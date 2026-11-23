@@ -11,6 +11,7 @@
 const WF = 'gsd-core/workflows';
 const AUDITED = ['review.md', 'plan-phase.md', 'ship.md', 'debug.md', 'autonomous.md', 'ai-integration-phase.md', 'eval-review.md', 'update.md'];
 
+const LANES_MARKER = 'jq-dependent reviewer lanes';
 const isWord = (ch) => ch !== undefined && /\w/.test(ch);
 
 // True when the text from `from` runs to a pipe on its own line and `jq` follows the pipe (whitespace in between).
@@ -71,12 +72,11 @@ function callsWithField(text, call, field) {
 
 // True when `lane` appears as a whole word after the first mention of the jq-dependent lanes.
 function laneAfterDeclaration(text, lane) {
-  const marker = 'jq-dependent reviewer lanes';
-  const from = text.indexOf(marker);
-  if (from === -1) return false;
-  const tail = text.slice(from + marker.length);
-  for (let at = tail.indexOf(lane); at !== -1; at = tail.indexOf(lane, at + 1)) {
-    if (!isWord(tail[at - 1]) && !isWord(tail[at + lane.length])) return true;
+  const from = text.indexOf(LANES_MARKER);
+  if (from === -1) return true; // the missing declaration is reported once by its own assertion
+  const base = from + LANES_MARKER.length;
+  for (let at = text.indexOf(lane, base); at !== -1; at = text.indexOf(lane, at + 1)) {
+    if (!isWord(text[at - 1]) && !isWord(text[at + lane.length])) return true;
   }
   return false;
 }
@@ -118,6 +118,7 @@ module.exports = {
     }, 'ship.md must decide the verification gate on a single verification.status read');
 
     const review = ctx.doc(`${WF}/review.md`)
+      .has(LANES_MARKER, 'review.md must declare the jq-dependent reviewer lanes')
       .has('command -v jq >/dev/null 2>&1 && echo "jq:available" || echo "jq:missing"', 'review.md detect_clis must probe jq alongside the other reviewer prerequisites');
     for (const lane of ['ollama', 'lm_studio', 'llama_cpp', 'opencode', 'antigravity']) {
       review.satisfies((text) => laneAfterDeclaration(text, lane), `review.md must name ${lane} as a jq-dependent lane`);

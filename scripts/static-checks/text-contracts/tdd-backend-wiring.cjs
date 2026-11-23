@@ -7,7 +7,7 @@
 // issue byte-identical query calls; the worktree backend fail-closes on an unresolved marker; the harness reaches the
 // fragment before its Agent( call and the fragment states a MANDATORY HALT. Line scans replace the test's unbounded
 // patterns. The test's RED-first case compared two in-memory strings, not repo text, and is dropped.
-// Was tests/tdd-backend-wiring.test.cjs.
+// Each file is read through one document, so a file that is gone is one finding. Was tests/tdd-backend-wiring.test.cjs.
 
 const HARNESS = 'gsd-core/workflows/execute-phase.md';
 const WORKTREE = 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md';
@@ -74,8 +74,13 @@ module.exports = {
   id: 'tdd-backend-wiring',
   issue: '#4266',
   check(ctx) {
+    const docs = new Map();
+    const docOf = (file) => {
+      if (!docs.has(file)) docs.set(file, ctx.doc(file));
+      return docs.get(file);
+    };
     for (const [name, , assignmentFile] of BACKENDS) {
-      ctx.doc(assignmentFile)
+      docOf(assignmentFile)
         .satisfies((text) => {
           const lines = text.split('\n');
           const assign = lines.findIndex(isAssignment);
@@ -89,7 +94,7 @@ module.exports = {
         }, `${name}: the phase.tdd-applicable call must be plan-scoped ({phase_dir}/{plan_file}), not phase-scoped`);
     }
 
-    ctx.doc(WORKTREE).satisfies((text) => {
+    docOf(WORKTREE).satisfies((text) => {
       const lines = text.split('\n');
       const assign = lines.findIndex(isAssignment);
       if (assign === -1) return 'it has no TDD_APPLICABLE assignment';
@@ -99,9 +104,9 @@ module.exports = {
       return early === undefined || `TDD_APPLICABLE is used at line ${early + 1} before it is assigned at line ${assign + 1}`;
     }, 'executor-isolation-dispatch.md must assign TDD_APPLICABLE before every ${TDD_APPLICABLE...} use');
 
-    ctx.doc(FRAGMENT).satisfies((text) => assignsAtLineStart(text), 'tdd-applicability-resolution.md must assign TDD_APPLICABLE');
+    docOf(FRAGMENT).satisfies((text) => assignsAtLineStart(text), 'tdd-applicability-resolution.md must assign TDD_APPLICABLE');
 
-    ctx.doc(HARNESS)
+    docOf(HARNESS)
       .satisfies((text) => {
         const lines = text.split('\n');
         const reference = lines.findIndex((line) => line.includes('tdd-applicability-resolution.md') && line.includes('TDD-applicability resolution'));
@@ -118,7 +123,7 @@ module.exports = {
         return lines.slice(0, agent).join('\n').includes('execute-phase/steps/tdd-applicability-resolution.md') || 'the fragment is not referenced before the Agent( call';
       }, 'execute-phase.md must reference the tdd-applicability-resolution.md step fragment before the Agent() call');
 
-    ctx.doc(FRAGMENT).satisfies((text) => {
+    docOf(FRAGMENT).satisfies((text) => {
       const at = text.indexOf('MANDATORY');
       if (at === -1) return 'it states no MANDATORY pre-dispatch check';
       const check = text.slice(at);
@@ -128,7 +133,7 @@ module.exports = {
     }, 'the fragment must state a MANDATORY pre-dispatch check naming TDD_APPLICABLE, CONTEXT_WINDOW and AGENT_SKILLS and instructing a HALT');
 
     for (const [name, referenceFile] of BACKENDS) {
-      ctx.doc(referenceFile)
+      docOf(referenceFile)
         .satisfies((text) => {
           const line = lineOf(text, (candidate) => candidate.includes('tdd.md') && candidate.includes('TDD_APPLICABLE ?'));
           if (line === undefined) return 'it lists no tdd.md conditional embed entry';
@@ -143,7 +148,7 @@ module.exports = {
         }, `${name}: the tdd.md entry must stay conditional on TDD_APPLICABLE (#3990)`);
     }
 
-    ctx.doc(WORKTREE).satisfies((text) => {
+    docOf(WORKTREE).satisfies((text) => {
       const lines = text.split('\n');
       if (!lines.some((line) => line.includes("grep -q '\\${AGENT_SKILLS}'"))) return 'it no longer carries the ${AGENT_SKILLS} fail-closed check';
       const check = lines.findIndex((line) => line.includes("grep -q '\\${TDD_APPLICABLE"));
@@ -155,13 +160,13 @@ module.exports = {
 
     const callOf = (text) => lineOf(text, (line) => line.includes('=$(gsd_run query phase.tdd-applicable'));
     let harnessCall = null;
-    ctx.doc(FRAGMENT).satisfies((text) => {
+    docOf(FRAGMENT).satisfies((text) => {
       const line = callOf(text);
       if (line === undefined) return 'it carries no gsd_run query phase.tdd-applicable assignment call';
       harnessCall = queryCall(line);
       return true;
     }, 'the harness backend must carry a gsd_run query phase.tdd-applicable call');
-    ctx.doc(WORKTREE).satisfies((text) => {
+    docOf(WORKTREE).satisfies((text) => {
       const line = callOf(text);
       if (line === undefined) return 'it carries no gsd_run query phase.tdd-applicable assignment call';
       return harnessCall === null || harnessCall === queryCall(line) || `the harness call is ${harnessCall}, the worktree call is ${queryCall(line)}`;

@@ -62,6 +62,7 @@ function executorPrompt(text) {
   const spawn = text.indexOf(SPAWN);
   if (spawn === -1) return { error: 'the executor Agent()/Task() spawn is missing' };
   const start = text.lastIndexOf('prompt="', spawn);
+  if (start === -1) return { error: 'there is no prompt=" before the executor spawn' };
   return { prompt: text.slice(start, text.indexOf(SPAWN, start)) };
 }
 
@@ -69,14 +70,13 @@ function executorPrompt(text) {
 function blockAt(text, startMarker, label) {
   const start = text.indexOf(startMarker);
   const end = start === -1 ? -1 : text.indexOf(CLOSE_TAG, start);
-  return start === -1 || end === -1 ? { error: `the ${label} required_reading block is missing` } : { start, block: text.slice(start, end) };
+  return start === -1 || end === -1 ? { error: `the ${label} required_reading block is missing` } : { block: text.slice(start, end) };
 }
 
 module.exports = {
   id: 'quick-commit-boundary-context-research',
   issue: '#4996',
   check(ctx) {
-    ctx.exists(STEP, 'gsd-core/workflows/quick/steps/worktree-pre-dispatch-commit.md must exist');
     ctx.doc(STEP)
       .has('DISCUSS_MODE', 'the pre-dispatch commit step must reference DISCUSS_MODE so it stages CONTEXT.md when the discussion phase ran')
       .has('CONTEXT.md', 'the pre-dispatch commit step must reference CONTEXT.md so it stages it when the discussion phase ran')
@@ -86,7 +86,6 @@ module.exports = {
       .satisfies((text) => guarded(text, 'RESEARCH.md'), 'RESEARCH.md staging must be guarded by a file-existence test, not mode alone')
       .has('PLAN.md', 'the pre-dispatch commit step must still reference PLAN.md unconditionally');
 
-    ctx.exists(QUICK, 'gsd-core/workflows/quick.md must exist');
     ctx.doc(QUICK)
       .satisfies((text) => {
         const reading = executorReading(text);

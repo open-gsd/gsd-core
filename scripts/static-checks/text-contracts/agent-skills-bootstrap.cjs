@@ -10,7 +10,7 @@
 const BOOTSTRAP_REF = 'agent-skills-bootstrap.md';
 const BOOTSTRAP = `gsd-core/references/${BOOTSTRAP_REF}`;
 const RESOLVER = 'gsd-core/references/gsd-run-resolver.md';
-const MIN_SELF_LOADING_FILES = 36; // 22 canonical agents + 14 compact siblings, the test's `22 * 2 - 8`
+const MIN_SELF_LOADING_FILES = 36; // the test's `22 * 2 - 8` (the tree has 22 canonical and 16 compact files carrying the pointer)
 const NAME_LENGTH_LIMIT = 64;
 
 const CONSUMER_AGENTS = [
@@ -35,15 +35,24 @@ function hasWhitespaceGap(text, before, after) {
   return false;
 }
 
-// The first `name:` line that is a plain name (1 to 64 letters, digits or hyphens, optionally in double quotes), as the
-// test's multiline pattern read it from anywhere in the file, or null.
+// The name the old multiline pattern `^name:\s*"?([A-Za-z0-9-]{1,64})"?\s*$` captured, by one walk with that pattern's
+// semantics: `name:` at a line start (after CR, LF, U+2028 or U+2029), any whitespace (line breaks included) before the
+// value, an optional double quote either side of 1 to 64 letters, digits or hyphens, then whitespace up to a line end.
+const LINE_ENDS = new Set(['\n', '\r', String.fromCharCode(0x2028), String.fromCharCode(0x2029)]);
 function frontmatterNameOf(text) {
-  for (const line of text.split(/\r|\n|\u2028|\u2029/)) {
-    if (!line.startsWith('name:')) continue;
-    let rest = line.slice('name:'.length).trim();
-    if (rest.startsWith('"')) rest = rest.slice(1);
-    if (rest.endsWith('"')) rest = rest.slice(0, -1);
-    if (rest.length >= 1 && rest.length <= NAME_LENGTH_LIMIT && [...rest].every((ch) => /[A-Za-z0-9-]/.test(ch))) return rest;
+  for (let i = 0; i < text.length; i += 1) {
+    if (!((i === 0 || LINE_ENDS.has(text[i - 1])) && text.startsWith('name:', i))) continue;
+    let at = i + 'name:'.length;
+    while (at < text.length && /\s/.test(text[at])) at += 1;
+    if (text[at] === '"') at += 1;
+    let end = at;
+    while (end < text.length && /[A-Za-z0-9-]/.test(text[end])) end += 1;
+    if (end - at < 1 || end - at > NAME_LENGTH_LIMIT) continue;
+    for (const tail of text[end] === '"' ? [end + 1, end] : [end]) {
+      let stop = tail;
+      while (stop < text.length && /\s/.test(text[stop])) stop += 1;
+      for (let q = tail; q <= stop; q += 1) if (q === text.length || LINE_ENDS.has(text[q])) return text.slice(at, end);
+    }
   }
   return null;
 }
@@ -54,8 +63,6 @@ module.exports = {
   id: 'agent-skills-bootstrap',
   issue: '#1866',
   check(ctx) {
-    ctx.exists(BOOTSTRAP, 'the bootstrap reference must exist at gsd-core/references/');
-
     ctx.doc(BOOTSTRAP)
       .has(/<agent_skills>/, 'the bootstrap must name the <agent_skills> block')
       .has(/skip/i, 'the bootstrap must document the dedup guard (skip when <agent_skills> is already present)')

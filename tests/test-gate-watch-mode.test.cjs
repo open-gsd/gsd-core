@@ -5,7 +5,7 @@
  * #1857, #4784: the post-merge gate's simulator-extraction pipeline, run for real.
  *
  * The text of the test gates (one-shot normalization, the timeout bound, `--raw` config reads, the Xcode
- * construction, the package-manager fallbacks) is the `test-gate-watch-mode` text contract in
+ * construction, the package-manager fallbacks) is the `post-merge-gate-watch-mode` text contract in
  * scripts/static-checks/text-contracts/. This file keeps the one case a contract cannot state: it extracts the
  * gate's OWN `simctl | sed | head` pipeline and executes it against a real-format simctl line.
  */

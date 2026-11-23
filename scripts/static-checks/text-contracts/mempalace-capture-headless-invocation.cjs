@@ -83,7 +83,7 @@ module.exports = {
         }, `${rel}: every rooms: entry must be a dict with a name key (a bare-string list crashes the miner's detect_room, #2414)`)
         .satisfies((text) => {
           const block = roomsBlock(text);
-          if (block === null) return 'could not locate a rooms: YAML block';
+          if (block === null) return true; // reported once by the assertion above
           const bare = block.split('\n').filter(isBareEntry);
           return bare.length === 0 || `offenders: ${JSON.stringify(bare)}`;
         }, `${rel}: the rooms: block must not contain bare-string entries (the pre-fix shape, #2414)`)

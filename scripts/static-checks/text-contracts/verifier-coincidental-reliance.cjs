@@ -8,7 +8,8 @@
 // status unions and the status enum, the qualifier suffixes VERIFIED); the report surface (items key, shape, survival);
 // and parity with the standalone template, the verifier gate reference and docs/reference/agents.md. Was
 // tests/verifier-coincidental-reliance.test.cjs. The old windows around the first mention (1400 characters either side,
-// 500 around the frontmatter key) keep their size; the status-union lines and table cells are read by linear walks.
+// 500 around the frontmatter key) keep their size; the status-union lines and table cells are read by linear walks. The
+// shipped libraries it uses are loaded through one helper, so a missing build is a finding and not a throw.
 
 const path = require('node:path');
 
@@ -16,6 +17,7 @@ const VERIFIER = 'agents/gsd-verifier.md';
 const TEMPLATE = 'gsd-core/templates/verification-report.md';
 const AGENTS_DOC = 'docs/reference/agents.md';
 const GATES = 'gsd-core/references/verifier-phase-gates.md';
+const VERIFICATION_LIB = 'gsd-core/bin/lib/verification.cjs';
 const QUALIFIER = '✓ VERIFIED (coincidental-reliance)';
 const REASONS = ['undeclared-precondition', 'incidental-ordering', 'fixture-only'];
 const RULE_RADIUS = 1400;
@@ -23,13 +25,22 @@ const ITEMS_RADIUS = 500;
 const ITEMS_ANCHOR = 'coincidental_reliance_items: #';
 const STATUSES = ['passed', 'gaps_found', 'human_needed'];
 
+// A shipped library under gsd-core/bin/lib, or the reason it cannot be loaded.
+function loadLib(name) {
+  try {
+    return { lib: require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', name)) };
+  } catch (err) {
+    return { error: `gsd-core/bin/lib/${name} cannot be loaded: ${err.message}` };
+  }
+}
+
 // The source around the first occurrence of `needle`, `radius` characters either side, or null when it is absent.
 function windowAround(text, needle, radius) {
   const at = text.indexOf(needle);
   return at === -1 ? null : text.slice(Math.max(0, at - radius), at + needle.length + radius);
 }
 
-const isTerminator = (ch) => ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
+const LINE_ENDS = new Set(['\n', '\r', String.fromCharCode(0x2028), String.fromCharCode(0x2029)]);
 const isWhitespace = (ch) => ch !== undefined && /\s/.test(ch);
 const isStatusWord = (ch) => ch !== undefined && ((ch >= 'a' && ch <= 'z') || ch === '_');
 
@@ -38,7 +49,7 @@ const isStatusWord = (ch) => ch !== undefined && ((ch >= 'a' && ch <= 'z') || ch
 function statusUnionLines(text) {
   const lines = [];
   for (let i = 0; i < text.length; i += 1) {
-    if (!((i === 0 || isTerminator(text[i - 1])) && text.startsWith('status:', i))) continue;
+    if (!((i === 0 || LINE_ENDS.has(text[i - 1])) && text.startsWith('status:', i))) continue;
     let at = i + 'status:'.length;
     const blankStart = at;
     while (isWhitespace(text[at])) at += 1;
@@ -65,7 +76,7 @@ function statusUnionLines(text) {
     while (isWhitespace(text[blankEnd])) blankEnd += 1;
     let stop = -1;
     for (let q = blankEnd; q >= end; q -= 1) {
-      if (q === text.length || isTerminator(text[q])) {
+      if (q === text.length || LINE_ENDS.has(text[q])) {
         stop = q;
         break;
       }
@@ -79,16 +90,29 @@ function statusUnionLines(text) {
 
 // The table cells that mention the advisory must render the suffixed verdict "✓ VERIFIED (coincidental-reliance)".
 function qualifierSuffixes(text) {
-  const { splitTableRow } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-table.cjs'));
+  const loaded = loadLib('markdown-table.cjs');
+  if (loaded.error) return loaded.error;
   const cells = text.split('\n').filter((line) => line.includes('|') && line.includes('coincidental-reliance'))
-    .flatMap((line) => splitTableRow(line).filter((cell) => cell.includes('coincidental-reliance')));
+    .flatMap((line) => loaded.lib.splitTableRow(line).filter((cell) => cell.includes('coincidental-reliance')));
   const bad = cells.find((cell) => !cell.includes(QUALIFIER));
   return bad === undefined || `a verdict cell must render as "${QUALIFIER}": ${bad.trim()}`;
+}
+
+// What the contract asks of the overall-status enum (the shipped module's frozen writer set): the problems found.
+function statusEnumProblems(verification) {
+  const statuses = verification === null || typeof verification !== 'object' ? undefined : verification.VERIFIER_STATUSES;
+  if (!(statuses instanceof Set)) return ['the VERIFIER_STATUSES set must be present'];
+  const found = [...statuses].map(String).sort();
+  if (found.join(',') !== STATUSES.slice().sort().join(',') || found.some((status) => /coincidental/i.test(status))) {
+    return [`the overall-status enum must stay ${STATUSES.slice().sort().join(', ')} (found: ${found.join(', ')})`];
+  }
+  return [];
 }
 
 module.exports = {
   id: 'verifier-coincidental-reliance',
   issue: '#1955',
+  statusEnumProblems,
   check(ctx) {
     const verifier = ctx.doc(VERIFIER);
     verifier.has(/coincidental-reliance/, 'the verifier must define the coincidental-reliance advisory');
@@ -142,15 +166,16 @@ module.exports = {
     inItems(/(harden|fix|precondition)/i, 'an item must name the hardening');
     inItems(/(regardless of (overall )?status|survive|never lost)/i, 'the items must survive a gaps_found phase');
 
-    ctx.doc(TEMPLATE)
+    const template = ctx.doc(TEMPLATE);
+    template
       .satisfies(qualifierSuffixes, 'the template qualifier must suffix VERIFIED, never replace it')
-      .has('coincidental_reliance_items', 'the standalone template must carry the frontmatter items list')
-      .slice('**Per-truth states')
+      .has('coincidental_reliance_items', 'the standalone template must carry the frontmatter items list');
+    for (const token of ['coincidental-reliance', ...REASONS]) {
+      template.has(token, `the standalone template must carry '${token}'`);
+    }
+    template.slice('**Per-truth states')
       .has(/coincidental-reliance/, 'the template guidelines must document the advisory per-truth state')
       .has(/apply the reliance check to every `✓ VERIFIED` truth/i, 'the template Guidelines must carry the imperative check, not just the row shape');
-    for (const token of ['coincidental-reliance', ...REASONS]) {
-      ctx.doc(TEMPLATE).has(token, `the standalone template must carry '${token}'`);
-    }
 
     ctx.doc(GATES)
       .satisfies((text) => text.split('\n').some((line) => {
@@ -161,11 +186,11 @@ module.exports = {
     ctx.doc(AGENTS_DOC).has(/coincidental-reliance/, 'docs/reference/agents.md must document the coincidental-reliance advisory');
 
     // The overall-status enum the advisory must not enter (the shipped module's frozen writer set).
-    const { VERIFIER_STATUSES } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'verification.cjs'));
-    if (!(VERIFIER_STATUSES instanceof Set)) {
-      ctx.fail('gsd-core/bin/lib/verification.cjs', 'the VERIFIER_STATUSES set must be present');
-    } else if ([...VERIFIER_STATUSES].sort().join(',') !== [...STATUSES].sort().join(',') || [...VERIFIER_STATUSES].some((status) => /coincidental/i.test(status))) {
-      ctx.fail('gsd-core/bin/lib/verification.cjs', `the overall-status enum must stay ${STATUSES.slice().sort().join(', ')} (found: ${[...VERIFIER_STATUSES].sort().join(', ')})`);
+    const loaded = loadLib('verification.cjs');
+    if (loaded.error) {
+      ctx.fail(VERIFICATION_LIB, loaded.error);
+    } else {
+      for (const problem of statusEnumProblems(loaded.lib)) ctx.fail(VERIFICATION_LIB, problem);
     }
   },
 };

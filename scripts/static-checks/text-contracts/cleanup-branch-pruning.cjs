@@ -140,7 +140,6 @@ module.exports = {
   id: 'cleanup-branch-pruning',
   issue: '#40',
   check(ctx) {
-    ctx.exists(FILE, `${FILE} must exist`);
     ctx.doc(FILE)
       .satisfies(onBlock('prune_local_branches', () => true), 'cleanup.md must contain a <prune_local_branches> step')
       .satisfies(onBlock('show_dry_run', (block) => statementsOf(block).some(isFetchPrune) || 'it runs no git fetch --prune'), 'show_dry_run must run `git fetch --prune` so the candidate list matches the execution step')

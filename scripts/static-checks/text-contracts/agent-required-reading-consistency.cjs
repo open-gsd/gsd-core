@@ -33,7 +33,6 @@ module.exports = {
       ctx.doc(rel)
         .lacks('<files_to_read>', `${agent} still has <files_to_read> opening tag: migrate to <required_reading>`)
         .lacks('</files_to_read>', `${agent} still has </files_to_read> closing tag: migrate to </required_reading>`)
-        .lacks('`<files_to_read>`', `${agent} still references \`<files_to_read>\` in prose: update to \`<required_reading>\``)
         .satisfies((text) => {
           if (!text.includes('required_reading') && !text.includes('files_to_read')) return true;
           withReading += 1;
@@ -45,7 +44,6 @@ module.exports = {
       ctx.fail('agents', `expected at least ${MIN_AGENTS_WITH_READING} agents with reading instructions, found ${withReading}`);
     }
 
-    ctx.exists(COMMON_BUG_PATTERNS, 'the common-bug-patterns.md reference must exist');
     ctx.doc(COMMON_BUG_PATTERNS)
       .satisfies((text) => text.startsWith('# Common Bug Patterns'), 'the file must start with the "# Common Bug Patterns" title')
       .has('---', 'the file must contain a --- separator after the intro')

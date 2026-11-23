@@ -20,7 +20,6 @@ module.exports = {
   id: 'planner-decomposition',
   issue: '#3320',
   check(ctx) {
-    ctx.exists(PLANNER, 'the planner agent file must exist');
     ctx.doc(PLANNER)
       .shorterThan(AGENT_FILE_SIZE_LIMIT, 'gsd-planner.md must stay under the 100K agent file threshold')
       .shorterThan(PLANNER_EXTRACTED_LIMIT, 'gsd-planner.md must stay under 48K characters after extracting the mode sections')
@@ -31,14 +30,11 @@ module.exports = {
       .has('NEVER place fenced code blocks (```) inside `<action>`', 'gsd-planner.md must explicitly forbid fenced implementation code in <action>')
       .has('Code excerpts belong in `<read_first>` source files or referenced context', 'gsd-planner.md must route code excerpts to context and read-first material');
 
-    ctx.exists(GAP_CLOSURE, 'planner-gap-closure.md must exist');
     ctx.doc(GAP_CLOSURE).satisfies((text) => {
       const lower = text.toLowerCase();
       return lower.includes('gap_closure') || lower.includes('gap closure') || text.includes('--gaps');
     }, 'planner-gap-closure.md must contain gap closure mode content (gap_closure, gap closure or --gaps)');
-    ctx.exists(REVISION, 'planner-revision.md must exist');
     ctx.doc(REVISION).has(/revision|Revision|REVISION/, 'planner-revision.md must contain revision mode content');
-    ctx.exists(REVIEWS, 'planner-reviews.md must exist');
     ctx.doc(REVIEWS).has(/reviews|Reviews|REVIEWS/, 'planner-reviews.md must contain reviews mode content');
 
     ctx.doc(GUIDANCE)

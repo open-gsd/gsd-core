@@ -57,7 +57,7 @@ module.exports = {
 
     ctx.doc(PLANT_SEED)
       .has('new-milestone', 'plant-seed.md must reference new-milestone as the surfacing mechanism for seeds')
-      .satisfies((text) => /auto.surface/i.test(text) || /auto-surface/i.test(text) || /auto.present/i.test(text) || /auto-present/i.test(text),
+      .satisfies((text) => /auto.surface/i.test(text) || /auto.present/i.test(text),
         'plant-seed.md must describe seeds as auto-surfacing or auto-presenting')
       .satisfies((text) => stepNames(text).includes('write-seed'), 'plant-seed.md must contain a <step name="write-seed"> (hyphens, not underscores)')
       .satisfies((text) => {
@@ -72,7 +72,7 @@ module.exports = {
       .satisfies((text) => lineHasInOrder(text, ['trigger_when', 'default']) || lineHasInOrder(text, ['default', 'trigger'])
         || /when relevant|when scope matches|unspecified/i.test(text), 'plant-seed.md must document a default for trigger_when when the user provides no Trigger')
       .satisfies((text) => lineHasInOrder(text, ['scope', 'default']) || lineHasInOrder(text, ['default', 'scope'])
-        || lineHasInOrder(text, ['scope', 'unknown']) || /unknown|unspecified/i.test(text), 'plant-seed.md must document a default for scope when the user provides no Scope')
+        || /unknown|unspecified/i.test(text), 'plant-seed.md must document a default for scope when the user provides no Scope')
       .satisfies((text) => {
         const names = stepNames(text);
         const writeIdx = names.findIndex((name) => name === 'write-seed' || name === 'write_seed');

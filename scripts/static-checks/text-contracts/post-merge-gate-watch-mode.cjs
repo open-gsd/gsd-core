@@ -5,9 +5,9 @@
 // hint; the regression gate aborts; execute-phase includes the shared verification step that reads the regression-gate
 // step; every build/test command config-get passes `--raw`; the Xcode arms pass -project and derive the destination from
 // the available simulators, and the skip arms assign their command variable; the package-manager fallbacks resolve through
-// one verb and keep a literal fallback. The simulator-extraction pipeline, run for real, stays in the test of this name.
-// Pattern matches are linear scans here (the test's `\s+`, `[^\n]*` and `.*` were unbounded).
-// Was tests/test-gate-watch-mode.test.cjs.
+// one verb and keep a literal fallback. The simulator-extraction pipeline, run for real, stays in
+// tests/test-gate-watch-mode.test.cjs. Pattern matches are linear scans here (the test's `\s+`, `[^\n]*` and `.*` were
+// unbounded). Each file is read through one document, so a file that is gone is one finding. Was the text half of that test.
 
 const STEPS = 'gsd-core/workflows/execute-phase/steps';
 const REGRESSION_GATE = `${STEPS}/regression-gate.md`;
@@ -75,13 +75,20 @@ function constructedCommands(text) {
   return found;
 }
 
-// The text of each `if [ -z "$XCODE_SIM" ]; then` ... first line `    fi` (four spaces) arm.
+// The index of the first `\n    fi` (four spaces) at or after `from` that is not the start of a longer word, or -1.
+function closingFi(text, from) {
+  let end = text.indexOf('\n    fi', from);
+  while (end !== -1 && /[A-Za-z0-9_]/.test(text[end + '\n    fi'.length] ?? '')) end = text.indexOf('\n    fi', end + 1);
+  return end;
+}
+
+// The text of each `if [ -z "$XCODE_SIM" ]; then` ... first line `    fi` (four spaces, `fi` as a whole word) arm.
 function skipArms(text) {
   const start = 'if [ -z "$XCODE_SIM" ]; then';
   const arms = [];
   let at = text.indexOf(start);
   while (at !== -1) {
-    const end = text.indexOf('\n    fi', at + start.length);
+    const end = closingFi(text, at + start.length);
     if (end === -1) break;
     arms.push(text.slice(at, end + '\n    fi'.length));
     at = text.indexOf(start, end + '\n    fi'.length);
@@ -109,9 +116,13 @@ module.exports = {
   id: 'post-merge-gate-watch-mode',
   issue: '#1857',
   check(ctx) {
+    const docs = new Map();
+    const docOf = (file) => {
+      if (!docs.has(file)) docs.set(file, ctx.doc(file));
+      return docs.get(file);
+    };
     for (const [label, file] of FULL_GATES) {
-      ctx.exists(file, `${file} must exist`);
-      ctx.doc(file)
+      docOf(file)
         .has('normalize-test-command', `${label} must call the shared normalize-test-command helper`)
         .has('workflow.test_gate_timeout', `${label} must read workflow.test_gate_timeout`)
         .has('run-with-timeout "$TEST_GATE_TIMEOUT"', `${label} must wrap the test command in run-with-timeout with the configured budget`)
@@ -126,15 +137,12 @@ module.exports = {
         }, `${label}: every build/test_command config-get must pass --raw so an unset key is empty, not the literal ""`);
     }
 
-    ctx.exists(REGRESSION_GATE, `${REGRESSION_GATE} must exist`);
-    ctx.doc(REGRESSION_GATE).has('REGRESSION GATE ABORTED', 'the regression gate must abort (not continue) on a watch-mode timeout');
+    docOf(REGRESSION_GATE).has('REGRESSION GATE ABORTED', 'the regression gate must abort (not continue) on a watch-mode timeout');
 
-    ctx.exists(EXECUTE_PHASE, `${EXECUTE_PHASE} must exist`);
-    ctx.doc(EXECUTE_PHASE).has('steps/verify-phase-goal.md', 'execute-phase.md must include the shared verification step');
-    ctx.exists(VERIFY_PHASE_GOAL, `${VERIFY_PHASE_GOAL} must exist`);
-    ctx.doc(VERIFY_PHASE_GOAL).has('steps/regression-gate.md', 'the shared verification step must reference the extracted regression-gate step');
+    docOf(EXECUTE_PHASE).has('steps/verify-phase-goal.md', 'execute-phase.md must include the shared verification step');
+    docOf(VERIFY_PHASE_GOAL).has('steps/regression-gate.md', 'the shared verification step must reference the extracted regression-gate step');
 
-    ctx.doc(POST_MERGE_GATE)
+    docOf(POST_MERGE_GATE)
       .satisfies((text) => {
         const commands = constructedCommands(text);
         if (commands.length < 4) return `expected the four Xcode command constructions, got ${commands.length}`;
@@ -157,7 +165,7 @@ module.exports = {
       .satisfies(logsSniffedBuildScript, "a sniffed build script must be logged: running this project's ... build ... script");
 
     for (const [label, file, call, fallback] of SITES) {
-      ctx.doc(file)
+      docOf(file)
         .has(call, `${label} must resolve through "${call}"`)
         .has(`"${fallback}"`, `${label} must keep the literal "${fallback}" fallback`);
     }

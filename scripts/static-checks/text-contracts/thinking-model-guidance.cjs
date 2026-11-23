@@ -9,6 +9,8 @@
 // @-reference inside the named block, never in <required_reading>. The test accepted a named model or a boundary word
 // anywhere in the file; the contract asks for the heading and for the sentence the file carries. Was tests/thinking-model-guidance.test.cjs.
 
+const path = require('node:path');
+
 const REFERENCES = 'gsd-core/references';
 const CONTEXTS = ['debug', 'execution', 'planning', 'research', 'verification'];
 const NAMED_MODELS = {
@@ -37,11 +39,21 @@ const AGENT_WIRING = {
 
 // The section of the heading line that names the model, up to the next `## ` heading, or null.
 function sectionOf(text, model) {
+  const { matchFenceDelimiter } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
   const lines = text.split('\n');
-  const start = lines.findIndex((line) => line.startsWith('## ') && line.includes(model));
-  if (start === -1) return null;
-  const end = lines.findIndex((line, at) => at > start && line.startsWith('## '));
-  return lines.slice(start, end === -1 ? lines.length : end).join('\n');
+  // A `## ` line inside a fenced block is example text, not a heading: the fence rules have one owner.
+  const headings = [];
+  let open = null;
+  lines.forEach((line, at) => {
+    const fence = matchFenceDelimiter(line);
+    if (fence !== null && open === null && fence.canOpen) open = fence;
+    else if (fence !== null && open !== null && fence.closes(open)) open = null;
+    else if (open === null && line.startsWith('## ')) headings.push(at);
+  });
+  const start = headings.find((at) => lines[at].includes(model));
+  if (start === undefined) return null;
+  const end = headings.find((at) => at > start);
+  return lines.slice(start, end === undefined ? lines.length : end).join('\n');
 }
 
 // True when a <required_reading> block (a closed one) mentions the file.

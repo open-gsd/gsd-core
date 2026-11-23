@@ -122,7 +122,6 @@ module.exports = {
   id: 'spec-phase-probe-reachability',
   issue: '#2733',
   check(ctx) {
-    ctx.exists(FILE, `${FILE} must exist`);
     ctx.doc(FILE)
       .satisfies((text) => {
         const { probes } = analyse(text);

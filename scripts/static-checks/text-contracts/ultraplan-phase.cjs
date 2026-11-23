@@ -53,7 +53,7 @@ module.exports = {
       .satisfies((text) => {
         const importAt = firstOf(text, ['gsd-import', 'gsd:import']);
         const triggerAt = text.indexOf('/ultraplan');
-        if (importAt === -1 || triggerAt === -1) return 'the import command or the /ultraplan trigger is missing';
+        if (importAt === -1 || triggerAt === -1) return true; // a missing one is reported by its own assertion
         return importAt < triggerAt || 'the import command first appears after the /ultraplan trigger';
       }, 'the return-path instructions (the import command) must appear before the /ultraplan trigger so they are visible in scroll-back')
       .lacks('write PLAN.md', 'the workflow must not directly write PLAN.md: it delegates to /gsd-import --from')

@@ -6,7 +6,8 @@
 // orchestrator-owned and the ghost `state update-position` stays gone; execute-phase.md points to the extracted
 // worktree-recovery-policy.md fragment, which carries the ISOLATED-RUN RECOVERY guardrail and the fail-closed rule, and
 // quick.md carries the same guardrail. The success_criteria block of a mode is read by indexOf, from the mode marker to
-// the first closing tag after the next opening tag (the test's lazy `[\s\S]*?`). Was
+// the first closing tag after the next opening tag (the test's lazy `[\s\S]*?`). A missing `isolation="worktree"` or
+// `**Sequential mode**` marker is a finding (the test passed vacuously without either). Each file is one document. Was
 // tests/execute-phase-worktree-artifacts.test.cjs.
 
 const EXECUTE_PHASE = 'gsd-core/workflows/execute-phase.md';
@@ -33,7 +34,6 @@ module.exports = {
   id: 'execute-phase-worktree-artifacts',
   issue: '#1571',
   check(ctx) {
-    ctx.exists(EXECUTE_PHASE, `${EXECUTE_PHASE} must exist`);
     ctx.doc(EXECUTE_PHASE)
       .satisfies(criteriaCheck('**Worktree mode**', 'STATE.md', false), 'the worktree executor success_criteria must not reference STATE.md (the orchestrator owns this write)')
       .satisfies(criteriaCheck('**Worktree mode**', 'ROADMAP.md', false), 'the worktree executor success_criteria must not reference ROADMAP.md (the orchestrator owns this write)')
@@ -45,6 +45,8 @@ module.exports = {
         const command = text.indexOf('roadmap update-plan-progress');
         const start = text.indexOf('isolation="worktree"');
         const end = text.indexOf('**Sequential mode**');
+        if (start === -1) return 'the isolation="worktree" marker is missing';
+        if (end === -1) return 'the **Sequential mode** marker is missing';
         return command < start || command > end || 'it sits inside the worktree agent prompt';
       }, 'roadmap update-plan-progress must appear outside the worktree agent prompt (orchestrator-owned)')
       .lacks('state update-position', 'state update-position was a ghost reference (the command never existed) and must stay removed')
@@ -53,7 +55,6 @@ module.exports = {
       .has('declines to merge a worktree', 'the step 5.5 pointer must mention "declines to merge a worktree" as the trigger for the fail-safe policy')
       .has('never default to editing', 'the step 5.5 pointer must state "never default to editing" main');
 
-    ctx.exists(POLICY, `${POLICY} must exist`);
     ctx.doc(POLICY)
       .has('ISOLATED-RUN RECOVERY', 'the fragment must contain the ISOLATED-RUN RECOVERY guardrail label')
       .has('#1292', 'the ISOLATED-RUN RECOVERY guardrail must reference #1292')
@@ -63,7 +64,6 @@ module.exports = {
       .has('worktree_branch_check', 'the fragment must contain "worktree_branch_check" from the FAIL-CLOSED rule (#48)')
       .has('42', 'the fragment must contain "42" (exit 42) from the FAIL-CLOSED rule (#48)');
 
-    ctx.exists(QUICK, `${QUICK} must exist`);
     ctx.doc(QUICK)
       .has('ISOLATED-RUN RECOVERY', 'quick.md must contain the ISOLATED-RUN RECOVERY guardrail label')
       .has('#1292', 'the quick.md ISOLATED-RUN RECOVERY guardrail must reference #1292')

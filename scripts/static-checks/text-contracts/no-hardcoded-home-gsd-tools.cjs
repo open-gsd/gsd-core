@@ -4,11 +4,8 @@
 // commands/ and gsd-core/references/ (each directory must hold at least one such block), and in any line of
 // gsd-core/workflows (#637, the quoted `node "$HOME/..."` form); and no workflow calls mktemp with a filename suffix
 // after the XXXXXX run (#1520: BSD mktemp then yields a literal, colliding path). The probes are linear scans of
-// each line, as the old patterns were. Bash blocks are found through the sectionizer's fence scanner (three-backtick
-// bash or sh fences, as the test matched), so a fence indented by up to three spaces now counts. Folded: bug-637 and
-// fix-1520. Was tests/no-hardcoded-home-gsd-tools.test.cjs.
-
-const path = require('node:path');
+// each line, as the old patterns were. Bash blocks are found as the test found them: a column-0 bash or sh fence line
+// opens, the next column-0 fence line closes. Folded: bug-637 and fix-1520. Was tests/no-hardcoded-home-gsd-tools.test.cjs.
 
 const SCAN_DIRS = ['agents', 'commands', 'gsd-core/references'];
 const WORKFLOWS = 'gsd-core/workflows';
@@ -79,20 +76,28 @@ const firstWord = (text) => {
   return text.slice(0, end);
 };
 
-// The bash and sh blocks (three-backtick fences) of a file: their lines with the line numbers. An unterminated block
-// runs to the end of the file; an empty unterminated block is not a block.
+// The bash and sh blocks of a file, as the test read them: a column-0 line of three backticks and bash or sh (any info
+// string after a blank) opens a block, the next column-0 line of three backticks and blanks closes it, and any other
+// fence line is plain text. An unterminated block runs to the end of the file; an empty unterminated block is dropped.
 function bashBlocks(text) {
-  const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
-  const lines = text.split('\n');
   const blocks = [];
-  for (const block of scanFencedBlocks(lines)) {
-    if (block.char !== '`' || block.len !== 3) continue;
-    const tag = firstWord(block.infoString);
-    if (tag !== 'bash' && tag !== 'sh') continue;
-    const stop = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
-    if (block.closeLineIdx === -1 && stop <= block.openLineIdx + 1) continue;
-    blocks.push(lines.slice(block.openLineIdx + 1, stop).map((line, at) => ({ line, number: block.openLineIdx + 2 + at })));
-  }
+  let open = null;
+  text.split('\n').forEach((line, at) => {
+    if (open === null) {
+      if (!line.startsWith('```')) return;
+      const tag = line.slice(3);
+      const word = firstWord(tag);
+      if ((word === 'bash' || word === 'sh') && (tag.length === word.length || isSpace(tag[word.length]))) open = [];
+      return;
+    }
+    if (line.startsWith('```') && line.slice(3).trim() === '') {
+      blocks.push(open);
+      open = null;
+    } else {
+      open.push({ line, number: at + 1 });
+    }
+  });
+  if (open !== null && open.length > 0) blocks.push(open);
   return blocks;
 }
 

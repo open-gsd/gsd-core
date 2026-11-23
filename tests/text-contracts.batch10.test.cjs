@@ -124,6 +124,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     'capabilities/live-dom-uat/fragments/execute-wave-post.md',
     'capabilities/mempalace/fragments/capture-problems.md',
     'commands/gsd/add-tests.md',
+    'commands/gsd/debug.md',
     'commands/gsd/mempalace-capture.md',
     'commands/gsd/mempalace-recall.md',
     'commands/gsd/progress.md',
@@ -222,7 +223,6 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     'commands/gsd/code-review.md',
     'commands/gsd/complete-milestone.md',
     'commands/gsd/config.md',
-    'commands/gsd/debug.md',
     'commands/gsd/discuss-phase.md',
     'commands/gsd/docs-update.md',
     'commands/gsd/eval-review.md',
@@ -912,7 +912,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         // agent-required-reading-consistency
         ['an agent with the legacy opening tag', 'agents/gsd-verifier.md', append('<files_to_read>'), 'agent-required-reading-consistency', /gsd-verifier still has <files_to_read> opening tag: migrate to <required_reading>/],
         ['an agent with the legacy closing tag', 'agents/gsd-verifier.md', append('</files_to_read>'), 'agent-required-reading-consistency', /gsd-verifier still has <\/files_to_read> closing tag: migrate to <\/required_reading>/],
-        ['an agent with the legacy tag in backticks', 'agents/gsd-verifier.md', append('Read the `<files_to_read>` block.'), 'agent-required-reading-consistency', /gsd-verifier still references `<files_to_read>` in prose: update to `<required_reading>`/],
+        ['an agent with the legacy tag in backticks', 'agents/gsd-verifier.md', append('Read the `<files_to_read>` block.'), 'agent-required-reading-consistency', /gsd-verifier still has <files_to_read> opening tag: migrate to <required_reading>/],
         ['an agent that still names files_to_read as a bare word', 'agents/gsd-verifier.md', append('See files_to_read.'), 'agent-required-reading-consistency', /gsd-verifier still uses files_to_read: it must be migrated to required_reading/],
         ['an agent that moved to the legacy name only', 'agents/gsd-verifier.md', swap('required_reading', 'files_to_read'), 'agent-required-reading-consistency', /gsd-verifier has reading instructions but does not use required_reading/],
         ['the common-bug-patterns title gone', 'gsd-core/references/common-bug-patterns.md', swap('# Common Bug Patterns', '# Bug Patterns'), 'agent-required-reading-consistency', /must start with the "# Common Bug Patterns" title/],
@@ -1084,7 +1084,6 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     ['the import command gone from the workflow', 'gsd-core/workflows/ultraplan-phase.md', swap('gsd:import', 'gsd:imp'), 'ultraplan-phase', /the workflow must direct the user to run \/gsd-import --from after ultraplan completes/],
     ['--from gone from the workflow', 'gsd-core/workflows/ultraplan-phase.md', eraseAll('--from'), 'ultraplan-phase', /the workflow must reference \/gsd-import --from <file-path>/],
     ['the /ultraplan trigger placed before the import command', 'gsd-core/workflows/ultraplan-phase.md', (text) => `/ultraplan first\n${text}`, 'ultraplan-phase', /the import command first appears after the \/ultraplan trigger/],
-    ['the import command missing for the ordering', 'gsd-core/workflows/ultraplan-phase.md', swap('gsd:import', 'gsd:imp'), 'ultraplan-phase', /the import command or the \/ultraplan trigger is missing/],
     ['write PLAN.md added', 'gsd-core/workflows/ultraplan-phase.md', append('Then write PLAN.md for the phase.'), 'ultraplan-phase', /the workflow must not directly write PLAN\.md/],
     ["a Write('.planning call added", 'gsd-core/workflows/ultraplan-phase.md', append("Write('.planning/phase/PLAN.md')"), 'ultraplan-phase', /the workflow must not write \.planning files directly/],
     ['ultrareview mentioned', 'gsd-core/workflows/ultraplan-phase.md', append('Use ultrareview afterwards.'), 'ultraplan-phase', /the workflow must not reference ultrareview/],
@@ -1118,7 +1117,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     ['next_action read before the gate decides in ship.md', 'gsd-core/workflows/ship.md', (text) => `--pick next_action\n${text}`, 'workflow-jq-dependency', /next_action must be read only on the blocking path/],
     ['next_command no longer surfaced by ship.md', 'gsd-core/workflows/ship.md', swap('--pick next_command', '--pick nc'), 'workflow-jq-dependency', /ship\.md must still surface next_command/],
     ['the jq probe gone from review.md', 'gsd-core/workflows/review.md', swap('command -v jq >/dev/null 2>&1 && echo "jq:available" || echo "jq:missing"', 'true'), 'workflow-jq-dependency', /review\.md detect_clis must probe jq alongside the other reviewer prerequisites/],
-    ['the jq-dependent lanes declaration gone from review.md', 'gsd-core/workflows/review.md', swap('jq-dependent reviewer lanes', 'jq reviewers'), 'workflow-jq-dependency', /review\.md must name ollama as a jq-dependent lane/],
+    ['the jq-dependent lanes declaration gone from review.md', 'gsd-core/workflows/review.md', swap('jq-dependent reviewer lanes', 'jq reviewers'), 'workflow-jq-dependency', /review\.md must declare the jq-dependent reviewer lanes/],
     ['ollama gone from review.md', 'gsd-core/workflows/review.md', swap('ollama', 'xx'), 'workflow-jq-dependency', /review\.md must name ollama as a jq-dependent lane/],
     ['lm_studio gone from review.md', 'gsd-core/workflows/review.md', swap('lm_studio', 'xx'), 'workflow-jq-dependency', /review\.md must name lm_studio as a jq-dependent lane/],
     ['llama_cpp gone from review.md', 'gsd-core/workflows/review.md', swap('llama_cpp', 'xx'), 'workflow-jq-dependency', /review\.md must name llama_cpp as a jq-dependent lane/],
@@ -1208,7 +1207,6 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     ['a hardcoded call in an sh block', 'agents/gsd-verifier.md', append('```sh\nnode ~/x/gsd-tools.cjs state\n```'), 'no-hardcoded-home-gsd-tools', /a bash block must not hardcode a \$HOME gsd-tools\.cjs call/],
     ['a hardcoded call in a bash block with an info string', 'agents/gsd-verifier.md', append('```bash title="run"\nnode ~/x/gsd-tools.cjs state\n```'), 'no-hardcoded-home-gsd-tools', /a bash block must not hardcode a \$HOME gsd-tools\.cjs call/],
     ['a hardcoded call in an unterminated bash block at the end of the file', 'agents/gsd-verifier.md', append('```bash\nnode ~/x/gsd-tools.cjs state'), 'no-hardcoded-home-gsd-tools', /a bash block must not hardcode a \$HOME gsd-tools\.cjs call/],
-    ['a hardcoded call in a bash block indented by two spaces', 'agents/gsd-verifier.md', append('  ```bash\n  node ~/x/gsd-tools.cjs state\n  ```'), 'no-hardcoded-home-gsd-tools', /a bash block must not hardcode a \$HOME gsd-tools\.cjs call/],
     ['a quoted $HOME gsd-tools call in a workflow', 'gsd-core/workflows/ship.md', append('node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state'), 'no-hardcoded-home-gsd-tools', /a workflow must invoke gsd-tools via the resolved gsd_run launcher, not a hardcoded node "\$HOME\/\.\.\.\/gsd-tools\.cjs" path/],
     ['a quoted $HOME gsd-tools call after other words in a workflow', 'gsd-core/workflows/ship.md', append('Run: node   "$HOME/x/gsd-tools.cjs" init now'), 'no-hardcoded-home-gsd-tools', /a workflow must invoke gsd-tools via the resolved gsd_run launcher/],
     ['a mktemp template with a .json suffix in a workflow', 'gsd-core/workflows/ship.md', append('TMP=$(mktemp /tmp/gsd-XXXXXX.json)'), 'no-hardcoded-home-gsd-tools', /a workflow mktemp template must keep XXXXXX as the final path component/],
@@ -1537,6 +1535,10 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
           swap('<step name="identify_completed_milestones">', '<step name="identify_milestones">'), 'cleanup-branch-pruning', /the <identify_completed_milestones> block is missing/],
         ['the process block renamed (#40)', 'gsd-core/workflows/cleanup.md',
           swap('<process>', '<procedure>'), 'cleanup-branch-pruning', /the <process> block is missing/],
+        ['the isolation="worktree" marker gone from execute-phase.md (#1571)', 'gsd-core/workflows/execute-phase.md',
+          eraseAll('isolation="worktree"'), 'execute-phase-worktree-artifacts', /\(the isolation="worktree" marker is missing\)/],
+        ['the sequential mode marker gone: the position check has no end marker (#1571)', 'gsd-core/workflows/execute-phase.md',
+          swap('**Sequential mode**', '**Sequential-mode**'), 'execute-phase-worktree-artifacts', /\(the \*\*Sequential mode\*\* marker is missing\)/],
         // code-review-flags
         ['the initialize step of code-review.md renamed (#3727)', 'gsd-core/workflows/code-review.md',
           swap('<step name="initialize">', '<step name="init">'), 'code-review-flags', /the workflow has no initialize step/],
@@ -1550,10 +1552,8 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
           eraseAll('<step name="dispatch_fix">'), 'code-review-flags', /the dispatch-fix\.md step file must contain the dispatch_fix step/],
         ['code-review-fix.md gone from the dispatch_fix step (#3727)', 'gsd-core/workflows/code-review/steps/dispatch-fix.md',
           eraseAll('code-review-fix.md'), 'code-review-flags', /the dispatch_fix step must reference the code-review-fix\.md workflow/],
-        ['neither the fixer agent nor the fix workflow named in the dispatch_fix step (#3727)', 'gsd-core/workflows/code-review/steps/dispatch-fix.md',
-          (text) => eraseAll('gsd-code-fixer')(eraseAll('code-review-fix.md')(text)), 'code-review-flags', /the dispatch_fix step must reference the gsd-code-fixer agent or the code-review-fix\.md workflow/],
   ]) {
-    test(`mutation: ${title} fails ${contract}`, (t) => {
+    test(`mutation: ${title} (${rel}) fails ${contract}`, (t) => {
       const root = copyOfRepoFiles(t);
       const abs = path.join(root, ...rel.split('/'));
       const before = fs.readFileSync(abs, 'utf8');
@@ -2074,7 +2074,10 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       const POINTER_FILE = 'gsd-core/references/agent-skills-bootstrap.md';
       const rewrite = (root, rel, edit) => {
         const abs = path.join(root, ...rel.split('/'));
-        fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
+        const before = fs.readFileSync(abs, 'utf8');
+        const after = edit(before);
+        assert.notEqual(after, before, 'the edit changed the file');
+        fs.writeFileSync(abs, after);
       };
       const carryingCompact = (root) => fs.readdirSync(path.join(root, 'agents'))
         .filter((name) => name.endsWith('.compact.md'))
@@ -2181,8 +2184,8 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       passes('the auto-selection rule in capitals', NEW_MILESTONE_MD, (text) => text.split('Auto-select ALL matching seeds').join('AUTO-SELECT ALL MATCHING SEEDS'), CONTRACT);
       passes('the auto-selection rule with long gaps on one line', NEW_MILESTONE_MD,
         (text) => text.split('Auto-select ALL matching seeds').join(`Auto ${'-'.repeat(400)} select ${'.'.repeat(400)} all ${'.'.repeat(400)} matching ${'.'.repeat(400)} seed`), CONTRACT);
-      passes('only "auto-surface" left of the four auto-surfacing spellings', PLANT_SEED_MD, (text) => text.replace(/auto.present/gi, 'x'), CONTRACT);
-      passes('only "auto-present" left of the four auto-surfacing spellings', PLANT_SEED_MD, (text) => text.replace(/auto.surface/gi, 'x'), CONTRACT);
+      passes('only "auto-surface" left of the two auto-surfacing patterns', PLANT_SEED_MD, (text) => text.replace(/auto.present/gi, 'x'), CONTRACT);
+      passes('only "auto-present" left of the two auto-surfacing patterns', PLANT_SEED_MD, (text) => text.replace(/auto.surface/gi, 'x'), CONTRACT);
       passes('"auto surface" with a space is an auto-surfacing spelling', PLANT_SEED_MD, (text) => text.replace(/auto-surface/gi, 'auto surface').replace(/auto.present/gi, 'x'), CONTRACT);
       passes('"auto_present" with an underscore is an auto-surfacing spelling', PLANT_SEED_MD, (text) => text.replace(/auto.surface/gi, 'x').replace(/auto-present/gi, 'auto_present'), CONTRACT);
       passes('only "when relevant" left of the trigger_when defaults', PLANT_SEED_MD, (text) => text.replace(/default|when scope matches|unspecified/gi, ''), CONTRACT);
@@ -2212,7 +2215,10 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         .flatMap((entry) => (entry.isDirectory() ? markdownUnder(root, `${rel}/${entry.name}`) : entry.name.endsWith('.md') ? [`${rel}/${entry.name}`] : []));
       const rewrite = (root, rel, edit) => {
         const abs = path.join(root, ...rel.split('/'));
-        fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
+        const before = fs.readFileSync(abs, 'utf8');
+        const after = edit(before);
+        assert.notEqual(after, before, 'the edit changed the file');
+        fs.writeFileSync(abs, after);
       };
       const fullPasses = (title, edits) => test(title, (t) => {
         const root = copyOfRepoFiles(t, HEAVY);
@@ -2409,14 +2415,6 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         assert.ok(findings.some((f) => /introduces `config\.mempalace\.mirror_kg !== false` with "unless"/.test(f.message)), JSON.stringify(findings));
       });
       passes('an explanatory mention of the predicate next to a when gate is not a failing gate', RECALL_COMMAND_MD, append('The predicate is `config.mempalace.mirror_kg !== false` when read.'), CONTRACT);
-      test('a connective more than 80 characters before the predicate is not read: the word before the window decides', (t) => {
-        const root = copyOfRepoFiles(t);
-        const abs = path.join(root, ...RECALL_COMMAND_MD.split('/'));
-        fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8').split(GATE).join(`(when${'-'.repeat(100)}\`config.mempalace.mirror_kg !== false\``)}\n`);
-        const findings = runShipped(root, [CONTRACT]);
-        assert.ok(findings.some((f) => /must introduce its `config\.mempalace\.mirror_kg !== false` gate with "when" or "only if"/.test(f.message)), JSON.stringify(findings));
-      });
-      passes('a connective exactly 80 characters before the predicate is read', RECALL_COMMAND_MD, swap(GATE, `(when${'-'.repeat(74)}\`config.mempalace.mirror_kg !== false\``), CONTRACT);
       passes('the capture command may use unless with the correct === false form', CAPTURE_COMMAND_MD, append('Skip unless `k === false`.'), CONTRACT);
     }
 
@@ -2525,6 +2523,162 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         assert.ok(findings.some((f) => /the human_needed branch must direct the user to \/gsd:verify-work/.test(f.message)), JSON.stringify(findings));
       });
       passes('text appended inside the human_needed section is read as part of it', WORKFLOW_MD, inHumanNeeded((section) => `${section}\nSee verify-work and the -UAT.md file.\n`), CONTRACT);
+    }
+
+    // Round 1 review of group 2: one finding for one missing file, the frontmatter name read, the connective lookback, the step-name guards, the end-of-file heading, the registry and status-enum seams.
+    {
+      const contractModule = (id) => require(path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', `${id}.cjs`));
+      const editFile = (root, rel, edit) => {
+        const abs = path.join(root, ...rel.split('/'));
+        const before = fs.readFileSync(abs, 'utf8');
+        const after = edit(before);
+        assert.notEqual(after, before, 'the edit changed the file');
+        fs.writeFileSync(abs, after);
+      };
+      const OWN_FILES = {
+        'agent-skills-bootstrap': ['gsd-core/references/agent-skills-bootstrap.md', 'gsd-core/references/gsd-run-resolver.md', 'agents/gsd-planner.md'],
+        'agent-required-reading-consistency': ['gsd-core/references/common-bug-patterns.md', 'agents/gsd-debugger.md'],
+        'planner-decomposition': ['agents/gsd-planner.md', 'gsd-core/references/planner-gap-closure.md', 'gsd-core/references/planner-revision.md',
+          'gsd-core/references/planner-reviews.md', 'gsd-core/references/planner-guidance.md', 'gsd-core/workflows/plan-phase.md'],
+        'execute-phase-step-5-5-deviation-doc': ['gsd-core/workflows/execute-phase.md'],
+        'mempalace-capture-gate-default': ['skills/gsd-mempalace-capture/SKILL.md', 'commands/gsd/mempalace-capture.md', 'skills/gsd-mempalace-recall/SKILL.md',
+          'commands/gsd/mempalace-recall.md', 'agents/gsd-mempalace-curator.md', 'agents/gsd-mempalace-curator.compact.md'],
+        'verifier-coincidental-reliance': ['agents/gsd-verifier.md', 'gsd-core/templates/verification-report.md', 'docs/reference/agents.md', 'gsd-core/references/verifier-phase-gates.md'],
+        'spike-manifest-scoping': ['gsd-core/workflows/spike.md', 'gsd-core/workflows/spike-wrap-up.md', 'gsd-core/workflows/sketch.md', 'gsd-core/references/artifact-types.md'],
+        'seed-scan-new-milestone': ['gsd-core/workflows/new-milestone.md', 'gsd-core/workflows/plant-seed.md'],
+      };
+      for (const [contract, files] of Object.entries(OWN_FILES)) {
+        for (const rel of files) {
+          test(`${rel} removed from the tree is exactly one finding for that file under ${contract}`, (t) => {
+            const root = copyOfRepoFiles(t, HEAVY);
+            fs.unlinkSync(path.join(root, ...rel.split('/')));
+            const own = runShipped(root, [contract]).filter((f) => f.file === rel);
+            assert.equal(own.length, 1, JSON.stringify(own));
+            assert.match(own[0].message, /cannot read the file/);
+          });
+        }
+      }
+
+      // The frontmatter name is read the way the old multiline pattern read it: whitespace, line breaks included, may precede the value.
+      const AGENT = 'agents/gsd-planner.md';
+      const NAME_LINE = 'name: gsd-planner';
+      const nameMismatch = /frontmatter name gsd-other must match the stated type gsd-planner/;
+      for (const [label, written] of [
+        ['on the next line', 'name:\n  gsd-other'],
+        ['after several blank lines', 'name:\n\n\n  gsd-other'],
+        ['in double quotes with trailing blanks', 'name:   "gsd-other"   '],
+        ['on the next line in double quotes', 'name:\n  "gsd-other"'],
+        ['before a line separator', `name: gsd-other${String.fromCharCode(0x2028)}`],
+        ['before a carriage return', 'name: gsd-other\r'],
+      ]) {
+        test(`a frontmatter name ${label} is read and compared with the stated type`, (t) => {
+          const root = copyOfRepoFiles(t);
+          editFile(root, AGENT, (text) => text.split(NAME_LINE).join(written));
+          const findings = runShipped(root, ['agent-skills-bootstrap']);
+          assert.ok(findings.some((f) => nameMismatch.test(f.message)), JSON.stringify(findings));
+        });
+      }
+      passes('a frontmatter name on the next line that matches the stated type', AGENT, (text) => text.split(NAME_LINE).join('name:\n  gsd-planner'), 'agent-skills-bootstrap');
+      passes('a name value followed by more words is not a plain name', AGENT, (text) => text.split(NAME_LINE).join('name: gsd-other extra words'), 'agent-skills-bootstrap');
+      passes('a name value ending in a quote and text is not a plain name', AGENT, (text) => text.split(NAME_LINE).join('name: "gsd-other" tail'), 'agent-skills-bootstrap');
+      passes('a name key that is not at a line start is not read', AGENT, (text) => text.split(NAME_LINE).join(' name: gsd-other'), 'agent-skills-bootstrap');
+
+      // The connective before a `!== false` gate is read from the 80 characters before the predicate: "when" ends 76 characters before it at the limit.
+      gapCases('the connective before the mirror_kg gate', 'commands/gsd/mempalace-recall.md', 'mempalace-capture-gate-default',
+        (text, gap) => text.split('(when `config.mempalace.mirror_kg !== false`').join(`(when${'-'.repeat(gap)}\`config.mempalace.mirror_kg !== false\``), 76,
+        /must introduce its `config\.mempalace\.mirror_kg !== false` gate with "when" or "only if" \(found: hen\)/);
+
+      // seed-scan-new-milestone: a step tag with an empty name or no closing quote is skipped.
+      passes('a step with an empty name is skipped', 'gsd-core/workflows/plant-seed.md', (text) => text.split('<step name="parse-idea">').join('<step name="">\n</step>\n<step name="parse-idea">'), 'seed-scan-new-milestone');
+      passes('a step tag with no closing quote at the very end of the file is skipped', 'gsd-core/workflows/plant-seed.md', (text) => `${text}\n<step name="`, 'seed-scan-new-milestone');
+
+      // spike-manifest-scoping: the `## Ideas` heading as the last bytes of the file satisfies the section check by itself.
+      passes('## Ideas as the last bytes of the file, with every other heading word changed', 'gsd-core/workflows/spike.md', (text) => `${text.split('Ideas').join('Ideax')}\n## Ideas`, 'spike-manifest-scoping');
+      test('## Ideas followed by a word character as the last bytes of the file is not the heading', (t) => {
+        const root = copyOfRepoFiles(t);
+        editFile(root, 'gsd-core/workflows/spike.md', (text) => `${text.split('Ideas').join('Ideax')}\n## Ideasx`);
+        const findings = runShipped(root, ['spike-manifest-scoping']);
+        assert.ok(findings.some((f) => /must have a `## Ideas` section \(plural\)/.test(f.message)), JSON.stringify(findings));
+      });
+
+      // agent-required-reading-consistency: one backticked legacy tag in an agent is two findings, one per cause.
+      test('one backticked legacy tag in an agent is two findings: the tag and the bare word', (t) => {
+        const root = copyOfRepoFiles(t, HEAVY);
+        editFile(root, 'agents/gsd-verifier.md', (text) => `${text}\nRead the \`<files_to_read>\` block.\n`);
+        const own = runShipped(root, ['agent-required-reading-consistency']).filter((f) => f.file === 'agents/gsd-verifier.md').map((f) => f.message);
+        assert.equal(own.length, 2, JSON.stringify(own));
+        assert.ok(own.some((m) => /still has <files_to_read> opening tag/.test(m)), JSON.stringify(own));
+        assert.ok(own.some((m) => /still uses files_to_read: it must be migrated/.test(m)), JSON.stringify(own));
+      });
+
+      // The registry and status-enum checks are functions of the shipped module, so other shapes can be fed to them.
+      const mempalace = contractModule('mempalace-capture-gate-default');
+      const settings = (overrides = {}) => ({
+        'mempalace.enabled': { type: 'boolean', default: false },
+        'mempalace.capture_artifacts': { type: 'boolean', default: true },
+        'mempalace.mirror_kg': { type: 'boolean', default: true },
+        'mempalace.diary_journal': { type: 'boolean', default: true },
+        'mempalace.cross_project_tunnels': { type: 'boolean', default: false },
+        ...overrides,
+      });
+      const registryOf = (schema) => ({ capabilities: { mempalace: { group: { nested: schema } } } });
+      const SCHEMA_PROBLEM = 'the capability registry must expose a mempalace settings schema';
+      test('a registry with the declared defaults has no problem and reports its default-true keys', () => {
+        const result = mempalace.registryProblems(registryOf(settings()));
+        assert.deepEqual(result.problems, []);
+        assert.deepEqual([...result.defaultTrue].sort(), ['mempalace.capture_artifacts', 'mempalace.diary_journal', 'mempalace.mirror_kg']);
+      });
+      for (const [label, registry] of [
+        ['no registry', undefined], ['a null registry', null], ['a string registry', 'registry'], ['a registry with no capabilities', {}],
+        ['null capabilities', { capabilities: null }], ['capabilities without a mempalace node', { capabilities: {} }], ['a null mempalace node', { capabilities: { mempalace: null } }],
+        ['a mempalace node with no settings schema', { capabilities: { mempalace: { other: { type: 'boolean' } } } }],
+      ]) {
+        test(`${label} is a problem, not a throw`, () => assert.deepEqual(mempalace.registryProblems(registry).problems, [SCHEMA_PROBLEM]));
+      }
+      for (const entry of [null, 'text', 7, undefined]) {
+        test(`a ${entry === null ? 'null' : typeof entry} entry in the settings schema is skipped`, () => {
+          assert.deepEqual(mempalace.registryProblems(registryOf(settings({ 'mempalace.extra': entry }))).problems, []);
+        });
+      }
+      for (const key of ['mempalace.capture_artifacts', 'mempalace.mirror_kg', 'mempalace.diary_journal']) {
+        test(`${key} declared default false is a problem`, () => {
+          assert.deepEqual(mempalace.registryProblems(registryOf(settings({ [key]: { type: 'boolean', default: false } }))).problems, [`${key} must declare default: true in the capability registry`]);
+        });
+        test(`${key} declared as a string is not a default-true boolean`, () => {
+          assert.deepEqual(mempalace.registryProblems(registryOf(settings({ [key]: { type: 'string', default: true } }))).problems, [`${key} must declare default: true in the capability registry`]);
+        });
+      }
+      test('mempalace.enabled declared default true is a problem', () => {
+        assert.deepEqual(mempalace.registryProblems(registryOf(settings({ 'mempalace.enabled': { type: 'boolean', default: true } }))).problems, ['mempalace.enabled must stay default: false: the master switch is opt-in']);
+      });
+      test('mempalace.enabled missing from the schema is a problem', () => {
+        const { 'mempalace.enabled': omitted, ...rest } = settings();
+        assert.equal(omitted.default, false);
+        assert.deepEqual(mempalace.registryProblems(registryOf(rest)).problems, ['mempalace.enabled must stay default: false: the master switch is opt-in']);
+      });
+      test('a settings schema nested six levels deep is still found', () => {
+        const deep = { capabilities: { mempalace: { a: { b: { c: { d: { e: settings() } } } } } } };
+        assert.deepEqual(mempalace.registryProblems(deep).problems, []);
+      });
+
+      const verifier = contractModule('verifier-coincidental-reliance');
+      const STATUS_PROBLEM = 'the VERIFIER_STATUSES set must be present';
+      test('the expected overall-status set has no problem', () => assert.deepEqual(verifier.statusEnumProblems({ VERIFIER_STATUSES: new Set(['human_needed', 'passed', 'gaps_found']) }), []));
+      for (const [label, verification] of [['no module', undefined], ['a null module', null], ['a module with an array', { VERIFIER_STATUSES: ['passed', 'gaps_found', 'human_needed'] }], ['a module with a plain object', { VERIFIER_STATUSES: {} }], ['a module with no set', {}]]) {
+        test(`${label} is a problem, not a throw`, () => assert.deepEqual(verifier.statusEnumProblems(verification), [STATUS_PROBLEM]));
+      }
+      for (const [label, statuses] of [
+        ['an extra status', ['passed', 'gaps_found', 'human_needed', 'other']],
+        ['a missing status', ['passed', 'gaps_found']],
+        ['the advisory as a status', ['passed', 'gaps_found', 'human_needed', 'coincidental_reliance']],
+        ['the advisory in place of a status', ['passed', 'gaps_found', 'coincidental']],
+      ]) {
+        test(`${label} in the overall-status set is a problem`, () => {
+          const problems = verifier.statusEnumProblems({ VERIFIER_STATUSES: new Set(statuses) });
+          assert.equal(problems.length, 1, JSON.stringify(problems));
+          assert.match(problems[0], /the overall-status enum must stay gaps_found, human_needed, passed \(found: /);
+        });
+      }
     }
   }
 
@@ -2750,6 +2904,66 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       passes(`a closed required_reading block without ${ref} is allowed in ${agent}.md`, rel, append('<required_reading>\n@~/.claude/gsd-core/references/other.md\n</required_reading>'), 'thinking-model-guidance');
     }
 
+    // ---- review round 1: bash block rule, bound of the X run, one finding per cause, branches and depth filters.
+    // A column-0 bash or sh fence line opens a block even after an unclosed fence of another language or inside a longer fence.
+    findsOne('a bash block after an unclosed js fence is still read', 'agents/gsd-verifier.md', append('```js\nlet x;\n```bash\nnode ~/x/gsd-tools.cjs state\n```'), 'no-hardcoded-home-gsd-tools', 'a bash block must not hardcode a $HOME gsd-tools.cjs call');
+    findsOne('a bash fence inside a longer markdown example is still read', 'agents/gsd-verifier.md', append('````markdown\n```bash\nnode ~/x/gsd-tools.cjs state\n```\n````'), 'no-hardcoded-home-gsd-tools', 'a bash block must not hardcode a $HOME gsd-tools.cjs call');
+    // The bound of the X run: two X are not a run, three and four are.
+    passes('a run of two X before a suffix is not a template run (limit - 1)', 'gsd-core/workflows/ship.md', append('mktemp /tmp/gsd-XX.json'), 'no-hardcoded-home-gsd-tools');
+    findsOne('a run of three X before a suffix is a suffixed template (limit)', 'gsd-core/workflows/ship.md', append('mktemp /tmp/gsd-XXX.json'), 'no-hardcoded-home-gsd-tools', 'a workflow mktemp template must keep XXXXXX as the final path component');
+    findsOne('a run of four X before a suffix is a suffixed template (limit + 1)', 'gsd-core/workflows/ship.md', append('mktemp /tmp/gsd-XXXX.json'), 'no-hardcoded-home-gsd-tools', 'a workflow mktemp template must keep XXXXXX as the final path component');
+    // One finding for one cause.
+    findsOne('a missing rooms: line in the skill is one finding', 'skills/gsd-mempalace-capture/SKILL.md', swap('rooms:\n     - name: decisions', 'items:\n     - name: decisions'), 'mempalace-capture-headless-invocation', 'could not locate a rooms: YAML block');
+    findsOne('a missing YAML sentinel in the command is one finding', 'commands/gsd/mempalace-capture.md', swap('   YAML\n   # Suppress', '   # Suppress'), 'mempalace-capture-headless-invocation', 'could not locate a rooms: YAML block');
+    findsOne('the import command gone from the ultraplan workflow is one finding', 'gsd-core/workflows/ultraplan-phase.md', swap('gsd:import', 'gsd:imp'), 'ultraplan-phase', 'the workflow must direct the user to run /gsd-import --from after ultraplan completes');
+    findsOne('the /ultraplan trigger gone from the ultraplan workflow is one finding', 'gsd-core/workflows/ultraplan-phase.md', swap('/ultraplan', 'ultraplan'), 'ultraplan-phase', 'the workflow must trigger /ultraplan');
+    findsOne('the jq-dependent lanes declaration gone from review.md is one finding', 'gsd-core/workflows/review.md', swap('jq-dependent reviewer lanes', 'jq reviewers'), 'workflow-jq-dependency', 'review.md must declare the jq-dependent reviewer lanes');
+    // Branches of the jq scans.
+    passes('gsd_run query with a longer verification.status word is not a jq pipe', 'gsd-core/workflows/review.md', append('gsd_run query verification.statuses | jq .x'), 'workflow-jq-dependency');
+    findsOne('a lane name that is the tail of a longer word does not count', 'gsd-core/workflows/review.md', swap('ollama', 'myollama'), 'workflow-jq-dependency', 'review.md must name ollama as a jq-dependent lane');
+    findsOne('a lane name glued to the end of the declaration does not count', 'gsd-core/workflows/review.md',
+      (text) => text.split('ollama').join('x').split('jq-dependent reviewer lanes').join('jq-dependent reviewer lanesollama'), 'workflow-jq-dependency', 'review.md must name ollama as a jq-dependent lane');
+    // Only the files directly under a directory are read.
+    test('a nested verify-work step carrying the user-flow phrase is not read', (t) => {
+      const root = copyOfRepoFiles(t);
+      const framing = path.join(root, 'gsd-core', 'workflows', 'verify-work', 'steps', 'mvp-uat-framing.md');
+      fs.writeFileSync(framing, framingBody3(fs.readFileSync(framing, 'utf8'), 'technical checks defer'));
+      write(root, 'gsd-core/workflows/verify-work/steps/nested/extra.md', 'user-flow first\n');
+      const findings = runShipped(root, ['verify-mvp-uat']);
+      assert.ok(findings.some((f) => f.message.includes('the workflow must specify user-flow-first ordering')), JSON.stringify(findings.map((f) => f.message)));
+    });
+    test('a nested workflow citing review.md by line number is not read', (t) => {
+      const root = copyOfRepoFiles(t);
+      write(root, 'gsd-core/workflows/nested/extra.md', 'See review.md:12 for the prerequisite.\n');
+      assert.deepEqual(runShipped(root, ['workflow-jq-dependency']), []);
+    });
+    // Smaller branches.
+    passes('a carriage return before the required_reading tag still starts a line', 'agents/gsd-verifier.md', swap('\n<required_reading>', '\r<required_reading>'), 'verification-overrides');
+    passes('a line separator before the required_reading tag still starts a line', 'agents/gsd-verifier.md', swap('\n<required_reading>', '\u2028<required_reading>'), 'verification-overrides');
+    passes('mempalace glued to mine is not a mine command', 'commands/gsd/mempalace-capture.md', append('mempalacemine --room x'), 'mempalace-capture-headless-invocation');
+    test('a rooms entry with no blank after the hyphen is not a bare-string entry (it is not valid as a dict either)', (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'commands', 'gsd', 'mempalace-capture.md');
+      fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').split('- name: decisions').join('-decisions'));
+      const findings = runShipped(root, ['mempalace-capture-headless-invocation']);
+      assert.ok(findings.length > 0 && !findings.some((f) => f.message.includes('bare-string entries')), JSON.stringify(findings.map((f) => f.message)));
+    });
+    // A fenced `## ` line inside a model section is example text and does not end the section.
+    passes('a fenced ## line before the Counters line does not end the section', 'gsd-core/references/thinking-models-debug.md',
+      (text) => { const at = text.indexOf('**Counters:**'); return `${text.slice(0, at)}\`\`\`\n## fake heading\n\`\`\`\n${text.slice(at)}`; }, 'thinking-model-guidance');
+    // The general gsd_run query guard needs a blank on each side of query: the per-family probes still see the pipe, the guard does not.
+    for (const [title, line] of [['gsd_runquery with no blank', 'gsd_runquery config-get x | jq .x'], ['gsd_run queryconfig-get with no blank', 'gsd_run queryconfig-get x | jq .x']]) {
+      test(`${title} is not a gsd_run query for the general guard`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, 'gsd-core', 'workflows', 'review.md');
+        fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
+        const findings = runShipped(root, ['workflow-jq-dependency']);
+        assert.ok(findings.some((f) => f.message.includes('config-get lookups must use --raw')), JSON.stringify(findings.map((f) => f.message)));
+        assert.ok(!findings.some((f) => f.message.includes('no gsd_run query (config-get')), JSON.stringify(findings.map((f) => f.message)));
+      });
+    }
+    passes('an indented bash fence is not a block, as before', 'agents/gsd-verifier.md', append('  ```bash\n  node ~/x/gsd-tools.cjs state\n  ```'), 'no-hardcoded-home-gsd-tools');
+
     // A file a contract checks with ctx.exists, removed from the tree, is a finding of its own.
     for (const [rel, contract, why] of [
       ['commands/gsd/ultraplan-phase.md', 'ultraplan-phase', 'commands/gsd/ultraplan-phase.md should exist'],
@@ -2955,6 +3169,72 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     // code-review-flags: without a closing step tag the initialize section runs to the end of the file (the test's slice).
     passes('with no closing step tag the initialize section is read to the end of the file', 'gsd-core/workflows/code-review.md',
       (text) => text.split('</step>').join(''), 'code-review-flags');
+
+    // A file a group 4 contract reads, gone from the tree, is exactly one finding for that file (each file is one document).
+    for (const [rel, contract] of [
+      ['gsd-core/workflows/quick/steps/worktree-pre-dispatch-commit.md', 'quick-commit-boundary-context-research'],
+      ['gsd-core/workflows/quick.md', 'quick-commit-boundary-context-research'],
+      ['gsd-core/workflows/spec-phase.md', 'spec-phase-probe-reachability'],
+      ['gsd-core/workflows/execute-phase/steps/regression-gate-run.md', 'post-merge-gate-watch-mode'],
+      ['gsd-core/workflows/execute-phase/steps/post-merge-gate.md', 'post-merge-gate-watch-mode'],
+      ['gsd-core/workflows/audit-fix.md', 'post-merge-gate-watch-mode'],
+      ['gsd-core/workflows/execute-phase/steps/regression-gate.md', 'post-merge-gate-watch-mode'],
+      ['gsd-core/workflows/execute-phase.md', 'post-merge-gate-watch-mode'],
+      ['gsd-core/workflows/execute-phase/steps/verify-phase-goal.md', 'post-merge-gate-watch-mode'],
+      ['gsd-core/workflows/execute-phase.md', 'execute-phase-worktree-artifacts'],
+      ['gsd-core/workflows/execute-phase/steps/worktree-recovery-policy.md', 'execute-phase-worktree-artifacts'],
+      ['gsd-core/workflows/quick.md', 'execute-phase-worktree-artifacts'],
+      ['gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md', 'tdd-backend-wiring'],
+      ['gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', 'tdd-backend-wiring'],
+      ['gsd-core/workflows/execute-phase.md', 'tdd-backend-wiring'],
+      ['gsd-core/workflows/cleanup.md', 'cleanup-branch-pruning'],
+      ['gsd-core/workflows/code-review.md', 'code-review-flags'],
+      ['gsd-core/workflows/code-review/steps/dispatch-fix.md', 'code-review-flags'],
+    ]) {
+      test(`${rel} removed from the tree is exactly one finding for ${contract}`, (t) => {
+        const root = copyOfRepoFiles(t);
+        fs.unlinkSync(path.join(root, ...rel.split('/')));
+        const findings = runShipped(root, [contract]);
+        assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+        assert.equal(findings[0].file, rel);
+        assert.match(findings[0].message, /cannot read the file/);
+      });
+    }
+
+    // spec-phase-probe-reachability: a third probe step passes; a heading at the end of the file keeps its title when a lone CR ends it.
+    passes('three probe steps (a probe before the edge probe, jumped to) satisfy the two-probe minimum', 'gsd-core/workflows/spec-phase.md',
+      (text) => text.split('Jump to Step 5.5').join('Jump to Step 5.4').split('## Step 5.5: Edge-Completeness Probe').join('## Step 5.4: Extra Probe\n\nproceed to Step 5.5.\n\n## Step 5.5: Edge-Completeness Probe'), 'spec-phase-probe-reachability');
+    findsAmong('a probe heading that ends the file with a lone CR keeps its title', 'gsd-core/workflows/spec-phase.md',
+      (text) => `${text}\n## Step 5.7: Extra Probe\r`, 'spec-phase-probe-reachability', 'Step 5.7 (Extra Probe) has no "proceed to Step N" exit');
+
+    // post-merge-gate-watch-mode: the four-construction and two-arm minimums, and the whole-word fi that closes an arm.
+    const MERGE_GATE = 'gsd-core/workflows/execute-phase/steps/post-merge-gate.md';
+    findsAmong('three xcodebuild constructions are one short of the four', MERGE_GATE,
+      swap("xcodebuild build -project '$XCODEPROJ' -destination", "xcrun build -project '$XCODEPROJ' -destination"), 'post-merge-gate-watch-mode', 'expected the four Xcode command constructions, got 3');
+    passes('a fifth compliant xcodebuild construction passes', MERGE_GATE,
+      append("EXTRA=\"xcodebuild build -project '$XCODEPROJ' -destination 'id=1'\""), 'post-merge-gate-watch-mode');
+    findsAmong('one skip arm is one short of the two', MERGE_GATE,
+      (text) => { const start = 'if [ -z "$XCODE_SIM" ]; then'; const at = text.lastIndexOf(start); return text.slice(0, at) + 'if [ -z "$XCODE_SIM2" ]; then' + text.slice(at + start.length); }, 'post-merge-gate-watch-mode', 'expected both skip arms, got 1');
+    passes('a third skip arm that assigns its variable passes', MERGE_GATE,
+      append('if [ -z "$XCODE_SIM" ]; then\n  BUILD_CMD=""\n    fi'), 'post-merge-gate-watch-mode');
+    passes('a line that only begins with fi (fix) does not close a skip arm', MERGE_GATE,
+      append('if [ -z "$XCODE_SIM" ]; then\n  echo x\n    fix\n    BUILD_CMD=""\n    fi'), 'post-merge-gate-watch-mode');
+
+    // quick-commit-boundary-context-research: no prompt=" before the executor spawn is its own finding.
+    findsAmong('no prompt= before the executor spawn', 'gsd-core/workflows/quick.md',
+      swap('prompt="', 'prompt = "'), 'quick-commit-boundary-context-research', 'there is no prompt=" before the executor spawn');
+
+    // cleanup-branch-pruning: where the sectionizer's fence rules differ from the old any-triple-backtick reading, and the
+    // line-terminator branches of the shell reader.
+    const CLEANUP_FILE = 'gsd-core/workflows/cleanup.md';
+    const inPrune = (body) => inStep('prune_local_branches', (section) => `${section}\n${body}\n`);
+    findsOne('a tilde fence is read as shell', CLEANUP_FILE, inPrune('~~~bash\ngit fetch --prune\n~~~'), 'cleanup-branch-pruning', 'it runs git fetch --prune');
+    passes('a closing fence shorter than its opener does not close it, so the block is dropped', CLEANUP_FILE, inPrune('````bash\ngit fetch --prune\n```'), 'cleanup-branch-pruning');
+    passes('a closing fence carrying text does not close it, so the block is dropped', CLEANUP_FILE, inPrune('```bash\ngit fetch --prune\n``` x'), 'cleanup-branch-pruning');
+    passes('a backtick in the info string cannot open a fence', CLEANUP_FILE, inPrune('```a`b\ngit fetch --prune\n```'), 'cleanup-branch-pruning');
+    findsOne('a # before a line terminator does not start a comment', CLEANUP_FILE, inPrune('```bash\ngit fetch # c\u2028--prune\n```'), 'cleanup-branch-pruning', 'it runs git fetch --prune');
+    passes('an assignment whose value holds a line terminator is not unwrapped', CLEANUP_FILE, inPrune('```bash\nX=git fetch --prune\u2028y\n```'), 'cleanup-branch-pruning');
+    passes('a nested substitution holding a line terminator is not unwrapped', CLEANUP_FILE, inPrune('```bash\n$($(git fetch --prune\u2028x))\n```'), 'cleanup-branch-pruning');
   }
 
   // A file a batch 10 contract reads that is gone from the tree is one finding for that file.
