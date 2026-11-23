@@ -31,6 +31,7 @@
   "tests/compact-content-4139.test.cjs": 4,
   "tests/config-defaults-runtime-exclusion.test.cjs": 2,
   "tests/config-get-default.test.cjs": 1,
+  "tests/config-loader.test.cjs": 1,
   "tests/config-schema.property.test.cjs": 4,
   "tests/config.platform.test.cjs": 17,
   "tests/configured-entrypoint-validation.test.cjs": 1,
