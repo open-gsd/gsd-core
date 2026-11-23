@@ -4,7 +4,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempGitProject, createTempDir, cleanup, runGsdTools, runGsdToolsCaptured } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { runNode, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 
@@ -469,10 +469,6 @@ describe('verify context-drift CLI', () => {
 // NOTHING to stderr; and config is workstream-aware through the resolver `config-get` shares: with
 // GSD_WORKSTREAM the workstream's config.json is read first, then the project root's.
 describe('verify context-drift: workflow.context_drift_action through the gate-config reader (#5139)', () => {
-  const { TEST_ENV_BASE } = require('./helpers.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-  const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-
   let tmp;
   beforeEach(() => { tmp = createTempGitProject('gsd-ctx-drift-cfg-'); });
   afterEach(() => cleanup(tmp));
@@ -492,13 +488,15 @@ describe('verify context-drift: workflow.context_drift_action through the gate-c
     fs.appendFileSync(path.join(tmp, dir, '03-CONTEXT.md'), 'D-99\n');
   }
 
+  // In-process, not a spawned binary (#6569): the subject here is a config read, not a process, so
+  // there is no spawn limit for a co-scheduled install test on a Windows shard to push the call past
+  // (TESTING-STANDARDS.md, "In-process CLI tests", rule 1). `runGsdToolsCaptured` keeps stderr for a
+  // successful command, which the "nothing on stderr" cases below assert on.
   function drift(workstream) {
-    const r = runNode([TOOLS, 'verify', 'context-drift', '03-feature'], {
-      cwd: tmp,
-      timeoutMs: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
+    const r = runGsdToolsCaptured(['verify', 'context-drift', '03-feature'], tmp, {
+      HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '',
     });
-    assertSeamExit(assert, r, 0, 'verify context-drift failed');
+    assert.equal(r.exitCode, 0, `verify context-drift failed: ${r.stderr}`);
     return { data: JSON.parse(r.stdout), stderr: r.stderr };
   }
 

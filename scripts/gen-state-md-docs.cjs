@@ -31,7 +31,7 @@
  *     documenting the `status` field's lifecycle. This is the section
  *     ISSUE #3873's own design doc found missing from all four locale
  *     translations (verified by line/heading count) — the generator emitting
- *     this skeleton is what turns `tests/docs-state-md-locale-parity.test.cjs`
+ *     this skeleton is what turns the `docs-state-md-locale-parity` text contract
  *     green.
  *
  * A NOTE ON WHAT "SCHEMA-DERIVED" MEANS HERE. `STATE_FIELD_SCHEMA.status.enum`

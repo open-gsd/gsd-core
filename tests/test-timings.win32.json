@@ -11,7 +11,7 @@
     "test-timings-windows-latest-job4.jsonl",
     "test-timings-windows-latest-job5.jsonl"
   ],
-  "file_count": 352,
+  "file_count": 351,
   "timings": {
     "5100-win32-bare-bash-sentinel.property.test.cjs": 35,
     "adr-612-bracket-new-project-config.test.cjs": 243,
@@ -194,7 +194,6 @@
     "launcher-homes-derivation.test.cjs": 56,
     "lint-phase-arg-assignment.test.cjs": 96,
     "lint-workflow-shellcheck-fetch.test.cjs": 163,
-    "lockfile-cve-audit.test.cjs": 3567,
     "locking-bugs-1909-1916-1925-1927.test.cjs": 1922,
     "mcp-catalog.test.cjs": 53,
     "milestone-archive.test.cjs": 7287,
@@ -231,7 +230,7 @@
     "opencode-statusline-plugin.test.cjs": 14341,
     "opencode-uninstall-roundtrip.test.cjs": 15626,
     "overlay-repo-helpers.test.cjs": 17901,
-    "packaging-shipped-scripts-require-only-shipped.test.cjs": 16885,
+    "packaging-shipped-scripts-require-only-shipped.test.cjs": 100,
     "path-replacement.test.cjs": 16720,
     "pause-work-context-detection.test.cjs": 2688,
     "pause-work-improvements.test.cjs": 535,

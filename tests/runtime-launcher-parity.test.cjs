@@ -1022,7 +1022,7 @@ describe('runtime-launcher-parity (#373)', () => {
   //
   // Regression for the #3841 red matrix run. The preamble is inlined into 112
   // shipped files, and several downstream guards balance braces by scanning raw
-  // TEXT with no string-context awareness — tests/new-project-mvp-prompt.test.cjs's
+  // TEXT with no string-context awareness — the new-project-mvp-prompt text contract's
   // "balanced braces" guard (mirroring #3784 bd53925f) counts every `{` and `}`
   // across new-project.md plus its steps/. new-project.md and
   // new-project/steps/auto-mode-config.md each carry one preamble copy, so a
@@ -1048,7 +1048,7 @@ describe('runtime-launcher-parity (#373)', () => {
       0,
       `_runtime-launcher.snippet.sh has unbalanced braces: net depth ${depth}. ` +
         `The preamble is inlined into 112 shipped files, and downstream guards ` +
-        `(tests/new-project-mvp-prompt.test.cjs) balance braces over raw text with no ` +
+        `(the new-project-mvp-prompt text contract) balance braces over raw text with no ` +
         `awareness of shell quoting — an unpaired brace here fails there instead, ` +
         `multiplied by the number of inlined copies in the scanned file set. ` +
         `Pair the brace in the snippet; do not relax the downstream guard.`,

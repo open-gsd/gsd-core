@@ -27,9 +27,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalizeRuntimeName, resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
-import configFileReadMod = require('./config-file-read.cjs');
-const { readConfigFileBounded } = configFileReadMod;
 
 export function formatGsdSlash(commandName: unknown, runtime: unknown): unknown {
   if (typeof commandName !== 'string') return commandName;
@@ -149,33 +146,30 @@ export function resolveExplicitRuntime(
 ): string | null {
   const envRuntime = resolveRuntimeNameFromCandidates(env['GSD_RUNTIME']);
   if (envRuntime) return envRuntime;
-  const config = readProjectConfig(projectDir);
-  const configRuntime = resolveRuntimeNameFromCandidates(config ? config['runtime'] : undefined);
+  const configRuntime = resolveRuntimeNameFromCandidates(readProjectRuntime(projectDir));
   if (configRuntime) return configRuntime;
   return null;
 }
 
 /**
- * Read `<projectDir>/.planning/config.json` as a plain object, or `null` when
- * there is no project, no file, or it is unreadable or not an object.
+ * The `runtime` a PROJECT config sets (workstream or root layer), or `undefined`.
  *
- * Read directly (not via loadConfig). loadConfig has a side effect of
- * normalizing and re-writing legacy keys back to disk, which would mutate the
- * project file just to read the runtime name. A plain JSON read is sufficient
- * and side-effect-free. A missing or broken config must not crash runtime
- * output formatting, so every failure degrades to `null`.
+ * Read through the Config Value Resolution Module (#6030), which never rewrites a layer.
+ * The global defaults layer is excluded on purpose: the installer stamps `runtime` into the
+ * shared `~/.gsd/defaults.json` with whichever runtime installed first, an install identity
+ * the marker rung below must outrank (#2840, #4717). A missing or broken config must not crash
+ * runtime output formatting, so every failure degrades to `undefined`. The resolver is required
+ * lazily because this module sits below the config modules in the load order.
  */
-function readProjectConfig(projectDir: string | null | undefined): Record<string, unknown> | null {
-  if (!projectDir) return null;
+function readProjectRuntime(projectDir: string | null | undefined): unknown {
+  if (!projectDir) return undefined;
   try {
-    const configPath = path.join(projectDir, '.planning', 'config.json');
-    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws and degrades to null.
-    const raw = readConfigFileBounded(configPath);
-    if (raw === null) return null;
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 lazy: the resolver imports modules that import this one
+    const { resolveConfigValue } = require('./config-value-resolver.cjs') as typeof import('./config-value-resolver.cjs');
+    const resolved = resolveConfigValue('runtime', { cwd: projectDir, family: 'A', quiet: true });
+    return resolved.found && (resolved.layer === 'workstream' || resolved.layer === 'root') ? resolved.value : undefined;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -203,7 +197,7 @@ function readProjectConfig(projectDir: string | null | undefined): Record<string
 export function resolveRuntime(projectDir: string | null | undefined): string {
   // The same chain `resolveActiveRuntime` owns, fed by a project directory:
   // one implementation, so the two entry points cannot drift (#5169).
-  return resolveActiveRuntime(readProjectConfig(projectDir));
+  return resolveActiveRuntime({ runtime: readProjectRuntime(projectDir) });
 }
 
 /**

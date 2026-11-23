@@ -29,6 +29,7 @@ process.env.GSD_TEST_MODE = '1';
 const core = require('../gsd-core/bin/lib/claude-orchestration.cjs');
 const router = require('../gsd-core/bin/lib/claude-orchestration-command-router.cjs');
 const { runGsdTools, createTempDir, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   detectWorkflowBackend,
@@ -482,7 +483,11 @@ describe('#4747 B: the CLI applies the kill switches end to end', () => {
       claude_orchestration: { enabled: true },
     }, extraConfig || {})));
     // Isolate the user scope from the machine running the test.
-    const env = { CLAUDE_CONFIG_DIR: path.join(home, '.claude'), HOME: home, USERPROFILE: home, CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managed, GSD_TEST_MODE: '1' };
+    const env = isolatedEnv({
+      home,
+      claudeConfigDir: path.join(home, '.claude'),
+      override: { CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managed, GSD_TEST_MODE: '1' },
+    });
     fs.mkdirSync(env.CLAUDE_CONFIG_DIR);
     return { dir, env, managed };
   }

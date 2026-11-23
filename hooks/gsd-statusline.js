@@ -18,7 +18,7 @@ const os = require('os');
 // monkeypatching childProcess.execFileSync.
 const childProcess = require('child_process');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath } = require('./lib/config-read.js');
 const { gitEnv } = require('./lib/git-probe.js');
 
 // This hook's build-seam outer catch (require.main guard just below) has
@@ -79,7 +79,7 @@ function readGsdConfig(dir) {
   const home = os.homedir();
   let current = dir;
   for (let i = 0; i < 10; i++) {
-    const candidate = path.join(current, '.planning', 'config.json');
+    const candidate = projectConfigPath(current);
     if (fs.existsSync(candidate)) {
       try {
         return JSON.parse(readConfigFileBounded(candidate, { required: true })) || {};

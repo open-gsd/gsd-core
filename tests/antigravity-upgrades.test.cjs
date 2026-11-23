@@ -36,6 +36,7 @@ const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
 
 const { installRuntimeFixture, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   toTildePosixPath,
@@ -248,7 +249,7 @@ test('antigravity --global uninstall removes only GSD-owned permissions.allow ru
 
   const args = [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root];
   const installResult = runNode(args, {
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(installResult.exitCode, 0, `install failed: ${installResult.stderr}`);
@@ -267,7 +268,7 @@ test('antigravity --global uninstall removes only GSD-owned permissions.allow ru
 
   const uninstallArgs = [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root, '--uninstall'];
   const uninstallResult = runNode(uninstallArgs, {
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(uninstallResult.exitCode, 0, `uninstall failed: ${uninstallResult.stderr}`);

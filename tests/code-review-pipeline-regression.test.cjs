@@ -32,6 +32,7 @@ const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempGitProject, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { findShellFencedMatches } = require('./helpers/shell-doc-scan.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const os = require('node:os');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -765,7 +766,7 @@ describe('Bug 4 (#2352) — compute_file_scope tilde-path expansion', () => {
     return toLegacyResult(
       runHook('-c', [script, 'bash', ...files], {
         interpreter: 'bash',
-        env: { ...process.env, HOME: homeDir },
+        env: isolatedEnv({ home: homeDir }),
         timeoutMs: PROBE_TIMEOUT_MS,
       })
     );
@@ -4845,12 +4846,12 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
   }
 
   /** Run a resolver block (then print the directory it exported) in the sandboxed project. */
-  function runBlock(block, env, extra = '', prefix = '') {
+  function runBlock(block, env, extra = '', prefix = '', home = emptyHome) {
     const script = prefix + block.text + '\nprintf "%s" "$GSD_LIB_DIR"\n' + extra;
     const result = runHook('-c', [script], {
       interpreter: 'bash',
       cwd: projectDir,
-      env: { PATH: minimalPath, HOME: emptyHome, ...env },
+      env: isolatedEnv({ home, path: minimalPath, base: {}, override: env }),
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
     return toLegacyResult(result);
@@ -4872,7 +4873,7 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
     before_(t);
     {
       for (const site of RESOLVER_SITES) {
-        const r = runBlock(resolverFor(site), { HOME: installHome });
+        const r = runBlock(resolverFor(site), {}, '', '', installHome);
         assert.equal(r.status, 0, site.module + ': ' + r.stderr);
         assert.equal(r.stdout, installedLib(), site.module);
       }
@@ -4884,7 +4885,7 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
     {
       const site = RESOLVER_SITES[0];
       const read = "\nnode -e \"const { parseCodeReviewFlags } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-flags.cjs')); process.stdout.write(JSON.stringify(parseCodeReviewFlags(process.argv.slice(1))));\" -- 03 --fix";
-      const r = runBlock(resolverFor(site), { HOME: installHome }, '\necho\n' + read.trimStart());
+      const r = runBlock(resolverFor(site), {}, '\necho\n' + read.trimStart(), '', installHome);
       assert.equal(r.status, 0, r.stderr);
       const flags = JSON.parse(r.stdout.slice(r.stdout.indexOf('\n') + 1));
       assert.equal(flags.fix, true, 'the --fix flag reaches the review');

@@ -803,7 +803,6 @@ test('module-level caches are reset around every in-process call (#6332)', async
 
   await t.test('the modules with per-invocation state are registered', () => {
     require('../gsd-core/bin/lib/state.cjs');
-    require('../gsd-core/bin/lib/capability-activation.cjs');
     require('../gsd-core/bin/lib/model-resolver.cjs');
     require('../gsd-core/bin/lib/unusable-input.cjs');
     const names = invocationResetNames();
@@ -812,7 +811,6 @@ test('module-level caches are reset around every in-process call (#6332)', async
       'state.diskScanCache',
       'config-loader.warnings',
       'config-loader.gitIgnoredCache',
-      'capability-activation.warnedRawConfigPaths',
       'model-resolver.unmappableWarnings',
       'unusable-input.warnedInputs',
     ]) {
