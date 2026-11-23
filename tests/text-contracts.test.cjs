@@ -1172,7 +1172,9 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
     const findings = runShipped(root, [contract]);
     assert.equal(findings.length, 1, JSON.stringify(findings));
-    assert.match(findings[0].message, expected);
+    // A string is matched literally (no regex is built from data); a RegExp is matched as given.
+    if (typeof expected === 'string') assert.ok(findings[0].message.includes(expected), `expected "${expected}" in ${findings[0].message}`);
+    else assert.match(findings[0].message, expected);
   });
 
   passes('an agent granting neither context7 form satisfies context7-plugin-grant-parity', 'agents/gsd-advisor-researcher.md',
@@ -1198,7 +1200,7 @@ describe('the shipped contracts hold on the real files, and fail when a contract
   for (const [pkg, floor, below, above] of [['node_modules/re2js', '2.8.7', '2.8.6', '2.8.8'], ['node_modules/@hono/node-server', '2.1.3', '2.1.2', '2.2.0']]) {
     passes(`${pkg} locked at its floor ${floor} satisfies dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, floor), 'dependency-advisory-floors');
     passes(`${pkg} locked above its floor (${above}) satisfies dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, above), 'dependency-advisory-floors');
-    findsOne(`${pkg} locked below its floor (${below}) fails dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, below), 'dependency-advisory-floors', new RegExp(`${below}, below the patched ${floor.replace(/\./g, '\\.')}`));
+    findsOne(`${pkg} locked below its floor (${below}) fails dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, below), 'dependency-advisory-floors', `${below}, below the patched ${floor}`);
   }
 
   // The planner stays under 50000 characters: 49999 passes, 50000 and 50001 fail.
