@@ -17,8 +17,10 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 const { ESLint } = require('eslint');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { assertWithinAllowlist } = require('../scripts/lib/allowlist-ratchet.cjs');
 const rule = require('../eslint-rules/no-adhoc-config-merge.cjs');
@@ -26,17 +28,6 @@ const allowlist = require('../eslint-rules/no-adhoc-config-merge.allowlist.json'
 
 const ROOT = path.join(__dirname, '..');
 const RULE_ID = 'local/no-adhoc-config-merge';
-
-function collect(dir, predicate, out) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules') continue;
-      collect(full, predicate, out);
-    } else if (predicate(full)) out.push(full);
-  }
-  return out;
-}
 
 function ruleOnlyEslint() {
   const { parser } = require('typescript-eslint');
@@ -87,13 +78,17 @@ describe('no-adhoc-config-merge allowlist: shape', () => {
 
 describe('no-adhoc-config-merge: the first-party tree', () => {
   test('census zero: every offending file is allowlisted and every allowlisted file offends', async () => {
-    const files = [
-      ...collect(path.join(ROOT, 'src'), (f) => f.endsWith('.cts'), []),
-      ...collect(path.join(ROOT, 'hooks'), (f) => f.endsWith('.js'), []),
-      ...collect(path.join(ROOT, 'gsd-core', 'bin'), (f) => f.endsWith('.cjs'), []),
-      ...collect(path.join(ROOT, 'scripts'), (f) => f.endsWith('.cjs'), []),
-      path.join(ROOT, 'bin', 'install.js'),
-    ];
+    // Tracked source only: gsd-core/bin/lib/*.cjs is build output (gitignored), the compiled twin of
+    // src/*.cts, and is not a first-party surface the lint config reaches.
+    const tracked = execFileSync('git', ['ls-files', '-z', '--', 'src', 'hooks', 'gsd-core/bin', 'scripts', 'bin'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: GIT_TIMEOUT_MS,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    }).split('\0').filter(Boolean);
+    const files = tracked
+      .filter((f) => /^(?:src\/.*\.cts|hooks\/.*\.js|gsd-core\/bin\/.*\.cjs|scripts\/.*\.cjs|bin\/install\.js)$/.test(f))
+      .map((f) => path.join(ROOT, f));
     // Without the allowlist options an offender is reported and an exempt file is not, so run the
     // rule bare and compare by identity with the temporary section.
     const { parser } = require('typescript-eslint');
@@ -167,12 +162,12 @@ describe('no-adhoc-config-merge: a reintroduced copy goes red', () => {
   ].join('\n');
   const REMOVED = "const fs = require('node:fs');\nmodule.exports = {};\n";
 
-  test('the copy is reported on both shapes, and removing it is green', async () => {
+  test('the copy is reported on all three shapes, and removing it is green', async () => {
     const eslint = ruleOnlyEslint();
     const file = path.join(ROOT, 'src', 'reintroduced-config-merge.cts');
     const [red] = await eslint.lintText(REINTRODUCED, { filePath: file });
     const ids = red.messages.filter((m) => m.ruleId === RULE_ID).map((m) => m.messageId).sort();
-    assert.deepEqual(ids, ['configSpreadMerge', 'layerPathRead', 'layerPathRead']);
+    assert.deepEqual(ids, ['configSpreadMerge', 'layerPathRead', 'layerPathRead', 'layerWalk']);
     const [green] = await eslint.lintText(REMOVED, { filePath: file });
     assert.deepEqual(green.messages.filter((m) => m.ruleId === RULE_ID), []);
   });
