@@ -724,6 +724,54 @@ on purpose. Without the fixture, the result depends on which runtimes the develo
 If the code under test also searches upward for `.planning/config.json`, start it inside a
 `createHermeticRoot()` directory as well (#4613).
 
+#### The lint rule that enforces child-env isolation
+
+`local/no-adhoc-env-isolation` (`eslint-rules/no-adhoc-env-isolation.cjs`) fails two hand-written
+copies under `tests/`:
+
+- a split of `process.env.PATH`, or any `X.split(path.delimiter).filter(...)`, which is the copy
+  `isolatedPath()` replaces;
+- an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` or
+  `env.USERPROFILE` on any object other than `process.env`, which is the copy `isolatedEnv()`
+  replaces.
+
+The rule and the count below read `tests/**/*.cjs` files only. A copy in a `.mjs`, `.js` or
+`.cts` test file, or in a file outside `tests/`, is neither flagged nor counted.
+
+An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
+`sandboxHome()`, above. Three other spellings of it are flagged:
+`globalThis.process.env.HOME = …`, `const env = process.env; env.HOME = …` and
+`Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt
+file. [docs/contributing/no-adhoc-env-isolation.md](docs/contributing/no-adhoc-env-isolation.md)
+states the forms each arm recognises. Every other spelling, such as a `HOME=` inside a shell
+script string, is out of scope; the page gives examples.
+
+`eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
+and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
+A count falls as copies migrate. A new copy in a file the list does not name fails lint, and
+`tests/no-adhoc-env-isolation.rule.test.cjs` counts every `tests/**/*.cjs` file: it fails when a
+listed file holds more copies than its count, or fewer. The count reads the files ESLint lints, and
+it also fails when ESLint skips a `.cjs` file under `tests/`, so an ESLint ignore over a `tests/`
+subtree cannot hide that subtree's copies. When you migrate copies, lower the count, and delete
+the entry when it reaches zero (until you do, lint reports the entry as stale). An
+`eslint-disable` comment for this rule does not exempt a copy: the count runs with inline config
+off and still sees it. Entries are repository-relative, so run lint from the repository root, as
+`npm run lint` does.
+
+The count is per file. A PR that adds a copy fails it, as `grown` in a listed file and as `added`
+in any other; a PR that removes one copy and adds another in the same file leaves the count
+unchanged, so review sees that swap only in the diff. Build a child env with `isolatedEnv()`
+instead of a copy: `home` sets `HOME` and `USERPROFILE`, `claudeConfigDir` sets
+`CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries every other key the test needs the
+helper to set or keep. A `HOME` or `USERPROFILE` key in `override` is an object-literal copy, so
+the rule flags it. Build a filtered PATH with `isolatedPath()`. If the helpers cannot build it, for
+example because the test's subject is an env object handed to code in-process and its exact keys
+are the fixture, add or raise that file's entry in the same PR and say in the PR description which
+site needs it and why. That is the only way an entry grows, and review decides it. When two open
+PRs change a listed file and one adds copies, whichever lands second rebases onto `next`: the PR
+that adds copies moves them to the helpers or takes this route for each, and the other sets the
+file's entry to the count the test measures on the rebased tree.
+
 ### Test Structure
 
 ```javascript
