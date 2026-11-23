@@ -950,7 +950,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    When **any** executor in this wave ran with `isolation="worktree"`, it skipped STATE.md and ROADMAP.md updates (last-merge-wins). The orchestrator is the single writer: after the merge, update shared artifacts once for every completed plan in the wave (worktree plans **and** sequential plans that deferred tracking writes).
 
-   **Only update tracking when tests passed (TEST_EXIT=0).**
+   **Only update tracking on pass or deferral (`TEST_EXIT=0` for either).**
    If tests failed or timed out, skip the tracking update — plans should
    not be marked as complete when integration tests are failing or inconclusive.
 

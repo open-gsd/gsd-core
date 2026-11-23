@@ -125,8 +125,12 @@ not read the file. It applies to decimal (gap-closure) phases only and is a no-o
 </step>
 
 <step name="regression_gate_dispatch">
-**Regression gate, gated by the section manifest (#2932).** If `section_manifest` is `null` or
-`"regression-gate"` is in its `included` list: read and execute
+**Regression gate, gated by the section manifest (#2932).** Resolve
+`gsd_run query config-get workflow.defer_wave_tests --raw` (default `false`)
+and pass the result to the regression gate as `DEFER_WAVE_TESTS`.
+If it is `true`, run the regression gate even when the section manifest
+omits it. Otherwise run it only if `section_manifest` is `null` or
+`"regression-gate"` is in its `included` list. When applicable, read and execute
 `gsd-core/workflows/execute-phase/steps/regression-gate.md`. Otherwise skip — do not read the file.
 On `REGRESSION GATE ABORTED`, HALT — do not dispatch the verifier.
 </step>

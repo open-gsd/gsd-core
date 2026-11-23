@@ -22,6 +22,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { runHook, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
 // #2932: the regression-gate step was split — steps/regression-gate.md now only
@@ -41,6 +43,65 @@ const AUDIT_FIX = path.join(ROOT, 'gsd-core', 'workflows', 'audit-fix.md');
 const EXECUTE_PHASE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 
 function read(p) { return fs.readFileSync(p, 'utf-8'); }
+
+describe('#6466: defer wave tests to the phase regression gate', () => {
+  function runTestGate({ configured, phase = false, runnerExit = 0 }) {
+    const block = read(POST_MERGE_GATE)
+      .split('**Step B — Test gate:**')[1].split('```bash')[1].split('```')[0]
+      .split(/\r?\n/).filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+    return runHook('-c', [`
+      GSD_PHASE_TEST_GATE=${phase}
+      gsd_run() {
+        case "$1 $2" in
+          'query config-get')
+            case "$3" in
+              workflow.defer_wave_tests) ${configured === undefined ? 'return 1' : `echo ${configured}`} ;;
+              workflow.test_command) echo 'project-test' ;;
+              workflow.test_gate_timeout) echo 17 ;;
+            esac ;;
+          'query normalize-test-command') printf '%s\n' "$3" ;;
+          'run-with-timeout 17') printf 'ran %s\n' "$6"; return ${runnerExit} ;;
+          *) return 99 ;;
+        esac
+      }
+      ${block}
+    `], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+  }
+
+  for (const configured of [undefined, false]) {
+    test(`runs the wave suite when the setting is ${configured}`, () => {
+      const result = runTestGate({ configured });
+      assertSeamExit(assert, result, 0, 'wave test gate');
+      assert.match(result.stdout, /ran project-test/);
+    });
+  }
+
+  test('skips the wave suite and runs it once at phase end', () => {
+    const wave = runTestGate({ configured: true });
+    assertSeamExit(assert, wave, 0, 'deferred wave test gate');
+    assert.match(wave.stdout, /deferred to the end-of-phase regression gate/);
+    assert.doesNotMatch(wave.stdout, /ran project-test/);
+
+    const phase = runTestGate({ configured: true, phase: true });
+    assertSeamExit(assert, phase, 0, 'phase test gate');
+    assert.equal(phase.stdout.match(/ran project-test/g)?.length, 1);
+  });
+
+  test('returns failures and aborts on timeout at phase end', () => {
+    for (const code of [1, 124]) {
+      const result = runTestGate({ configured: true, phase: true, runnerExit: code });
+      assertSeamExit(assert, result, code, 'phase test gate');
+      if (code === 124) assert.match(result.stdout, /REGRESSION GATE ABORTED/);
+    }
+  });
+
+  test('the deferred route bypasses prior-phase discovery and uses the wave suite', () => {
+    const verify = path.join(path.dirname(REGRESSION_GATE), 'verify-phase-goal.md');
+    assert.match(read(verify), /workflow\.defer_wave_tests --raw[\s\S]*?even when the section manifest\s+omits it/);
+    assert.match(read(REGRESSION_GATE), /When `DEFER_WAVE_TESTS` is true[^\n]*Go directly to Step 3/);
+    assert.match(read(REGRESSION_GATE_RUN), /only Step B of\s+`[^\n]+post-merge-gate\.md`, prepending\s+`GSD_PHASE_TEST_GATE=true`/);
+  });
+});
 
 // The three gates that were unbounded/silently-continued: full normalize + configured timeout.
 // Regression gate's mechanics now live in the delegated regression-gate-run.md (#2932).
