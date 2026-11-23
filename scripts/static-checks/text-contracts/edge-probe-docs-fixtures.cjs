@@ -20,16 +20,16 @@ const TAG = /^json edge-probe:([^\r\n]{1,500})$/;
 const PLAIN_REF = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
 const isDotSegment = (segment) => segment === '.' || segment === '..';
 
-// The tagged fenced blocks of the doc, keyed by ref; the fence rules have one owner (the markdown sectionizer).
+// The tagged fenced blocks of the doc as [ref, body] pairs in document order (a list, so a ref such as __proto__ or a repeated ref is never lost); the fence rules have one owner (the markdown sectionizer).
 function taggedJsonBlocks(markdown) {
   const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
   const lines = markdown.split('\n');
-  const out = {};
+  const out = [];
   for (const block of scanFencedBlocks(lines)) {
     if (block.closeLineIdx === -1) continue;
     const tag = TAG.exec(block.infoString || '');
     if (!tag) continue;
-    out[tag[1].trim()] = lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n');
+    out.push([tag[1].trim(), lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')]);
   }
   return out;
 }
@@ -45,11 +45,17 @@ module.exports = {
     // Fixture directories (directly under the fixtures root) that carry an expected-coverage.json.
     const expected = ctx.list(FIXTURES, 'expected-coverage.json', 'the fixtures are what the doc blocks are checked against')
       .filter((rel) => rel.endsWith('/expected-coverage.json') && rel.split('/').length === FIXTURES.split('/').length + 2);
-    doc.satisfies(() => Object.keys(blocks).length === expected.length
-      || `the doc embeds ${Object.keys(blocks).length} tagged blocks, the fixtures carry ${expected.length}`,
+    doc.satisfies(() => blocks.length === expected.length
+      || `the doc embeds ${blocks.length} tagged blocks, the fixtures carry ${expected.length}`,
     'the doc must embed one tagged fixture block for every expected-coverage.json fixture (count equality)');
 
-    for (const [ref, body] of Object.entries(blocks)) {
+    const seen = new Set();
+    for (const [ref, body] of blocks) {
+      if (seen.has(ref)) {
+        ctx.fail(DOC, `the tag "${ref}" is used by more than one block, so the earlier block would never be compared`);
+        continue;
+      }
+      seen.add(ref);
       if (!PLAIN_REF.test(ref) || ref.split('/').some(isDotSegment)) {
         ctx.fail(DOC, `a tagged block names "${ref}", which is not a plain <dir>/<file> fixture reference`);
         continue;

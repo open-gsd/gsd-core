@@ -424,7 +424,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
   ];
 
   function copyOfRepoFiles(t, extra = []) {
-    const root = tempDir(t, 'gsd-text-contracts-b8-');
+    const root = tempDir(t, 'gsd-text-contracts-b9-');
     for (const rel of [...FILES, ...extra]) write(root, rel, fs.readFileSync(path.join(REPO_ROOT, ...rel.split('/')), 'utf8'));
     return root;
   }
@@ -678,6 +678,37 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the pull_request path filter removed', '.github/workflows/install-smoke.yml', yamlEdit((w) => { delete w.on.pull_request.paths; }), 'release-tarball-smoke-workflow', /path filter must include scripts\/release-tarball-smoke\.cjs/],
         ['the upload-artifact step removed', '.github/workflows/install-smoke.yml', yamlEdit((w) => { for (const job of Object.values(w.jobs)) job.steps = (job.steps || []).filter((s) => !String(s.uses || '').startsWith('actions/upload-artifact')); }), 'release-tarball-smoke-workflow', /an actions\/upload-artifact step must exist/],
         ['the upload-artifact action replaced by another that merely contains the name', '.github/workflows/install-smoke.yml', yamlEdit((w) => { for (const job of Object.values(w.jobs)) for (const s of job.steps || []) if (String(s.uses || '').startsWith('actions/upload-artifact')) s.uses = 'other/actions/upload-artifact@v1'; }), 'release-tarball-smoke-workflow', /an actions\/upload-artifact step must exist/],
+        // review round 1
+        ['rc: the coverage gate needs a longer job name as a string', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc-coverage-gate'].needs = 'rc-test-extra'; }), 'release-shard-lane-sharding', /rc-coverage-gate does not depend on rc-test/],
+        ['rc: the final job needs a longer gate name as a string', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc'].needs = 'rc-coverage-gate-extra'; }), 'release-shard-lane-sharding', /rc does not depend on rc-coverage-gate/],
+        ['rc: the coverage gate needs only a longer job name in a list', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc-coverage-gate'].needs = ['rc-test-extra']; }), 'release-shard-lane-sharding', /rc-coverage-gate does not depend on rc-test/],
+        ['finalize: the coverage gate needs a longer job name as a string', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize-coverage-gate'].needs = 'finalize-test-extra'; }), 'release-shard-lane-sharding', /finalize-coverage-gate does not depend on finalize-test/],
+        ['finalize: the final job needs a longer gate name as a string', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize'].needs = 'finalize-coverage-gate-extra'; }), 'release-shard-lane-sharding', /finalize does not depend on finalize-coverage-gate/],
+        ['finalize: the coverage gate needs only a longer job name in a list', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize-coverage-gate'].needs = ['finalize-test-extra']; }), 'release-shard-lane-sharding', /finalize-coverage-gate does not depend on finalize-test/],
+        ['triggers written as a list without workflow_call', '.github/workflows/install-smoke.yml', yamlEdit((w) => { w.on = ['push']; }), 'release-tarball-smoke-workflow', /must keep the workflow_call trigger/],
+        ['triggers written as the string push', '.github/workflows/install-smoke.yml', yamlEdit((w) => { w.on = 'push'; }), 'release-tarball-smoke-workflow', /must keep the workflow_call trigger/],
+        ['a URL before an untyped read on the same line is not a comment', 'hooks/gsd-prompt-guard.js', append("const u = 'http://x'; const leaked = payload.tool_input.file_path;"), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['a line comment ended by a carriage return before an untyped read', 'hooks/gsd-prompt-guard.js', append('// c\rconst leaked = payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['a line comment ended by a line separator before an untyped read', 'hooks/gsd-prompt-guard.js', append('// c\u2028const leaked = payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['a line comment ended by a paragraph separator before an untyped read', 'hooks/gsd-prompt-guard.js', append('// c\u2029const leaked = payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['a line comment ended by a line feed before an untyped read', 'hooks/gsd-prompt-guard.js', append('// c\nconst leaked = payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['typeofx beside an untyped read', 'hooks/gsd-prompt-guard.js', append('const leaked = typeofx + payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['xtypeof beside an untyped read', 'hooks/gsd-prompt-guard.js', append('const leaked = xtypeof + payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['typeof_ beside an untyped read', 'hooks/gsd-prompt-guard.js', append('const leaked = typeof_ + payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads', /must not read a model-supplied payload path field/],
+        ['three pipes spread across a line separator are not a table', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.split('|').join('/') + '\na|b|\u2028|c\n', 'debugger-bug-taxonomy', /there must be a markdown table/],
+        ['a not-append wording split across a line separator', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.replace(/replace|supersede|routed? selection/gi, 'x').replace(/append/gi, 'y') + '\nnot\u2028append\n', 'debugger-bug-taxonomy', /the reference must state the flat menu is replaced or superseded/],
+        ['a skip and a log wording split across a line separator', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/skip|log|note/gi, 'x') + '\nskip\u2028log\n', 'debugger-sbfl', /a skip must be logged/],
+        ['a word merely containing rr does not name record-replay in the Heisenbug row', 'gsd-core/references/debugger-bug-taxonomy.md', swap('record-replay (`rr`) \u2192 stability-stress \u2192 ', '(err) \u2192 '), 'debugger-bug-taxonomy', /the Heisenbug row must include record-replay \(rr\) and\/or stability-stress/],
+        ['the Bohrbug row removed from the routing table', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.split('\n').filter((line) => !line.startsWith('| **Bohrbug')).join('\n'), 'debugger-bug-taxonomy', /no bohrbug row/],
+        ['the Heisenbug row removed from the routing table', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.split('\n').filter((line) => !line.startsWith('| **Heisenbug')).join('\n'), 'debugger-bug-taxonomy', /no heisenbug row/],
+        ['the Concurrency row removed from the routing table', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.split('\n').filter((line) => !line.startsWith('| **Concurrency')).join('\n'), 'debugger-bug-taxonomy', /no concurrency row/],
+        ['full variant: a true flag then a false flag in the spawn still blocks but its first flag differs from the sibling', 'agents/gsd-debug-session-manager.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=false'), 'debug-manager-blocking-spawn', /the compact sibling must not diverge from the canonical agent on spawn semantics/],
+        ['full variant: only true flags in the spawn', 'agents/gsd-debug-session-manager.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=true'), 'debug-manager-blocking-spawn', /full variant: the debugger spawn must be blocking/],
+        ['full variant: no spawn block names gsd-debugger', 'agents/gsd-debug-session-manager.md', eraseAll('subagent_type="gsd-debugger"'), 'debug-manager-blocking-spawn', /full variant: expected exactly one gsd-debugger spawn block/],
+        ['compact variant: a true flag then a false flag in the spawn still blocks but its first flag differs from the sibling', 'agents/gsd-debug-session-manager.compact.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=false'), 'debug-manager-blocking-spawn', /the compact sibling must not diverge from the canonical agent on spawn semantics/],
+        ['compact variant: only true flags in the spawn', 'agents/gsd-debug-session-manager.compact.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=true'), 'debug-manager-blocking-spawn', /compact variant: the debugger spawn must be blocking/],
+        ['compact variant: no spawn block names gsd-debugger', 'agents/gsd-debug-session-manager.compact.md', eraseAll('subagent_type="gsd-debugger"'), 'debug-manager-blocking-spawn', /compact variant: expected exactly one gsd-debugger spawn block/],
+        ['the compact variant first flag differs from the full variant first flag with a later false flag', 'agents/gsd-debug-session-manager.compact.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=false'), 'debug-manager-blocking-spawn', /the compact sibling must not diverge from the canonical agent on spawn semantics/],
         // tdd-reference-correctness
         ['a cited section name gone from the execute-plan pointer (Red-Green-Refactor Cycle)', 'gsd-core/workflows/execute-plan.md', within('<tdd_plan_execution>', '</tdd_plan_execution>', swap('"Red-Green-Refactor Cycle"', '"Cycle"')), 'tdd-reference-correctness', /execute-plan\.md: the commit-scope contract must cite "Red-Green-Refactor Cycle"/],
         ['a cited section name gone from the execute-plan pointer (Fail-Fast Rules)', 'gsd-core/workflows/execute-plan.md', within('<tdd_plan_execution>', '</tdd_plan_execution>', swap('"Fail-Fast Rules"', '"Fast"')), 'tdd-reference-correctness', /execute-plan\.md: the fail-fast rule must cite "Fail-Fast Rules" by its literal section name/],
@@ -758,12 +789,10 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the MVP false-branch note gone from verify-work', 'gsd-core/workflows/verify-work.md', eraseAll('When `MVP_MODE=false` (mode is null, absent, or the phase has no `**Mode:**` line in ROADMAP.md), fall back to the standard UAT generation path — no behavioral change.'), 'section-marker-inversion-guard', /the MVP=false fallback note must be present in the host file/],
         // planner-estimate-emission
         ['the estimate block gone from the planner template', 'agents/gsd-planner.md', erase(/^estimate:/gm), 'planner-estimate-emission', /the template must declare an `estimate:` block/],
-        ['a field gone from the planner estimate block', 'agents/gsd-planner.md', erase(/^(\s+)tasks:/gm), 'planner-estimate-emission', /the estimate block must carry tokens, tasks and confidence/],
         ['the estimate row gone from the planner field table', 'agents/gsd-planner.md', erase(/\|\s*`estimate`\s*\|/g), 'planner-estimate-emission', /the field reference table must have an `estimate` row/],
         ['the calibration surface gone from the planner', 'agents/gsd-planner.md', eraseAll('estimate-calibration'), 'planner-estimate-emission', /the planner must consume the calibration surface/],
         ['the sample count derivation gone from the planner', 'agents/gsd-planner.md', eraseAll('sample count'), 'planner-estimate-emission', /the planner must be told confidence is derived from the sample count/],
         ['the planner frontmatter template gone', 'agents/gsd-planner.md', eraseAll('must_haves:'), 'planner-estimate-emission', /the template must declare an `estimate:` block \(the PLAN\.md frontmatter template is not in the planner\)/],
-        ['a confidence word the parser rejects in the planner template', 'agents/gsd-planner.md', erase(/^(\s+confidence:.*)\blow\b/gm), 'planner-estimate-emission', /every confidence value the planner may emit must be accepted by the parser/],
         ['the configured budget gone from the plan-checker', 'agents/gsd-plan-checker.md', eraseAll('workflow.smart_zone_tokens'), 'planner-estimate-emission', /the checker must read the configured budget, not hardcode one/],
         ['the estimate-check verb gone from the plan-checker', 'agents/gsd-plan-checker.md', eraseAll('estimate-check'), 'planner-estimate-emission', /the flag must be computed by the estimate-check verb/],
         ['the split recommendation gone from the plan-checker', 'agents/gsd-plan-checker.md', eraseAll('re-slic'), 'planner-estimate-emission', /an over-budget plan must recommend splitting \(re-slice\)/],
@@ -859,7 +888,31 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the MVP note duplicated inside the gated body of verify-work', "gsd-core/workflows/verify-work.md", within("<!-- gsd:section id=\"mvp-uat-framing\"", "<!-- /gsd:section -->", (body) => `${body}${"When `MVP_MODE=false` (mode is null, absent, or the phase has no `**Mode:**` line in ROADMAP.md), fall back to the standard UAT generation path — no behavioral change."}\n`), 'section-marker-inversion-guard', /gating mvp-uat-framing away \(MVP_MODE=false\) must not delete the note that documents exactly that fallback/],
         ['the gated section of verify-work with another when condition', "gsd-core/workflows/verify-work.md", swap('when="state:phase-mvp-mode"', 'when="state:other"'), 'section-marker-inversion-guard', /the gated section must exist and be when="state:phase-mvp-mode"/],
         ['the gated section of discuss-phase-assumptions twice', 'gsd-core/workflows/discuss-phase-assumptions.md', (text) => `${text}\n${"<!-- gsd:section id=\"auto-advance-dispatch\""} when="state:auto-advance-active" -->\nx\n${"<!-- /gsd:section -->"}\n`, 'section-marker-inversion-guard', /the sections of the workflow cannot be parsed: workflow-fragments: duplicate section id "auto-advance-dispatch"/],
-        ['the template text fence unclosed', "gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md", (text) => `${text}\n\`\`\`text\nnever closes`, 'executor-isolation-prompt-contract', /the prompt must carry the required-reading contract/],
+        ['the confidence enumeration offers a value the parser rejects', 'agents/gsd-planner.md', swap('# low | med | high', '# low | medium | high'), 'planner-estimate-emission', /the planner offers medium but CONFIDENCE_VALUES does not accept it/],
+        ['the confidence line enumerates no allowed values', 'agents/gsd-planner.md', (text) => text.replace(/^(\s+confidence: low)\s+#[^\n]*/m, '$1'), 'planner-estimate-emission', /the confidence line must enumerate the allowed values/],
+        ['the confidence line gone from the template', 'agents/gsd-planner.md', erase(/^\s+confidence:[^\n]*\n/m), 'planner-estimate-emission', /\(the template must show the confidence field\)/],
+        ['tokens gone from the planner estimate block', 'agents/gsd-planner.md', erase(/^(\s+)tokens:/gm), 'planner-estimate-emission', /the estimate block must carry tokens, tasks and confidence \(missing tokens\)/],
+        ['confidence gone from the planner estimate block', 'agents/gsd-planner.md', erase(/^(\s+)confidence:/gm), 'planner-estimate-emission', /the estimate block must carry tokens, tasks and confidence \(missing confidence\)/],
+        ['the manifest is JSON null', 'gsd-core/bin/shared/config-defaults.manifest.json', () => 'null', 'planner-estimate-emission', /the manifest must ship a usable smart_zone_tokens default \(workflow\.smart_zone_tokens is undefined\)/],
+        ['the manifest is an array', 'gsd-core/bin/shared/config-defaults.manifest.json', () => '[]', 'planner-estimate-emission', /workflow\.smart_zone_tokens is undefined/],
+        ['the manifest has no workflow mapping', 'gsd-core/bin/shared/config-defaults.manifest.json', () => '{}', 'planner-estimate-emission', /workflow\.smart_zone_tokens is undefined/],
+        ['the manifest workflow is a number', 'gsd-core/bin/shared/config-defaults.manifest.json', () => '{"workflow": 5}', 'planner-estimate-emission', /workflow\.smart_zone_tokens is undefined/],
+        ['the manifest workflow is a list', 'gsd-core/bin/shared/config-defaults.manifest.json', () => '{"workflow": []}', 'planner-estimate-emission', /workflow\.smart_zone_tokens is undefined/],
+        ['the manifest smart_zone_tokens is not an integer', 'gsd-core/bin/shared/config-defaults.manifest.json', () => '{"workflow": {"smart_zone_tokens": 1.5}}', 'planner-estimate-emission', /workflow\.smart_zone_tokens is 1\.5/],
+        ['the manifest smart_zone_tokens is negative', 'gsd-core/bin/shared/config-defaults.manifest.json', () => '{"workflow": {"smart_zone_tokens": -1}}', 'planner-estimate-emission', /workflow\.smart_zone_tokens is -1/],
+        ['a bash block using a placeholder the instruction does not name', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', append('```bash\necho {zz_unnamed}\n```'), 'executor-isolation-prompt-contract', /a placeholder of a fenced block is missing from the instruction/],
+        ['a bash block holding the mcp_tools marker', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', append('```bash\necho "<mcp_tools>"\n```'), 'executor-isolation-prompt-contract', /<mcp_tools> sits in a bash block/],
+        ['a bash block holding the dispatch marker', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', append('```bash\necho "[gsd:dispatch"\n```'), 'executor-isolation-prompt-contract', /\[gsd:dispatch sits in a bash block/],
+        ['the TDD_APPLICABLE marker gone from the template', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', eraseAll('${TDD_APPLICABLE'), 'executor-isolation-prompt-contract', /the template does not carry \$\{TDD_APPLICABLE/],
+        ['the Inline marker gone from the template', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', eraseAll('Inline the actual contents'), 'executor-isolation-prompt-contract', /the template does not carry Inline the actual contents/],
+        ['the instruction names no placeholders', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', (text) => text.split('\n').map((line) => (line.includes('Before running each bash block below') ? 'Before running each bash block below' : line)).join('\n'), 'executor-isolation-prompt-contract', /the instruction names no placeholders/],
+        ['the fragment holds no bash blocks', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', swap('```bash', '```sh'), 'executor-isolation-prompt-contract', /the fragment holds no bash blocks/],
+        ['the closing fence of the one text fence gone', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', (text) => text.slice(0, text.indexOf('```text\n') + 8) + 'the prompt never closes\n', 'executor-isolation-prompt-contract', /the text fence must close/],
+        ['the Parse --auto resolver gone from discuss-phase-assumptions', 'gsd-core/workflows/discuss-phase-assumptions.md', eraseAll('Parse `--auto` flag from $ARGUMENTS'), 'section-marker-inversion-guard', /"Parse `--auto` flag from \$ARGUMENTS" is not in the gap text/],
+        ['the config-set resolver gone from discuss-phase-assumptions (the gap text)', 'gsd-core/workflows/discuss-phase-assumptions.md', eraseAll('gsd_run query config-set workflow._auto_chain_active'), 'section-marker-inversion-guard', /"gsd_run query config-set workflow\._auto_chain_active" is not in the gap text/],
+        ['the AUTO_MODE resolver gone from discuss-phase-assumptions', 'gsd-core/workflows/discuss-phase-assumptions.md', eraseAll('AUTO_MODE=$(gsd_run query check auto-mode --pick active'), 'section-marker-inversion-guard', /"AUTO_MODE=\$\(gsd_run query check auto-mode --pick active" is not in the gap text/],
+
+        ['tasks gone from the planner estimate block', 'agents/gsd-planner.md', erase(/^(\s+)tasks:/gm), 'planner-estimate-emission', /the estimate block must carry tokens, tasks and confidence \(missing tasks\)/],
         // debugger-rca-branching
         ['the RCA reference unlinked from the debugger agent', 'agents/gsd-debugger.md', swap('@~/.claude/gsd-core/references/debugger-rca-branching.md', '@~/.claude/gsd-core/references/rca.md'), 'debugger-rca-branching', /gsd-debugger\.md must @-include the RCA-branching reference from Phase 2 \(or the reasoning checkpoint\)/],
         ['candidate_causes gone from the reasoning checkpoint', 'agents/gsd-debugger.md', swap('candidate_causes', 'candidates'), 'debugger-rca-branching', /the reasoning_checkpoint must include a candidate_causes field \(the >=2-category branches\)/],
@@ -977,12 +1030,15 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the local resolver moved into a converge-gated section', 'gsd-core/workflows/autonomous.md', (text) => swap('PLAN_STRATEGY="local"\nif echo', 'PLAN_STRATEGY=""\nif echo')(text).replace('<!-- gsd:section id="converge-loop" when="state:plan-strategy-converge" -->\n', '<!-- gsd:section id="converge-loop" when="state:plan-strategy-converge" -->\nPLAN_STRATEGY="local"\n'), 'resolver-hoist-guard', /the PLAN_STRATEGY="local" resolver must be present outside every converge-gated section/],
 
         // prompt-thinning
+        ['a tagged block named __proto__ beside the six fixture blocks', 'gsd-core/references/edge-probe.md', append('```json edge-probe:__proto__\n{}\n```'), 'edge-probe-docs-fixtures', /which is not a plain <dir>\/<file> fixture reference/],
+        ['a tagged block named __proto__ in place of a fixture block', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:__proto__'), 'edge-probe-docs-fixtures', /a tagged block names "__proto__", which is not a plain <dir>\/<file> fixture reference/],
+        ['two blocks with the same tag', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:02-merge-intervals/expected-coverage.json'), 'edge-probe-docs-fixtures', /the tag "02-merge-intervals\/expected-coverage.json" is used by more than one block, so the earlier block would never be compared/],
         ['the sub-200K thinning conditional gone from execute-phase', 'gsd-core/workflows/execute-phase.md', erase(/CONTEXT_WINDOW ?< 200000/g), 'prompt-thinning', /execute-phase\.md must contain a CONTEXT_WINDOW < 200000 conditional for prompt thinning/],
         ['the 500K enrichment conditional gone from execute-phase', 'gsd-core/workflows/execute-phase.md', swap('CONTEXT_WINDOW >= 500000', 'CONTEXT_WINDOW >= 400000'), 'prompt-thinning', /execute-phase\.md must preserve the existing 500K enrichment conditional/],
         ['the executor-examples reference gone from execute-phase', 'gsd-core/workflows/execute-phase.md', swap('executor-examples.md', 'examples.md'), 'prompt-thinning', /the execute-phase\.md thinning block must reference executor-examples\.md/],
         ['the executor-examples reference gone from the executor agent', 'agents/gsd-executor.md', swap('executor-examples.md', 'examples.md'), 'prompt-thinning', /gsd-executor\.md must reference executor-examples\.md for extended deviation and checkpoint examples/],
         ['the antipatterns reference gone from the planner agent', 'agents/gsd-planner.md', swap('planner-antipatterns.md', 'antipatterns.md'), 'prompt-thinning', /gsd-planner\.md must reference planner-antipatterns\.md for extended checkpoint anti-patterns and specificity examples/],
-        ['the assign_waves step renamed in the planner', 'agents/gsd-planner.md', swap('<step name="assign_waves">', '<step name="assign">'), 'prompt-thinning', /assign_waves/],
+        ['the assign_waves step renamed in the planner', 'agents/gsd-planner.md', swap('<step name="assign_waves">', '<step name="assign">'), 'prompt-thinning', /marker .*assign_waves.* not found/],
         ['the known external review gone from assign_waves', 'agents/gsd-planner.md', inStepOf('assign_waves', erase(/known automatic external review/gi)), 'prompt-thinning', /assign_waves must name the known automatic external review/],
         ['the internal review lanes condition gone from assign_waves', 'agents/gsd-planner.md', inStepOf('assign_waves', erase(/plan includes internal review lanes/gi)), 'prompt-thinning', /assign_waves must condition the ordering on internal review lanes/],
         ['the accepted fixes before the open gone from assign_waves', 'agents/gsd-planner.md', inStepOf('assign_waves', erase(/accepted internal-review fixes[^.]{0,500}before[^.]{0,500}open/gi)), 'prompt-thinning', /assign_waves must put the accepted internal-review fixes before the open/],
@@ -1085,6 +1141,14 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
           erase(/surviv/gi), 'debugger-fix-acceptance', /a surviving mutant rejects the fix/],
         ['the deletion rule gone from the reference (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           erase(/delet/gi), 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
+        ['the rejection words only before the first delet (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => `reject justif rca root cause\n${text.replace(/delet/gi, 'remov').replace(/reject|justif|rca|root cause/gi, 'x')}\ndelet\n`, 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
+        ['skipped and log split by a lone CR do not log the skip (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => `${text.replace(/skip/gi, 'drop').replace(/log/gi, 'lg').replace(/record/gi, 'rcd')}\nskipped\rlog\n`, 'debugger-fix-acceptance', /skipped signals must be logged or recorded/],
+        ['mutant and surviv split by U+2028 do not state the surviving-mutant rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => `${text.replace(/surviv/gi, 'living')}\nmutant\u2028surviv\n`, 'debugger-fix-acceptance', /a surviving mutant rejects the fix/],
+        ['mutant and surviv split by U+2029 do not state the surviving-mutant rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => `${text.replace(/surviv/gi, 'living')}\nmutant\u2029surviv\n`, 'debugger-fix-acceptance', /a surviving mutant rejects the fix/],
         ['the rejection words gone after the deletion rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           erase(/reject|justif|rca|root cause/gi), 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
         ['every accept wording gone, so revert-and-reconfirm has no ordering rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
@@ -1125,6 +1189,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
           eraseAll('--auto'), 'progress-mvp-display', /next\.md must handle the --auto flag/],
         ['the --next --auto re-invocation gone from next.md (#14)', 'gsd-core/workflows/next.md',
           eraseAll('--next --auto'), 'progress-mvp-display', /must instruct re-invocation of \/gsd:progress --next --auto/],
+        ['the opening <process> marker of progress.md gone (#14)', 'commands/gsd/progress.md',
+          eraseAll('<process>'), 'progress-mvp-display', /<process>.* not found/],
         ['the <process> block of progress.md gone, so its end marker is missing (#14)', 'commands/gsd/progress.md',
           eraseAll('</process>'), 'progress-mvp-display', /closing marker .* not found/],
         // verifier-deferred-items
@@ -1181,6 +1247,20 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
           within('---', '\n---', swap('- Glob', '- Other')), 'extract-learnings', /allowed-tools must include Glob/],
         ['Agent dropped from the command allowed-tools (extract-learnings)', 'commands/gsd/extract-learnings.md',
           within('---', '\n---', swap('- Agent', '- Other')), 'extract-learnings', /allowed-tools must include Agent/],
+        ['Glob only in the description, not in allowed-tools (extract-learnings)', 'commands/gsd/extract-learnings.md',
+          (text) => swap('description: Extract', 'description: Glob Extract')(within('---', '\n---', swap('- Glob', '- Other'))(text)), 'extract-learnings', /allowed-tools must include Glob/],
+        ['Read only in the requires line, not in allowed-tools (extract-learnings)', 'commands/gsd/extract-learnings.md',
+          (text) => swap('requires: [phase]', 'requires: [Read]')(within('---', '\n---', swap('- Read', '- Other'))(text)), 'extract-learnings', /allowed-tools must include Read/],
+        ['GlobX in allowed-tools is not Glob (extract-learnings)', 'commands/gsd/extract-learnings.md',
+          swap('  - Glob\n', '  - GlobX\n'), 'extract-learnings', /allowed-tools must include Glob/],
+        ['phase: after a lone CR is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          swap('\nphase: {PHASE_NUMBER}', '\rphase: {PHASE_NUMBER}'), 'extract-learnings', /frontmatter must include phase$/],
+        ['phase_name: after U+2028 is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          swap('\nphase_name:', '\u2028phase_name:'), 'extract-learnings', /frontmatter must include phase_name/],
+        ['generated: after U+2029 is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          swap('\ngenerated:', '\u2029generated:'), 'extract-learnings', /frontmatter must include generated/],
+        ['missing_artifacts: after a lone CR is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          swap('\nmissing_artifacts:', '\rmissing_artifacts:'), 'extract-learnings', /frontmatter must include missing_artifacts/],
         ['Agent dropped from allowed-tools but named in the prose (extract-learnings)', 'commands/gsd/extract-learnings.md',
           (text) => append('The Agent is mentioned here.')(within('---', '\n---', swap('- Agent', '- Other'))(text)), 'extract-learnings', /allowed-tools must include Agent/],
         ['type: prompt gone from the command (extract-learnings)', 'commands/gsd/extract-learnings.md',
@@ -1260,11 +1340,11 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['no Step 2 heading after the map step (#1988)', 'agents/gsd-phase-researcher.md',
           swap('## Step 2:', '## Phase 2:'), 'gsd-researcher-app-aware', /no "## Step 2:" heading after the step/],
         ['two of the standard tiers gone from the map step (#1988)', 'agents/gsd-phase-researcher.md',
-          within('Architectural Responsibility Map', '## Step 2:', (section) => section.replace(/browser/gi, 'x').replace(/frontend/gi, 'x').replace(/api/gi, 'x')), 'gsd-researcher-app-aware', /must mention at least 3 standard architectural tiers/],
+          within('## Step 1.5:', '## Step 2:', (section) => section.replace(/browser/gi, 'x').replace(/frontend/gi, 'x')), 'gsd-researcher-app-aware', /must mention at least 3 standard architectural tiers/],
         ['the table gone from the map step (#1988)', 'agents/gsd-phase-researcher.md',
-          within('Architectural Responsibility Map', '## Step 2:', (section) => section.split('|').join(':')), 'gsd-researcher-app-aware', /must specify a table output format with a Capability column/],
+          within('## Step 1.5:', '## Step 2:', (section) => section.split('|').join(':')), 'gsd-researcher-app-aware', /must specify a table output format with a Capability column/],
         ['the Capability column gone from the map step (#1988)', 'agents/gsd-phase-researcher.md',
-          within('Architectural Responsibility Map', '## Step 2:', (section) => section.split('Capability').join('Item')), 'gsd-researcher-app-aware', /must specify a table output format with a Capability column/],
+          within('## Step 1.5:', '## Step 2:', (section) => section.split('Capability').join('Item')), 'gsd-researcher-app-aware', /must specify a table output format with a Capability column/],
         ['the map gone from gsd-planner (#1988)', 'agents/gsd-planner.md',
           eraseAll('Architectural Responsibility Map'), 'gsd-researcher-app-aware', /gsd-planner\.md must reference the Architectural Responsibility Map/],
         ['the sanity check gone from gsd-planner (#1988)', 'agents/gsd-planner.md',
@@ -1361,6 +1441,76 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     passes('the lifecycle smoke step moved to another job', '.github/workflows/install-smoke.yml', yamlEdit((w) => { const step = w.jobs.smoke.steps.find((s) => typeof s.run === 'string' && s.run.includes('release-tarball-smoke.cjs')); w.jobs.smoke.steps = w.jobs.smoke.steps.filter((s) => s !== step); w.jobs['smoke-unpacked'].steps.push(step); }), 'release-tarball-smoke-workflow');
     passes('the triggers written as a list holding workflow_call', '.github/workflows/install-smoke.yml', yamlEdit((w) => { const paths = w.on.pull_request.paths; w.on = { workflow_call: null, pull_request: { paths } }; }), 'release-tarball-smoke-workflow');
     passes('an extra pull_request path and trigger', '.github/workflows/install-smoke.yml', yamlEdit((w) => { w.on.pull_request.paths.push('docs/**'); w.on.workflow_dispatch = null; }), 'release-tarball-smoke-workflow');
+    findsOne('a prompt-first spawn with parentheses and a quote inside a triple-quoted prompt and no model', 'gsd-core/workflows/quick.md', append('Agent(prompt="""x ) ( "q" """, subagent_type="gsd-code-reviewer")'), 'model-routing-spawn-threading', /gsd-code-reviewer spawn missing model=/);
+    findsOne('a spawn whose single-quoted prompt holds an escaped quote and a closing parenthesis and no model', 'gsd-core/workflows/quick.md', append('Agent(prompt="a \\" ) b", subagent_type="gsd-code-fixer")'), 'model-routing-spawn-threading', /gsd-code-fixer spawn missing model=/);
+    findsOne('a spawn whose prompt holds a nested call and no model', 'gsd-core/workflows/quick.md', append('Agent(prompt=f(x), subagent_type="gsd-code-fixer")'), 'model-routing-spawn-threading', /gsd-code-fixer spawn missing model=/);
+    findsOne('a spawn whose model param follows a closing parenthesis inside the prompt is read to its end', 'gsd-core/workflows/quick.md', append('Agent(prompt="a ) b", subagent_type="gsd-code-fixer")\nAgent(subagent_type="gsd-planner", model="{M}")'), 'model-routing-spawn-threading', /gsd-code-fixer spawn missing model=/);
+    passes('a prompt-first spawn with parentheses and a quote inside a triple-quoted prompt and a model after it', 'gsd-core/workflows/quick.md', append('Agent(prompt="""x ) ( "q" """, subagent_type="gsd-code-reviewer", model="{M}")'), 'model-routing-spawn-threading');
+    passes('a spawn whose single-quoted prompt holds an escaped quote and a model after it', 'gsd-core/workflows/quick.md', append('Agent(prompt="a \\" ) b", subagent_type="gsd-code-fixer", model="{M}")'), 'model-routing-spawn-threading');
+    passes('a spawn whose prompt holds a nested call and a model after it', 'gsd-core/workflows/quick.md', append('Agent(prompt=f(x), subagent_type="gsd-code-fixer", model="{M}")'), 'model-routing-spawn-threading');
+    passes('rc: the coverage gate needs a longer job name beside the real one in a list', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc-coverage-gate'].needs = ['rc-test-extra', 'rc-test']; }), 'release-shard-lane-sharding');
+    passes('finalize: the coverage gate needs a longer job name beside the real one in a list', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize-coverage-gate'].needs = ['finalize-test-extra', 'finalize-test']; }), 'release-shard-lane-sharding');
+    {
+      const caseOf = (title, onValue) => test(title, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, '.github/workflows/install-smoke.yml');
+        fs.writeFileSync(abs, yamlEdit((w) => { w.on = onValue; })(fs.readFileSync(abs, 'utf8')));
+        const findings = runShipped(root, ['release-tarball-smoke-workflow']);
+        assert.equal(findings.length, 2, JSON.stringify(findings));
+        assert.ok(findings.every((f) => /path filter must include/.test(f.message)), JSON.stringify(findings));
+      });
+      caseOf('triggers written as a list holding workflow_call leave only the path-filter findings', ['workflow_call']);
+      caseOf('triggers written as the string workflow_call leave only the path-filter findings', 'workflow_call');
+    }
+    passes('a comment at the very start of the file holding a read', 'hooks/gsd-prompt-guard.js', (text) => '// payload.tool_input.file_path\n' + text, 'kimi-guard-typed-payload-reads');
+    passes('a comment with a double slash after a non-colon holding a read', 'hooks/gsd-prompt-guard.js', append('const ok = 1; // payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads');
+    passes('a read typed by typeof as a whole word', 'hooks/gsd-prompt-guard.js', append('const safe = typeof (payload.tool_input.file_path);'), 'kimi-guard-typed-payload-reads');
+    passes('a not-append wording on one line is enough', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.replace(/replace|supersede|routed? selection/gi, 'x').replace(/append/gi, 'y') + '\nnot append\n', 'debugger-bug-taxonomy');
+    passes('only one line pairs skip then log', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/skip|log|note/gi, 'x') + '\nskip log\n', 'debugger-sbfl');
+    passes('only one line pairs log then skip', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/skip|log|note/gi, 'x') + '\nlog skip\n', 'debugger-sbfl');
+    passes('only one line pairs skip then note', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/skip|log|note/gi, 'x') + '\nskip note\n', 'debugger-sbfl');
+    passes('only one line pairs note then skip', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/skip|log|note/gi, 'x') + '\nnote skip\n', 'debugger-sbfl');
+    passes('only "no coverage" names the no-coverage skip path', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/gi, 'x') + '\nno coverage\n', 'debugger-sbfl');
+    passes('only "no test suite" names the no-coverage skip path', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/gi, 'x') + '\nno test suite\n', 'debugger-sbfl');
+    passes('only "coverage is absent" names the no-coverage skip path', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/gi, 'x') + '\ncoverage is absent\n', 'debugger-sbfl');
+    passes('only "coverage absent" names the no-coverage skip path', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/gi, 'x') + '\ncoverage absent\n', 'debugger-sbfl');
+    passes('only "coverage is unavailable" names the no-coverage skip path', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/gi, 'x') + '\ncoverage is unavailable\n', 'debugger-sbfl');
+    passes('only "coverage unavailable" names the no-coverage skip path', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/gi, 'x') + '\ncoverage unavailable\n', 'debugger-sbfl');
+    passes('only "bohrbug" notes where SBFL suits', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/bohrbug|deterministic|flaky|heisenbug|mandelbug/gi, 'x') + '\nbohrbug\n', 'debugger-sbfl');
+    passes('only "deterministic" notes where SBFL suits', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/bohrbug|deterministic|flaky|heisenbug|mandelbug/gi, 'x') + '\ndeterministic\n', 'debugger-sbfl');
+    passes('only "flaky" notes where SBFL suits', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/bohrbug|deterministic|flaky|heisenbug|mandelbug/gi, 'x') + '\nflaky\n', 'debugger-sbfl');
+    passes('only "heisenbug" notes where SBFL suits', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/bohrbug|deterministic|flaky|heisenbug|mandelbug/gi, 'x') + '\nheisenbug\n', 'debugger-sbfl');
+    passes('only "mandelbug" notes where SBFL suits', 'gsd-core/references/debugger-sbfl.md', (text) => text.replace(/bohrbug|deterministic|flaky|heisenbug|mandelbug/gi, 'x') + '\nmandelbug\n', 'debugger-sbfl');
+    passes('only the bare word rr names record-replay in the Heisenbug row', 'gsd-core/references/debugger-bug-taxonomy.md', swap('record-replay (`rr`) \u2192 stability-stress \u2192 ', '(rr) \u2192 '), 'debugger-bug-taxonomy');
+    passes('full variant: a false flag then a true flag in the spawn still blocks and agrees', 'agents/gsd-debug-session-manager.md', (text) => text.replace('run_in_background=false', 'run_in_background=false\n  run_in_background=true'), 'debug-manager-blocking-spawn');
+    passes('compact variant: a false flag then a true flag in the spawn still blocks and agrees', 'agents/gsd-debug-session-manager.compact.md', (text) => text.replace('run_in_background=false', 'run_in_background=false\n  run_in_background=true'), 'debug-manager-blocking-spawn');
+    passes('a spawn with a flag after the closing paren of a call-like text', 'agents/gsd-executor.md', append('Agent(subagent_type="gsd-planner", run_in_background = false, prompt="a")'), 'debug-manager-blocking-spawn');
+    {
+      const frags = ['batch-init', 'completion', 'merge-wave', 'plan-checker-loop', 'verification-wave'].map((n) => 'gsd-core/workflows/quick-batch/steps/' + n + '.md');
+      const run = (t, keep) => {
+        const root = copyOfRepoFiles(t);
+        for (const rel of frags) {
+          const abs = path.join(root, rel);
+          if (rel !== keep && fs.existsSync(abs)) fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').split('runs in a subagent').join('runs elsewhere'));
+        }
+        return runShipped(root, ['spawn-liveness-banner']).filter((f) => f.file === 'gsd-core/workflows/quick-batch.md');
+      };
+      test('a host whose fragments all lack the liveness phrase while naming subagent_type is a finding', (t) => {
+        const findings = run(t, null);
+        assert.equal(findings.length, 1, JSON.stringify(findings));
+        assert.match(findings[0].message, /never the liveness phrase/);
+      });
+      test('a host with the liveness phrase in one steps fragment only has no finding', (t) => {
+        assert.deepEqual(run(t, 'gsd-core/workflows/quick-batch/steps/verification-wave.md'), []);
+      });
+    }
+    passes('a heading of seven marks in the English reference is no heading', 'docs/reference/state-md.md', append('####### seven marks'), 'docs-state-md-locale-parity');
+    passes('a heading with no space after the marks in the English reference is no heading', 'docs/reference/state-md.md', append('#nospace'), 'docs-state-md-locale-parity');
+    passes('a fenced heading in the English reference is no heading', 'docs/reference/state-md.md', append('```\n# fenced\n```'), 'docs-state-md-locale-parity');
+    passes('a heading holding a line separator in the English reference is skipped', 'docs/reference/state-md.md', append('# a\u2028b'), 'docs-state-md-locale-parity');
+    passes('a heading holding a paragraph separator in the English reference is skipped', 'docs/reference/state-md.md', append('# a\u2029b'), 'docs-state-md-locale-parity');
+    passes('an extra heading in a locale reference is no missing section', 'docs/ja-JP/reference/state-md.md', append('## An extra section'), 'docs-state-md-locale-parity');
+    passes('a translated heading text in a locale reference is no missing section', 'docs/ja-JP/reference/state-md.md', (text) => text.replace(/^## .*$/m, '## Translated again'), 'docs-state-md-locale-parity');
   }
 
   {
@@ -1443,7 +1593,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     findsOne('no quality_gate block in plan-phase', 'gsd-core/workflows/plan-phase.md', (text) => text.split('<quality_gate>').join('<quality_gat>'), 'edge-probe-planner-contract', /no <quality_gate> block/);
     // prohibition-probe.spec-phase-contract: the gaps of the bounded sentences, over a Step 5.6 block that carries every other phrase
     const PROBE_BASE = ['adversarial', 'soft gate', 'text mode', 'Prohibitions', 'references/prohibition-probe.md'];
-    const probeBlock = (lines) => (text) => within('## Step 5.6', '\n## ', () => `## Step 5.6\n${[...PROBE_BASE, ...lines].join('\n')}\n`)(text);
+    const probeBlock = (lines) => (text) => within('## Step 5.6', '\n## ', () => `## Step 5.6\n${[...PROBE_BASE, ...lines].map((line) => `${line}.`).join('\n')}\n`)(text);
     gapCases('a classifier mention the given distance after precision', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['dismiss reason', 'never auto-dismiss', 'secure-phase', `precision${'x'.repeat(gap)}classif`])(text), 500, /Step 5\.6 must describe a precision classifier that drops routine engineering items/);
     gapCases('a reason the given distance after dismiss', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['routine engineering', 'never auto-dismiss', 'secure-phase', `dismiss ${'x'.repeat(gap - 1)}reason`])(text), 500, /Step 5\.6 must require a non-empty reason when dismissing a prohibition/);
     gapCases('a never the given distance after --auto', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['routine engineering', 'dismiss reason', 'secure-phase', `--auto${'x'.repeat(gap)}never dismiss`])(text), 500, /Step 5\.6 must specify that --auto never auto-dismisses prohibitions/);
@@ -1473,6 +1623,61 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     findsOne('a fenced block that never closes', DISPATCH_FRAGMENT, append('```bash\necho hi'), 'executor-isolation-prompt-contract', /the substitution instruction must name every placeholder any fenced block of the fragment uses/);
     passes('the unconditional criterion followed by OR on its line', DISPATCH_FRAGMENT, (text) => text.replace('```text\n', '```text\n- SUMMARY.md created AND committed OR skipped_gitignored\n'), 'executor-isolation-prompt-contract');
     findsOne('the conditional embed line without its trailing comment', DISPATCH_FRAGMENT, (text) => text.split('\n').map((line) => (line.startsWith('${TDD_APPLICABLE ? "- tdd.md" : ""}') ? '${TDD_APPLICABLE ? "- tdd.md" : ""}' : line)).join('\n'), 'executor-isolation-prompt-contract', /the template must hold the conditional embed line with its trailing comment/);
+
+    // planner-estimate-emission: the estimate row, the field indents and the fence owner (pinned at its edges)
+    const PLANNER = 'agents/gsd-planner.md';
+    const PLAN_MD = 'docs/reference/plan-md.md';
+    gapCases('whitespace of the given width before `estimate` in the planner field table', PLANNER, 'planner-estimate-emission', (text, gap) => text.replace(/\|\s{0,20}`estimate`\s{0,20}\|/, `|${' '.repeat(gap)}\`estimate\`|`), 20, /the field reference table must have an `estimate` row/);
+    gapCases('whitespace of the given width after `estimate` in the planner field table', PLANNER, 'planner-estimate-emission', (text, gap) => text.replace(/\|\s{0,20}`estimate`\s{0,20}\|/, `|\`estimate\`${' '.repeat(gap)}|`), 20, /the field reference table must have an `estimate` row/);
+    gapCases('whitespace of the given width before `estimate` in plan-md.md', PLAN_MD, 'planner-estimate-emission', (text, gap) => text.replace(/\|\s{0,20}`estimate`\s{0,20}\|/, `|${' '.repeat(gap)}\`estimate\`|`), 20, /plan-md\.md must document `estimate`/);
+    gapCases('whitespace of the given width after `estimate` in plan-md.md', PLAN_MD, 'planner-estimate-emission', (text, gap) => text.replace(/\|\s{0,20}`estimate`\s{0,20}\|/, `|\`estimate\`${' '.repeat(gap)}|`), 20, /plan-md\.md must document `estimate`/);
+    for (const field of ['tokens', 'tasks', 'confidence']) {
+      gapCases(`an indent of the given width before ${field}: in the planner template`, PLANNER, 'planner-estimate-emission', (text, gap) => text.replace(new RegExp(`^ {2}${field}:`, 'm'), `${' '.repeat(gap)}${field}:`), 20, new RegExp(`the estimate block must carry tokens, tasks and confidence \\(missing ${field}\\)`));
+      if (field !== 'confidence') findsOne(`no indent before ${field}: in the planner template`, PLANNER, (text) => text.replace(new RegExp(`^ {2}${field}:`, 'm'), `${field}:`), 'planner-estimate-emission', field === 'confidence' ? /\(missing confidence\)/ : new RegExp(`\\(missing ${field}\\)`));
+    }
+    const PLANNER_BLOCK = (fence, bodyExtra = '') => `---\nphase: x\nmust_haves: y\nestimate:\n  tokens: 1\n  tasks: 1\n  confidence: low           # low | med | high\n${bodyExtra}${fence}\n| \`estimate\` | No |\nestimate-calibration sample count\n`;
+    const fenceFindings = (t, content) => {
+      const root = copyOfRepoFiles(t);
+      fs.writeFileSync(path.join(root, 'agents', 'gsd-planner.md'), content);
+      return runShipped(root, ['planner-estimate-emission']).map((finding) => finding.message).filter((message) => /frontmatter template is not in the planner/.test(message));
+    };
+    test('a template closed by --- is found by planner-estimate-emission', (t) => assert.deepEqual(fenceFindings(t, PLANNER_BLOCK('---')), []));
+    test('a CRLF template closed by --- is found by planner-estimate-emission', (t) => assert.deepEqual(fenceFindings(t, PLANNER_BLOCK('---').split('\n').join('\r\n')), []));
+    test('a template closed by --- and trailing spaces is found (the fence owner accepts them)', (t) => assert.deepEqual(fenceFindings(t, PLANNER_BLOCK('---  ')), []));
+    test('a template closed by ---- is found when no exact closer follows (the fence owner is lenient)', (t) => assert.deepEqual(fenceFindings(t, PLANNER_BLOCK('----')), []));
+    test('a template closed by ---- while an exact closer follows closes at the exact one', (t) => assert.deepEqual(fenceFindings(t, PLANNER_BLOCK('----', '').replace('estimate-calibration', '---\nestimate-calibration')), []));
+    test('an unclosed template block is not found', (t) => assert.equal(fenceFindings(t, '---\nphase: x\nmust_haves: y\nestimate:\n  tokens: 1\n').length > 0, true));
+    test('consecutive blocks: the second one holding phase and must_haves is the template', (t) => assert.deepEqual(fenceFindings(t, `---\na: 1\n---\n${PLANNER_BLOCK('---')}`), []));
+    test('a block that declares only phase is not the template', (t) => assert.equal(fenceFindings(t, '---\nphase: x\n---\nnothing\n').length > 0, true));
+    // edge-probe-planner-contract: the Edge Coverage heading gap
+    gapCases('whitespace of the given width between ## and Edge Coverage in the downstream_consumer block', 'gsd-core/workflows/plan-phase.md', 'edge-probe-planner-contract', (text, gap) => within('<downstream_consumer>', '</downstream_consumer>', (block) => block.split('## Edge Coverage').join(`##${' '.repeat(gap)}Edge Coverage`))(text), 20, /the <downstream_consumer> block must reference ## Edge Coverage/);
+    passes('## directly followed by Edge Coverage in the downstream_consumer block', 'gsd-core/workflows/plan-phase.md', (text) => within('<downstream_consumer>', '</downstream_consumer>', (block) => block.split('## Edge Coverage').join('##Edge Coverage'))(text), 'edge-probe-planner-contract');
+    // executor-isolation-prompt-contract: the remaining bounded patterns
+    gapCases('whitespace of the given width between steps and 0/0a/0b', DISPATCH_FRAGMENT, 'executor-isolation-prompt-contract', (text, gap) => text.replace(/steps\s{0,20}0\/0a\/0b/, `steps${' '.repeat(gap)}0/0a/0b`), 20, /the per-commit HEAD\/cwd-drift\/path-guard discipline must be pointed at/);
+    const QUICK_BULLET = (edit) => within('**`isolation == "orchestrator-worktree"`:**', '**`isolation == "none"`:**', edit);
+    gapCases('an omit marker the given distance before [gsd:dispatch', QUICK_FRAGMENT, 'executor-isolation-prompt-contract', (text, gap) => QUICK_BULLET((bullet) => bullet.replace(/Omit[^\n]{0,500}\[gsd:dispatch/, `Omit${'x'.repeat(gap)}[gsd:dispatch`))(text), 500, /the \[gsd:dispatch \.\.\.\] marker line must be stated as omitted for a quick item/);
+    gapCases('whitespace of the given width before = in the plan_padded mapping', QUICK_FRAGMENT, 'executor-isolation-prompt-contract', (text, gap) => text.replace(/`\{plan_padded\}`\s{0,20}=\s{0,20}`\$\{quick_id\}`/, `\`{plan_padded}\`${' '.repeat(gap)}= \`\${quick_id}\``), 20, /\{plan_padded\} must map to the quick id/);
+    gapCases('whitespace of the given width after = in the plan_padded mapping', QUICK_FRAGMENT, 'executor-isolation-prompt-contract', (text, gap) => text.replace(/`\{plan_padded\}`\s{0,20}=\s{0,20}`\$\{quick_id\}`/, `\`{plan_padded}\` =${' '.repeat(gap)}\`\${quick_id}\``), 20, /\{plan_padded\} must map to the quick id/);
+    test('the executor isolation contract and tdd-walk agree on the dispatch step and the embed line', () => {
+      const walk = require(path.join(REPO_ROOT, 'tests', 'qa', 'tdd-walk.cjs'));
+      assert.equal(path.relative(REPO_ROOT, walk.DISPATCH_STEP_PATH).split(path.sep).join('/'), 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md');
+      assert.equal(walk.TDD_EMBED_TERNARY, '${TDD_APPLICABLE ? "- tdd.md" : ""}');
+      const dispatch = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md'), 'utf8');
+      assert.ok(dispatch.split(/\r?\n/).some((line) => line.startsWith(walk.TDD_EMBED_TERNARY)));
+    });
+    // prohibition-probe.spec-phase-contract: the bounded stems, the second dismissal branch and every alternative as the sole satisfier
+    gapCases('a word stem of the given length after drop', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['dismiss reason', 'never auto-dismiss', 'secure-phase', `drop${'a'.repeat(gap)} engineering`])(text), 30, /Step 5\.6 must describe a precision classifier that drops routine engineering items/);
+    gapCases('a word stem of the given length after dismiss', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['routine engineering', 'never auto-dismiss', 'secure-phase', `dismiss${'a'.repeat(gap)} reason`])(text), 30, /Step 5\.6 must require a non-empty reason when dismissing a prohibition/);
+    gapCases('a dismiss the given distance after reason', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['routine engineering', 'never auto-dismiss', 'secure-phase', `reason${'x'.repeat(gap)}dismiss`])(text), 500, /Step 5\.6 must require a non-empty reason when dismissing a prohibition/);
+    const PROBE_DEFAULTS = { adversarial: 'adversarial', precision: 'routine engineering', soft: 'soft gate', dismiss: 'dismiss reason', auto: 'never auto-dismiss', text: 'text mode', canon: 'secure-phase' };
+    const soleBranch = (key, phrase) => passes(`${phrase} alone satisfies the ${key} sentence of Step 5.6`, 'gsd-core/workflows/spec-phase.md', (text) => within('## Step 5.6', '\n## ', () => `## Step 5.6\n${Object.entries(PROBE_DEFAULTS).map(([name, line]) => `${name === key ? phrase : line}.`).join('\n')}\nProhibitions.\nreferences/prohibition-probe.md.\n`)(text), 'prohibition-probe.spec-phase-contract');
+    for (const phrase of ['silently become', 'would NOT want', 'must not', 'mustnot']) soleBranch('adversarial', phrase);
+    for (const phrase of ['routine engineering', 'drops the engineering', 'precision classif']) soleBranch('precision', phrase);
+    for (const phrase of ['write anyway', 'writeanyway', 'soft-gate', 'with flags']) soleBranch('soft', phrase);
+    for (const phrase of ['dismiss the reason', 'reason to dismiss']) soleBranch('dismiss', phrase);
+    for (const phrase of ['--auto will never dismiss', '--auto may not dismiss', 'never auto dismiss']) soleBranch('auto', phrase);
+    for (const phrase of ['text-mode', 'non-Claude', 'nonClaude', 'AskUserQuestion']) soleBranch('text', phrase);
+    for (const phrase of ['canon of security', 'OWASP', 'GDPR']) soleBranch('canon', phrase);
   }
 
   {
@@ -1723,6 +1928,9 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     test('an untouched copy with HEAVY satisfies context-index-sync', (t) => {
       assert.deepEqual(runShipped(copyOfRepoFiles(t, HEAVY), ['context-index-sync']), []);
     });
+
+    passes('a Bad example whose open PR line is followed by internal review of the PR on the same line', 'gsd-core/references/planner-antipatterns.md', swap('Wave 1: Open PR; automatic external review starts', 'Wave 1: Open PR, then internal review of the PR'), 'prompt-thinning');
+    passes('the thinning conditional written without a space before the less-than sign', 'gsd-core/workflows/execute-phase.md', swap('CONTEXT_WINDOW < 200000', 'CONTEXT_WINDOW< 200000'), 'prompt-thinning');
   }
 
   {
@@ -1764,9 +1972,21 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     passes('a deletion rule worded as justified by the RCA satisfies debugger-fix-acceptance', DEBUGGER_REF,
       (text) => `${text.replace(/delet/gi, 'remov')}\nA deletion is justified.\n`, 'debugger-fix-acceptance');
     passes('accept after the revert word satisfies the revert-before-accept order', DEBUGGER_REF,
-      (text) => `${text.replace(/accept/gi, 'take')}\naccept the fix after the revert\n`, 'debugger-fix-acceptance');
+      (text) => `${text.replace(/accept/gi, 'take').replace(/before/gi, 'ahead of')}\naccept the fix after the revert\n`, 'debugger-fix-acceptance');
     passes('a prior to accept wording satisfies the revert-before-accept order', DEBUGGER_REF,
-      (text) => `${text.replace(/accept/gi, 'take')}\nrun it prior to accept.\n`, 'debugger-fix-acceptance');
+      (text) => `${text.replace(/accept/gi, 'take').replace(/before/gi, 'ahead of')}\nrun it prior to accept.\n`, 'debugger-fix-acceptance');
+    passes('a surviving-mutant word run of one character satisfies debugger-fix-acceptance', DEBUGGER_REF,
+      (text) => `${text.replace(/surviv/gi, 'living')}\nsurvivA mutant\n`, 'debugger-fix-acceptance');
+    findsOne('a surviving-mutant word run of zero characters is not the surviving-mutant rule', DEBUGGER_REF,
+      (text) => `${text.replace(/surviv/gi, 'living')}\nsurviv mutant\n`, 'debugger-fix-acceptance', /a surviving mutant rejects the fix/);
+    for (const [pair, line] of [['skipped then log', 'skipped then log'], ['log then skip', 'log then skip'], ['recorded then skip', 'recorded then skip'], ['skip then record', 'skip then record']]) {
+      passes(`the pair ${pair} on one line logs the skip`, DEBUGGER_REF,
+        (text) => `${text.replace(/skip/gi, 'drop').replace(/log/gi, 'lg').replace(/record/gi, 'rcd')}\n${line}\n`, 'debugger-fix-acceptance');
+    }
+    for (const word of ['reject', 'justif', 'rca', 'root cause']) {
+      passes(`${word} after the first delet satisfies the deletion rule`, DEBUGGER_REF,
+        (text) => `${text.replace(/delet/gi, 'remov').replace(/reject|justif|rca|root cause/gi, 'x')}\ndelet then ${word}\n`, 'debugger-fix-acceptance');
+    }
     findsOne('a skipped line with no log or record word is not logged for debugger-fix-acceptance', DEBUGGER_REF,
       (text) => text.replace(/skip/gi, 'drop').replace(/log/gi, 'lg').replace(/record/gi, 'rcd'), 'debugger-fix-acceptance', /skipped signals must be logged or recorded/);
 
@@ -1842,19 +2062,65 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
       within('Architectural Responsibility Map', '## Step 2:', (section) => section.replace(/browser/gi, 'x')), 'gsd-researcher-app-aware');
     passes('a lowercase tier name counts as a standard tier', 'agents/gsd-phase-researcher.md',
       within('Architectural Responsibility Map', '## Step 2:', (section) => section.replace(/Frontend/g, 'frontend').replace(/Browser/g, 'browser')), 'gsd-researcher-app-aware');
+
+    // Both steps directories are listed through ctx.list: an empty or missing directory is a finding.
+    for (const [dir, contract, why] of [
+      ['gsd-core/workflows/progress/steps', 'progress-mvp-display', /cannot read the directory/],
+      ['gsd-core/workflows/new-project/steps', 'new-project-mvp-prompt', /cannot read the directory/],
+    ]) {
+      test(`${dir} removed from the tree is a finding for ${contract}`, (t) => {
+        const root = copyOfRepoFiles(t);
+        cleanup(path.join(root, ...dir.split('/')));
+        const findings = runShipped(root, [contract]);
+        assert.ok(findings.some((f) => why.test(f.message)), JSON.stringify(findings.map((f) => f.message)));
+      });
+    }
+
+    // The research template: the map section runs to the next line starting with "## " or, with none, 500 characters.
+    const TEMPLATE = 'gsd-core/templates/research.md';
+    const mapHeading = 'Architectural Responsibility Map';
+    gapCases('the Tier table end after the map heading', TEMPLATE, 'gsd-researcher-app-aware', (text, gap) => {
+      const at = text.indexOf(mapHeading);
+      const tail = ' Tier |';
+      return text.slice(0, at) + mapHeading + ' '.repeat(gap - mapHeading.length - tail.length) + tail;
+    }, 500, /table format with a Tier column/);
+    passes('a table under a ### subheading inside the map section satisfies gsd-researcher-app-aware', TEMPLATE,
+      (text) => `${text.slice(0, text.indexOf(mapHeading))}${mapHeading}\n\n### Detail\n\n| Tier | Owner |\n\n## Next\n`, 'gsd-researcher-app-aware');
+    findsOne('a table after the next ## heading is outside the map section', TEMPLATE,
+      (text) => `${text.slice(0, text.indexOf(mapHeading))}${mapHeading}\n\n## Next\n\n| Tier | Owner |\n`, 'gsd-researcher-app-aware', /table format with a Tier column/);
   }
 
   // A file a batch 9 contract reads that is gone from the tree is one finding for that file.
   for (const [rel, contract] of [
     ['docs/reference/state-md.md', 'docs-state-md-locale-parity'],
+    ['docs/ja-JP/reference/state-md.md', 'docs-state-md-locale-parity'],
+    ['docs/zh-CN/reference/state-md.md', 'docs-state-md-locale-parity'],
+    ['docs/ko-KR/reference/state-md.md', 'docs-state-md-locale-parity'],
+    ['docs/pt-BR/reference/state-md.md', 'docs-state-md-locale-parity'],
     ['.github/workflows/release.yml', 'release-shard-lane-sharding'],
     ['.github/workflows/install-smoke.yml', 'release-tarball-smoke-workflow'],
+    ['gsd-core/workflows/discuss-phase-assumptions.md', 'model-routing-spawn-threading'],
+    ['gsd-core/workflows/code-review.md', 'model-routing-spawn-threading'],
+    ['gsd-core/workflows/code-review-fix.md', 'model-routing-spawn-threading'],
     ['gsd-core/workflows/quick.md', 'model-routing-spawn-threading'],
     ['gsd-core/workflows/execute-phase.md', 'context-enrichment'],
+    ['gsd-core/workflows/execute-phase/steps/verify-phase-goal.md', 'context-enrichment'],
+    ['gsd-core/workflows/plan-phase.md', 'context-enrichment'],
     ['hooks/gsd-prompt-guard.js', 'kimi-guard-typed-payload-reads'],
+    ['hooks/gsd-read-guard.js', 'kimi-guard-typed-payload-reads'],
+    ['hooks/gsd-read-injection-scanner.js', 'kimi-guard-typed-payload-reads'],
+    ['hooks/gsd-secret-read-guard.js', 'kimi-guard-typed-payload-reads'],
+    ['hooks/gsd-windsurf-pre-write.js', 'kimi-guard-typed-payload-reads'],
+    ['hooks/gsd-workflow-guard.js', 'kimi-guard-typed-payload-reads'],
+    ['hooks/gsd-worktree-path-guard.js', 'kimi-guard-typed-payload-reads'],
     ['agents/gsd-debug-session-manager.md', 'debug-manager-blocking-spawn'],
+    ['agents/gsd-debug-session-manager.compact.md', 'debug-manager-blocking-spawn'],
+    ['gsd-core/workflows/debug.md', 'debug-manager-blocking-spawn'],
     ['gsd-core/references/debugger-bug-taxonomy.md', 'debugger-bug-taxonomy'],
+    ['agents/gsd-debugger.md', 'debugger-bug-taxonomy'],
+    ['gsd-core/templates/DEBUG.md', 'debugger-bug-taxonomy'],
     ['gsd-core/references/debugger-sbfl.md', 'debugger-sbfl'],
+    ['agents/gsd-debugger.md', 'debugger-sbfl'],
     ['agents/gsd-executor.md', 'tdd-reference-correctness'],
     ['gsd-core/references/tdd.md', 'tdd-reference-correctness'],
     ['gsd-core/workflows/execute-plan.md', 'tdd-reference-correctness'],

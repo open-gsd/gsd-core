@@ -21,6 +21,44 @@ const MAX_MAPPED_VALUE = 80;
 const SECTIONIZER = path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs');
 const SHELLCHECK_LINT = path.join(__dirname, '..', '..', 'lint-workflow-shellcheck.cjs');
 
+// Every "`{inner}`" of a line (a brace pair in backticks, no backtick or closing brace inside), as "{inner}".
+function backtickedBraces(line) {
+  const out = [];
+  let at = line.indexOf('`');
+  while (at !== -1) {
+    if (line[at + 1] === '{') {
+      const close = line.indexOf('}', at + 2);
+      if (close > at + 2 && line[close + 1] === '`' && !line.slice(at + 2, close).includes('`')) {
+        out.push(line.slice(at + 1, close + 1));
+        at = line.indexOf('`', close + 2);
+        continue;
+      }
+    }
+    at = line.indexOf('`', at + 1);
+  }
+  return out;
+}
+
+// Every "{name}" of the text where name is a lowercase letter then lowercase letters and underscores, as "name".
+function bracedNames(text) {
+  const out = [];
+  let at = text.indexOf('{');
+  while (at !== -1) {
+    let end = at + 1;
+    if (/[a-z]/.test(text[end] || '')) {
+      end += 1;
+      while (end < text.length && /[a-z_]/.test(text[end])) end += 1;
+      if (text[end] === '}') {
+        out.push(text.slice(at + 1, end));
+        at = text.indexOf('{', end + 1);
+        continue;
+      }
+    }
+    at = text.indexOf('{', at + 1);
+  }
+  return out;
+}
+
 // The prompt template: the one `text` fence the orchestrator writes to PROMPT_FILE, or the reason there is none.
 function promptBody(text) {
   const fences = text.split('\n').filter((line) => line.trim() === '```text').length;
@@ -103,7 +141,7 @@ module.exports = {
         const { scanFencedBlocks } = require(SECTIONIZER);
         const blocks = scanFencedBlocks(lines);
         if (!blocks.every((block) => block.closeLineIdx !== -1)) return 'a fenced block of the fragment does not close';
-        const named = [...sentence.matchAll(/`(\{[^`}]{1,100}\})`/g)].map((match) => match[1]);
+        const named = backtickedBraces(sentence);
         if (named.length === 0) return 'the instruction names no placeholders';
         const { substitutePlaceholders } = require(SHELLCHECK_LINT);
         for (const block of blocks) {
@@ -135,7 +173,7 @@ module.exports = {
       .satisfies((text) => {
         const sentence = /Substitute this plan's([\s\S]{0,400}?)placeholders/.exec(text);
         if (!sentence) return 'the fragment must state its substitution list';
-        placeholders = [...sentence[1].matchAll(/\{([a-z][a-z_]{0,60})\}/g)].map((match) => match[1]);
+        placeholders = bracedNames(sentence[1]);
         return placeholders.length >= MIN_PLACEHOLDERS || `the substitution list names ${placeholders.length} placeholders, expected at least ${MIN_PLACEHOLDERS}`;
       }, "the fragment's substitution list must name at least the 7 known placeholders");
 

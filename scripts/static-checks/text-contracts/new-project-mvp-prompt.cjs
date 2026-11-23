@@ -73,7 +73,7 @@ function optionsArrays(text) {
       if (open !== -1 && text[open] === '[') {
         questions += 1;
         let depth = 0;
-        let end = open;
+        let end = -1;
         for (let k = open; k < text.length; k += 1) {
           if (text[k] === '[') depth += 1;
           else if (text[k] === ']') {
@@ -81,8 +81,10 @@ function optionsArrays(text) {
             if (depth === 0) { end = k; break; }
           }
         }
-        const count = quotedAfter(text.slice(open, end + 1), 'label:').length;
+        const count = quotedAfter(text.slice(open, end === -1 ? open + 1 : end + 1), 'label:').length;
         if (count > OPTIONS_CAP && offender === null) offender = { index: questions, count };
+        // An unclosed array runs to the end of the text, so nothing after it is a separate array: stop (linear).
+        if (end === -1) break;
         next = open + 1;
       }
     }

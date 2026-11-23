@@ -44,13 +44,17 @@ module.exports = {
         return found.length === 0 || `found ${found.join(', ')}`;
       }, 'the Architectural Responsibility Mapping step must be pure reasoning (no tool calls)')
       .satisfies((text) => {
-        const { error, section } = untilStep2(text, Math.max(text.indexOf(ARM), 0));
+        const start = armStepStart(text);
+        if (start === -1) return 'no Step 1.5 heading names the Architectural Responsibility Map';
+        const { error, section } = untilStep2(text, start);
         if (error) return error;
         const found = TIERS.filter((tier) => section.toLowerCase().includes(tier.toLowerCase()));
         return found.length >= 3 || `found: ${found.join(', ')}`;
       }, 'the step must mention at least 3 standard architectural tiers')
       .satisfies((text) => {
-        const { error, section } = untilStep2(text, Math.max(text.indexOf(ARM), 0));
+        const start = armStepStart(text);
+        if (start === -1) return 'no Step 1.5 heading names the Architectural Responsibility Map';
+        const { error, section } = untilStep2(text, start);
         if (error) return error;
         return (section.includes('|') && section.includes('Capability')) || 'no table with a Capability column';
       }, 'the step must specify a table output format with a Capability column');
@@ -68,7 +72,7 @@ module.exports = {
       .satisfies((text) => {
         const at = text.indexOf(ARM);
         if (at === -1) return 'no Architectural Responsibility Map section';
-        const end = text.indexOf('##', at + 10);
+        const end = text.indexOf('\n## ', at);
         const section = text.slice(at, end !== -1 ? end : at + 500);
         return (section.includes('|') && (section.includes('Tier') || section.includes('tier'))) || 'no table with a Tier column';
       }, 'the research template section must include a table format with a Tier column');

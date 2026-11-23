@@ -13,7 +13,7 @@ const VARIANTS = [['full', MANAGER], ['compact', MANAGER_COMPACT]];
 const DEBUG_WORKFLOW = 'gsd-core/workflows/debug.md';
 
 // The `Agent(...)` spawn blocks of a file: the multi-line form (a call whose open paren is followed only by whitespace
-// that includes a newline, up to the first line that is exactly `)`) and the single-line form (`Agent(` up to the next `)`
+// that includes a newline, up to the first line that starts with `)`) and the single-line form (`Agent(` up to the next `)`
 // with no newline or `)` between), so a one-line spawn cannot evade the class guard.
 function agentSpawnBlocks(content) {
   const blocks = [];
@@ -24,15 +24,15 @@ function agentSpawnBlocks(content) {
     const afterParen = at + 'Agent('.length;
     let runEnd = afterParen;
     while (runEnd < content.length && /\s/.test(content[runEnd])) runEnd += 1;
-    // Multi-line: some newline inside the whitespace run, then the first newline-paren after it (the last newline is tried first).
-    for (let i = runEnd - 1; i >= afterParen; i--) {
-      if (content[i] !== '\n') continue;
-      const close = content.indexOf('\n)', i + 1);
-      if (close !== -1) {
-        blocks.push(content.slice(at, close + 2));
-        next = close + 2;
-        break;
-      }
+    // Multi-line: the last newline of the whitespace run, then the first newline-paren after it. An earlier newline of the
+    // run can only close on the line break directly before a paren that ends the run, so it is tried only for that case.
+    const lastNewline = content.lastIndexOf('\n', runEnd - 1);
+    if (lastNewline < afterParen) continue;
+    let close = content.indexOf('\n)', lastNewline + 1);
+    if (close === -1 && content[runEnd] === ')' && lastNewline === runEnd - 1 && content.lastIndexOf('\n', lastNewline - 1) >= afterParen) close = lastNewline;
+    if (close !== -1) {
+      blocks.push(content.slice(at, close + 2));
+      next = close + 2;
     }
   }
   next = 0;
@@ -48,19 +48,20 @@ function agentSpawnBlocks(content) {
   return blocks;
 }
 
-// The value of the first `run_in_background = true|false` in a block, or undefined.
-function runInBackgroundFlag(block) {
+// The values of every `run_in_background = true|false` in a block, in order.
+function runInBackgroundFlags(block) {
   const key = 'run_in_background';
+  const flags = [];
   for (let at = block.indexOf(key); at !== -1; at = block.indexOf(key, at + 1)) {
     let i = at + key.length;
     while (i < block.length && /\s/.test(block[i])) i += 1;
     if (block[i] !== '=') continue;
     i += 1;
     while (i < block.length && /\s/.test(block[i])) i += 1;
-    if (block.startsWith('true', i)) return 'true';
-    if (block.startsWith('false', i)) return 'false';
+    if (block.startsWith('true', i)) flags.push('true');
+    else if (block.startsWith('false', i)) flags.push('false');
   }
-  return undefined;
+  return flags;
 }
 
 const debuggerSpawns = (content) => agentSpawnBlocks(content).filter((block) => block.includes('subagent_type="gsd-debugger"'));
@@ -96,7 +97,7 @@ module.exports = {
         }, `${label} variant: expected exactly one gsd-debugger spawn block`)
         .satisfies((text) => {
           const spawns = debuggerSpawns(text);
-          return spawns.length !== 1 || runInBackgroundFlag(spawns[0]) === 'false' || 'the flag is not false';
+          return spawns.length !== 1 || runInBackgroundFlags(spawns[0]).includes('false') || 'no flag is false';
         }, `${label} variant: the debugger spawn must be blocking (run_in_background = false), or the manager cannot see its result`)
         .satisfies((text) => {
           const spawns = spawnLiterals(text);
@@ -113,7 +114,7 @@ module.exports = {
     for (const [label, rel] of VARIANTS) {
       ctx.doc(rel).satisfies((text) => {
         const spawns = debuggerSpawns(text);
-        flags[label] = spawns.length === 1 ? runInBackgroundFlag(spawns[0]) : undefined;
+        flags[label] = spawns.length === 1 ? runInBackgroundFlags(spawns[0])[0] : undefined;
         return flags[label] !== undefined || 'no flag';
       }, `${label} variant must declare the run_in_background flag at all`);
     }
@@ -135,7 +136,7 @@ module.exports = {
         const offenders = [];
         for (const block of agentSpawnBlocks(text)) {
           if (!block.includes('subagent_type=')) continue;
-          if (runInBackgroundFlag(block) === undefined) offenders.push(block.split('\n').find((line) => line.includes('subagent_type=')).trim());
+          if (runInBackgroundFlags(block).length === 0) offenders.push(block.split('\n').find((line) => line.includes('subagent_type=')).trim());
         }
         return offenders.length === 0 || offenders.join('; ');
       }, 'an agent that spawns a subagent must decide whether that spawn blocks: leaving run_in_background unstated inherits the host default, which backgrounds subagents (#4395)');

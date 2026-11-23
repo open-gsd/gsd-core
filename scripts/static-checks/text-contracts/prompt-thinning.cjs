@@ -71,7 +71,7 @@ module.exports = {
     ctx.doc(ANTIPATTERNS)
       .has(/anti-pattern|Anti-Pattern|Bad/, 'planner-antipatterns.md must contain checkpoint anti-pattern examples')
       .has(/TOO VAGUE|Specificity|specificity/, 'planner-antipatterns.md must contain specificity examples')
-      .satisfies(onExample((body) => inOrder(body, [/Bad/i, /open[^\n]{0,500}PR/i, /internal review/i]) || 'the Bad example does not open the PR before internal review'),
+      .satisfies(onExample((body) => inOrder(body, [/Bad/i, /open[^\n]{0,500}?PR/i, /internal review/i]) || 'the Bad example does not open the PR before internal review'),
         'the example must show Bad: open the PR, then internal review')
       .satisfies(onExample((body) => inOrder(body, [/Good/i, /internal review/i, /accepted fixes/i, /if applicable[^\n]{0,500}re-check[^\n]{0,500}then immediately open PR/i])
         || 'the Good example does not run internal review and the accepted fixes before the re-check and open'),

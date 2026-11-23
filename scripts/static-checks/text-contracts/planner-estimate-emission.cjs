@@ -6,8 +6,13 @@
 // budget, runs the estimate-check verb, recommends splitting as a warning that is never a blocker, and consults the
 // estimate in Dimension 5; docs/reference/plan-md.md documents `estimate` as optional. Parity: every confidence word
 // the planner offers is in the module's CONFIDENCE_VALUES, and docs/CONFIGURATION.md states the shipped
-// smart_zone_tokens default. Was tests/planner-estimate-emission.test.cjs. The template is found by a line walk over
-// `---` fences (the test used a lazy regex), consuming fence pairs in order as the regex did. The test accepted
+// smart_zone_tokens default. Was tests/planner-estimate-emission.test.cjs. The template is found by walking the
+// fenced blocks with the repo's one fence owner (locateFrontmatterFence), where the test used a lazy regex: a closing
+// fence there was `---` and nothing else, here it is `---` plus optional trailing spaces or tabs, or a `----` line
+// when no exact closer follows; a lone CR or U+2028 no longer starts a line. These are deliberate (one owner of the
+// fence rules, ADR-5057) and are pinned by cases. The confidence values are read from the template's own enumeration
+// comment (`# low | med | high`), where the test took every low/med/high word of the line and so could never see a
+// value the parser rejects. The test accepted
 // `calibration factor`, `derived` and `split` or `never a blocker` alone; the files carry `estimate-calibration`,
 // `sample count`, `re-slic` and `WARNING, never a blocker`, which are asked for.
 
@@ -71,7 +76,8 @@ module.exports = {
       .satisfies(onTemplate((template) => {
         const line = template.split('\n').find((candidate) => /^\s{1,20}confidence:/.test(candidate));
         if (!line) return 'the template must show the confidence field';
-        const words = line.match(/\b(low|med|high)\b/g) || [];
+        const comment = line.split('#')[1];
+        const words = comment === undefined ? [] : comment.split('\u2014')[0].split('|').map((word) => word.trim()).filter((word) => word.length > 0);
         if (words.length === 0) return 'the confidence line must enumerate the allowed values';
         const { CONFIDENCE_VALUES } = require(ESTIMATION_LIB);
         const rejected = words.filter((word) => !CONFIDENCE_VALUES.includes(word));

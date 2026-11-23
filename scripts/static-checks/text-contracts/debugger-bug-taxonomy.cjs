@@ -60,7 +60,7 @@ module.exports = {
       .has(/heisenbug|mandelbug/i, 'the reference must define the class Heisenbug/Mandelbug')
       .has(/concurrency/i, 'the reference must define the class Concurrency')
       .has(/rout/i, 'the word route/routing must appear')
-      .satisfies((text) => text.split(/\r|\n/).some((line) => line.split('|').length - 1 >= 3) || 'no line with three pipes', 'there must be a markdown table (inspectable)')
+      .satisfies((text) => text.split(/\r|\n|\u2028|\u2029/).some((line) => line.split('|').length - 1 >= 3) || 'no line with three pipes', 'there must be a markdown table (inspectable)')
       .satisfies((text) => tableRows(text).length >= 3 || `found ${tableRows(text).length}`, 'the routing table must have at least 3 class rows')
       .satisfies(onRow('bohrbug', (row) => row.includes('reproduc') || 'no reproduction'), 'the Bohrbug row must include reproduction')
       .satisfies(onRow('bohrbug', (row) => row.includes('sbfl') || 'no SBFL'), 'the Bohrbug row must include SBFL (Phase 1.25, not the epic shorthand Phase 1B)')
@@ -74,6 +74,6 @@ module.exports = {
     for (const technique of PREVIOUSLY_ORPHANED) {
       ctx.doc(REFERENCE).satisfies((text) => text.toLowerCase().includes(technique), `the technique "${technique}" must appear in the bug-taxonomy reference (General lane): the reframe once orphaned it`);
     }
-    ctx.doc(REFERENCE).satisfies((text) => /replace|supersede|routed? selection/i.test(text) || text.split(/\r|\n/).some((line) => hasInOrder(line, 'not', 'append')) || 'no such wording', 'the reference must state the flat menu is replaced or superseded by class-routed selection, not merely appended');
+    ctx.doc(REFERENCE).satisfies((text) => /replace|supersede|routed? selection/i.test(text) || text.split(/\r|\n|\u2028|\u2029/).some((line) => hasInOrder(line, 'not', 'append')) || 'no such wording', 'the reference must state the flat menu is replaced or superseded by class-routed selection, not merely appended');
   },
 };

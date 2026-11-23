@@ -19,8 +19,8 @@ function inOrder(text, words) {
   return true;
 }
 
-// A line holds one of the word sequences in order (`.` never crossed a newline).
-const lineHasAny = (text, sequences) => text.split('\n').some((line) => sequences.some((words) => inOrder(line, words)));
+// A line holds one of the word sequences in order (`.` never crossed LF, CR, U+2028 or U+2029).
+const lineHasAny = (text, sequences) => text.split(/[\n\r\u2028\u2029]/).some((line) => sequences.some((words) => inOrder(line, words)));
 
 // The text with every run of whitespace as one space, built without a backtracking pattern.
 const flatten = (text) => text.split(/\s/).filter(Boolean).join(' ');

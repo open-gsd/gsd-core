@@ -10,6 +10,24 @@
 const COMMAND = 'commands/gsd/extract-learnings.md';
 const WORKFLOW = 'gsd-core/workflows/extract-learnings.md';
 
+// The items of the frontmatter `allowed-tools:` list (a block list or a `[a, b]` flow list), exact names only.
+function allowedTools(text) {
+  const lines = text.split('\n');
+  const at = lines.findIndex((line) => line.trimEnd().startsWith('allowed-tools:'));
+  if (at === -1) return [];
+  const rest = lines[at].trim().slice('allowed-tools:'.length).trim();
+  if (rest.startsWith('[') && rest.endsWith(']')) return rest.slice(1, -1).split(',').map((item) => item.trim());
+  const items = [];
+  for (const line of lines.slice(at + 1)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('- ')) break;
+    items.push(trimmed.slice(2).trim());
+  }
+  return items;
+}
+
+const hasLineStarting = (text, prefix) => text.split('\n').some((line) => line.startsWith(prefix));
+
 module.exports = {
   id: 'extract-learnings',
   check(ctx) {
@@ -22,7 +40,9 @@ module.exports = {
       .has('argument-hint:', 'the command must have argument-hint')
       .has('<phase-number>', 'the argument-hint must reference <phase-number>')
       .has('allowed-tools:', 'the command must have allowed-tools');
-    for (const tool of ['Read', 'Write', 'Bash', 'Grep', 'Glob', 'Agent']) frontmatter.has(tool, `allowed-tools must include ${tool}`);
+    for (const tool of ['Read', 'Write', 'Bash', 'Grep', 'Glob', 'Agent']) {
+      frontmatter.satisfies((text) => allowedTools(text).includes(tool) || `the allowed-tools list is [${allowedTools(text).join(', ')}]`, `allowed-tools must include ${tool}`);
+    }
     frontmatter.has('type: prompt', 'the command must have type: prompt');
     ctx.doc(COMMAND).has('workflows/extract-learnings.md', 'the command must reference workflows/extract-learnings.md in execution_context');
 
@@ -49,10 +69,10 @@ module.exports = {
       .has('LEARNINGS.md', 'the workflow must output LEARNINGS.md')
       .has('skip if not found', 'the workflow must skip missing optional artifacts')
       .has('attribution to', 'the workflow must include source attribution for extracted items')
-      .has(/^phase:/m, 'the LEARNINGS.md frontmatter must include phase')
-      .has(/^phase_name:/m, 'the LEARNINGS.md frontmatter must include phase_name')
-      .has(/^generated:/m, 'the LEARNINGS.md frontmatter must include generated')
-      .has(/^missing_artifacts:/m, 'the LEARNINGS.md frontmatter must include missing_artifacts')
+      .satisfies((text) => hasLineStarting(text, 'phase:'), 'the LEARNINGS.md frontmatter must include phase')
+      .satisfies((text) => hasLineStarting(text, 'phase_name:'), 'the LEARNINGS.md frontmatter must include phase_name')
+      .satisfies((text) => hasLineStarting(text, 'generated:'), 'the LEARNINGS.md frontmatter must include generated')
+      .satisfies((text) => hasLineStarting(text, 'missing_artifacts:'), 'the LEARNINGS.md frontmatter must include missing_artifacts')
       .has('overwrite it', 'the workflow must overwrite a previous LEARNINGS.md on re-run');
   },
 };

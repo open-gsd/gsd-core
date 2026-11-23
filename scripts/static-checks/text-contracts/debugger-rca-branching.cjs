@@ -7,9 +7,9 @@
 // contributing condition simultaneously) and that root_cause may hold a set while single-cause sessions are unchanged;
 // the DEBUG.md template's root_cause field notes it may hold a set; the agent's reasoning checkpoint carries
 // candidate_causes and and_gate; debugger-philosophy.md calls out the single-cause bias. The reference is held to the
-// phrases it carries (a bare `code`, `data` or `set` anywhere would be satisfied by unrelated text). The schema
-// invariant fixtures stay in tests/debugger-rca-branching.test.cjs: they exercise a function defined in that file, not
-// repo text. Was the text half of tests/debugger-rca-branching.test.cjs.
+// phrases it carries (a bare `code`, `data` or `set` anywhere would be satisfied by unrelated text). The test's
+// four schema fixtures exercised a function defined in that file, not repo text, and were dropped. Was
+// tests/debugger-rca-branching.test.cjs.
 
 const REFERENCE = 'gsd-core/references/debugger-rca-branching.md';
 

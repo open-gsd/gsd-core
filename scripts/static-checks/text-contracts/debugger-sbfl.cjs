@@ -31,7 +31,7 @@ module.exports = {
       .has(/tarantula/i, 'the reference must mention Tarantula as a documented fallback')
       .has(/top-?n/i, 'the reference must document top-N shortlist seeding')
       .has(/no coverage|no test suite|coverage (?:is )?(?:absent|unavailable)/i, 'the reference must document the no-coverage skip path')
-      .satisfies((text) => text.split(/\r|\n/).some((line) => hasInOrder(line, 'skip', 'log') || hasInOrder(line, 'log', 'skip') || hasInOrder(line, 'skip', 'note') || hasInOrder(line, 'note', 'skip')) || 'no such line', 'a skip must be logged (not a silent pass): auditability')
+      .satisfies((text) => text.split(/\r|\n|\u2028|\u2029/).some((line) => hasInOrder(line, 'skip', 'log') || hasInOrder(line, 'log', 'skip') || hasInOrder(line, 'skip', 'note') || hasInOrder(line, 'note', 'skip')) || 'no such line', 'a skip must be logged (not a silent pass): auditability')
       .has(/evidence/i, 'the reference must document that the ranking lands in the Evidence section of the debug file')
       .has(/bohrbug|deterministic|flaky|heisenbug|mandelbug/i, 'the reference must note SBFL suits deterministic bugs and is not trusted on flaky spectra (pairs with Phase 2B)');
   },

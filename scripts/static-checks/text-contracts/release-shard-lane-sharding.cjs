@@ -14,7 +14,7 @@ const LANES = [
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const stepsOf = (job) => (Array.isArray(job.steps) ? job.steps.filter(isObject) : []);
-const dependsOn = (job, name) => (Array.isArray(job.needs) || typeof job.needs === 'string' ? job.needs.includes(name) : false);
+const dependsOn = (job, name) => (Array.isArray(job.needs) ? job.needs.includes(name) : job.needs === name);
 
 // The jobs mapping of release.yml, or the reason it cannot be read.
 function withJobs(check) {
