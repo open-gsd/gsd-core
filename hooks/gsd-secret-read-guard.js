@@ -386,8 +386,7 @@ const WRAPPERS = new Map([
 // word it does not know and takes it for the command, so `then curl …`, `! bash
 // -c …` and `time ! cat …` hide the command behind it. This reading walks past
 // those words, as a scan of its own (furtherReading) after the plain scans found
-// nothing. It only adds: the plain scan still checks the operands of the word it
-// stopped at, so what it denies stays denied (`! file -f .env`, `if [ -f .env ];
+// nothing. It only adds, so what the plain scans deny stays denied (`if [ -f .env ];
 // then`, a script named `repeat`).
 //   keyword  a shell keyword, so a keyword or an assignment may follow (`time ! cmd`)
 //   count    the next word is a count, whatever it looks like (`repeat -1+2 cmd`)
@@ -5149,7 +5148,7 @@ function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter
 }
 
 // The words of segment `s`'s own here-strings and heredoc bodies, as { hereWords, bodyWords }, found once per
-// segment: `find` runs many xargs in one segment, and each would walk the segment's tokens again.
+// segment.
 const ownFeedWordsBySegMap = new WeakMap();
 function ownFeedWords(s, bySeg) {
   let found = ownFeedWordsBySegMap.get(bySeg);
