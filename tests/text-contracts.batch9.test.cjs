@@ -2216,7 +2216,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     passes('a suboptions array of five labels is not an options array', NEW_PROJECT, append(options(5, 'suboptions')), 'new-project-mvp-prompt');
     findsOne('an options array with a space before the colon and five labels exceeds the cap', NEW_PROJECT, append(options(5, 'options ')), 'new-project-mvp-prompt', /has 5 options/);
     findsOne('an options array with a newline before the bracket and five labels exceeds the cap', NEW_PROJECT,
-      append(options(5).replace('[', '\n[')), 'new-project-mvp-prompt', /has 5 options/);
+      append(options(5).split('[').join('\n[')), 'new-project-mvp-prompt', /has 5 options/);
     editFiles('a five-label options array in a nested steps file is not read',
       [[NEW_PROJECT_STEP, append('{ label: "nested" }')]], 'new-project-mvp-prompt', null,
       [['gsd-core/workflows/new-project/steps/nested/big.md', `${options(5)}\n`]]);
