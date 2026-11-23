@@ -44,6 +44,6 @@ Structural contract tests for each integration site live under `tests/`:
 - `planner-mvp-mode.test.cjs` — gsd-planner agent MVP section
 - `mvp-phase-command.test.cjs`, `mvp-phase-integration.test.cjs`, `mvp-phase-spidr.test.cjs` — `/gsd:mvp-phase`
 - `execute-mvp-tdd-gate.test.cjs`, `executor-mvp-tdd-section.test.cjs` — MVP+TDD Gate
-- `verifier-mvp-section.test.cjs`, `verify-mvp-uat.test.cjs` — verifier UAT framing
+- the `verifier-mvp-section` text contract (`scripts/static-checks/text-contracts/verifier-mvp-section.cjs`), `verify-mvp-uat.test.cjs` — verifier UAT framing
 - `new-project-mvp-prompt.test.cjs` — mode prompt at init
 - `progress-mvp-display.test.cjs`, `stats-mvp-display.test.cjs`, `graphify-mvp-viz.test.cjs` — discovery surfaces

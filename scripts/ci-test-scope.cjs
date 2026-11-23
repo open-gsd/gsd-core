@@ -36,7 +36,6 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-230-pr-target-policy.test.cjs',
   'tests/ci-conformance-pr-gating.test.cjs',
   'tests/ci-docs-guard-registry.test.cjs',
-  'tests/ci-durations-upload-nonfatal.test.cjs',
   'tests/ci-full-lane-sharding.test.cjs',
   'tests/ci-merge-group-wiring.test.cjs',
   'tests/ci-pr-mergeability.test.cjs',
@@ -48,7 +47,7 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/merge-commit-pr.test.cjs',
   'tests/mutation-tap-runner-wiring.test.cjs',
   'tests/mutation-workflow-base-ref.test.cjs',
-  // #6481, #6536: policy-release-no-npm-self-upgrade and release-coverage-scope are now text contracts; their release.yml mutation cases live here.
+  // #6481, #6536, #6551: policy-release-no-npm-self-upgrade, release-coverage-scope and ci-durations-upload-nonfatal are now text contracts; their release.yml and test.yml mutation cases live here.
   'tests/text-contracts.test.cjs',
   'tests/policy-shell-pinning.test.cjs',
   'tests/registry-docs-approved-issue-parity.test.cjs',
