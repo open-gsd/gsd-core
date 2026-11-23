@@ -736,7 +736,12 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
     // Control: with no extra ignore, every file under the subtree is visited.
     assert.deepStrictEqual(findUnvisited(onDisk, await lintTree(siteCountEslint(), pattern)), []);
     const ignored = await lintTree(siteCountEslint([{ ignores: ['tests/helpers/**'] }]), pattern);
-    assert.deepStrictEqual(findUnvisited(onDisk, ignored), onDisk);
+    // findUnvisited skips a file that no longer exists, so a probe removed since the walk (#6570) is not in its
+    // answer. Every file the walk saw that is STILL on disk must be unvisited: the ignore hid all of them.
+    const unvisited = findUnvisited(onDisk, ignored);
+    const visitedDespiteIgnore = onDisk.filter((f) => !unvisited.includes(f) && fs.existsSync(path.join(REPO_ROOT, f)));
+    assert.deepStrictEqual(visitedDespiteIgnore, []);
+    assert.ok(unvisited.length > 0, 'the ignore must leave files unvisited, or the row proves nothing');
   });
 
   test('every file under tests/ carries exactly the sites the allowlist records', async () => {
