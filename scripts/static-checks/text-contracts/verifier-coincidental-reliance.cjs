@@ -25,14 +25,16 @@ const ITEMS_RADIUS = 500;
 const ITEMS_ANCHOR = 'coincidental_reliance_items: #';
 const STATUSES = ['passed', 'gaps_found', 'human_needed'];
 
-// A shipped library under gsd-core/bin/lib, or the reason it cannot be loaded.
-function loadLib(name) {
+// A shipped library through `load`, or the reason it cannot be loaded (a missing build is a finding, not a throw).
+function loadLib(load, file) {
   try {
-    return { lib: require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', name)) };
+    return { lib: load() };
   } catch (err) {
-    return { error: `gsd-core/bin/lib/${name} cannot be loaded: ${err.message}` };
+    return { error: `${file} cannot be loaded: ${err.message}` };
   }
 }
+
+const shippedLib = (name) => loadLib(() => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', name)), `gsd-core/bin/lib/${name}`);
 
 // The source around the first occurrence of `needle`, `radius` characters either side, or null when it is absent.
 function windowAround(text, needle, radius) {
@@ -57,10 +59,11 @@ function statusUnionLines(text) {
     const firstStart = at;
     while (isStatusWord(text[at])) at += 1;
     if (at === firstStart) continue;
-    let end = at;
-    let alternatives = 0;
+    // The end of the first word and of each `| word` alternative, in order: the pattern backtracks to fewer
+    // alternatives when the line does not end after the last one.
+    const ends = [at];
     for (;;) {
-      let probe = end;
+      let probe = ends[ends.length - 1];
       while (isWhitespace(text[probe])) probe += 1;
       if (text[probe] !== '|') break;
       probe += 1;
@@ -68,32 +71,33 @@ function statusUnionLines(text) {
       const wordStart = probe;
       while (isStatusWord(text[probe])) probe += 1;
       if (probe === wordStart) break;
-      end = probe;
-      alternatives += 1;
+      ends.push(probe);
     }
-    if (alternatives === 0) continue;
-    let blankEnd = end;
-    while (isWhitespace(text[blankEnd])) blankEnd += 1;
-    let stop = -1;
-    for (let q = blankEnd; q >= end; q -= 1) {
-      if (q === text.length || LINE_ENDS.has(text[q])) {
-        stop = q;
+    for (let k = ends.length - 1; k >= 1; k -= 1) {
+      const wordEnd = ends[k];
+      let blankEnd = wordEnd;
+      while (isWhitespace(text[blankEnd])) blankEnd += 1;
+      let stop = -1;
+      for (let q = blankEnd; q >= wordEnd; q -= 1) {
+        if (q === text.length || LINE_ENDS.has(text[q])) {
+          stop = q;
+          break;
+        }
+      }
+      if (stop !== -1) {
+        lines.push(text.slice(i, stop));
+        i = stop - 1;
         break;
       }
     }
-    if (stop === -1) continue;
-    lines.push(text.slice(i, stop));
-    i = stop - 1;
   }
   return lines;
 }
 
 // The table cells that mention the advisory must render the suffixed verdict "✓ VERIFIED (coincidental-reliance)".
-function qualifierSuffixes(text) {
-  const loaded = loadLib('markdown-table.cjs');
-  if (loaded.error) return loaded.error;
+function qualifierSuffixes(text, splitTableRow) {
   const cells = text.split('\n').filter((line) => line.includes('|') && line.includes('coincidental-reliance'))
-    .flatMap((line) => loaded.lib.splitTableRow(line).filter((cell) => cell.includes('coincidental-reliance')));
+    .flatMap((line) => splitTableRow(line).filter((cell) => cell.includes('coincidental-reliance')));
   const bad = cells.find((cell) => !cell.includes(QUALIFIER));
   return bad === undefined || `a verdict cell must render as "${QUALIFIER}": ${bad.trim()}`;
 }
@@ -103,7 +107,7 @@ function statusEnumProblems(verification) {
   const statuses = verification === null || typeof verification !== 'object' ? undefined : verification.VERIFIER_STATUSES;
   if (!(statuses instanceof Set)) return ['the VERIFIER_STATUSES set must be present'];
   const found = [...statuses].map(String).sort();
-  if (found.join(',') !== STATUSES.slice().sort().join(',') || found.some((status) => /coincidental/i.test(status))) {
+  if (found.join(',') !== STATUSES.slice().sort().join(',')) {
     return [`the overall-status enum must stay ${STATUSES.slice().sort().join(', ')} (found: ${found.join(', ')})`];
   }
   return [];
@@ -113,7 +117,14 @@ module.exports = {
   id: 'verifier-coincidental-reliance',
   issue: '#1955',
   statusEnumProblems,
+  loadLib,
+  statusUnionLines,
   check(ctx) {
+    // The table splitter is loaded once: when the library cannot be loaded that is one finding for the library and the
+    // verdict-cell checks (which need it) are skipped.
+    const table = shippedLib('markdown-table.cjs');
+    if (table.error) ctx.fail('gsd-core/bin/lib/markdown-table.cjs', table.error);
+    const qualifierCheck = (text) => table.error !== undefined || qualifierSuffixes(text, table.lib.splitTableRow);
     const verifier = ctx.doc(VERIFIER);
     verifier.has(/coincidental-reliance/, 'the verifier must define the coincidental-reliance advisory');
     for (const reason of REASONS) verifier.has(reason, `the verifier must name the '${reason}' trigger`);
@@ -147,7 +158,7 @@ module.exports = {
         }
         return true;
       }, 'the per-truth advisory must never leak into the status vocabulary')
-      .satisfies(qualifierSuffixes, 'the qualifier must suffix VERIFIED, never replace it')
+      .satisfies(qualifierCheck, 'the qualifier must suffix VERIFIED, never replace it')
       .has(QUALIFIER, 'the agent must show the suffixed verdict form at least once')
       .has(/coincidental_reliance_items/, 'the report frontmatter must carry coincidental_reliance_items')
       .satisfies((text) => text.split('\n').some((line) => {
@@ -168,7 +179,7 @@ module.exports = {
 
     const template = ctx.doc(TEMPLATE);
     template
-      .satisfies(qualifierSuffixes, 'the template qualifier must suffix VERIFIED, never replace it')
+      .satisfies(qualifierCheck, 'the template qualifier must suffix VERIFIED, never replace it')
       .has('coincidental_reliance_items', 'the standalone template must carry the frontmatter items list');
     for (const token of ['coincidental-reliance', ...REASONS]) {
       template.has(token, `the standalone template must carry '${token}'`);
@@ -186,7 +197,7 @@ module.exports = {
     ctx.doc(AGENTS_DOC).has(/coincidental-reliance/, 'docs/reference/agents.md must document the coincidental-reliance advisory');
 
     // The overall-status enum the advisory must not enter (the shipped module's frozen writer set).
-    const loaded = loadLib('verification.cjs');
+    const loaded = shippedLib('verification.cjs');
     if (loaded.error) {
       ctx.fail(VERIFICATION_LIB, loaded.error);
     } else {

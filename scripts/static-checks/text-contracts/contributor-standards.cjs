@@ -65,6 +65,8 @@ const headingCheck = (pattern, label) => (text) => {
 };
 
 module.exports = {
+  // The linear walkers, exported for the differential properties of tests/text-contracts.batch10.test.cjs.
+  backtickedHeadings, actualHeadings,
   id: 'contributor-standards',
   issue: '#2721',
   check(ctx) {

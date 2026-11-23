@@ -44,6 +44,9 @@ const SPIKES_TABLE_HEADER = ['|', WS, '#', WS, '|', WS, 'Idea', WS, '|', WS, 'Na
 module.exports = {
   id: 'spike-manifest-scoping',
   issue: '#1700',
+  hasSequence,
+  WS,
+  SPIKES_TABLE_HEADER,
   check(ctx) {
     ctx.doc(SPIKE)
       .has(/idea key/i, 'create_manifest must introduce an explicit "idea key" concept: without one the write side cannot tell a continuation of the current idea from an unrelated new idea')

@@ -107,15 +107,21 @@ function offerNextOf(text) {
   return { block: text.slice(start, end) };
 }
 
-// The route block's lines (a line ends at LF, CR, U+2028 or U+2029) that name both `resume` and `exception`.
+// A line of the route block (a line ends at LF, CR, U+2028 or U+2029) that names `resume` and `exception`, one after the other
+// without overlapping (`resumexception` shares its `e`: the old /resume.*exception/ could not match it), in either order.
 function explainsResumeException(text) {
   return text.split(/[\n\r\u2028\u2029]/).some((line) => {
     const lower = line.toLowerCase();
-    return lower.includes('resume') && lower.includes('exception');
+    const resume = lower.indexOf('resume');
+    const exception = lower.indexOf('exception');
+    return (resume !== -1 && lower.includes('exception', resume + 'resume'.length))
+      || (exception !== -1 && lower.includes('resume', exception + 'exception'.length));
   });
 }
 
 module.exports = {
+  // The linear walkers, exported for the differential properties of tests/text-contracts.batch10.test.cjs.
+  hasSubClear, hasSequence, capturesGapsMode, derivesExecFlag, derivationBlock, explainsResumeException,
   id: 'next-up-clear-order',
   issue: '#1623',
   check(ctx) {
@@ -145,9 +151,9 @@ module.exports = {
       .satisfies(capturesGapsMode, 'the plan-phase.md preamble must set GAPS_MODE from the captured arguments ($GSD_ARGS) --gaps, so the mode reaches <offer_next>')
       .satisfies(derivesExecFlag, 'the plan-phase.md preamble must derive GAPS_EXEC_FLAG="--gaps-only" from GAPS_MODE')
       .satisfies((text) => {
+        if (!derivesExecFlag(text)) return true;
         const block = derivationBlock(text);
         if (block === null) return 'expected a GAPS_EXEC_FLAG derivation block';
-        if (!block.includes('GAPS_MODE')) return 'the derivation does not mention GAPS_MODE';
         return !block.toLowerCase().includes('reviews') || 'the derivation references reviews';
       }, 'the --gaps-only derivation must be gated on GAPS_MODE alone: reviews-mode Next Up stays unchanged')
       .satisfies((text) => offerNextOf(text).error || true, 'plan-phase.md must have a closed <offer_next> block')

@@ -67,9 +67,15 @@ module.exports = {
         .satisfies((text) => {
           const block = roomsBlock(text);
           if (block === null) return 'could not locate a rooms: YAML block';
+          let yaml;
+          try {
+            yaml = require('js-yaml');
+          } catch (err) {
+            return `js-yaml cannot be loaded: ${err.message}`;
+          }
           let parsed;
           try {
-            parsed = require('js-yaml').load(block);
+            parsed = yaml.load(block);
           } catch (err) {
             return `the rooms: block is not valid YAML: ${err.message}`;
           }

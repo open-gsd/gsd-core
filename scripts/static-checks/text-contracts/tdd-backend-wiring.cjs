@@ -20,7 +20,7 @@ const QUERY = 'gsd_run query phase.tdd-applicable';
 
 const isBlank = (char) => char !== undefined && /\s/.test(char);
 const isWordChar = (char) => char !== undefined && /[A-Za-z0-9_]/.test(char);
-const asciiLower = (text) => text.replace(/[A-Z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32));
+const { asciiLower } = require('./lib/ascii-lower.cjs');
 
 // The line after its leading blanks.
 function trimmedStart(line) {
@@ -31,18 +31,6 @@ function trimmedStart(line) {
 
 const isAssignment = (line) => trimmedStart(line).startsWith('TDD_APPLICABLE=');
 const isAgentCall = (line) => trimmedStart(line) === 'Agent(';
-
-// The old `^\s*TDD_APPLICABLE=` with the `m` flag: the assignment starts a line, line breaks being CR, LF, U+2028, U+2029.
-function assignsAtLineStart(text) {
-  let at = text.indexOf('TDD_APPLICABLE=');
-  while (at !== -1) {
-    let back = at;
-    while (back > 0 && isBlank(text[back - 1])) back -= 1;
-    if (back === 0 || /[\r\n\u2028\u2029]/.test(text.slice(back, at))) return true;
-    at = text.indexOf('TDD_APPLICABLE=', at + 1);
-  }
-  return false;
-}
 
 // Indices of the lines holding `${TDD_APPLICABLE` as a whole word.
 function useLines(lines) {
@@ -60,17 +48,16 @@ function useLines(lines) {
   return found;
 }
 
-// The call from `gsd_run query phase.tdd-applicable` to the end of the line, without a closing parenthesis.
+// The call from `gsd_run query phase.tdd-applicable` (which the line holds) to the end of the line, without a closing parenthesis.
 function queryCall(line) {
-  const start = line.indexOf(QUERY);
-  if (start === -1) return null;
-  const call = line.slice(start);
+  const call = line.slice(line.indexOf(QUERY));
   return call.endsWith(')') ? call.slice(0, -1) : call;
 }
 
 const lineOf = (text, predicate) => text.split('\n').find(predicate);
 
 module.exports = {
+  walkers: { useLines, isAssignment, queryCall },
   id: 'tdd-backend-wiring',
   issue: '#4266',
   check(ctx) {
@@ -79,17 +66,27 @@ module.exports = {
       if (!docs.has(file)) docs.set(file, ctx.doc(file));
       return docs.get(file);
     };
+    // A cause shared by several assertions (an assignment or a query call that is gone from a file) is reported once.
+    const seen = new Set();
+    const once = (key, message) => {
+      if (seen.has(key)) return true;
+      seen.add(key);
+      return message;
+    };
+    const isQueryLine = (line) => line.includes('phase.tdd-applicable') && line.includes('gsd_run query');
     for (const [name, , assignmentFile] of BACKENDS) {
       docOf(assignmentFile)
         .satisfies((text) => {
           const lines = text.split('\n');
           const assign = lines.findIndex(isAssignment);
-          if (assign === -1) return 'it has no TDD_APPLICABLE assignment';
-          return lines.slice(Math.max(0, assign - 8), assign + 1).join('\n').includes('phase.tdd-applicable') || 'no phase.tdd-applicable call within eight lines above the assignment';
+          if (assign === -1) return once(`no-assignment:${assignmentFile}`, 'it has no TDD_APPLICABLE assignment');
+          if (lines.slice(Math.max(0, assign - 8), assign + 1).join('\n').includes('phase.tdd-applicable')) return true;
+          const message = 'no phase.tdd-applicable call within eight lines above the assignment';
+          return lines.some(isQueryLine) ? message : once(`no-call:${assignmentFile}`, message);
         }, `${name}: TDD_APPLICABLE must be assigned from a phase.tdd-applicable call within a few lines above it`)
         .satisfies((text) => {
-          const call = lineOf(text, (line) => line.includes('phase.tdd-applicable') && line.includes('gsd_run query'));
-          if (call === undefined) return 'it has no gsd_run query phase.tdd-applicable call';
+          const call = lineOf(text, isQueryLine);
+          if (call === undefined) return once(`no-call:${assignmentFile}`, 'it has no gsd_run query phase.tdd-applicable call');
           return (call.includes('{phase_dir}') && call.includes('{plan_file}')) || `the call is ${call.trim()}`;
         }, `${name}: the phase.tdd-applicable call must be plan-scoped ({phase_dir}/{plan_file}), not phase-scoped`);
     }
@@ -97,14 +94,12 @@ module.exports = {
     docOf(WORKTREE).satisfies((text) => {
       const lines = text.split('\n');
       const assign = lines.findIndex(isAssignment);
-      if (assign === -1) return 'it has no TDD_APPLICABLE assignment';
+      if (assign === -1) return once(`no-assignment:${WORKTREE}`, 'it has no TDD_APPLICABLE assignment');
       const uses = useLines(lines);
       if (uses.length === 0) return 'it has no ${TDD_APPLICABLE...} use to check ordering against';
       const early = uses.find((use) => !(assign < use));
       return early === undefined || `TDD_APPLICABLE is used at line ${early + 1} before it is assigned at line ${assign + 1}`;
     }, 'executor-isolation-dispatch.md must assign TDD_APPLICABLE before every ${TDD_APPLICABLE...} use');
-
-    docOf(FRAGMENT).satisfies((text) => assignsAtLineStart(text), 'tdd-applicability-resolution.md must assign TDD_APPLICABLE');
 
     docOf(HARNESS)
       .satisfies((text) => {
@@ -162,13 +157,13 @@ module.exports = {
     let harnessCall = null;
     docOf(FRAGMENT).satisfies((text) => {
       const line = callOf(text);
-      if (line === undefined) return 'it carries no gsd_run query phase.tdd-applicable assignment call';
+      if (line === undefined) return once(`no-call:${FRAGMENT}`, 'it carries no gsd_run query phase.tdd-applicable assignment call');
       harnessCall = queryCall(line);
       return true;
     }, 'the harness backend must carry a gsd_run query phase.tdd-applicable call');
     docOf(WORKTREE).satisfies((text) => {
       const line = callOf(text);
-      if (line === undefined) return 'it carries no gsd_run query phase.tdd-applicable assignment call';
+      if (line === undefined) return once(`no-call:${WORKTREE}`, 'it carries no gsd_run query phase.tdd-applicable assignment call');
       return harnessCall === null || harnessCall === queryCall(line) || `the harness call is ${harnessCall}, the worktree call is ${queryCall(line)}`;
     }, 'the harness and worktree backends must issue byte-identical phase.tdd-applicable command-substitution calls (#4268)');
   },

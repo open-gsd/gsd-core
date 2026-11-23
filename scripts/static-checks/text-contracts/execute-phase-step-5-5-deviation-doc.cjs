@@ -39,7 +39,11 @@ module.exports = {
     workflow
       .has('human_needed', 'execute-phase.md must contain a human_needed branch')
       .lacks('"approved" → continue', 'the human_needed branch must not offer "approved" → continue: it marks the phase complete without verification (issue #38)')
-      .before('**If human_needed:**', '**If gaps_found:**', 'the human_needed section must appear before the gaps_found section')
+      .satisfies((text) => {
+        const humanNeeded = text.indexOf('**If human_needed:**');
+        const gapsFound = text.indexOf('**If gaps_found:**');
+        return humanNeeded === -1 || gapsFound === -1 || humanNeeded < gapsFound;
+      }, 'the human_needed section must appear before the gaps_found section (a missing marker is reported by the section read below)')
       .satisfies((text) => {
         const humanNeeded = text.indexOf('**If human_needed:**');
         const gapsFound = text.indexOf('**If gaps_found:**');

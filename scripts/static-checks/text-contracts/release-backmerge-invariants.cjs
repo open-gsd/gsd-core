@@ -85,6 +85,8 @@ function withWorkflow(ctx, rel, label, check) {
 const when = (present, fn) => () => (present ? fn() : true);
 
 module.exports = {
+  // The linear walkers, exported for the differential properties of tests/text-contracts.batch10.test.cjs.
+  gatesOnOutcome, hasSequence,
   id: 'release-backmerge-invariants',
   issue: '#2504',
   check(ctx) {

@@ -3,8 +3,10 @@
 // /gsd-code-review dispatches --fix (#3727): the code-review.md initialize step names code-review-flags.cjs to parse the
 // --fix, --all and --auto flags, the host gates a dispatch-fix section on flag:--fix that points at the dispatch-fix.md
 // step file, and that file holds the dispatch_fix step, which delegates to code-review-fix.md (which spawns
-// gsd-code-fixer; the test's `gsd-code-fixer || code-review-fix.md` alternative was implied by the workflow reference). The flag-parsing and workflow-dispatch behaviour of code-review-flags.cjs stays in the test of this
-// name: its subject is code. Was the structural half of tests/code-review-flags.test.cjs.
+// gsd-code-fixer; the test's `gsd-code-fixer || code-review-fix.md` alternative was implied by that reference).
+// The flag-parsing and workflow-dispatch behaviour of code-review-flags.cjs stays in tests/code-review-flags.test.cjs:
+// its subject is code. An initialize step with no closing tag is a finding (the test sliced to one character short
+// of the end and passed). Was the structural half of that test.
 
 const WORKFLOW = 'gsd-core/workflows/code-review.md';
 const DISPATCH_FIX = 'gsd-core/workflows/code-review/steps/dispatch-fix.md';
@@ -18,8 +20,8 @@ module.exports = {
       .satisfies((text) => {
         const start = text.indexOf(INITIALIZE);
         if (start === -1) return 'the workflow has no initialize step';
-        // The step ends at the first closing tag after it; with none, the section runs to the last character (as the test read it).
         const end = text.indexOf('</step>', start);
+        if (end === -1) return 'the initialize step is not closed';
         return text.slice(start, end).includes('code-review-flags.cjs') || 'the initialize step does not name it';
       }, 'the initialize step must reference code-review-flags.cjs to parse the --fix/--all/--auto flags')
       .has('<!-- gsd:section id="dispatch-fix" when="flag:--fix" -->', 'code-review.md must gate a dispatch-fix section on flag:--fix (missing: --fix is silently a no-op)')

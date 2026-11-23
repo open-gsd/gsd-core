@@ -24,22 +24,30 @@ function criteriaOf(text, marker) {
   return close === -1 ? { error: `no success_criteria block follows ${marker}` } : { criteria: text.slice(open + OPEN.length, close) };
 }
 
-const criteriaCheck = (marker, needle, present) => (text) => {
+// The assertion over the success_criteria block of a mode; a block that is missing is reported once (by `once`).
+const criteriaCheck = (once) => (marker, needle, present) => (text) => {
   const found = criteriaOf(text, marker);
-  if (found.error) return found.error;
+  if (found.error) return once(found.error);
   return found.criteria.includes(needle) === present || (present ? `the block does not mention ${needle}` : `the block mentions ${needle}`);
 };
 
 module.exports = {
+  walkers: { criteriaOf },
   id: 'execute-phase-worktree-artifacts',
   issue: '#1571',
   check(ctx) {
+    const seen = new Set();
+    const criteria = criteriaCheck((message) => {
+      if (seen.has(message)) return true;
+      seen.add(message);
+      return message;
+    });
     ctx.doc(EXECUTE_PHASE)
-      .satisfies(criteriaCheck('**Worktree mode**', 'STATE.md', false), 'the worktree executor success_criteria must not reference STATE.md (the orchestrator owns this write)')
-      .satisfies(criteriaCheck('**Worktree mode**', 'ROADMAP.md', false), 'the worktree executor success_criteria must not reference ROADMAP.md (the orchestrator owns this write)')
-      .satisfies(criteriaCheck('**Worktree mode**', 'SUMMARY.md', true), 'the worktree executor success_criteria must still require SUMMARY.md creation')
-      .satisfies(criteriaCheck('**Sequential mode**', 'STATE.md', true), 'the sequential executor success_criteria must still require the STATE.md update')
-      .satisfies(criteriaCheck('**Sequential mode**', 'ROADMAP.md', true), 'the sequential executor success_criteria must still require the ROADMAP.md update')
+      .satisfies(criteria('**Worktree mode**', 'STATE.md', false), 'the worktree executor success_criteria must not reference STATE.md (the orchestrator owns this write)')
+      .satisfies(criteria('**Worktree mode**', 'ROADMAP.md', false), 'the worktree executor success_criteria must not reference ROADMAP.md (the orchestrator owns this write)')
+      .satisfies(criteria('**Worktree mode**', 'SUMMARY.md', true), 'the worktree executor success_criteria must still require SUMMARY.md creation')
+      .satisfies(criteria('**Sequential mode**', 'STATE.md', true), 'the sequential executor success_criteria must still require the STATE.md update')
+      .satisfies(criteria('**Sequential mode**', 'ROADMAP.md', true), 'the sequential executor success_criteria must still require the ROADMAP.md update')
       .has('roadmap update-plan-progress', 'the post-wave section must contain the orchestrator-owned roadmap update-plan-progress command')
       .satisfies((text) => {
         const command = text.indexOf('roadmap update-plan-progress');

@@ -12,14 +12,23 @@
 const WORKFLOW = 'gsd-core/workflows/next.md';
 const COMMAND = 'commands/gsd/progress.md';
 
+// The first `a` precedes the first `b`. A missing safety_gates step (the `b` of the first pair, the `a` of the second) is
+// already one finding of its own, so that pair is skipped; any other missing marker is a finding of this assertion.
+const inOrder = (a, b, gatesIs) => (text) => {
+  const first = text.indexOf(a);
+  const second = text.indexOf(b);
+  if ((gatesIs === 1 ? second : first) === -1 && (gatesIs === 1 ? b : a).includes('safety_gates')) return true;
+  return (first !== -1 && second !== -1 && first < second) || `expected the first ${a} before the first ${b}`;
+};
+
 module.exports = {
   id: 'next-safety-gates',
   issue: '#1732',
   check(ctx) {
     ctx.doc(WORKFLOW)
       .has('<step name="safety_gates">', 'workflow should have a safety_gates step')
-      .before('name="detect_state"', 'name="safety_gates"', 'safety_gates must appear after the detect_state step')
-      .before('name="safety_gates"', 'name="determine_next_action"', 'safety_gates must appear before the determine_next_action step')
+      .satisfies(inOrder('name="detect_state"', 'name="safety_gates"', 1), 'safety_gates must appear after the detect_state step')
+      .satisfies(inOrder('name="safety_gates"', 'name="determine_next_action"', 0), 'safety_gates must appear before the determine_next_action step')
       .has('.continue-here.md', 'Gate 1 should check for .planning/.continue-here.md')
       .has('Unresolved checkpoint', 'Gate 1 should display "Unresolved checkpoint" message')
       .has(/status: error|status: failed/, 'Gate 2 should check for error/failed status in STATE.md')

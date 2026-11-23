@@ -138,6 +138,8 @@ function autoArmProblem(text, { anchor, reuse, regen }) {
 }
 
 module.exports = {
+  // The linear walkers, exported for the differential properties of tests/text-contracts.batch10.test.cjs.
+  bracketPartners, labelCount, optionCapViolations, sectionAfter,
   id: 'ask-user-questions-fallback',
   issue: '#2012',
   check(ctx) {

@@ -16,7 +16,7 @@ const VERIFIER = 'agents/gsd-verifier.md';
 const hasCriterionField = (text) => text.split('\n').some((line) => line.length > line.trimStart().length && line.trimStart().startsWith('criterion:'));
 
 // A line that names the field and says Required (the field table row).
-const requiredRow = (field) => (text) => text.split('\n').some((line) => line.includes(`\`${field}\``) && line.includes('Required')) || `no table row names ${field} as Required`;
+const requiredRow = (field) => (text) => !text.includes(field) || text.split('\n').some((line) => line.includes(`\`${field}\``) && line.includes('Required')) || `no table row names ${field} as Required`;
 
 // The index of the first `<required_reading>` that begins a line, or -1.
 function requiredReadingAt(text) {
@@ -30,7 +30,6 @@ module.exports = {
   id: 'verification-overrides',
   issue: '#1747',
   check(ctx) {
-    ctx.exists(REFERENCE, 'verification-overrides.md should exist');
     ctx.doc(REFERENCE)
       .has('## Override Format', 'the reference should contain an "Override Format" section')
       .has('## Matching Rules', 'the reference should contain a "Matching Rules" section')
@@ -56,8 +55,8 @@ module.exports = {
       .has('carry forward', 'the reference should document that overrides carry forward during re-verification')
       .has('audit-milestone', 'the reference should document that overrides are surfaced during milestone audit');
 
-    ctx.exists(VERIFIER, 'gsd-verifier.md should exist');
-    ctx.doc(VERIFIER)
+    const verifier = ctx.doc(VERIFIER);
+    verifier
       .has('verification-overrides.md', 'gsd-verifier.md should reference verification-overrides.md')
       .satisfies((text) => {
         const roleEnd = text.indexOf('</role>');
@@ -68,10 +67,9 @@ module.exports = {
         if (reading === -1) return 'the <required_reading> tag is missing';
         return (reading > roleEnd && reading < projectContext) || '<required_reading> is not between </role> and <project_context>';
       }, '<required_reading> should appear between </role> and <project_context>')
-      .has('Step 3b', 'gsd-verifier.md should include a Step 3b override check')
       .slice('## Step 3b', '\n## Step 4')
       .has('must_have', 'Step 3b should reference the must_have field');
-    ctx.doc(VERIFIER)
+    verifier
       .has('overrides_applied', 'the gsd-verifier.md frontmatter template should include the overrides_applied counter');
   },
 };

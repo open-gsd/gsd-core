@@ -5,7 +5,7 @@
 // is silently dropped), ship.md decides the verification gate on a single status read (the two message fields come
 // after the blocking prose), review.md still declares jq a prerequisite for the lanes that need it, no workflow cites
 // review.md by line number, and update.md still resolves the four update-context fields. The pipe detectors are
-// linear scans that stop at the first pipe of the line, as the old patterns did, so no gap evades them. The audited
+// linear scans that read every pipe of the line (the old patterns stopped at the first, so a tr stage before jq evaded them). The audited
 // files are all read (a missing one is a finding, where the test skipped it). Was tests/workflow-jq-dependency.test.cjs.
 
 const WF = 'gsd-core/workflows';
@@ -14,14 +14,25 @@ const AUDITED = ['review.md', 'plan-phase.md', 'ship.md', 'debug.md', 'autonomou
 const LANES_MARKER = 'jq-dependent reviewer lanes';
 const isWord = (ch) => ch !== undefined && /\w/.test(ch);
 
-// True when the text from `from` runs to a pipe on its own line and `jq` follows the pipe (whitespace in between).
+// True when, on the line that holds `from`, a pipe (not the `||` operator) is followed by `jq`: any stage of the pipeline,
+// whitespace (a newline included) allowed after the pipe.
 function pipesToJq(text, from) {
   let at = from;
-  while (at < text.length && text[at] !== '|' && text[at] !== '\n') at += 1;
-  if (text[at] !== '|') return false;
-  at += 1;
-  while (at < text.length && /\s/.test(text[at])) at += 1;
-  return text.startsWith('jq', at) && !isWord(text[at + 2]);
+  while (at < text.length && text[at] !== '\n') {
+    if (text[at] !== '|') {
+      at += 1;
+      continue;
+    }
+    if (text[at + 1] === '|') {
+      at += 2;
+      continue;
+    }
+    let next = at + 1;
+    while (next < text.length && /\s/.test(text[next])) next += 1;
+    if (text.startsWith('jq', next) && !isWord(text[next + 2])) return true;
+    at += 1;
+  }
+  return false;
 }
 
 // True when some occurrence of `word` (followed by a word boundary) is piped to jq.
@@ -84,7 +95,17 @@ function laneAfterDeclaration(text, lane) {
 module.exports = {
   id: 'workflow-jq-dependency',
   issue: '#2589',
+  wordPipedToJq,
+  queryPipedToJq,
+  callsWithField,
+  laneAfterDeclaration,
   check(ctx) {
+    // One document per path: a file that is gone, or empty, is one finding however many assertions read it.
+    const docs = new Map();
+    const docOf = (rel) => {
+      if (!docs.has(rel)) docs.set(rel, ctx.doc(rel));
+      return docs.get(rel);
+    };
     const probes = [
       ['config-get lookups must use --raw, not a jq pipe', (text) => wordPipedToJq(text, 'config-get')],
       ['resolve-model lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'resolve-model')],
@@ -94,11 +115,11 @@ module.exports = {
       ['resolve-execution lookups must use --pick, not a jq pipe (sibling of resolve-model)', (text) => wordPipedToJq(text, 'resolve-execution')],
     ];
     for (const name of AUDITED) {
-      const doc = ctx.doc(`${WF}/${name}`);
+      const doc = docOf(`${WF}/${name}`);
       for (const [why, piped] of probes) doc.satisfies((text) => !piped(text) || 'a pipe to jq is present', why);
     }
 
-    ctx.doc(`${WF}/ship.md`).satisfies((text) => {
+    docOf(`${WF}/ship.md`).satisfies((text) => {
       const statusAt = text.indexOf('STATUS=$(gsd_run query verification.status');
       if (statusAt === -1) return 'ship.md must read verification.status --pick status';
       const prefix = 'gsd_run query verification.status "${PHASE_DIR}" --pick ';
@@ -117,7 +138,7 @@ module.exports = {
       return true;
     }, 'ship.md must decide the verification gate on a single verification.status read');
 
-    const review = ctx.doc(`${WF}/review.md`)
+    const review = docOf(`${WF}/review.md`)
       .has(LANES_MARKER, 'review.md must declare the jq-dependent reviewer lanes')
       .has('command -v jq >/dev/null 2>&1 && echo "jq:available" || echo "jq:missing"', 'review.md detect_clis must probe jq alongside the other reviewer prerequisites');
     for (const lane of ['ollama', 'lm_studio', 'llama_cpp', 'opencode', 'antigravity']) {
@@ -126,9 +147,9 @@ module.exports = {
 
     // Cross-references to review.md go by section name, in every workflow directly under the directory.
     const top = ctx.list(WF, '.md', 'the workflows hold the review.md cross-references').filter((rel) => rel.split('/').length === WF.split('/').length + 1);
-    for (const rel of top) ctx.doc(rel).lacks(/review\.md:\d/, `${rel} must cite review.md by section name, not a line number`);
+    for (const rel of top) docOf(rel).lacks(/review\.md:\d/, `${rel} must cite review.md by section name, not a line number`);
 
-    const update = ctx.doc(`${WF}/update.md`);
+    const update = docOf(`${WF}/update.md`);
     for (const field of ['installedVersion', 'scope', 'runtime', 'gsdDir']) {
       update.satisfies((text) => callsWithField(text, 'uc_field', field), `update.md must still resolve ${field} from the update-context projection`);
     }

@@ -20,15 +20,29 @@ const firstOf = (text, markers) => {
   return hits.length === 0 ? -1 : Math.min(...hits);
 };
 
+// `^name:\s*gsd:ultraplan-phase$` with the m flag: the key at the start of a line, any whitespace (a line break included),
+// the value, then the end of a line. Line starts and ends are LF, CR, U+2028 and U+2029.
+function hasNameLine(text) {
+  const isBreak = (ch) => ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
+  const value = 'gsd:ultraplan-phase';
+  for (let at = text.indexOf('name:'); at !== -1; at = text.indexOf('name:', at + 1)) {
+    if (at !== 0 && !isBreak(text[at - 1])) continue;
+    let next = at + 'name:'.length;
+    while (next < text.length && /\s/.test(text[next])) next += 1;
+    if (!text.startsWith(value, next)) continue;
+    const end = next + value.length;
+    if (end === text.length || isBreak(text[end])) return true;
+  }
+  return false;
+}
+
 module.exports = {
   id: 'ultraplan-phase',
+  hasNameLine,
   check(ctx) {
-    ctx.exists(COMMAND, 'commands/gsd/ultraplan-phase.md should exist');
-    ctx.exists(WORKFLOW, 'gsd-core/workflows/ultraplan-phase.md should exist');
-
     const command = ctx.doc(COMMAND);
     command.frontmatter()
-      .has(/^name:\s{0,20}gsd:ultraplan-phase$/m, 'the command must have name: gsd:ultraplan-phase')
+      .satisfies((text) => hasNameLine(text) || 'no name line carries gsd:ultraplan-phase', 'the command must have name: gsd:ultraplan-phase')
       .satisfies((text) => linesOf(text).some((line) => line.startsWith('description:') && line.includes('[BETA]')) || 'no description line carries [BETA]', 'the description must mark the feature as BETA')
       .has(/^argument-hint:/m, 'the command must have an argument-hint');
     command

@@ -85,9 +85,8 @@ function bashBlocks(text) {
   text.split('\n').forEach((line, at) => {
     if (open === null) {
       if (!line.startsWith('```')) return;
-      const tag = line.slice(3);
-      const word = firstWord(tag);
-      if ((word === 'bash' || word === 'sh') && (tag.length === word.length || isSpace(tag[word.length]))) open = [];
+      const word = firstWord(line.slice(3));
+      if (word === 'bash' || word === 'sh') open = [];
       return;
     }
     if (line.startsWith('```') && line.slice(3).trim() === '') {
@@ -106,6 +105,10 @@ const offenders = (text, probe) => text.split('\n').flatMap((line, at) => (probe
 module.exports = {
   id: 'no-hardcoded-home-gsd-tools',
   issue: '#637',
+  hardcodedNodeCall,
+  quotedHomeNodeCall,
+  suffixedMktemp,
+  bashBlocks,
   check(ctx) {
     for (const dir of SCAN_DIRS) {
       let blockCount = 0;

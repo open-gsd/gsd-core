@@ -38,8 +38,12 @@ function stepNames(text) {
   while (at !== -1) {
     const from = at + open.length;
     const close = text.indexOf('"', from);
-    if (close > from) names.push(text.slice(from, close));
-    at = text.indexOf(open, at + 1);
+    if (close > from) {
+      names.push(text.slice(from, close));
+      at = text.indexOf(open, close + 1);
+    } else {
+      at = text.indexOf(open, at + 1);
+    }
   }
   return names;
 }
@@ -47,6 +51,8 @@ function stepNames(text) {
 module.exports = {
   id: 'seed-scan-new-milestone',
   issue: '#2169',
+  lineHasInOrder,
+  stepNames,
   check(ctx) {
     ctx.doc(NEW_MILESTONE)
       .has('.planning/seeds/', 'new-milestone.md must contain instructions about scanning .planning/seeds/')

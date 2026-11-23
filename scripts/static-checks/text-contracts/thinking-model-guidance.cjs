@@ -37,24 +37,33 @@ const AGENT_WIRING = {
   'gsd-verifier': { ref: 'thinking-models-verification.md', block: 'verification_process', text: 'At verification decision points, apply structured reasoning' },
 };
 
-// The section of the heading line that names the model, up to the next `## ` heading, or null.
-function sectionOf(text, model) {
-  const { matchFenceDelimiter } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
+// The sectionizer's fence scanner (build output), loaded once; a load failure is a finding of its own.
+function loadFenceScanner() {
+  try {
+    return { scan: require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs')).scanFencedBlocks };
+  } catch (err) {
+    return { error: `the markdown sectionizer cannot be loaded: ${err.message}` };
+  }
+}
+
+// The section of the heading line that names the model, up to the next `## ` heading outside a fenced block, or null.
+// A `## ` line inside a fenced block is example text, not a heading: the fence rules have one owner.
+function sectionOf(scan, text, model) {
   const lines = text.split('\n');
-  // A `## ` line inside a fenced block is example text, not a heading: the fence rules have one owner.
-  const headings = [];
-  let open = null;
-  lines.forEach((line, at) => {
-    const fence = matchFenceDelimiter(line);
-    if (fence !== null && open === null && fence.canOpen) open = fence;
-    else if (fence !== null && open !== null && fence.closes(open)) open = null;
-    else if (open === null && line.startsWith('## ')) headings.push(at);
-  });
+  const fenced = new Array(lines.length).fill(false);
+  for (const block of scan(lines)) {
+    const stop = block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx;
+    for (let at = block.openLineIdx; at <= stop; at += 1) fenced[at] = true;
+  }
+  const headings = lines.flatMap((line, at) => (!fenced[at] && line.startsWith('## ') ? [at] : []));
   const start = headings.find((at) => lines[at].includes(model));
   if (start === undefined) return null;
   const end = headings.find((at) => at > start);
   return lines.slice(start, end === undefined ? lines.length : end).join('\n');
 }
+
+// The text with every run of whitespace collapsed to one blank: a phrase that a line wrap may split.
+const collapsed = (text) => text.split(/\s+/).join(' ');
 
 // True when a <required_reading> block (a closed one) mentions the file.
 function inRequiredReading(text, ref) {
@@ -71,23 +80,33 @@ function inRequiredReading(text, ref) {
 
 module.exports = {
   id: 'thinking-model-guidance',
+  sectionOf,
+  collapsed,
   check(ctx) {
+    // One document per path: a file that is gone, or empty, is one finding however many assertions read it.
+    const docs = new Map();
+    const docOf = (rel) => {
+      if (!docs.has(rel)) docs.set(rel, ctx.doc(rel));
+      return docs.get(rel);
+    };
+    const fences = loadFenceScanner();
+    if (fences.error) ctx.fail(REFERENCES, fences.error);
     for (const context of CONTEXTS) {
       const rel = `${REFERENCES}/thinking-models-${context}.md`;
-      ctx.exists(rel, `thinking-models-${context}.md should exist`);
-      const doc = ctx.doc(rel)
+      const doc = docOf(rel)
         .has('## When NOT to Think', `thinking-models-${context}.md must have a "When NOT to Think" section`)
         .has('## Conflict Resolution', `thinking-models-${context}.md must have a Conflict Resolution section (sequencing rules)`);
       for (const model of NAMED_MODELS[context]) {
+        if (fences.error) continue;
         doc.satisfies((text) => {
-          const section = sectionOf(text, model);
+          const section = sectionOf(fences.scan, text, model);
           if (section === null) return 'no heading names it';
           return section.includes('**Counters:**') || 'its section has no **Counters:** line';
         }, `thinking-models-${context}.md must name the model "${model}" in a heading with a **Counters:** line (the failure mode it counters)`);
       }
     }
 
-    const planning = ctx.doc(`${REFERENCES}/thinking-models-planning.md`);
+    const planning = docOf(`${REFERENCES}/thinking-models-planning.md`);
     planning.satisfies((text) => {
       let previous = -1;
       for (const option of ORDERED_OPTIONS) {
@@ -101,25 +120,31 @@ module.exports = {
     for (const reference of ['dont_hand_roll', 'Dimension 12 (Pattern Compliance)', 'thinking-models-execution.md']) {
       planning.has(reference, `the planning Occam check must cross-reference ${reference}`);
     }
+    planning.has('must never reduce requested scope', 'the planning Occam check must say it must never reduce requested scope');
     for (const boundary of BOUNDARIES) {
       planning.satisfies((text) => {
         const sentence = text.split('\n').find((line) => line.includes('must never reduce requested scope'));
-        if (sentence === undefined) return 'no sentence says it must never reduce requested scope';
+        if (sentence === undefined) return true; // the missing sentence is reported once above
         return sentence.includes(boundary) || `that sentence does not name ${boundary}`;
       }, `the planning Occam check must not override ${boundary}`);
     }
     planning
-      .has('the plan checker flags a new abstraction or dependency only when a higher rung is demonstrably sufficient', 'the planning Occam check must ask the plan checker to flag avoidable new surface only when a higher rung is sufficient')
+      .satisfies((text) => collapsed(text).includes('the plan checker flags a new abstraction or dependency only when a higher rung is demonstrably sufficient'), 'the planning Occam check must ask the plan checker to flag avoidable new surface only when a higher rung is sufficient (the sentence may wrap across lines)')
       .has('## Gap Closure Mode', 'thinking-models-planning.md must have a Gap Closure Mode section')
-      .has('triggered by `gaps_found`', 'the Gap Closure Mode section must name its trigger condition');
+      .has(/gaps_found|gap closure mode/, 'the Gap Closure Mode section must name its trigger condition');
 
     for (const [agent, wiring] of Object.entries(AGENT_WIRING)) {
       const rel = `agents/${agent}.md`;
-      ctx.doc(rel)
+      docOf(rel)
         .has(wiring.ref, `${agent}.md must reference ${wiring.ref}`)
         .has(wiring.block, `${agent}.md must contain the block ${wiring.block}`)
         .has(wiring.text, `${agent}.md must carry the decision-point annotation "${wiring.text}"`)
-        .before(wiring.block, wiring.text, `${agent}.md must place the decision-point annotation after the block ${wiring.block}`)
+        .satisfies((text) => {
+          const blockAt = text.indexOf(wiring.block);
+          const textAt = text.indexOf(wiring.text);
+          if (blockAt === -1 || textAt === -1) return true; // a missing one is reported by its own assertion
+          return blockAt < textAt || 'the annotation comes before the block';
+        }, `${agent}.md must place the decision-point annotation after the block ${wiring.block}`)
         .satisfies((text) => !inRequiredReading(text, wiring.ref), `${agent}.md must not put ${wiring.ref} inside a <required_reading> block (inline @-reference wiring at decision points only)`);
     }
   },

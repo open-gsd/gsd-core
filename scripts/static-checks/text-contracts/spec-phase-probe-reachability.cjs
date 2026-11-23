@@ -15,7 +15,7 @@ const MAX_ROUNDS_MARKER = 'If max rounds reached';
 
 const isDigit = (char) => char !== undefined && char >= '0' && char <= '9';
 const isBlank = (char) => char !== undefined && /\s/.test(char);
-const asciiLower = (text) => text.replace(/[A-Z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32));
+const { asciiLower } = require('./lib/ascii-lower.cjs');
 
 // `[0-9]+(?:\.[0-9]+)*` read from `at`: the id and the index after it, or null.
 function readStepId(text, at) {
@@ -119,6 +119,7 @@ function analyse(text) {
 }
 
 module.exports = {
+  walkers: { parseStepHeading, transitionTarget, proceedsToStep },
   id: 'spec-phase-probe-reachability',
   issue: '#2733',
   check(ctx) {

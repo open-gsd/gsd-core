@@ -5,9 +5,9 @@
 // command and the curator agent gate mirror_kg and diary_journal on `!== false`, none gates a default-true key on positive
 // presence, the default-false master switch and cross_project_tunnels keep their positive gates, and a `!== false` gate
 // is introduced by "when" or "only if", never "unless" (the double negative inverts it). Was
-// tests/mempalace-capture-gate-default.test.cjs. The registry is the shipped module (gsd-core/bin/lib); registryProblems
-// states what the contract asks of it as a function of the module, so tests can feed it other shapes. Each file is loaded
-// once and every assertion about it runs on that document; the `unless` probes are linear walks.
+// tests/mempalace-capture-gate-default.test.cjs. The registry is the shipped module (gsd-core/bin/lib), loaded through a
+// guarded loader; registryProblems states what the contract asks of it as a function of the module, so tests can feed it
+// other shapes. Each file is loaded once and every assertion about it runs on that document; the probes are linear walks.
 
 const path = require('node:path');
 
@@ -23,12 +23,24 @@ const DEFAULT_TRUE_KEYS = ['mempalace.capture_artifacts', 'mempalace.mirror_kg',
 
 const isObject = (value) => value !== null && typeof value === 'object';
 
-// The registry's settings schema (the node holding `mempalace.mirror_kg`), found by the test's depth-first walk.
+// A shipped library through `load`, or the reason it cannot be loaded (a missing build is a finding, not a throw).
+function loadLib(load, file) {
+  try {
+    return { lib: load() };
+  } catch (err) {
+    return { error: `${file} cannot be loaded: ${err.message}` };
+  }
+}
+
+// The registry's settings schema (the node holding `mempalace.mirror_kg`), found by the test's depth-first walk; a node
+// is visited once, so a registry that refers back to itself ends the walk.
 function mempalaceSettings(capabilities) {
   const stack = [capabilities.mempalace];
+  const seen = new Set();
   while (stack.length > 0) {
     const node = stack.pop();
-    if (!isObject(node)) continue;
+    if (!isObject(node) || seen.has(node)) continue;
+    seen.add(node);
     if (Object.prototype.hasOwnProperty.call(node, 'mempalace.mirror_kg')) return node;
     for (const value of Object.values(node)) {
       if (isObject(value)) stack.push(value);
@@ -111,37 +123,47 @@ module.exports = {
   id: 'mempalace-capture-gate-default',
   issue: '#2641',
   registryProblems,
+  loadLib,
+  connectivesBefore,
+  hasUnlessGate,
   check(ctx) {
     const doc = new Map([CAPTURE_SKILL, CAPTURE_COMMAND, RECALL_SKILL, RECALL_COMMAND, CURATOR, CURATOR_COMPACT].map((rel) => [rel, ctx.doc(rel)]));
+    // The positive-presence needles asserted absent per file; the registry loop below skips what these already cover.
+    const explicit = new Map([[CAPTURE_SKILL, []], [CAPTURE_COMMAND, []], [RECALL_SKILL, []], [RECALL_COMMAND, []], [CURATOR, []]]);
+    const lacksPositive = (rel, needle, why) => {
+      explicit.get(rel).push(needle);
+      doc.get(rel).lacks(needle, why);
+    };
 
     for (const rel of [CAPTURE_SKILL, CAPTURE_COMMAND]) {
       doc.get(rel)
         .has('capture_artifacts === false', `${rel} must use capture_artifacts === false (disabled only on explicit false) (#2641)`)
         .lacks('capture_artifacts !== true', `${rel} must not use the inverted capture_artifacts !== true check (#2641)`)
-        .has('config.mempalace.mirror_kg === false', `${rel} must mirror KG facts unless config.mempalace.mirror_kg === false (#3479)`)
-        .lacks('config.mempalace.mirror_kg` is true', `${rel} must not gate mirror_kg on positive presence: absent means enabled (#3479)`);
+        .has('config.mempalace.mirror_kg === false', `${rel} must mirror KG facts unless config.mempalace.mirror_kg === false (#3479)`);
+      lacksPositive(rel, 'config.mempalace.mirror_kg` is true', `${rel} must not gate mirror_kg on positive presence: absent means enabled (#3479)`);
     }
     doc.get(CAPTURE_SKILL)
       .has('config.mempalace.enabled !== true', 'the capture master gate must keep treating an absent mempalace.enabled as disabled (#3479)');
     for (const rel of [RECALL_SKILL, RECALL_COMMAND]) {
-      doc.get(rel)
-        .has('config.mempalace.mirror_kg !== false', `${rel} KG-facts step must gate on config.mempalace.mirror_kg !== false (#3479)`)
-        .lacks('config.mempalace.mirror_kg` is true', `${rel} must not gate mirror_kg on positive presence (#3479)`);
+      doc.get(rel).has('config.mempalace.mirror_kg !== false', `${rel} KG-facts step must gate on config.mempalace.mirror_kg !== false (#3479)`);
+      lacksPositive(rel, 'config.mempalace.mirror_kg` is true', `${rel} must not gate mirror_kg on positive presence (#3479)`);
     }
     doc.get(CURATOR)
       .has('mempalace.diary_journal !== false', `${CURATOR} diary gate must run when mempalace.diary_journal !== false (#3479)`)
       .has('mempalace.mirror_kg !== false', `${CURATOR} KG-mirror gate must run when mempalace.mirror_kg !== false (#3479)`)
-      .lacks('mempalace.diary_journal` is true', `${CURATOR} must not gate diary_journal on positive presence (#3479)`)
-      .lacks('mempalace.mirror_kg` is true', `${CURATOR} must not gate mirror_kg on positive presence (#3479)`)
       .has('mempalace.enabled !== true', 'the curator master gate must keep treating an absent mempalace.enabled as disabled (#3479)')
       .has('mempalace.cross_project_tunnels` is true', 'cross_project_tunnels (default: false) must keep its positive-presence gate: do not over-correct (#3479)');
+    lacksPositive(CURATOR, 'mempalace.diary_journal` is true', `${CURATOR} must not gate diary_journal on positive presence (#3479)`);
+    lacksPositive(CURATOR, 'mempalace.mirror_kg` is true', `${CURATOR} must not gate mirror_kg on positive presence (#3479)`);
 
-    // #5173: a `!== false` gate is introduced by "when" or "only if", never "unless".
+    // #5173: a `!== false` gate is introduced by "when" or "only if", never "unless". A gate absent altogether is
+    // already reported by the presence assertions above; this reads the connective of the gates the text carries.
     for (const [rel, predicate] of [[RECALL_COMMAND, 'config.mempalace.mirror_kg !== false'], [RECALL_SKILL, 'config.mempalace.mirror_kg !== false'],
       [CURATOR, 'mempalace.diary_journal !== false'], [CURATOR, 'mempalace.mirror_kg !== false']]) {
       doc.get(rel).satisfies((text) => {
+        if (!text.includes(predicate)) return true;
         const connectives = connectivesBefore(text, predicate);
-        if (connectives.length === 0) return `${rel} must still carry the \`${predicate}\` gate (#5173)`;
+        if (connectives.length === 0) return `${rel} must still carry the \`${predicate}\` gate in backticks (#5173)`;
         if (connectives.includes('unless')) return `${rel} introduces \`${predicate}\` with "unless": "unless \`K !== false\`" means "only when K is false"; use "when" (#5173)`;
         return connectives.some((connective) => connective === 'when' || connective === 'only if')
           || `${rel} must introduce its \`${predicate}\` gate with "when" or "only if" (found: ${connectives.join(', ')}) (#5173)`;
@@ -154,20 +176,23 @@ module.exports = {
       doc.get(rel).satisfies((text) => hasUnlessGate(text, '==='), `${rel} must keep its "unless \`… === false\`" gate: it already reads correctly (#5173)`);
     }
 
-    // The registry defaults the corrected gates depend on (the shipped module, loaded here so a missing build is one finding).
-    let registry;
-    try {
-      registry = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
-    } catch (err) {
-      ctx.fail(REGISTRY_FILE, `the capability registry cannot be loaded: ${err.message}`);
-      return;
+    // The registry defaults the corrected gates depend on (the shipped module): when it cannot be loaded that is one
+    // finding and the text checks still run over the keys the test named.
+    const loaded = loadLib(() => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'capability-registry.cjs')), REGISTRY_FILE);
+    let defaultTrue = DEFAULT_TRUE_KEYS;
+    if (loaded.error) {
+      ctx.fail(REGISTRY_FILE, loaded.error);
+    } else {
+      const result = registryProblems(loaded.lib);
+      for (const problem of result.problems) ctx.fail(REGISTRY_FILE, problem);
+      defaultTrue = result.defaultTrue;
     }
-    const { problems, defaultTrue } = registryProblems(registry);
-    for (const problem of problems) ctx.fail(REGISTRY_FILE, problem);
-    for (const rel of [CAPTURE_SKILL, CAPTURE_COMMAND, RECALL_SKILL, RECALL_COMMAND, CURATOR]) {
+    for (const rel of explicit.keys()) {
       for (const key of defaultTrue) {
         for (const spelling of [`config.${key}`, key]) {
-          doc.get(rel).lacks(`\`${spelling}\` is true`, `${rel} gates \`${key}\` on positive presence, but the registry declares default: true: absent must mean enabled (#3479)`);
+          const needle = `\`${spelling}\` is true`;
+          if (explicit.get(rel).some((covered) => needle.includes(covered))) continue;
+          doc.get(rel).lacks(needle, `${rel} gates \`${key}\` on positive presence, but the registry declares default: true: absent must mean enabled (#3479)`);
         }
       }
     }

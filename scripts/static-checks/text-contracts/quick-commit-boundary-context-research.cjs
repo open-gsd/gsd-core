@@ -74,9 +74,17 @@ function blockAt(text, startMarker, label) {
 }
 
 module.exports = {
+  walkers: { guarded, executorReading, executorPrompt, blockAt },
   id: 'quick-commit-boundary-context-research',
   issue: '#4996',
   check(ctx) {
+    // A cause shared by several assertions (no executor spawn, no prompt, no block) is reported once.
+    const seen = new Set();
+    const once = (message) => {
+      if (seen.has(message)) return true;
+      seen.add(message);
+      return message;
+    };
     ctx.doc(STEP)
       .has('DISCUSS_MODE', 'the pre-dispatch commit step must reference DISCUSS_MODE so it stages CONTEXT.md when the discussion phase ran')
       .has('CONTEXT.md', 'the pre-dispatch commit step must reference CONTEXT.md so it stages it when the discussion phase ran')
@@ -89,17 +97,17 @@ module.exports = {
     ctx.doc(QUICK)
       .satisfies((text) => {
         const reading = executorReading(text);
-        if (reading.error) return reading.error;
+        if (reading.error) return once(reading.error);
         return (reading.block.includes('DISCUSS_MODE') && reading.block.includes('CONTEXT.md')) || 'it does not list CONTEXT.md conditionally on $DISCUSS_MODE';
       }, 'the executor required_reading must list CONTEXT.md conditionally on $DISCUSS_MODE, matching the planner')
       .satisfies((text) => {
         const reading = executorReading(text);
-        if (reading.error) return reading.error;
+        if (reading.error) return once(reading.error);
         return (reading.block.includes('RESEARCH_MODE') && reading.block.includes('RESEARCH.md')) || 'it does not list RESEARCH.md conditionally on $RESEARCH_MODE';
       }, 'the executor required_reading must list RESEARCH.md conditionally on $RESEARCH_MODE, matching the planner')
       .satisfies((text) => {
         const found = executorPrompt(text);
-        if (found.error) return found.error;
+        if (found.error) return once(found.error);
         const { prompt } = found;
         const show = prompt.indexOf('git show');
         const reading = prompt.indexOf(OPEN_TAG);
@@ -108,19 +116,19 @@ module.exports = {
       }, 'the executor prompt must materialize CONTEXT.md from QUICK_PLAN_COMMIT before required_reading can prime paths, as it does for PLAN.md')
       .satisfies((text) => {
         const found = executorPrompt(text);
-        if (found.error) return found.error;
+        if (found.error) return once(found.error);
         return (found.prompt.includes('QUICK_PLAN_COMMIT') && found.prompt.includes('RESEARCH.md')) || 'it names no QUICK_PLAN_COMMIT or no RESEARCH.md';
       }, 'the executor prompt must materialize RESEARCH.md from QUICK_PLAN_COMMIT the same way it does for PLAN.md')
       .satisfies((text) => {
         const found = executorPrompt(text);
-        if (found.error) return found.error;
+        if (found.error) return once(found.error);
         return (found.prompt.includes('git show') && found.prompt.includes('QUICK_PLAN_COMMIT')) || 'it has no git show of the plan commit';
       }, 'the PLAN.md materialization via git show of the plan commit must remain')
       .satisfies((text) => {
         const planner = blockAt(text, PLANNER_BLOCK, 'planner');
-        if (planner.error) return planner.error;
+        if (planner.error) return once(planner.error);
         const executor = blockAt(text, EXECUTOR_BLOCK, 'executor');
-        if (executor.error) return executor.error;
+        if (executor.error) return once(executor.error);
         if (!planner.block.includes(CONTEXT_LINE)) return 'the planner block lacks the canonical CONTEXT.md conditional line';
         if (!planner.block.includes(RESEARCH_LINE)) return 'the planner block lacks the canonical RESEARCH.md conditional line';
         if (!executor.block.includes(CONTEXT_LINE)) return 'the executor block lacks the CONTEXT.md conditional line the planner carries';

@@ -4,8 +4,10 @@
 // documents the dedup guard, the frontmatter-name query, the query command (--skills-only, a visible failure), the
 // shared launcher and the per-runtime return contract; each of the 22 consumer agents @-includes it, and no other
 // canonical agent does; every agent file that carries the pointer (canonical and .compact.md sibling) states its own
-// agent type on the one pointer line, matching its frontmatter name. Was tests/agent-skills-bootstrap.test.cjs. The
-// test's fast-check property restated the bijection over random subsets, so the per-file checks below carry it.
+// agent type on the one pointer line, matching the name in its frontmatter. Was tests/agent-skills-bootstrap.test.cjs.
+// The test's fast-check property restated the bijection over random subsets of agent files; the per-file checks below
+// carry it (a differential property in the case file feeds random rosters to the contract). Every file is loaded
+// through one handle, so a missing or empty file is one finding.
 
 const BOOTSTRAP_REF = 'agent-skills-bootstrap.md';
 const BOOTSTRAP = `gsd-core/references/${BOOTSTRAP_REF}`;
@@ -21,7 +23,7 @@ const CONSUMER_AGENTS = [
 ];
 
 // `before`, one or more whitespace characters, `after`, matched without case, by one walk (the regex used an
-// unbounded `\s+`, which a bounded pattern would let a longer gap evade).
+// unbounded `\s+`, which a bounded pattern would let a longer gap evade). `before` and `after` are lower case.
 function hasWhitespaceGap(text, before, after) {
   const lower = text.toLowerCase();
   let at = lower.indexOf(before);
@@ -48,71 +50,79 @@ function frontmatterNameOf(text) {
     let end = at;
     while (end < text.length && /[A-Za-z0-9-]/.test(text[end])) end += 1;
     if (end - at < 1 || end - at > NAME_LENGTH_LIMIT) continue;
-    for (const tail of text[end] === '"' ? [end + 1, end] : [end]) {
-      let stop = tail;
-      while (stop < text.length && /\s/.test(text[stop])) stop += 1;
-      for (let q = tail; q <= stop; q += 1) if (q === text.length || LINE_ENDS.has(text[q])) return text.slice(at, end);
-    }
+    const tail = text[end] === '"' ? end + 1 : end;
+    let stop = tail;
+    while (stop < text.length && /\s/.test(text[stop])) stop += 1;
+    for (let q = tail; q <= stop; q += 1) if (q === text.length || LINE_ENDS.has(text[q])) return text.slice(at, end);
   }
   return null;
 }
 
 const agentTypeOf = (rel) => rel.split('/').pop().replace(/\.compact\.md$/, '').replace(/\.md$/, '');
 
+// A check that every word is in the text without regard to case: true, or the words that are missing.
+const hasWords = (...words) => (text) => {
+  const lower = text.toLowerCase();
+  const missing = words.filter((word) => !lower.includes(word));
+  return missing.length === 0 || `missing ${missing.join(', ')}`;
+};
+
 module.exports = {
   id: 'agent-skills-bootstrap',
   issue: '#1866',
+  hasWhitespaceGap,
+  frontmatterNameOf,
   check(ctx) {
+    const queryLine = (text) => text.split('\n').find((line) => line.includes('gsd_run query agent-skills'));
     ctx.doc(BOOTSTRAP)
       .has(/<agent_skills>/, 'the bootstrap must name the <agent_skills> block')
-      .has(/skip/i, 'the bootstrap must document the dedup guard (skip when <agent_skills> is already present)')
-      .has(/already/i, 'the bootstrap must document the dedup guard (skip when <agent_skills> is already present)')
+      .satisfies(hasWords('skip', 'already'), 'the bootstrap must document the dedup guard (skip when <agent_skills> is already present)')
       .has(/frontmatter/i, 'the bootstrap must instruct query agent-skills using the frontmatter name')
-      .has(/query agent-skills/i, 'the bootstrap must instruct query agent-skills using the frontmatter name')
-      .satisfies((text) => text.split('\n').some((line) => line.includes('gsd_run query agent-skills')), 'the bootstrap must carry the query command')
+      .satisfies((text) => queryLine(text) !== undefined, 'the bootstrap must carry the query command')
       .satisfies((text) => {
-        const command = text.split('\n').find((line) => line.includes('gsd_run query agent-skills'));
+        const command = queryLine(text);
         return command === undefined || command.includes('--skills-only') || 'the self-load must pass --skills-only';
       }, 'the self-load query must pass --skills-only')
       .satisfies((text) => {
-        const command = text.split('\n').find((line) => line.includes('gsd_run query agent-skills'));
+        const command = queryLine(text);
         return command === undefined || (!command.includes('2>/dev/null') && !command.includes('|| true'));
       }, 'stderr and the exit status must stay visible so a failure is not read as "nothing configured"')
       .has(/agent type/i, 'the bootstrap must tell the agent to use the type stated in its own file')
       .has('gsd-run-resolver.md', 'the bootstrap must point at the shared resolver reference')
       .lacks(/your own init already defines/i, 'gsd_run is not defined by every agent init')
-      .has('--skills-only', 'the bootstrap must tell the agent to pass --skills-only')
-      .has(/non-Claude/, 'the bootstrap must state that a non-Claude runtime returns the agent persona without --skills-only')
-      .has(/persona/i, 'the bootstrap must state that a non-Claude runtime returns the agent persona without --skills-only')
+      .satisfies((text) => (text.includes('non-Claude') && text.toLowerCase().includes('persona')) || `missing ${text.includes('non-Claude') ? 'persona' : 'non-Claude'}`,
+        'the bootstrap must state that a non-Claude runtime returns the agent persona without --skills-only')
       .satisfies((text) => !hasWhitespaceGap(text, 'exits 0 with an empty', 'block when nothing is configured for your type'),
         'the empty-block claim must be scoped to --skills-only')
       .satisfies((text) => !hasWhitespaceGap(text, 'the `name:` value in', 'your frontmatter'),
         'the bootstrap must not send the agent to the frontmatter it may not be able to see')
-      .has(/Claude Code/, 'the bootstrap must explain why the type is not read from frontmatter')
-      .has(/frontmatter/i, 'the bootstrap must explain why the type is not read from frontmatter');
+      .has(/Claude Code/, 'the bootstrap must explain why the type is not read from frontmatter');
     ctx.doc(RESOLVER).has('gsd_run() {', 'the referenced resolver must define gsd_run');
 
-    // Every consumer agent carries the pointer; no other canonical agent does (the test's bijection).
-    for (const name of CONSUMER_AGENTS) {
-      ctx.doc(`agents/${name}.md`).has(BOOTSTRAP_REF, `${name} must @-include references/${BOOTSTRAP_REF} (self-load contract)`);
-    }
+    // The agent files, one handle each: every consumer carries the pointer and no other canonical agent does (the
+    // test's bijection), and every file that carries it states its own type and the name of its frontmatter.
     const agentFiles = ctx.list('agents', '.md', 'the agent files are what carries the self-load pointer').filter((rel) => rel.split('/').length === 2);
+    const handles = new Map(agentFiles.map((rel) => [rel, ctx.doc(rel)]));
     const consumers = new Set(CONSUMER_AGENTS.map((name) => `agents/${name}.md`));
+    for (const rel of consumers) {
+      (handles.get(rel) || ctx.doc(rel)).has(BOOTSTRAP_REF, `${rel.split('/')[1].replace(/\.md$/, '')} must @-include references/${BOOTSTRAP_REF} (self-load contract)`);
+    }
     const carrying = new Set();
     for (const rel of agentFiles) {
-      const canonical = !rel.endsWith('.compact.md');
-      ctx.doc(rel).satisfies((text) => {
-        const carries = text.includes(BOOTSTRAP_REF);
-        if (carries) carrying.add(rel);
-        if (canonical && carries && !consumers.has(rel)) return `${rel} carries the bootstrap pointer but is not a consumer agent`;
-        if (!carries) return true;
-        const type = agentTypeOf(rel);
+      const handle = handles.get(rel);
+      if (!handle.text.includes(BOOTSTRAP_REF)) continue;
+      carrying.add(rel);
+      const type = agentTypeOf(rel);
+      handle.satisfies((text) => {
+        if (!rel.endsWith('.compact.md') && !consumers.has(rel)) return `${rel} carries the bootstrap pointer but is not a consumer agent`;
         const pointers = text.split('\n').filter((line) => line.includes(BOOTSTRAP_REF));
         if (pointers.length !== 1) return `${rel} must carry exactly one bootstrap pointer (found ${pointers.length})`;
-        if (!pointers[0].includes(`(agent type: \`${type}\`)`)) return `${rel} pointer must state "(agent type: \`${type}\`)"`;
-        const name = frontmatterNameOf(text);
-        return name === null || name === type || `${rel} frontmatter name ${name} must match the stated type ${type}`;
+        return pointers[0].includes(`(agent type: \`${type}\`)`) || `${rel} pointer must state "(agent type: \`${type}\`)"`;
       }, 'a self-loading agent must state its own type on the one bootstrap pointer line, and only consumer agents carry the pointer');
+      handle.frontmatter().satisfies((frontmatter) => {
+        const name = frontmatterNameOf(frontmatter);
+        return name === null || name === type || `${rel} frontmatter name ${name} must match the stated type ${type}`;
+      }, 'the frontmatter name of a self-loading agent must match the type its pointer states');
     }
     if (carrying.size < MIN_SELF_LOADING_FILES) {
       ctx.fail('agents', `only ${carrying.size} agent files carry the bootstrap pointer; the sweep expects at least ${MIN_SELF_LOADING_FILES} (canonical agents and compact siblings)`);

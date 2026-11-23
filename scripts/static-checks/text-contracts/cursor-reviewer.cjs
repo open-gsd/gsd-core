@@ -35,6 +35,8 @@ function listsCursorAmongReviewers(text) {
 }
 
 module.exports = {
+  // The linear walkers, exported for the differential properties of tests/text-contracts.batch10.test.cjs.
+  pipesIntoCursor, listsCursorAmongReviewers,
   id: 'cursor-reviewer',
   issue: '#1960',
   check(ctx) {

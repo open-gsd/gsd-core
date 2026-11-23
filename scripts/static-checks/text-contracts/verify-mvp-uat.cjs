@@ -26,7 +26,6 @@ module.exports = {
       .has(/technical[\s-]?checks[^\n]{0,80}(after|defer|second)/i, 'the workflow must defer technical checks under MVP mode')
       .has('fall back to the standard UAT generation path', 'the workflow must specify the standard UAT fallback when the mode is not mvp');
 
-    ctx.exists(GATES, 'gsd-core/references/verifier-phase-gates.md should exist');
     ctx.doc(GATES)
       .slice('identify_human_verification', '\n## ')
       .has('infrastructure/foundation phase', 'the identify_human_verification step must explicitly handle infrastructure/foundation phases that have no user-facing elements (root cause of #2504)')

@@ -32,7 +32,7 @@ const SITES = [
 
 const LINE_TERMINATORS = /[\r\n\u2028\u2029]/;
 const isBlank = (char) => char !== undefined && /\s/.test(char);
-const asciiLower = (text) => text.replace(/[A-Z]/g, (letter) => String.fromCharCode(letter.charCodeAt(0) + 32));
+const { asciiLower } = require('./lib/ascii-lower.cjs');
 
 // The index after one or more blanks starting at `at`, or -1.
 function afterBlanks(text, at) {
@@ -113,6 +113,7 @@ const logsSniffedBuildScript = (text) => text.split(LINE_TERMINATORS).some((line
 });
 
 module.exports = {
+  walkers: { resolvesCommand, constructedCommands, skipArms, skipEchoNames, logsSniffedBuildScript },
   id: 'post-merge-gate-watch-mode',
   issue: '#1857',
   check(ctx) {
@@ -128,7 +129,8 @@ module.exports = {
         .has('run-with-timeout "$TEST_GATE_TIMEOUT"', `${label} must wrap the test command in run-with-timeout with the configured budget`)
         .has('-eq 124', `${label} must handle the timeout exit code (124)`)
         .has('watch/dev mode', `${label} must name watch/dev mode as the likely cause on timeout`)
-        .has('gsd_run query normalize-test-command', `${label} must invoke the shared normalizer by the same verb name`)
+        // A gate that never names the helper is already reported by the previous assertion.
+        .satisfies((text) => !text.includes('normalize-test-command') || text.includes('gsd_run query normalize-test-command'), `${label} must invoke the shared normalizer by the same verb name`)
         .satisfies((text) => {
           const lines = text.split('\n').filter(resolvesCommand);
           if (lines.length === 0) return `${file} resolves no build/test command via config-get`;
