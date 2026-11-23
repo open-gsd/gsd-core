@@ -16,7 +16,7 @@
 // CORRECT, because Step 6 genuinely follows Step 5.6 — position is the discriminator, not text.
 //
 // The two existing probe contract tests (edge-probe-spec-phase-contract.test.cjs,
-// prohibition-probe.spec-phase-contract.test.cjs) are structurally blind to this: both slice
+// the prohibition-probe.spec-phase-contract text contract) are structurally blind to this: both slice
 // the file from the "## Step 5.5" / "## Step 5.6" heading onward, so no assertion in either can
 // observe the upstream jump text. They assert the probes' CONTENTS; this file asserts their
 // REACHABILITY. Neither is modified by this fix.

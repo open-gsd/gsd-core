@@ -429,8 +429,8 @@ describe('the run itself fails closed', () => {
 
   test('the shipped contracts load, with unique ids, and their number is the pinned minimum', () => {
     const ids = textContracts.loadContracts().map((c) => c.id);
-    // The earlier contracts are exercised here; the batch 8 ones (#6566) in tests/text-contracts.batch8.test.cjs.
-    assert.deepEqual([...ids].sort(), [...SHIPPED, ...require('./helpers/text-contracts-batch8-ids.cjs')].sort());
+    // The earlier contracts are exercised here; the batch 8 ones (#6566) in tests/text-contracts.batch8.test.cjs and the batch 9 ones (#6573) in tests/text-contracts.batch9.test.cjs.
+    assert.deepEqual([...ids].sort(), [...SHIPPED, ...require('./helpers/text-contracts-batch8-ids.cjs'), ...require('./helpers/text-contracts-batch9-ids.cjs')].sort());
     assert.equal(new Set(ids).size, ids.length);
     // Deleting a contract file, or adding one without raising MIN_CONTRACTS, fails here.
     assert.equal(ids.length, textContracts.MIN_CONTRACTS);

@@ -465,7 +465,7 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
     const required = [
       'tests/ci-pr-mergeability.test.cjs',
       'tests/ci-test-scope.test.cjs',
-      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/text-contracts.batch9.test.cjs', // #6573: release-tarball-smoke-workflow and ci-merge-group-wiring are text contracts
       'tests/ci-conformance-pr-gating.test.cjs',
       'tests/text-contracts.batch8.test.cjs', // #6566: workflow-token-permissions and the other workflow contracts
       // #5029: holds the SHARD_BALANCE <-> test.yml layout-parity test, which
