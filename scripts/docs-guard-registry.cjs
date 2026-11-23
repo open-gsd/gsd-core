@@ -168,6 +168,24 @@ const DOCS_GUARD_TESTS = {
     'docs/how-to/develop-a-capability.md',
     'docs/README.md',
   ],
+  // #6566: the same, for the batch 8 contracts (tests/text-contracts.batch8.test.cjs copies these docs).
+  'tests/text-contracts.batch8.test.cjs': [
+    'docs/COMMANDS.md',
+    'docs/CONFIGURATION.md',
+    'docs/INVENTORY.md',
+    'docs/installer-migrations.md',
+    'docs/reference/planning-artifacts.md',
+    'docs/ja-JP/ARCHITECTURE.md',
+    'docs/ja-JP/INVENTORY.md',
+    'docs/ko-KR/ARCHITECTURE.md',
+    'docs/ko-KR/INVENTORY.md',
+    'docs/pt-BR/ARCHITECTURE.md',
+    'docs/pt-BR/CONFIGURATION.md',
+    'docs/pt-BR/INVENTORY.md',
+    'docs/zh-CN/ARCHITECTURE.md',
+    'docs/zh-CN/CONFIGURATION.md',
+    'docs/zh-CN/INVENTORY.md',
+  ],
   'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
@@ -217,10 +235,6 @@ const DOCS_GUARD_TESTS = {
   'tests/gates-confirmation-toggle-config.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/context-index-sync.test.cjs': ['docs/CONTEXT-INDEX.json'],
   'tests/context-predicates-query.test.cjs': ['docs/contributor-standards.md'],
-  // SCAN_DIRS includes 'docs' and recursively walks every .md file under it
-  // (context7-tool-name-parity.test.cjs:31-38) — a generic tree walk, not a
-  // fixed file set.
-  'tests/context7-tool-name-parity.test.cjs': ['*'],
   'tests/contributor-standards.test.cjs': ['docs/contributor-standards.md'],
   'tests/cursor-reviewer.test.cjs': [
     'docs/COMMANDS.md',
@@ -230,7 +244,6 @@ const DOCS_GUARD_TESTS = {
     'docs/ko-KR/COMMANDS.md',
     'docs/ko-KR/FEATURES.md',
   ],
-  'tests/discuss-all-flag.test.cjs': ['docs/COMMANDS.md'],
   'tests/discuss-mode.test.cjs': ['docs/workflow-discuss-mode.md'],
   // Walks docs/*.md and every docs/<locale>/*.md dir dynamically
   // (docs-parity-live-registry.test.cjs:42, 428) — deliberately generic.
@@ -271,7 +284,6 @@ const DOCS_GUARD_TESTS = {
   // #3913 (ADR-3889 terminal phase): reads the generated docs/reference/exit-codes.md
   // (content invariants, F1/F3) and docs/README.md (F4, the index link).
   'tests/exit-code-registry.test.cjs': ['docs/reference/exit-codes.md', 'docs/README.md'],
-  'tests/external-job-waiting.test.cjs': ['docs/reference/planning-artifacts.md'],
   // Rows 8/9 (negative controls) read real docs/registries/eos.json and
   // docs/adr/0001-dispatch-policy-module.md and assert on their EXACT
   // committed content (an entry's name field, ADR-0001's H1 title) as a
@@ -325,7 +337,6 @@ const DOCS_GUARD_TESTS = {
   'tests/host-integration-descriptors.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
   ],
-  'tests/inline-plan-threshold-default.test.cjs': ['docs/CONFIGURATION.md', 'docs/zh-CN/CONFIGURATION.md', 'docs/pt-BR/CONFIGURATION.md'],
   'tests/install.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   // SOURCE_DIRS includes 'docs' and walks it recursively for every .md file
   // (intel.test.cjs:1223-1228) — a generic tree walk.
@@ -333,13 +344,6 @@ const DOCS_GUARD_TESTS = {
   'tests/inventory-manifest-sync.test.cjs': ['docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   'tests/kilo-upgrades.test.cjs': ['docs/how-to/connect-gsd-mcp-server.md'],
   'tests/live-config-guard.test.cjs': ['docs/TESTING-SUITES.md'],
-  // #5601: localized INVENTORY coverage notes must state no agent counts.
-  'tests/localized-inventory-agent-counts.test.cjs': [
-    'docs/ja-JP/',
-    'docs/ko-KR/',
-    'docs/pt-BR/',
-    'docs/zh-CN/',
-  ],
   // #3726: pins the `milestone complete` synopsis (English + four localized
   // mirrors), the `--confirm` flag row and the guard-override instructions —
   // `type: Fixed` exempts that PR from the docs-required lint, so this is the
@@ -424,9 +428,6 @@ const DOCS_GUARD_TESTS = {
   'tests/secure-phase.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/security-dead-exports.regression.test.cjs': ['docs/FEATURES.md'],
   'tests/security.test.cjs': ['docs/INVENTORY-MANIFEST.json'],
-  // Walks docs/ recursively (todos-done-rename-guard.test.cjs:19-22
-  // SCAN_DIRS) looking for stale references — a generic tree walk.
-  'tests/todos-done-rename-guard.test.cjs': ['*'],
   'tests/tracer-bullet.test.cjs': [
     'docs/COMMANDS.md',
     'docs/reference/plan-md.md',

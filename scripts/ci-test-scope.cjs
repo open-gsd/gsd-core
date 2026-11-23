@@ -52,17 +52,16 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/policy-shell-pinning.test.cjs',
   'tests/registry-docs-approved-issue-parity.test.cjs',
   'tests/release-backmerge-invariants.test.cjs',
-  'tests/release-finalize-notes-5922.test.cjs',
-  'tests/release-finalize-syncs-next-version.test.cjs',
   'tests/release-hotfix-empty-cherry-pick.test.cjs',
   'tests/release-notes-real-os-5922.test.cjs',
   'tests/release-shard-lane-sharding.test.cjs',
   'tests/release-tarball-smoke-workflow.test.cjs',
   'tests/require-issue-link-policy.test.cjs',
-  'tests/reviewed-or-maintainer-workflow.test.cjs',
   'tests/security-scan.security.test.cjs',
   'tests/self-test-report-workflow.test.cjs',
-  'tests/workflow-token-permissions.test.cjs',
+  // #6566: release-finalize-notes-5922, release-finalize-syncs-next-version, reviewed-or-maintainer-workflow,
+  // workflow-token-permissions and policy-lint-shallow-checkout are text contracts; their workflow mutation cases live here.
+  'tests/text-contracts.batch8.test.cjs',
 ];
 
 // Workflows that gate merges, ship the product, or run security/cross-platform
@@ -106,7 +105,6 @@ const RULES = [
     fullMatrix: false,
     tests: [
       ...WORKFLOW_LINT_TESTS,
-      'tests/policy-lint-shallow-checkout.test.cjs',
       ...WORKFLOW_CONTRACT_TESTS,
     ],
   },
@@ -136,7 +134,7 @@ const RULES = [
       'tests/check-env.test.cjs',
       'tests/check-env.process.test.cjs',
       'tests/npm-integrity-gate.test.cjs', // #2758: absorbs the former tests/bug-3588-npm-audit-clean.test.cjs (folded into it by consolidation epic #1969 B6 #1975; the stale filename here was a silent coverage hole this rule never actually re-selected)
-      'tests/package-manifest.test.cjs',
+      'tests/text-contracts.batch8.test.cjs', // #6566: package-manifest is a text contract; its package.json mutation cases live here
     ],
   },
   {
