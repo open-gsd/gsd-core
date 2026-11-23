@@ -61,13 +61,20 @@ function aiModelsBlocks(text) {
 }
 
 // The first options array with more labels than the cap ({ index, count }), the first one never closed (its index, or
-// null) and how many options arrays there are. Every bracket is matched once, in one pass.
+// null) and how many options arrays there are. Every bracket outside a double-quoted string is matched once, in one pass.
 function optionsArrays(text) {
   const closeOf = new Map();
   const stack = [];
+  let inString = false;
   for (let k = 0; k < text.length; k += 1) {
-    if (text[k] === '[') stack.push(k);
-    else if (text[k] === ']' && stack.length > 0) closeOf.set(stack.pop(), k);
+    const ch = text[k];
+    if (inString) {
+      // A double-quoted string ends at its closing quote (a backslash escapes the next character) or at the line end.
+      if (ch === '\\') k += 1;
+      else if (ch === '"' || ch === '\n') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '[') stack.push(k);
+    else if (ch === ']' && stack.length > 0) closeOf.set(stack.pop(), k);
   }
   let questions = 0;
   let offender = null;

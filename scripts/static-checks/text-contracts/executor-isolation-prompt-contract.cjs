@@ -59,12 +59,15 @@ function bracedNames(text) {
   return out;
 }
 
-// The prompt template: the one `text` fence the orchestrator writes to PROMPT_FILE, or the reason there is none.
+// The prompt template: the one `text` fenced block the orchestrator writes to PROMPT_FILE (the sectionizer's own
+// fence scan, so a backtick or tilde fence counts and a fence inside another one does not), or the reason there is none.
 function promptBody(text) {
-  const fences = text.split('\n').filter((line) => line.trim() === '```text').length;
-  if (fences !== 1) return { error: `the fragment must hold exactly one text fence (the prompt template), found ${fences}` };
-  const body = require(SECTIONIZER).extractFencedBlock(text, 'text');
-  return body === null ? { error: 'the text fence must close' } : { body: `${body}\n` };
+  const lines = text.split('\n');
+  const blocks = require(SECTIONIZER).scanFencedBlocks(lines).filter((block) => block.infoString.trim().toLowerCase() === 'text');
+  if (blocks.length !== 1) return { error: `the fragment must hold exactly one text fence (the prompt template), found ${blocks.length}` };
+  const [block] = blocks;
+  if (block.closeLineIdx === -1) return { error: 'the text fence must close' };
+  return { body: `${lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')}\n` };
 }
 
 // The fence error is reported once, by the first check of the contract; the checks on the template pass without it.
@@ -156,7 +159,7 @@ module.exports = {
       .satisfies((text) => {
         const lines = text.split('\n');
         const { scanFencedBlocks } = require(SECTIONIZER);
-        const bash = scanFencedBlocks(lines).filter((block) => block.infoString === 'bash').map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'));
+        const bash = scanFencedBlocks(lines).filter((block) => block.infoString === 'bash').map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'));
         if (bash.length === 0) return 'the fragment holds no bash blocks';
         const inBash = ['<objective>', '<mcp_tools>', '[gsd:dispatch'].find((marker) => bash.some((body) => body.includes(marker)));
         return inBash ? `${inBash} sits in a bash block` : true;

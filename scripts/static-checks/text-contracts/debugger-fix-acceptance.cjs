@@ -90,8 +90,8 @@ module.exports = {
       .satisfies((text) => paragraphsOf(text).some((paragraph) => REVERT_NAME.test(paragraph)
         && (inOrder(paragraph, ['before', 'accept']) || inOrder(paragraph, ['accept', 'after', 'revert']) || paragraph.toLowerCase().includes('prior to accept'))),
       'revert-and-reconfirm must run before a fix is accepted (in the paragraph that names revert-and-reconfirm)')
-      .has(/timeout/i, 'the reference must mention a timeout')
-      .has(/60s|60.?second/i, 'the reference must state the 60s npm/Stryker bound')
-      .has(/git/i, 'the reference must bound the git subprocess (signal 5) too');
+      .has(/\btimeout\b/i, 'the reference must mention a timeout')
+      .has(/\b60s\b|\b60.?seconds?\b/i, 'the reference must state the 60s npm/Stryker bound')
+      .has(/\bgit\b/i, 'the reference must bound the git subprocess (signal 5) too');
   },
 };

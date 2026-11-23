@@ -32,10 +32,10 @@ const isDotSegment = (segment) => segment === '.' || segment === '..';
 
 // The concatenated content of every fenced block (fence markers excluded; an unterminated block runs to the end): a live
 // resolver call only ever sits in one. The fence rules (backtick or tilde, any length) have one owner, the sectionizer;
-// leading spaces and tabs are stripped first so an indented fence (the tree has many) counts, as it did for the test.
+// leading blanks and one list marker are stripped first so an indented or list-item fence counts, as it did for the test.
 function fencedCodeOnly(content) {
   const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
-  const lines = content.split('\n').map((line) => line.replace(/^[ \t]+/, ''));
+  const lines = content.split('\n').map((line) => line.replace(/^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+/, '').replace(/^[ \t]+/, ''));
   return scanFencedBlocks(lines)
     .map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'))
     .join('\n');
@@ -94,7 +94,7 @@ module.exports = {
       try {
         const { parseWorkflowSections } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'workflow-fragments.cjs'));
         const sections = parseWorkflowSections(text, AUTONOMOUS);
-        return Array.isArray(sections) && sections.every(isMapping) ? { sections } : { error: 'the fragment parser returned no list of sections' };
+        return { sections };
       } catch (err) {
         return { error: `the fragment parser failed: ${err.message}` };
       }

@@ -17,20 +17,35 @@ const unquote = (item) => {
   return item.length >= 2 && (first === '"' || first === "'") && item[item.length - 1] === first ? item.slice(1, -1) : item;
 };
 
-// The items of the frontmatter `allowed-tools:` list (a block list or a `[a, b]` flow list), exact names only; quotes
-// around an item are dropped and a blank or comment line inside the block list does not end it.
+// A line without its trailing ` # comment`, trimmed.
+const withoutComment = (line) => {
+  const trimmed = line.trim();
+  if (trimmed.startsWith('#')) return '';
+  const at = trimmed.indexOf(' #');
+  return (at === -1 ? trimmed : trimmed.slice(0, at)).trim();
+};
+
+// The items of the frontmatter `allowed-tools:` list (a block list, or a `[a, b]` flow list that may span lines), exact
+// names only; quotes around an item and a trailing comment are dropped, and a blank or comment line inside a block
+// list does not end it.
 function allowedTools(text) {
   const lines = text.split('\n');
   const at = lines.findIndex((line) => line.trimEnd().startsWith('allowed-tools:'));
   if (at === -1) return [];
-  const rest = lines[at].trim().slice('allowed-tools:'.length).trim();
-  if (rest.startsWith('[') && rest.endsWith(']')) return rest.slice(1, -1).split(',').map((item) => unquote(item.trim()));
+  const rest = withoutComment(lines[at].trim().slice('allowed-tools:'.length));
+  if (rest.startsWith('[')) {
+    let body = rest;
+    for (let i = at + 1; i < lines.length && !body.includes(']'); i += 1) body += ` ${withoutComment(lines[i])}`;
+    const close = body.indexOf(']');
+    if (close === -1) return [];
+    return body.slice(1, close).split(',').map((item) => unquote(item.trim())).filter((item) => item !== '');
+  }
   const items = [];
   for (const line of lines.slice(at + 1)) {
     const trimmed = line.trim();
     if (trimmed === '' || trimmed.startsWith('#')) continue;
     if (!trimmed.startsWith('- ')) break;
-    items.push(unquote(trimmed.slice(2).trim()));
+    items.push(unquote(withoutComment(trimmed.slice(2))));
   }
   return items;
 }
