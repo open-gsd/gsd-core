@@ -11,6 +11,7 @@ const fc = require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { installerEnv, RUNTIME_META } = require('./helpers/install-shared.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
@@ -40,7 +41,7 @@ function installClaude(t, { defaults, projectConfig, root = createTempDir('gsd-4
   const args = ['--preserve-symlinks', '--preserve-symlinks-main', path.join(REPO_ROOT, 'bin', 'install.js'), '--claude', '--local'];
   const result = runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `Claude install failed:\n${result.stderr}`);
@@ -75,7 +76,7 @@ function installRuntime(t, runtime, { defaults, projectConfig, repeat = false, s
   else args.push('--local');
   const run = () => runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: home, USERPROFILE: home }),
+    env: installerEnv(isolatedEnv({ home })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   const result = run();
@@ -162,7 +163,7 @@ test('config-set accepts named and wildcard agent_tools selectors (#4032)', (t) 
   t.after(() => cleanup(root));
   fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n', 'utf8');
-  const env = { HOME: root, USERPROFILE: root };
+  const env = isolatedEnv({ home: root });
 
   for (const selector of ['gsd-executor', '*']) {
     const result = runGsdTools(
