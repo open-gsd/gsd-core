@@ -1,6 +1,5 @@
 'use strict';
 
-// allow-test-rule: source-text-is-the-product
 // The text of the Cursor CLI reviewer in /gsd-review (review.md, the command file, help, COMMANDS.md, FEATURES.md and
 // their ja-JP and ko-KR mirrors) is the `cursor-reviewer` text contract (scripts/static-checks/text-contracts/
 // cursor-reviewer.cjs, run by lint:ci). These cases stay a test because their subject is product code: the lane

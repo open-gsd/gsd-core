@@ -129,56 +129,75 @@ module.exports = {
 
     withWorkflow(ctx, RELEASE, 'release.yml', (doc, workflow) => {
       const jobs = workflow.jobs;
-      const finalize = jobs.finalize;
-      const finalizeSteps = isObject(finalize) && Array.isArray(finalize.steps) ? finalize.steps : [];
-      doc.satisfies(() => isObject(finalize) || 'no such job', 'expected a finalize job in release.yml');
-      const capped = isObject(finalize) ? finalize['timeout-minutes'] : undefined;
-      doc.satisfies(when(isObject(finalize), () => (typeof capped === 'number' && capped >= FINALIZE_JOB_CAP_FLOOR) || `finalize timeout-minutes is ${JSON.stringify(capped)}`),
-        `the finalize job cap must be at least the rc budget (>= ${FINALIZE_JOB_CAP_FLOOR} minutes): a smaller budget cancels finalize mid-test before tag/publish`);
-      const autoAt = indexOfNamed(finalizeSteps, AUTO_MERGE_STEP);
-      const auto = autoAt === -1 ? undefined : finalizeSteps[autoAt];
-      doc
-        .satisfies(() => autoAt !== -1 || 'no such step', `expected a finalize step named like '${AUTO_MERGE_STEP} → main PR'`)
-        .satisfies(when(auto !== undefined, () => runOf(auto).includes('node scripts/merge-commit-pr.cjs "$PR"') || 'the step does not run it'),
-          'the auto-merge step must land the merge-back PR through merge-commit-pr.cjs (a verified merge commit, #5894)')
-        .satisfies(when(auto !== undefined, () => !runOf(auto).includes('gh pr merge') || 'the step runs gh pr merge'),
-          'the auto-merge step must never use `gh pr merge`')
-        .satisfies(when(auto !== undefined, () => (isObject(auto.env) && auto.env.HAS_ADMIN_TOKEN === HAS_ADMIN_TOKEN_EXPR) || `env is ${JSON.stringify(auto.env)}`),
-          'the auto-merge step must read HAS_ADMIN_TOKEN from the secret')
-        .satisfies(when(auto !== undefined, () => runOf(auto).includes('MERGEABLE') || 'the step does not mention MERGEABLE'),
-          'the auto-merge must gate on the PR being MERGEABLE so a genuine divergence is left open for manual resolution')
-        .satisfies(when(auto !== undefined, () => auto['continue-on-error'] === true || `continue-on-error is ${JSON.stringify(auto['continue-on-error'])}`),
-          'the merge-back auto-merge must be continue-on-error: the tag and npm publish already happened')
-        .satisfies(() => {
-          const verifyAt = indexOfNamed(finalizeSteps, 'Verify publish');
-          if (verifyAt === -1) return "expected a 'Verify publish' step";
-          if (autoAt === -1) return true;
-          return autoAt > verifyAt || `the auto-merge is step ${autoAt}, Verify publish is step ${verifyAt}`;
-        }, 'the auto-merge must run after "Verify publish" so main never absorbs a release whose npm publish was not confirmed');
+      // A job that is missing or not a mapping, or whose steps are not a list, is one finding that skips every check
+      // depending on it.
+      const stepsOf = (name) => {
+        const job = jobs[name];
+        let problem = null;
+        if (!isObject(job)) problem = 'no such job';
+        else if (!Array.isArray(job.steps)) problem = 'steps is not a list';
+        doc.satisfies(() => problem === null || problem, `expected a ${name} job in release.yml with a steps list`);
+        return problem === null ? job.steps : null;
+      };
 
-      const validate = jobs['validate-version'];
-      const validateSteps = isObject(validate) && Array.isArray(validate.steps) ? validate.steps : [];
-      const ancestryAt = indexOfNamed(validateSteps, ANCESTRY_STEP);
-      const publishedAt = indexOfNamed(validateSteps, 'Reject already-published versions');
-      const ancestry = ancestryAt === -1 ? undefined : validateSteps[ancestryAt];
-      doc
-        .satisfies(() => isObject(validate) || 'no such job', 'expected a validate-version job in release.yml')
-        .satisfies(when(isObject(validate), () => ancestryAt !== -1 || 'no such step'), `expected a '${ANCESTRY_STEP}' step`)
-        .satisfies(when(isObject(validate), () => publishedAt !== -1 || 'no such step'), "expected a 'Reject already-published versions' step")
-        .satisfies(when(ancestryAt !== -1 && publishedAt !== -1, () => ancestryAt > publishedAt || `the ancestry step is step ${ancestryAt}, the published check is step ${publishedAt}`),
-          'validate-version must require main to be an ancestor of next after the published-version check')
-        .satisfies(when(ancestry !== undefined, () => runOf(ancestry).includes('node scripts/release-ancestry.cjs --ancestor origin/main --descendant origin/next') || 'the step does not run it'),
-          'the ancestry step must run release-ancestry.cjs against origin/main and origin/next')
-        .satisfies(when(ancestry !== undefined, () => ancestry.if === "inputs.action != 'rc' && steps.validate.outputs.is_hotfix != 'true'" || `if is ${JSON.stringify(ancestry.if)}`),
-          'validate-version must gate the ancestry step on non-rc, non-hotfix runs')
-        .satisfies(() => {
-          for (const [name, job] of Object.entries(jobs)) {
-            if (name === 'validate-version') continue;
-            const needs = isObject(job) ? [].concat(job.needs || []) : [];
-            if (!needs.includes('validate-version')) return `job ${name} must list validate-version in needs`;
-          }
-          return true;
-        }, 'every other job needs validate-version, so the ancestry gate runs before any tagging job');
+      const finalizeSteps = stepsOf('finalize');
+      if (finalizeSteps !== null) {
+        const capped = jobs.finalize['timeout-minutes'];
+        doc.satisfies(() => (typeof capped === 'number' && capped >= FINALIZE_JOB_CAP_FLOOR) || `finalize timeout-minutes is ${JSON.stringify(capped)}`,
+          `the finalize job cap must be at least the rc budget (>= ${FINALIZE_JOB_CAP_FLOOR} minutes): a smaller budget cancels finalize mid-test before tag/publish`);
+        const autoAt = indexOfNamed(finalizeSteps, AUTO_MERGE_STEP);
+        const auto = autoAt === -1 ? undefined : finalizeSteps[autoAt];
+        doc.satisfies(() => autoAt !== -1 || 'no such step', `expected a finalize step named like '${AUTO_MERGE_STEP} \u2192 main PR'`);
+        if (auto !== undefined) {
+          doc
+            .satisfies(() => runOf(auto).includes('node scripts/merge-commit-pr.cjs "$PR"') || 'the step does not run it',
+              'the auto-merge step must land the merge-back PR through merge-commit-pr.cjs (a verified merge commit, #5894)')
+            .satisfies(() => !runOf(auto).includes('gh pr merge') || 'the step runs gh pr merge',
+              'the auto-merge step must never use `gh pr merge`')
+            .satisfies(() => (isObject(auto.env) && auto.env.HAS_ADMIN_TOKEN === HAS_ADMIN_TOKEN_EXPR) || `env is ${JSON.stringify(auto.env)}`,
+              'the auto-merge step must read HAS_ADMIN_TOKEN from the secret')
+            .satisfies(() => runOf(auto).includes('MERGEABLE') || 'the step does not mention MERGEABLE',
+              'the auto-merge must gate on the PR being MERGEABLE so a genuine divergence is left open for manual resolution')
+            .satisfies(() => auto['continue-on-error'] === true || `continue-on-error is ${JSON.stringify(auto['continue-on-error'])}`,
+              'the merge-back auto-merge must be continue-on-error: the tag and npm publish already happened');
+        }
+        const verifyAt = indexOfNamed(finalizeSteps, 'Verify publish');
+        doc.satisfies(() => verifyAt !== -1 || 'no such step', "expected a 'Verify publish' step");
+        if (autoAt !== -1 && verifyAt !== -1) {
+          doc.satisfies(() => autoAt > verifyAt || `the auto-merge is step ${autoAt}, Verify publish is step ${verifyAt}`,
+            'the auto-merge must run after "Verify publish" so main never absorbs a release whose npm publish was not confirmed');
+        }
+      }
+
+      const validateSteps = stepsOf('validate-version');
+      if (validateSteps !== null) {
+        const ancestryAt = indexOfNamed(validateSteps, ANCESTRY_STEP);
+        const publishedAt = indexOfNamed(validateSteps, 'Reject already-published versions');
+        const ancestry = ancestryAt === -1 ? undefined : validateSteps[ancestryAt];
+        doc
+          .satisfies(() => ancestryAt !== -1 || 'no such step', `expected a '${ANCESTRY_STEP}' step`)
+          .satisfies(() => publishedAt !== -1 || 'no such step', "expected a 'Reject already-published versions' step");
+        if (ancestryAt !== -1 && publishedAt !== -1) {
+          doc.satisfies(() => ancestryAt > publishedAt || `the ancestry step is step ${ancestryAt}, the published check is step ${publishedAt}`,
+            'validate-version must require main to be an ancestor of next after the published-version check');
+        }
+        if (ancestry !== undefined) {
+          doc
+            .satisfies(() => runOf(ancestry).includes('node scripts/release-ancestry.cjs --ancestor origin/main --descendant origin/next') || 'the step does not run it',
+              'the ancestry step must run release-ancestry.cjs against origin/main and origin/next')
+            .satisfies(() => ancestry.if === "inputs.action != 'rc' && steps.validate.outputs.is_hotfix != 'true'" || `if is ${JSON.stringify(ancestry.if)}`,
+              'validate-version must gate the ancestry step on non-rc, non-hotfix runs');
+        }
+      }
+      doc.satisfies(() => {
+        for (const [name, job] of Object.entries(jobs)) {
+          if (name === 'validate-version') continue;
+          if (!isObject(job)) continue;
+          const needs = [].concat(job.needs || []);
+          if (!needs.includes('validate-version')) return `job ${name} must list validate-version in needs`;
+        }
+        return true;
+      }, 'every other job needs validate-version, so the ancestry gate runs before any tagging job');
     });
   },
 };

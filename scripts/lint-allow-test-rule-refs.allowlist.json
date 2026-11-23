@@ -16,7 +16,6 @@
   "tests/config-field-docs.test.cjs :: docs-parity",
   "tests/copilot-install.test.cjs :: integration-test-input",
   "tests/cursor-hooks.test.cjs :: source-text-is-the-product",
-  "tests/cursor-reviewer.test.cjs :: source-text-is-the-product",
   "tests/debug-session-management.test.cjs :: source-text-is-the-product",
   "tests/discuss-phase-power.test.cjs :: source-text-is-the-product",
   "tests/docs-parity-live-registry.test.cjs :: source-text-is-the-product",

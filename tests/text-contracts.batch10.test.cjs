@@ -2066,6 +2066,94 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     passes('the gaps-only assignment after GAPS_MODE with a gap of 60 characters', 'gsd-core/workflows/plan-phase.md', () => `GAPS_MODE=false\n$GSD_ARGS--gapsGAPS_MODE=true\nGAPS_EXEC_FLAG=""GAPS_MODEzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzGAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`, 'next-up-clear-order');
     passes('the gaps-only assignment after the empty flag with a gap of 190 characters', 'gsd-core/workflows/plan-phase.md', () => `GAPS_MODE=false\n$GSD_ARGS--gapsGAPS_MODE=true\nGAPS_EXEC_FLAG=""qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqGAPS_MODEGAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`, 'next-up-clear-order');
     passes('the gaps-only assignment after the empty flag with a gap of 191 characters', 'gsd-core/workflows/plan-phase.md', () => `GAPS_MODE=false\n$GSD_ARGS--gapsGAPS_MODE=true\nGAPS_EXEC_FLAG=""qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqGAPS_MODEGAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`, 'next-up-clear-order');
+    // Round 1 review: exactly one finding per cause, and the branches that had no case.
+    const g1Abs = (root, rel) => path.join(root, ...rel.split('/'));
+    const g1One = (title, contract, heavy, prepare, expected) => test(title, (t) => {
+      const root = copyOfRepoFiles(t, heavy ? HEAVY : []);
+      prepare(root);
+      const findings = runShipped(root, [contract]);
+      assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+      assert.match(findings[0].message, expected);
+    });
+    const g1None = (title, contract, heavy, prepare) => test(title, (t) => {
+      const root = copyOfRepoFiles(t, heavy ? HEAVY : []);
+      prepare(root);
+      assert.deepEqual(runShipped(root, [contract]), []);
+    });
+    const g1Rm = (rel) => (root) => fs.unlinkSync(g1Abs(root, rel));
+    const g1Empty = (rel) => (root) => fs.writeFileSync(g1Abs(root, rel), '');
+    const g1Put = (rel, text) => (root) => write(root, rel, text);
+    const g1Edit = (rel, edit) => (root) => {
+      const abs = g1Abs(root, rel);
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the edit changed the file');
+      fs.writeFileSync(abs, after);
+    };
+    const G1_GONE = /cannot read the file: ENOENT/;
+    const G1_EMPTY = /the file is empty/;
+    const G1_WF = 'gsd-core/workflows';
+    const G1_UI = `${G1_WF}/ui-phase.md`;
+    const G1_ARM = '**If `--auto`:**';
+    const G1_PAD = 'pad '.repeat(200);
+
+    // contributor-standards and cursor-reviewer: a removed or empty file is one finding.
+    g1One('docs/contributor-standards.md removed is exactly one finding', 'contributor-standards', true, g1Rm('docs/contributor-standards.md'), G1_GONE);
+    g1One('docs/contributor-standards.md emptied is exactly one finding', 'contributor-standards', true, g1Empty('docs/contributor-standards.md'), G1_EMPTY);
+    g1One('CONTEXT.md removed is exactly one finding for contributor-standards', 'contributor-standards', true, g1Rm('CONTEXT.md'), G1_GONE);
+    g1One('CONTRIBUTING.md removed is exactly one finding for contributor-standards', 'contributor-standards', true, g1Rm('CONTRIBUTING.md'), G1_GONE);
+    g1One('gsd-core/workflows/review.md removed is exactly one finding', 'cursor-reviewer', false, g1Rm(`${G1_WF}/review.md`), G1_GONE);
+    g1One('gsd-core/workflows/review.md emptied is exactly one finding', 'cursor-reviewer', false, g1Empty(`${G1_WF}/review.md`), G1_EMPTY);
+    g1None('a backtick with no closing backtick after it adds no heading reference', 'contributor-standards', true, g1Edit('docs/contributor-standards.md', within('## CONTEXT.md', '## ADRs', (section) => `${section}\nSee \`## Phantom with no close\n`)));
+    g1None('a one-character span of a heading marker adds no heading reference', 'contributor-standards', true, g1Edit('docs/contributor-standards.md', within('## CONTEXT.md', '## ADRs', (section) => `${section}\nAn empty span \`## \` here.\n`)));
+
+    // ask-user-questions-fallback: one handle per path, so one finding per cause.
+    for (const file of ['ui-phase.md', 'spec-phase.md', 'ai-integration-phase.md', 'eval-review.md', 'ui-review.md']) {
+      g1One(`${file} removed is exactly one finding`, 'ask-user-questions-fallback', false, g1Rm(`${G1_WF}/${file}`), G1_GONE);
+      g1One(`${file} emptied is exactly one finding`, 'ask-user-questions-fallback', false, g1Empty(`${G1_WF}/${file}`), G1_EMPTY);
+    }
+    test('the two causes of that workflow are separate findings', (t) => {
+      const root = copyOfRepoFiles(t);
+      write(root, `${G1_WF}/zz-fixture.md`, 'Use AskUserQuestion.\nAskUserQuestion([ { options: [ { label: "a" }, { label: "b" }, { label: "c" }, { label: "d" }, { label: "e" } ] } ])\n');
+      const findings = runShipped(root, ['ask-user-questions-fallback']);
+      assert.equal(findings.length, 2, JSON.stringify(findings.map((f) => f.message)));
+      assert.ok(findings.some((f) => /no TEXT_MODE plain-text fallback/.test(f.message)));
+      assert.ok(findings.some((f) => /5 options/.test(f.message)));
+    });
+    g1None('an options array of three labels satisfies the cap', 'ask-user-questions-fallback', false,
+      g1Put(`${G1_WF}/zz-fixture.md`, 'TEXT_MODE plain-text fallback.\nAskUserQuestion([ { options: [ { label: "a" }, { label: "b" }, { label: "c" } ] } ])\n'));
+    g1None('a label with an unclosed quote inside an options slice ends that scan with the labels counted so far', 'ask-user-questions-fallback', false,
+      g1Put(`${G1_WF}/zz-fixture.md`, 'TEXT_MODE plain-text fallback.\nAskUserQuestion([ { options: [ { label: "a" }, { label: "b" }, { label: "c" }, { label: "d" }, { label: "e } ] } ])\n'));
+    const G1_DECISION_HEAD = '## 4. Check Existing UI-SPEC\n';
+    const G1_FLAGS = 'TEXT_MODE plain-text.\n';
+    g1None('a decision section ended by a level-one heading keeps the arm and prompt inside it', 'ask-user-questions-fallback', false,
+      g1Put(G1_UI, `${G1_FLAGS}Force approve\n${G1_PAD}\n${G1_DECISION_HEAD}${G1_ARM} Auto-select "Skip"\nUse AskUserQuestion.\n# Other\n`));
+    g1One('an --auto arm after the level-one heading that ends the section is outside it', 'ask-user-questions-fallback', false,
+      g1Put(G1_UI, `${G1_FLAGS}Force approve\n${G1_PAD}\n${G1_DECISION_HEAD}Use AskUserQuestion.\n# Other\n${G1_ARM} Auto-select "Skip"\n`), /the artifact-exists branch has no --auto arm/);
+    g1None('a decision section ended by the end of the file', 'ask-user-questions-fallback', false,
+      g1Put(G1_UI, `${G1_FLAGS}Force approve\n${G1_PAD}\n${G1_DECISION_HEAD}${G1_ARM} Auto-select "Skip"\nUse AskUserQuestion.\n`));
+    g1None('an --auto arm on the last line with no newline reads to the end of the file', 'ask-user-questions-fallback', false,
+      g1Put(G1_UI, `${G1_FLAGS}Force approve\n${G1_PAD}\n${G1_DECISION_HEAD}${G1_ARM} Auto-select "Skip"; Use AskUserQuestion`));
+
+    // next-up-clear-order: one handle per path, so one finding per cause.
+    for (const rel of ['gsd-core/references/ui-brand.md', 'gsd-core/references/continuation-format.md']) {
+      g1One(`${rel} with a footnote is exactly one finding`, 'next-up-clear-order', false, g1Edit(rel, (text) => `${text}\n<sub>/clear</sub>\n`), /must not contain a <sub>\/clear<\/sub> pattern/);
+    }
+    for (const rel of ['gsd-core/references/ui-brand.md', 'gsd-core/workflows/resume-project.md', 'gsd-core/workflows/plan-phase.md', 'gsd-core/references/continuation-format.md']) {
+      g1One(`${rel} removed is exactly one finding`, 'next-up-clear-order', false, g1Rm(rel), G1_GONE);
+      g1One(`${rel} emptied is exactly one finding`, 'next-up-clear-order', false, g1Empty(rel), G1_EMPTY);
+    }
+
+    // release-backmerge-invariants: a missing or malformed job is one finding that skips the checks depending on it.
+    findsOne('the finalize job removed is exactly one finding', '.github/workflows/release.yml', yamlEdit((w) => { delete w.jobs.finalize; }), 'release-backmerge-invariants', 'expected a finalize job in release.yml');
+    findsOne('the finalize steps replaced by a string is exactly one finding', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs.finalize.steps = 'x'; }), 'release-backmerge-invariants', 'expected a finalize job in release.yml');
+    findsOne('the finalize job replaced by a string is exactly one finding', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs.finalize = 'x'; }), 'release-backmerge-invariants', 'expected a finalize job in release.yml');
+    findsOne('the validate-version job removed is exactly one finding', '.github/workflows/release.yml', yamlEdit((w) => { delete w.jobs['validate-version']; }), 'release-backmerge-invariants', 'expected a validate-version job in release.yml');
+    findsOne('the validate-version steps replaced by a string is exactly one finding', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['validate-version'].steps = 'x'; }), 'release-backmerge-invariants', 'expected a validate-version job in release.yml');
+    passes('a job that is not a mapping is skipped by the needs scan', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs.zz = null; }), 'release-backmerge-invariants');
+    passes('a null step among the back-merge steps is skipped by the name scans', '.github/workflows/auto-backmerge.yml', yamlEdit((w) => { w.jobs.backmerge.steps.unshift(null); }), 'release-backmerge-invariants');
+    passes('a null step among the finalize steps is skipped by the name scans', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs.finalize.steps.unshift(null); }), 'release-backmerge-invariants');
+    findsOne('a later .outcome after a longer .outcomes name is still a gate', '.github/workflows/auto-backmerge.yml', yamlEdit((w) => { w.jobs.backmerge.steps.find((s) => s.name === 'Open or update PR').if = "steps.a.outcomes != 'x' && steps.b.outcome == 'success'"; }), 'release-backmerge-invariants', "'Open or update PR' must not gate on a step outcome/conclusion");
   }
 
   {

@@ -102,13 +102,10 @@ function collectOptions(text, partner, from, to, violations) {
       let cursor = skipBlanks(text, at + 'options'.length);
       if (text[cursor] === ':') {
         cursor = skipBlanks(text, cursor + 1);
-        if (text[cursor] === '[' && cursor <= to) {
+        if (text[cursor] === '[') {
           next = cursor + 1;
-          const close = partner.get(cursor);
-          if (close !== undefined) {
-            const count = labelCount(text.slice(cursor, close + 1));
-            if (count > OPTION_CAP) violations.push({ line: text.slice(0, at).split('\n').length, count });
-          }
+          const count = labelCount(text.slice(cursor, partner.get(cursor) + 1));
+          if (count > OPTION_CAP) violations.push({ line: text.slice(0, at).split('\n').length, count });
         }
       }
     }
@@ -145,7 +142,10 @@ module.exports = {
   issue: '#2012',
   check(ctx) {
     const every = ctx.list(WORKFLOWS, '.md', 'the workflows directory must hold workflows');
-    for (const rel of every) {
+    // One document handle per path: every assertion on a file runs on it, so a removed or empty file is one finding.
+    const decisionByPath = new Map(DECISION_POINTS.map((point) => [`${WORKFLOWS}/${point.file}`, point]));
+    const ESCALATION_PATH = `${WORKFLOWS}/ui-phase.md`;
+    for (const rel of [...new Set([...every, ...decisionByPath.keys()])]) {
       const doc = ctx.doc(rel);
       if (rel.split('/').length === 3) {
         doc.satisfies((text) => !text.includes('AskUserQuestion') || hasTextModeFallback(text) || 'it uses AskUserQuestion with no TEXT_MODE plain-text fallback',
@@ -155,17 +155,16 @@ module.exports = {
         const found = optionCapViolations(text);
         return found.length === 0 || found.map((v) => `line ${v.line}: ${v.count} options`).join('; ');
       }, `every AskUserQuestion options array must have at most ${OPTION_CAP} options (the runtime cap)`);
+      const point = decisionByPath.get(rel);
+      if (point) doc.satisfies((text) => autoArmProblem(text, point), `${point.file}: the --auto arm must reuse the existing artifact, before any prompt`);
+      // #4776 does not ask for the escalation: force-approving blocking findings is a decision a person makes.
+      if (rel === ESCALATION_PATH) {
+        doc.satisfies((text) => {
+          const at = text.indexOf('Force approve');
+          if (at === -1) return 'ui-phase.md: expected the max-iterations escalation to still exist';
+          return !text.slice(Math.max(0, at - ESCALATION_WINDOW), at + ESCALATION_WINDOW).includes(AUTO_ARM) || 'an --auto arm sits next to the force-approve escalation';
+        }, 'the max-revision-iterations escalation must keep blocking for a human under --auto');
+      }
     }
-
-    for (const point of DECISION_POINTS) {
-      ctx.doc(`${WORKFLOWS}/${point.file}`).satisfies((text) => autoArmProblem(text, point), `${point.file}: the --auto arm must reuse the existing artifact, before any prompt`);
-    }
-
-    // #4776 does not ask for the escalation: force-approving blocking findings is a decision a person makes.
-    ctx.doc(`${WORKFLOWS}/ui-phase.md`).satisfies((text) => {
-      const at = text.indexOf('Force approve');
-      if (at === -1) return 'ui-phase.md: expected the max-iterations escalation to still exist';
-      return !text.slice(Math.max(0, at - ESCALATION_WINDOW), at + ESCALATION_WINDOW).includes(AUTO_ARM) || 'an --auto arm sits next to the force-approve escalation';
-    }, 'the max-revision-iterations escalation must keep blocking for a human under --auto');
   },
 };

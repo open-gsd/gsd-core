@@ -11,6 +11,8 @@
 
 const UI_BRAND = 'gsd-core/references/ui-brand.md';
 const PLAN_PHASE = 'gsd-core/workflows/plan-phase.md';
+const RESUME = 'gsd-core/workflows/resume-project.md';
+const CONTINUATION = 'gsd-core/references/continuation-format.md';
 const NO_FOOTNOTE = 'must not contain a <sub>/clear</sub> pattern: /clear should appear before the command';
 const EXEC_FLAG = 'GAPS_EXEC_FLAG=""';
 const EXEC_FLAG_SET = 'GAPS_EXEC_FLAG="--gaps-only"';
@@ -117,24 +119,29 @@ module.exports = {
   id: 'next-up-clear-order',
   issue: '#1623',
   check(ctx) {
-    ctx.doc(UI_BRAND)
-      .satisfies((text) => !hasSubClear(text), `ui-brand.md ${NO_FOOTNOTE}`)
+    // One document handle per path: every assertion on a file runs on it, so a removed or empty file is one finding and a
+    // footnote in ui-brand.md or continuation-format.md is reported once, not once per scan.
+    const scanned = [];
+    for (const dir of ['gsd-core/workflows', 'gsd-core/references']) scanned.push(...ctx.list(dir, '.md', `${dir} must hold markdown files to scan`));
+    const paths = [...new Set([...scanned, UI_BRAND, CONTINUATION, RESUME, PLAN_PHASE])];
+    const docs = new Map(paths.map((rel) => [rel, ctx.doc(rel)]));
+    for (const [rel, doc] of docs) doc.satisfies((text) => !hasSubClear(text), `${rel} ${NO_FOOTNOTE}`);
+
+    docs.get(UI_BRAND)
       .slice('## Next Up Block', '## Error Panel')
       .before('/clear', '{copy-paste command}', 'the Next Up block template must show /clear before {copy-paste command}');
-    ctx.doc('gsd-core/references/continuation-format.md').satisfies((text) => !hasSubClear(text), `continuation-format.md ${NO_FOOTNOTE}`);
-    for (const dir of ['gsd-core/workflows', 'gsd-core/references']) {
-      for (const rel of ctx.list(dir, '.md', `${dir} must hold markdown files to scan`)) {
-        ctx.doc(rel).satisfies((text) => !hasSubClear(text), `${rel} ${NO_FOOTNOTE}`);
-      }
-    }
 
     // #3083: resume routing is the exception to the /clear-then template.
-    const route = ctx.doc('gsd-core/workflows/resume-project.md').step('route_to_workflow');
+    const route = docs.get(RESUME).step('route_to_workflow');
     route.lacks('/clear` then:', 'resume route templates must not include `/clear` then:');
     route.satisfies(explainsResumeException, 'the route_to_workflow block must include an exception note explaining resume behavior');
 
     // #3297: --gaps planning mode projects --gaps-only onto the Next Up execute command.
-    const plan = ctx.doc(PLAN_PHASE)
+    const onBlock = (check) => (text) => {
+      const found = offerNextOf(text);
+      return found.error ? true : check(found.block);
+    };
+    docs.get(PLAN_PHASE)
       .satisfies(capturesGapsMode, 'the plan-phase.md preamble must set GAPS_MODE from the captured arguments ($GSD_ARGS) --gaps, so the mode reaches <offer_next>')
       .satisfies(derivesExecFlag, 'the plan-phase.md preamble must derive GAPS_EXEC_FLAG="--gaps-only" from GAPS_MODE')
       .satisfies((text) => {
@@ -143,12 +150,7 @@ module.exports = {
         if (!block.includes('GAPS_MODE')) return 'the derivation does not mention GAPS_MODE';
         return !block.toLowerCase().includes('reviews') || 'the derivation references reviews';
       }, 'the --gaps-only derivation must be gated on GAPS_MODE alone: reviews-mode Next Up stays unchanged')
-      .satisfies((text) => offerNextOf(text).error || true, 'plan-phase.md must have a closed <offer_next> block');
-    const onBlock = (check) => (text) => {
-      const found = offerNextOf(text);
-      return found.error ? true : check(found.block);
-    };
-    plan
+      .satisfies((text) => offerNextOf(text).error || true, 'plan-phase.md must have a closed <offer_next> block')
       .satisfies(onBlock((block) => hasSequence(block, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}'])),
         '<offer_next> execute-phase command must substitute ${GAPS_EXEC_FLAG} after {X}')
       .satisfies(onBlock((block) => hasSequence(block, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', '${GSD_WS}'])),

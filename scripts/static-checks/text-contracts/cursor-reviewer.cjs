@@ -38,7 +38,6 @@ module.exports = {
   id: 'cursor-reviewer',
   issue: '#1960',
   check(ctx) {
-    ctx.exists(REVIEW, 'review.md should exist');
     ctx.doc(REVIEW)
       .has('command -v cursor-agent', 'review.md should detect cursor CLI via "command -v cursor-agent" (not the cursor IDE launcher)')
       .has('--cursor', 'review.md should parse --cursor flag')

@@ -36,7 +36,6 @@ function backtickedHeadings(body) {
     const hashes = end - (at + 1);
     if (hashes >= 2 && hashes <= 6 && end < body.length && /\s/.test(body[end])) {
       const close = body.indexOf('`', end);
-      if (close === -1) break;
       if (close - end >= 2) {
         const heading = body.slice(at + 1, close).trim();
         if (!heading.includes('<')) refs.add(heading);
@@ -69,7 +68,6 @@ module.exports = {
   id: 'contributor-standards',
   issue: '#2721',
   check(ctx) {
-    ctx.exists(STANDARDS, 'docs/contributor-standards.md must exist');
     const standards = ctx.doc(STANDARDS)
       .satisfies(headingCheck(/context/i, '"context" (case-insensitive)'), 'has required CONTEXT.md section')
       .satisfies(headingCheck(/adr/i, '"ADR" (case-insensitive)'), 'has required ADR section')
