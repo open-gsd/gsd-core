@@ -1,8 +1,9 @@
 {
   "resolverInternal": [
-    "src/config-value-resolver.cts",
+    "hooks/lib/config-read.js",
     "src/config-loader.cts",
-    "hooks/lib/config-read.js"
+    "src/config-value-resolver.cts",
+    "src/planning-workspace.cts"
   ],
   "temporary": []
 }

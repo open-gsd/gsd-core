@@ -633,6 +633,8 @@ const {
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
 // #5759: bounded config.json reader shared with the runtime (non-blocking open, regular file, 1 MiB cap).
 const { readConfigFileBounded } = require(path.join(_gsdLibDir, 'config-file-read.cjs'));
+// #6032: the owner names the project config path; the installer's walk-up probe takes it from there.
+const { rootConfigPath: gsdRootConfigPath } = require(path.join(_gsdLibDir, 'planning-workspace.cjs'));
 let _capabilityRegistry;
 try {
   _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
@@ -14322,7 +14324,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     try {
       let probeDir = path.resolve(targetDir);
       for (let depth = 0; depth < 8; depth += 1) {
-        const candidate = path.join(probeDir, '.planning', 'config.json');
+        const candidate = gsdRootConfigPath(probeDir);
         if (fs.existsSync(candidate)) {
           try {
             // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the

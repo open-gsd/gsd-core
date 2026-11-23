@@ -3,67 +3,18 @@
 const path = require('path');
 
 /**
- * no-adhoc-config-merge
+ * no-adhoc-config-merge (#6032, epic #4633, ADR-1411 Decision 5).
  *
- * Epic #4633 (ADR-1411, Decision 5) gave configuration layer resolution one
- * owner: `resolveConfigValue` in `src/config-value-resolver.cts` returns the
- * value AND the layer that produced it, and `src/config-loader.cts` owns the
- * loader's deep merge. Four hand-rolled precedence copies had accumulated before
- * that (#4071, #4090). This rule is the anti-divergence guard: a fifth copy fails
- * lint instead of shipping.
- *
- * It flags two shapes outside the resolver boundary.
- *
- * ## Shape (a) — `layerPathRead`: reading a configuration layer file
- *
- * Constructing the path of a layer file and reading it:
- *   - `path.join(…, '.gsd', 'defaults.json')`                (global defaults)
- *   - `path.join(planningDir(…) | planningRoot(…), 'config.json')`,
- *     `path.join(…, '.planning', 'config.json')`             (project / workstream)
- *   - `path.join(…, '.claude', 'settings.json' | 'settings.local.json')`
- *
- * A construction is a READ unless every use of its value is a write or a probe.
- * Write and probe sites parse or stat without merging, so they never match, and
- * the ADR keeps them out of the allowlist ("rule shape, not allowlist entry"):
- *   - an argument of a probe or write call (`existsSync`, `statSync`,
- *     `writeFileSync`, `renameSync`, `mkdirSync`, `unlinkSync`, …);
- *   - a value that is only reported (an object property value, e.g.
- *     `config_path: …`) or compared (`===`), optionally wrapped by `toPosixPath`.
- * A RETURNED path is not exempt: a local `function cfgPath() { return join(…) }` would be a
- * fifth copy of the layer location wearing a helper's name. The helpers live in the boundary.
- * Anything else — an argument of a reader, an element pushed into a candidate
- * list, an unknown call — is a read and is flagged, so an unfamiliar consumer
- * fails closed rather than slipping through.
- *
- * ## Shape (b) — `configSpreadMerge`: spread-merging two parsed config objects
- *
- * `{ ...globalCfg, ...projectCfg }` and `Object.assign({}, globalCfg, projectCfg)`
- * where at least two operands are config objects: an identifier or member chain
- * whose name says so (`config`, `cfg`, `defaults`, `settings`), or a direct
- * `JSON.parse(…)` / `loadConfig(…)` / `readConfig…(…)` call. A spread of one
- * config over a literal of defaults is a single-source copy, not a precedence
- * merge, and is not flagged.
- *
- * ## Boundary and exemptions
- *
- * Two kinds, kept apart and not interchangeable (ADR-1411 Decision 5):
- *   - `resolverInternal` — permanent. `src/config-value-resolver.cts` and
- *     `src/config-loader.cts` ARE the boundary and are exempt by construction.
- *   - `temporary` — migration exemptions, each removed by the child that adopts
- *     the owner there. The list is empty at the end of epic #4633 and stays
- *     empty. An entry whose file no longer offends reports `staleAllowlistEntry`
- *     so a list can only shrink (scripts/lib/allowlist-ratchet.cjs validates it
- *     by identity in tests/no-adhoc-config-merge.allowlist.test.cjs).
- *
- * A one-line justified holdout can carry a trailing same-line
- * `// allow-adhoc-config-merge: <reason>` comment; the reason is mandatory.
- *
- * ## Known gaps
- *
- * The rule recognizes literal path segments, not computed ones: a layer path
- * assembled from a variable segment (`join(dir, name)` with `name = 'config.json'`)
- * is not seen. It raises the cost of the accidental copy — the failure observed
- * four times — it does not prove no copy exists.
+ * The anti-divergence guard for configuration layer resolution. Flags, outside the boundary:
+ *   (a) `layerPathRead`: reading a layer file by a hand-built path (`.gsd/defaults.json`,
+ *       `planningDir|planningRoot(...)` + `config.json`, `.planning/config.json`,
+ *       `.claude/settings[.local].json`). A path that only reaches a probe, a write, a reported
+ *       property or a comparison is exempt by shape; a returned path is not (a local helper is a copy);
+ *   (b) `configSpreadMerge`: `{...a, ...b}` / `Object.assign` over two config-ish operands;
+ *   (c) `layerWalk`: one function reading two or more different layers, helpers or not.
+ * Options: `resolverInternal` (permanent boundary files) and `temporary` (migration entries, empty
+ * and kept empty; a stale one reports). A same-line `// allow-adhoc-config-merge: <reason>` holds one.
+ * Known gap: computed path segments are not seen. Full rationale: CONTEXT.md, ADR-1411 C5 amendment.
  */
 
 const JOIN_NAMES = new Set(['join', 'resolve']);
@@ -92,12 +43,24 @@ const WRITE_CALLS = new Set([
   'atomicWriteFileSync',
 ]);
 const PROBE_OR_WRITE_CALLS = new Set([...PROBE_CALLS, ...WRITE_CALLS]);
+/** An injected stat seam (`fsStatSync`, `fsExistsSync`) probes like the call it stands for. */
+const PROBE_NAME_RE = /^(?:fs)?(?:exists|stat|lstat|access)(?:Sync)?$/i;
 
 /** Wrappers that only reshape a path string; the use that matters is outside. */
 const PATH_WRAPPERS = new Set(['toPosixPath', 'normalize', 'relative', 'basename', 'dirname']);
 
 /** A helper named like a write (`platformWriteSync`, `writeJsonAtomic`) mutates the file too. */
 const WRITE_NAME_RE = /^(?:platform)?(?:write|rename|unlink|mkdir|copy)|Write(?:Sync|File|Json)?$/;
+/** Helper calls that name a layer file, and the layer kind each names. */
+const LAYER_HELPERS = new Set([
+  'projectConfigPath',
+  'rootConfigPath',
+  'globalDefaultsPath',
+  'claudeSettingsPath',
+  'claudeSettingsPaths',
+]);
+const FUNCTION_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+
 const MARKER_RE = /allow-adhoc-config-merge:(.*)$/;
 const CONFIGISH_RE = /(config|cfg|defaults|settings)/i;
 const CONFIG_CALL_RE = /^(loadConfig|readConfig\w*|readSettings|readJson\w*)$/;
@@ -169,6 +132,12 @@ const rule = {
         '(src/config-value-resolver.cts) or `loadConfig` (src/config-loader.cts). A write or a probe ' +
         '(`existsSync`, `writeFileSync`, …) is not a read and does not match. A justified holdout ' +
         'carries a trailing same-line `// allow-adhoc-config-merge: <non-empty reason>`.',
+      layerWalk:
+        'This function reads {{kinds}} configuration layers by hand: that is a precedence implementation ' +
+        '(ADR-1411), the shape that produced #4071 and #4090 four times. Resolve through ' +
+        '`resolveConfigValue` (src/config-value-resolver.cts), which returns the value AND the layer that ' +
+        'produced it, instead of reading layers one after another. A justified holdout carries a trailing ' +
+        'same-line `// allow-adhoc-config-merge: <non-empty reason>`.',
       configSpreadMerge:
         'Spread-merging two parsed config objects re-implements layer precedence (ADR-1411): four copies ' +
         'of it produced #4071 and #4090. Resolve through `resolveConfigValue` (src/config-value-resolver.cts) ' +
@@ -204,7 +173,7 @@ const rule = {
       if (!parent) return false;
       if (parent.type === 'CallExpression' && parent.arguments.includes(node)) {
         const name = calleeName(parent.callee);
-        if (name !== null && PROBE_OR_WRITE_CALLS.has(name)) return true;
+        if (name !== null && (PROBE_OR_WRITE_CALLS.has(name) || PROBE_NAME_RE.test(name))) return true;
         if (name !== null && PATH_WRAPPERS.has(name)) return isWriteOrProbeUse(parent, seen);
         return false;
       }
@@ -254,15 +223,59 @@ const rule = {
       return false;
     }
 
-    function check(node, messageId) {
-      pending.push({ node, messageId });
+    function check(node, messageId, data) {
+      pending.push({ node, messageId, data });
+    }
+
+    /** The layer kind a `join(...)` layer path names. */
+    function joinKind(node) {
+      const args = node.arguments;
+      const last = literalString(args[args.length - 1]);
+      if (last === 'defaults.json') return 'global';
+      if (last === 'settings.local.json') return 'claude-local';
+      if (last === 'settings.json') return 'claude-shared';
+      const planningCall = args.slice(0, -1).find((a) => a.type === 'CallExpression' && PLANNING_CALLS.has(calleeName(a.callee)));
+      if (planningCall && calleeName(planningCall.callee) === 'planningDir') return 'project';
+      return 'root';
+    }
+
+    /** The layer kinds a helper call names (a list for the plural settings helper). */
+    function helperKinds(node) {
+      const name = calleeName(node.callee);
+      if (name === 'projectConfigPath') return ['project'];
+      if (name === 'rootConfigPath') return ['root'];
+      if (name === 'globalDefaultsPath') return ['global'];
+      if (name === 'claudeSettingsPaths') return ['claude-local', 'claude-shared'];
+      const kind = node.arguments[1];
+      return [literalString(kind) === 'local' ? 'claude-local' : 'claude-shared'];
+    }
+
+    function enclosingFunction(node) {
+      let n = node.parent;
+      while (n && !FUNCTION_TYPES.has(n.type)) n = n.parent;
+      return n || sourceCode.ast;
+    }
+
+    /** Layer kinds read per enclosing function, from helper calls and join constructions alike. */
+    const kindsByFunction = new Map();
+    function noteKinds(node, kinds) {
+      if (isWriteOrProbeUse(node, new Set())) return;
+      const fn = enclosingFunction(node);
+      const set = kindsByFunction.get(fn) || new Set();
+      for (const k of kinds) set.add(k);
+      kindsByFunction.set(fn, set);
     }
 
     return {
       CallExpression(node) {
-        if (isJoinCall(node) && isLayerPathJoin(node) && !isWriteOrProbeUse(node, new Set())) {
-          check(node, 'layerPathRead');
-          return;
+        const helper = calleeName(node.callee);
+        if (helper !== null && LAYER_HELPERS.has(helper)) noteKinds(node, helperKinds(node));
+        if (isJoinCall(node) && isLayerPathJoin(node)) {
+          noteKinds(node, [joinKind(node)]);
+          if (!isWriteOrProbeUse(node, new Set())) {
+            check(node, 'layerPathRead');
+            return;
+          }
         }
         const name = calleeName(node.callee);
         if (
@@ -284,6 +297,11 @@ const rule = {
       },
 
       'Program:exit'(program) {
+        for (const [fn, kinds] of kindsByFunction) {
+          if (kinds.size >= 2) {
+            check(fn === sourceCode.ast ? program : fn, 'layerWalk', { kinds: [...kinds].sort().join(' + ') });
+          }
+        }
         const markers = (typeof sourceCode.getAllComments === 'function' ? sourceCode.getAllComments() : []).filter(
           (c) => {
             if (c.type !== 'Line') return false;
@@ -308,7 +326,7 @@ const rule = {
           if (suppressed.has(entry)) continue;
           violations += 1;
           if (exempt) continue;
-          context.report({ node: entry.node, messageId: entry.messageId });
+          context.report({ node: entry.node, messageId: entry.messageId, data: entry.data });
         }
 
         if (isTemporary && violations === 0) {

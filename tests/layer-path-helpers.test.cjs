@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * config-layer-paths.test.cjs
+ * layer-path-helpers.test.cjs
  *
  * The owner's path helpers (#6032, ADR-1411 Decision 5) name each configuration layer file in
  * exactly one place per execution context, and the hook-side equivalents (hooks are standalone
@@ -60,6 +60,73 @@ describe('loader layer path helpers', () => {
     assert.equal(loader.claudeSettingsPath(dir), path.join(dir, 'settings.json'));
     assert.equal(loader.claudeSettingsPath(dir, 'shared'), path.join(dir, 'settings.json'));
     assert.equal(loader.claudeSettingsPath(dir, 'local'), path.join(dir, 'settings.local.json'));
+  });
+});
+
+describe('loader claudeSettingsLayers', () => {
+  test('lists project local, project shared, then the user file, highest precedence first', () => {
+    const user = path.join(os.tmpdir(), 'gsd-user-claude');
+    assert.deepEqual(loader.claudeSettingsLayers(CWD, user), [
+      { scope: 'projectLocal', file: path.join(CWD, '.claude', 'settings.local.json') },
+      { scope: 'project', file: path.join(CWD, '.claude', 'settings.json') },
+      { scope: 'user', file: path.join(user, 'settings.json') },
+    ]);
+  });
+
+  test('a null user dir drops the user layer', () => {
+    assert.deepEqual(loader.claudeSettingsLayers(CWD, null).map((layer) => layer.scope), ['projectLocal', 'project']);
+  });
+});
+
+describe('loader readConfigFilesQuiet', () => {
+  const fs = require('node:fs');
+  const { cleanup } = require('./helpers.cjs');
+
+  function project(files) {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-quiet-config-'));
+    fs.mkdirSync(path.join(cwd, '.planning', 'workstreams', 'ws1'), { recursive: true });
+    for (const [rel, body] of Object.entries(files)) fs.writeFileSync(path.join(cwd, '.planning', rel), body);
+    return cwd;
+  }
+
+  test('a workstream config merges over the root; an absent file is silent', () => {
+    const cwd = project({ 'config.json': '{"a":1,"b":1}', [path.join('workstreams', 'ws1', 'config.json')]: '{"b":2}' });
+    try {
+      withEnv(NO_SCOPE, () => {
+        const read = loader.readConfigFilesQuiet(cwd, 'ws1');
+        assert.deepEqual(read.config, { a: 1, b: 2 });
+        assert.equal(read.configError, undefined);
+        assert.deepEqual(loader.readConfigFilesQuiet(cwd, null).config, { a: 1, b: 1 });
+      });
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('a broken workstream config falls back to the root and is named in configError', () => {
+    const cwd = project({ 'config.json': '{"a":1}', [path.join('workstreams', 'ws1', 'config.json')]: '{ not json' });
+    try {
+      withEnv(NO_SCOPE, () => {
+        const read = loader.readConfigFilesQuiet(cwd, 'ws1');
+        assert.deepEqual(read.config, { a: 1 });
+        assert.equal(read.configError.path, path.join(cwd, '.planning', 'workstreams', 'ws1', 'config.json'));
+      });
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('a config that is not a JSON object is named in configError and yields no config', () => {
+    const cwd = project({ 'config.json': '[1,2]' });
+    try {
+      withEnv(NO_SCOPE, () => {
+        const read = loader.readConfigFilesQuiet(cwd, null);
+        assert.equal(read.config, null);
+        assert.equal(read.configError.message, 'configuration must be a JSON object');
+      });
+    } finally {
+      cleanup(cwd);
+    }
   });
 });
 

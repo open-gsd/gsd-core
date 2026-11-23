@@ -613,18 +613,42 @@ function globalDefaultsPath(home: string = resolveGsdHome()): string {
 }
 
 /**
- * The one place that names a project's own `config.json` (ADR-1411 Decision 5, #6032): the file
- * the active workstream or project owns. `ws` selects a workstream the way `planningDir` does; omit
- * it for the environment's. Readers, probes and pre-write checks take the path from here, so
- * `local/no-adhoc-config-merge` can flag any other construction of it.
+ * The project config a quiet reader should see: the loader's own file-selection branches without its
+ * warnings, normalization or write-back (#6032, moved from `phase-locator.cts`, which mirrored them).
+ * A reader of flat keys that have no legacy aliases and are not inherited from global defaults (the
+ * phase naming policy) calls this instead of walking the workstream and root files itself, so the
+ * selection lives beside the code it must agree with. `ws` undefined means the environment's
+ * workstream. A usable workstream config is merged over a usable root; a missing or broken
+ * workstream with a usable root falls back to the project-scoped config rather than the flat root,
+ * as `loadConfig` does. An unusable file never throws: it is named in `configError`, and an absent
+ * one is silent.
  */
-function projectConfigPath(cwd: string, ws?: string | null): string {
-  return path.join(planningDir(cwd, ws), 'config.json');
-}
-
-/** The flat root `config.json` a workstream inherits from (the loader's second project layer). */
-function rootConfigPath(cwd: string): string {
-  return path.join(planningRoot(cwd), 'config.json');
+function readConfigFilesQuiet(
+  cwd: string,
+  ws?: string | null,
+): { config: Record<string, unknown> | null; configError?: { path: string; message: string } } {
+  let configError: { path: string; message: string } | undefined;
+  const readConfig = (file: string): Record<string, unknown> | null => {
+    try {
+      // Bounded read (#5759): null is an absent file (no configError); a FIFO/device/oversized
+      // file throws and is reported through configError like any other unreadable config.
+      const raw = readConfigFileBounded(file);
+      if (raw === null) return null;
+      const value: unknown = JSON.parse(raw);
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+      configError = { path: file, message: 'configuration must be a JSON object' };
+      return null;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') configError = { path: file, message: (cause as Error).message };
+      return null;
+    }
+  };
+  const activeWs = ws === undefined ? planningWorkspace.resolveEnvWorkstream() : ws?.trim() || null;
+  const root = activeWs ? readConfig(planningWorkspace.rootConfigPath(cwd)) : null;
+  const scoped = readConfig(planningWorkspace.projectConfigPath(cwd, activeWs));
+  const config = scoped ? (root ? _deepMergeConfig(root, scoped) as Record<string, unknown> : scoped)
+    : root ? readConfig(planningWorkspace.projectConfigPath(cwd, null)) : null;
+  return configError ? { config, configError } : { config };
 }
 
 /**
@@ -634,6 +658,26 @@ function rootConfigPath(cwd: string): string {
  */
 function claudeSettingsPath(claudeDir: string, kind: 'shared' | 'local' = 'shared'): string {
   return path.join(claudeDir, kind === 'local' ? 'settings.local.json' : 'settings.json');
+}
+
+/**
+ * The Claude Code settings files a project sees, highest precedence first: the project's
+ * gitignored `settings.local.json`, its shared `settings.json`, then the user's `settings.json` in
+ * `userDir` (omitted when `userDir` is null). The one ordered listing of those layers (#6032):
+ * a reader that must show or combine them takes the order from here and applies its own semantics
+ * to each file, so the precedence is named once.
+ */
+function claudeSettingsLayers(
+  projectDir: string,
+  userDir: string | null,
+): Array<{ scope: 'projectLocal' | 'project' | 'user'; file: string }> {
+  const dir = path.join(projectDir, '.claude');
+  const layers: Array<{ scope: 'projectLocal' | 'project' | 'user'; file: string }> = [
+    { scope: 'projectLocal', file: claudeSettingsPath(dir, 'local') },
+    { scope: 'project', file: claudeSettingsPath(dir) },
+  ];
+  if (userDir !== null) layers.push({ scope: 'user', file: claudeSettingsPath(userDir) });
+  return layers;
 }
 
 /**
@@ -1480,9 +1524,12 @@ export = {
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   globalDefaultsPath,
-  projectConfigPath,
-  rootConfigPath,
+  readConfigFilesQuiet,
+  // #6032: defined beside `planningDir` (their owner); re-exported so the loader names every layer file.
+  projectConfigPath: planningWorkspace.projectConfigPath,
+  rootConfigPath: planningWorkspace.rootConfigPath,
   claudeSettingsPath,
+  claudeSettingsLayers,
   honorsGlobalDefaults,
   _warnedUnknownConfigKeys,
   GLOBAL_DEFAULTS_RESOLUTION_KEYS,

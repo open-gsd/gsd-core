@@ -5098,8 +5098,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           let configuredAuthority = 'grep';
           let intelEnabled = false;
           try {
-            const { planningDir } = require('./lib/planning-workspace.cjs');
-            const cfgPath = require('path').join(planningDir(cwd), 'config.json');
+            const { projectConfigPath } = require('./lib/planning-workspace.cjs');
+            const cfgPath = projectConfigPath(cwd);
             // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
             // catch below (defaults apply) instead of blocking; null is an absent file.
             const rawCfgText = require('./lib/config-file-read.cjs').readConfigFileBounded(cfgPath);

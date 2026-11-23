@@ -28,7 +28,7 @@ describe('no-adhoc-config-merge rule module', () => {
   test('exports meta and create with the three messages', () => {
     assert.strictEqual(typeof rule.create, 'function');
     assert.strictEqual(rule.meta.type, 'problem');
-    for (const id of ['layerPathRead', 'configSpreadMerge', 'staleAllowlistEntry']) {
+    for (const id of ['layerPathRead', 'layerWalk', 'configSpreadMerge', 'staleAllowlistEntry']) {
       assert.ok(rule.meta.messages[id], `${id} message must exist`);
     }
   });
@@ -146,6 +146,66 @@ describe('write, probe, report and compare sites never match', () => {
         { code: `read(path.join(dir, 'settings.json'));`, filename: FILE },
         { code: `read(path.join(planningDir(cwd), 'phases'));`, filename: FILE },
       ],
+    });
+  });
+});
+
+describe('shape (c): one function reads two or more layers', () => {
+  test('two different layers read through the owner helpers is a walk', () => {
+    run('c-walk', {
+      invalid: [
+        {
+          code: `function pick(cwd) { const a = read(projectConfigPath(cwd)); const b = read(rootConfigPath(cwd)); return a ?? b; }`,
+          filename: FILE,
+          errors: [{ messageId: 'layerWalk' }],
+        },
+        {
+          code: `function pick(cwd) { return read(projectConfigPath(cwd)) ?? read(globalDefaultsPath()); }`,
+          filename: FILE,
+          errors: [{ messageId: 'layerWalk' }],
+        },
+        {
+          code: `function pick(d) { return read(claudeSettingsPath(d, 'local')) ?? read(claudeSettingsPath(d)); }`,
+          filename: FILE,
+          errors: [{ messageId: 'layerWalk' }],
+        },
+        {
+          code: `function pick(d, env) { return claudeSettingsPaths(d, env).map(read); }`,
+          filename: FILE,
+          errors: [{ messageId: 'layerWalk' }],
+        },
+      ],
+    });
+  });
+
+  test('a single layer, the same layer twice, and probe or write uses are not a walk', () => {
+    run('c-valid', {
+      valid: [
+        { code: `function one(cwd) { return read(projectConfigPath(cwd)); }`, filename: FILE },
+        { code: `function same(cwd) { return [read(projectConfigPath(cwd)), read(projectConfigPath(cwd, 'x'))]; }`, filename: FILE },
+        { code: `function probe(cwd) { return fs.existsSync(rootConfigPath(cwd)) && read(projectConfigPath(cwd)); }`, filename: FILE },
+        { code: `function save(cwd) { const g = globalDefaultsPath(); fs.writeFileSync(g, '{}'); return read(projectConfigPath(cwd)); }`, filename: FILE },
+        { code: `function stat(cwd, fsStatSync) { fsStatSync(rootConfigPath(cwd)); fsStatSync(globalDefaultsPath()); }`, filename: FILE },
+      ],
+    });
+  });
+
+  test('two functions each reading one layer are not a walk', () => {
+    run('c-two-functions', {
+      valid: [{
+        code: `function a(cwd) { return read(projectConfigPath(cwd)); } function b() { return read(globalDefaultsPath()); }`,
+        filename: FILE,
+      }],
+    });
+  });
+
+  test('a walk inside a resolverInternal file is exempt', () => {
+    run('c-internal', {
+      valid: [{
+        code: `function pick(cwd) { return read(projectConfigPath(cwd)) ?? read(rootConfigPath(cwd)); }`,
+        filename: 'src/config-loader.cts',
+        options: [{ resolverInternal: ['src/config-loader.cts'] }],
+      }],
     });
   });
 });

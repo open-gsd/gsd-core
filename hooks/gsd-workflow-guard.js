@@ -22,7 +22,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { tokenize, skipToSubcommand } = require('./lib/git-cmd.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath } = require('./lib/config-read.js');
 const { reportIfUndetermined, gitEnv, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('./lib/git-probe.js');
 
 // This guard is almost entirely advisory (fail open — a broken advisory must
@@ -177,7 +177,7 @@ function failClosedBlockContext(rawInput) {
 }
 
 function workflowGuardEnabled(cwd) {
-  const configPath = path.join(cwd, '.planning', 'config.json');
+  const configPath = projectConfigPath(cwd);
   if (!fs.existsSync(configPath)) return false;
   try {
     const config = JSON.parse(readConfigFileBounded(configPath, { required: true }));

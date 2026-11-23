@@ -41,6 +41,7 @@ import noExactCaseEnvAccess from './eslint-rules/no-exact-case-env-access.cjs';
 import noAdhocTimeoutLiteral from './eslint-rules/no-adhoc-timeout-literal.cjs';
 import noRenderedTextLengthAssert from './eslint-rules/no-rendered-text-length-assert.cjs';
 import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
+import noAdhocConfigMerge from './eslint-rules/no-adhoc-config-merge.cjs';
 import noVerificationStatusLiteral from './eslint-rules/no-verification-status-literal.cjs';
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
 import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
@@ -49,6 +50,7 @@ import directiveNamesIssue from './eslint-rules/directive-names-issue.cjs';
 import maxCommentBlockLines from './eslint-rules/max-comment-block-lines.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
+const adhocConfigMergeAllowlist = require('./eslint-rules/no-adhoc-config-merge.allowlist.json');
 const commentRatchetBaseline = require('./eslint-rules/comment-ratchet.baseline.json');
 
 // The `no-restricted-syntax` selectors every file under tests/ is held to. The block for the six
@@ -97,6 +99,7 @@ const localPlugin = {
     'no-adhoc-timeout-literal': noAdhocTimeoutLiteral,
     'no-rendered-text-length-assert': noRenderedTextLengthAssert,
     'no-unconfined-path-join': noUnconfinedPathJoin,
+    'no-adhoc-config-merge': noAdhocConfigMerge,
     'no-verification-status-literal': noVerificationStatusLiteral,
     'no-runtime-name-literal': noRuntimeNameLiteral,
     'require-read-only-git-env': requireReadOnlyGitEnv,
@@ -861,6 +864,26 @@ export default tseslint.config(
       // `no-unbounded-spawn`, the allowlist is seeded empty and stays empty — this
       // epic migrated every call site, so the rule runs with no exemption surface.
       'local/no-unconfined-path-join': ['error', { allowlist: unconfinedPathJoinAllowlist }],
+    },
+  },
+
+  // ── first-party source — no-adhoc-config-merge (#6032, ADR-1411 Decision 5) ──
+  // Every surface that can read a configuration layer file: the TypeScript source, the shipped hooks,
+  // the committed CLI/lib .cjs, the scripts and the installer. tests/** is excluded — a test builds
+  // layer fixtures by hand on purpose.
+  {
+    files: ['src/**/*.cts', 'src/**/*.ts', 'scripts/**/*.cjs', 'gsd-core/bin/**/*.cjs', 'hooks/**/*.js', 'bin/**/*.js'],
+    plugins: {
+      local: localPlugin,
+    },
+    rules: {
+      // Flags (a) reading a layer file whose path was built outside the resolver boundary, (b) spread
+      // merging two parsed config objects, (c) one function reading two or more layers. The boundary
+      // (`resolverInternal`) is the resolver, the loader, the planning-workspace path owner and the
+      // hook-side reader; the `temporary` migration section is empty because epic #4633 migrated every
+      // site and must stay empty. The allowlist is validated by identity in
+      // tests/no-adhoc-config-merge.allowlist.test.cjs via scripts/lib/allowlist-ratchet.cjs.
+      'local/no-adhoc-config-merge': ['error', adhocConfigMergeAllowlist],
     },
   },
 
