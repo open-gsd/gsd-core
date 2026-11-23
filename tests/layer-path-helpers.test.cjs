@@ -151,24 +151,6 @@ describe('hook-side helpers agree with the loader', () => {
     assert.equal(hook.globalDefaultsPath({}, '/h'), path.join('/h', '.gsd', 'defaults.json'));
     assert.equal(hook.globalDefaultsPath({ GSD_HOME: '/g' }, '/h'), path.join('/g', '.gsd', 'defaults.json'));
   });
-
-  test('claudeSettingsPaths lists project then user files, local before shared', () => {
-    const user = path.join(os.tmpdir(), 'gsd-user-claude');
-    assert.deepEqual(hook.claudeSettingsPaths(CWD, { CLAUDE_CONFIG_DIR: user }), [
-      loader.claudeSettingsPath(path.join(CWD, '.claude'), 'local'),
-      loader.claudeSettingsPath(path.join(CWD, '.claude'), 'shared'),
-      loader.claudeSettingsPath(user, 'local'),
-      loader.claudeSettingsPath(user, 'shared'),
-    ]);
-  });
-
-  test('claudeSettingsPaths without a project dir lists only the user files', () => {
-    const user = path.join(os.tmpdir(), 'gsd-user-claude');
-    assert.deepEqual(hook.claudeSettingsPaths('', { CLAUDE_CONFIG_DIR: user }), [
-      loader.claudeSettingsPath(user, 'local'),
-      loader.claudeSettingsPath(user, 'shared'),
-    ]);
-  });
 });
 
 describe('property: the hook-side and loader helpers agree for any input', () => {

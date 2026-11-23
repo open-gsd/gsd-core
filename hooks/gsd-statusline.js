@@ -18,7 +18,7 @@ const os = require('os');
 // monkeypatching childProcess.execFileSync.
 const childProcess = require('child_process');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
-const { readConfigFileBounded, projectConfigPath, readClaudeSetting, readClaudeSettingsFiles, SETTINGS_FILE_MAX_BYTES } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath } = require('./lib/config-read.js');
 const { gitEnv } = require('./lib/git-probe.js');
 
 // This hook's build-seam outer catch (require.main guard just below) has
@@ -209,6 +209,93 @@ function isAutoCompactDisabled(dir, env = process.env) {
     if (typeof v === 'string' && AUTO_COMPACT_ENV_TRUTHY.includes(v.trim().toLowerCase())) return true;
   }
   return readClaudeSetting(dir, env, 'autoCompactEnabled', v => typeof v === 'boolean') === false;
+}
+
+/**
+ * The first value of `key` that `accept` takes, reading the Claude Code
+ * settings files highest precedence first:
+ *   <dir>/.claude/settings.local.json, <dir>/.claude/settings.json,
+ *   (CLAUDE_CONFIG_DIR || ~/.claude)/settings.local.json, settings.json.
+ * Fail-soft: an absent or unparseable file is skipped; nothing found is
+ * `undefined`.
+ */
+function readClaudeSetting(dir, env, key, accept) {
+  // Lazy: stop at the first file that answers, so a lower file is never read.
+  for (const file of claudeSettingsPaths(dir, env)) {
+    const settings = readSettingsFile(file);
+    if (settings && accept(settings[key])) return settings[key];
+  }
+  return undefined;
+}
+
+/**
+ * The parsed Claude Code settings files, highest precedence first. An absent,
+ * unparseable or non-object file is left out.
+ */
+function readClaudeSettingsFiles(dir, env) {
+  return claudeSettingsPaths(dir, env).map(readSettingsFile).filter(Boolean);
+}
+
+/**
+ * A settings file larger than this is treated as absent. Claude Code's own
+ * settings files are a few kilobytes; the cap keeps a hostile project's
+ * `.claude/settings.json` from bloating a read that runs on every render.
+ */
+const SETTINGS_FILE_MAX_BYTES = 1024 * 1024;
+
+/**
+ * The parsed settings object in `file`, or null. Only a regular file of at
+ * most SETTINGS_FILE_MAX_BYTES is read: the project's `.claude/` is
+ * repository content, and a FIFO there would block the statusline forever.
+ * The file is opened non-blocking and checked through its own descriptor,
+ * so the check and the read see the same file, and at most the checked size
+ * is read: a file that grew or shrank after the check is absent. A symlink
+ * is followed — a settings file linked in from a dotfiles repo is ordinary.
+ */
+function readSettingsFile(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > SETTINGS_FILE_MAX_BYTES) return null;
+    // One byte past the checked size, so growth after the check shows as a longer read.
+    const buf = Buffer.alloc(st.size + 1);
+    let n = 0;
+    for (let r; n < buf.length && (r = fs.readSync(fd, buf, n, buf.length - n, n)) > 0;) n += r;
+    if (n !== st.size) return null;
+    const settings = JSON.parse(buf.toString('utf8', 0, n));
+    return settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : null;
+  } catch (e) {
+    return null; // absent, unreadable or unparseable — keep looking
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch (e) { /* already closed */ }
+    }
+  }
+}
+
+/**
+ * The Claude Code settings file paths, highest precedence first:
+ *   <dir>/.claude/settings.local.json, <dir>/.claude/settings.json,
+ *   (CLAUDE_CONFIG_DIR || ~/.claude)/settings.local.json, settings.json.
+ */
+function claudeSettingsPaths(dir, env) {
+  const candidates = [];
+  if (dir) {
+    candidates.push(path.join(dir, '.claude', 'settings.local.json'));
+    candidates.push(path.join(dir, '.claude', 'settings.json'));
+  }
+  let claudeDir;
+  try {
+    claudeDir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  } catch (e) {
+    claudeDir = null;
+  }
+  if (claudeDir) {
+    candidates.push(path.join(claudeDir, 'settings.local.json'));
+    candidates.push(path.join(claudeDir, 'settings.json'));
+  }
+  return candidates;
 }
 
 /**

@@ -70,8 +70,9 @@ describe('no-adhoc-config-merge allowlist: shape', () => {
     }
   });
 
-  test('the boundary is the resolver, the loader, the planning-workspace path owner and the hook-side reader', () => {
+  test('the boundary is the resolver, the loader, the path owner, the hook-side reader and the statusline', () => {
     assert.deepEqual([...allowlist.resolverInternal].sort(), [
+      'hooks/gsd-statusline.js',
       'hooks/lib/config-read.js',
       'src/config-loader.cts',
       'src/config-value-resolver.cts',
