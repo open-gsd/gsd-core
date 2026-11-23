@@ -31,6 +31,9 @@ type Diagnostic = healthDiagnosticMod.Diagnostic;
 import runtimeSlashMod = require('../runtime-slash.cjs');
 const { resolveRuntime } = runtimeSlashMod;
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6032 config-loader.cjs is an export= CommonJS module
+import configLoader = require('../config-loader.cjs');
+const { claudeSettingsLayers } = configLoader;
 import { getGlobalConfigDir } from '../runtime-homes.cjs';
 import { PACKAGE_NAME } from '../package-identity.cjs';
 
@@ -82,11 +85,7 @@ function checkContextBridge(snapshot: PlanningSnapshot): Diagnostic[] {
     const configDir = getGlobalConfigDir('claude');
     // Claude Code's precedence, lowest first: user, project, local. A later scope overrides an earlier one per
     // `enabledPlugins` key, and its `statusLine` replaces the earlier one. (Managed settings are not read.)
-    const files = [
-      path.join(configDir, 'settings.json'),
-      path.join(snapshot.cwd, '.claude', 'settings.json'),
-      path.join(snapshot.cwd, '.claude', 'settings.local.json'),
-    ];
+    const files = claudeSettingsLayers(snapshot.cwd, configDir).map((layer) => layer.file).reverse();
     const enabled = new Map<string, boolean>();
     let statusLineCommand: string | null = null;
     for (const file of files) {

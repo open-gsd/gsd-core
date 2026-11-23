@@ -8,7 +8,7 @@
 // fallback, or fabricated a result.
 //
 // This is the SECOND context7 naming drift after #2017 (which guarded the
-// plugin-marketplace PREFIX). #2017's guard (context7-plugin-grant-parity) only
+// plugin-marketplace PREFIX). #2017's guard (the context7-plugin-grant-parity text contract) only
 // checks `tools:` frontmatter lines; it does not scan prose bodies, which is
 // where the broken tool NAME lived. This guard scans the shipped prose surface
 // and fails if any artifact tells an agent to call the nonexistent tool.

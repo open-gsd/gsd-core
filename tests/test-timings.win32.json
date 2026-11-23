@@ -230,7 +230,7 @@
     "opencode-statusline-plugin.test.cjs": 14341,
     "opencode-uninstall-roundtrip.test.cjs": 15626,
     "overlay-repo-helpers.test.cjs": 17901,
-    "packaging-shipped-scripts-require-only-shipped.test.cjs": 16885,
+    "packaging-shipped-scripts-require-only-shipped.test.cjs": 100,
     "path-replacement.test.cjs": 16720,
     "pause-work-context-detection.test.cjs": 2688,
     "pause-work-improvements.test.cjs": 535,
