@@ -59,6 +59,78 @@ describe('parseCodeReviewFlags', () => {
     assert.strictEqual(flags.depth, '');
   });
 
+  // #6240: a bare `--files a.py,b.py` was silently dropped, so a narrowed
+  // review fell back to SUMMARY/git-diff scoping and reported success. The
+  // space-separated form must parse identically to the `=` form — and a bare
+  // `--files` with no usable value must be refused, never silently ignored.
+  test('--files a.py,b.py (space form, #6240) sets files like the = form', () => {
+    const flags = parseCodeReviewFlags(['184', '--files', 'a.py,b.py']);
+    assert.strictEqual(flags.files, 'a.py,b.py');
+  });
+
+  test('--files space form produces the same IR as the = form (#6240)', () => {
+    assert.deepStrictEqual(
+      parseCodeReviewFlags(['2', '--fix', '--files', 'src/a.ts,src/b.ts', '--all']),
+      parseCodeReviewFlags(['2', '--fix', '--files=src/a.ts,src/b.ts', '--all']),
+    );
+  });
+
+  test('--files space form consumes exactly its value token (#6240)', () => {
+    const flags = parseCodeReviewFlags(['--files', 'a.py,b.py', '--fix']);
+    assert.strictEqual(flags.files, 'a.py,b.py');
+    assert.strictEqual(flags.fix, true);
+  });
+
+  test('bare --files at end of argv is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--files']),
+      /Missing value for --files \(use --files=<file1,file2> or --files <file1,file2>\)/,
+    );
+  });
+
+  test('bare --files followed by another flag is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--files', '--fix']),
+      /Missing value for --files \(use --files=<file1,file2> or --files <file1,file2>\)/,
+    );
+  });
+
+  // #6240 triage: `--depth` has the same shape and the same question — a bare
+  // `--depth deep` was dropped the same way, silently keeping the default tier.
+  // The space-separated form must parse identically to the `=` form, and a
+  // bare `--depth` must be refused, never silently ignored.
+  test('--depth deep (space form, #6240) sets depth like the = form', () => {
+    const flags = parseCodeReviewFlags(['184', '--depth', 'deep']);
+    assert.strictEqual(flags.depth, 'deep');
+  });
+
+  test('--depth space form produces the same IR as the = form (#6240)', () => {
+    assert.deepStrictEqual(
+      parseCodeReviewFlags(['3', '--fix', '--all', '--depth', 'deep', '--files', 'src/x.ts']),
+      parseCodeReviewFlags(['3', '--fix', '--all', '--depth=deep', '--files', 'src/x.ts']),
+    );
+  });
+
+  test('--depth space form consumes exactly its value token (#6240)', () => {
+    const flags = parseCodeReviewFlags(['--depth', 'deep', '--fix']);
+    assert.strictEqual(flags.depth, 'deep');
+    assert.strictEqual(flags.fix, true);
+  });
+
+  test('bare --depth at end of argv is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--depth']),
+      /Missing value for --depth \(use --depth=<value> or --depth <value>\)/,
+    );
+  });
+
+  test('bare --depth followed by another flag is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--depth', '--fix']),
+      /Missing value for --depth \(use --depth=<value> or --depth <value>\)/,
+    );
+  });
+
   test('first positional argument (phase number) is ignored', () => {
     const flags = parseCodeReviewFlags(['2', '--fix']);
     assert.strictEqual(flags.fix, true);
@@ -289,3 +361,71 @@ describe('#3727 — code-review.md structural dispatch contract', () => {
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// #6251 review Minor 1 — the fix has two halves: the parser throws on a
+// refused flag, and the shipped workflow block (`FLAGS_JSON=$(node -e …)
+// || exit 1`) turns that into a halted workflow instead of an empty IR (the
+// old `2>/dev/null` hid any parser failure, so the review silently re-scoped).
+// These rows execute the SHIPPED block, extracted from the workflow text, so a
+// later edit that drops the `|| exit 1` or the `catch` fails here instead of
+// silently re-scoping reviews.
+// ---------------------------------------------------------------------------
+
+describe('#6251 — the shipped code-review.md flag block halts on a refused flag', () => {
+  const { execFileSync } = require('node:child_process');
+  const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const reviewFs = require('node:fs');
+  const reviewPath = require('node:path');
+  const reviewRoot = reviewPath.resolve(__dirname, '..');
+  const reviewWorkflowPath = reviewPath.join(reviewRoot, 'gsd-core', 'workflows', 'code-review.md');
+
+  const workflowSrc = reviewFs.readFileSync(reviewWorkflowPath, 'utf8');
+  const blockStart = workflowSrc.indexOf('FLAGS_JSON=$(node -e "');
+  const blockEndMarker = '" -- "$@") || exit 1';
+  const blockEnd = workflowSrc.indexOf(blockEndMarker, blockStart);
+  assert.ok(blockStart !== -1, 'code-review.md must contain the FLAGS_JSON=$(node -e …) block');
+  assert.ok(blockEnd !== -1, 'code-review.md FLAGS_JSON block must end with " -- "$@") || exit 1');
+  const flagsBlock = workflowSrc.slice(blockStart, blockEnd + blockEndMarker.length);
+
+  const runBlock = (args) => {
+    // The shipped block only ASSIGNS FLAGS_JSON (the workflow's next lines read
+    // the variable), so the harness prints it in the same shell afterwards —
+    // `|| exit 1` still halts before the printf when the parser refuses.
+    const harness = flagsBlock + `; printf '%s' "$FLAGS_JSON"`;
+    try {
+      // The block ends with `-- "$@"`, so the argv must arrive as real bash -c
+      // positional arguments (argv[0] is the $0 placeholder).
+      const stdout = execFileSync('bash', ['-c', harness, 'code-review', ...args], {
+        encoding: 'utf8',
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
+        env: { ...process.env, GSD_LIB_DIR: reviewPath.join(reviewRoot, 'gsd-core', 'bin', 'lib') },
+      });
+      return { exitCode: 0, stdout, stderr: '' };
+    } catch (err) {
+      return { exitCode: err.status, stdout: err.stdout || '', stderr: err.stderr || '' };
+    }
+  };
+
+  test('the extracted block is the shipped one (sanity)', () => {
+    assert.ok(flagsBlock.includes('parseCodeReviewFlags'), 'block must call parseCodeReviewFlags');
+    assert.ok(flagsBlock.includes('|| exit 1'), 'block must halt via || exit 1');
+    assert.ok(flagsBlock.includes('catch'), 'block must catch the parser error');
+  });
+
+  test('bare --files: non-zero exit, ERROR: on stderr, no JSON on stdout', { skip: process.platform === 'win32' }, () => {
+    const r = runBlock(['184', '--files']);
+    assert.notStrictEqual(r.exitCode, 0, `the workflow must halt on a refused flag, got stdout: ${r.stdout}`);
+    assert.ok(r.stderr.includes('ERROR: Missing value for --files'),
+      `stderr must carry the ERROR: line, got: ${r.stderr}`);
+    assert.strictEqual(r.stdout.trim(), '',
+      `no IR JSON may reach stdout when the parser refused the flags, got: ${r.stdout}`);
+  });
+
+  test('space-separated --files a.py: exit 0 and the IR JSON on stdout', { skip: process.platform === 'win32' }, () => {
+    const r = runBlock(['184', '--files', 'a.py']);
+    assert.strictEqual(r.exitCode, 0, `exit 0 expected, stderr: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.files, 'a.py', `the IR must carry the files override, got: ${r.stdout}`);
+  });
+});

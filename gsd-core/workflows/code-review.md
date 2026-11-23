@@ -44,11 +44,20 @@ _gsd_pick "${GSD_TOOLS:+${GSD_TOOLS%/*}/lib}" "$_gsd_rt/gsd-core/bin/lib" "$_gsd
 if [ -z "$GSD_LIB_DIR" ]; then echo "ERROR: code-review-flags.cjs not found in the GSD runtime. Looked in: ${GSD_TOOLS:+${GSD_TOOLS%/*}/lib, }${_gsd_rt}/gsd-core/bin/lib (and its .claude and .codex forms), ${_gsd_gr:-next to gsd_run (not on PATH)}, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/lib, ${CODEX_HOME:-$HOME/.codex}/gsd-core/bin/lib. Reinstall: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi
 export GSD_LIB_DIR
 # gsd-resolve-lib end
+# #6240: parseCodeReviewFlags throws (exit 1) on a malformed flag — e.g. a bare
+# `--files` with no value — naming the accepted forms. Fail the workflow here
+# instead of continuing with an empty IR, which would silently re-scope the review.
 FLAGS_JSON=$(node -e "
   const { parseCodeReviewFlags } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-flags.cjs'));
-  const flags = parseCodeReviewFlags(process.argv.slice(1));
+  let flags;
+  try {
+    flags = parseCodeReviewFlags(process.argv.slice(1));
+  } catch (err) {
+    process.stderr.write('ERROR: ' + (err && err.message ? err.message : String(err)) + '\n');
+    process.exit(1);
+  }
   process.stdout.write(JSON.stringify(flags));
-" -- "$@" 2>/dev/null)
+" -- "$@") || exit 1
 
 # Extract individual flag values from the IR
 FIX_FLAG=$(echo "$FLAGS_JSON" | node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync('/dev/stdin','utf-8')).fix))")
