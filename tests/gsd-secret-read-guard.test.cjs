@@ -6515,6 +6515,17 @@ describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", (
       assert.equal(bashVerdict(cmd), null, cmd);
     }), PROPERTY_RUNS);
   });
+
+  // The script past the options is read as next reads the script right after
+  // `-c`, a braced default included (#6132).
+  for (const cmd of ["bash -c -e 'cat ${x:-.env}'", "sh -ce 'cat ${x:-.env}'", "bash -c -- 'cat ${x:-.env}'"]) {
+    test(`denies ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash' });
+    });
+  }
+  test('allows a braced default naming another file past the options', () => {
+    assertAllowed(runHook(bash("bash -c -e 'cat ${x:-notes.txt}'")), 'notes.txt default');
+  });
 });
 
 describe("gsd-secret-read-guard: the edges of the changeset's Not covered list (#5779)", () => {
