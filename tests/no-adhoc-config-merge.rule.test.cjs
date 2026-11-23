@@ -10,7 +10,8 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { RuleTester } = require('eslint');
+const { RuleTester, Linter } = require('eslint');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const rule = require('../eslint-rules/no-adhoc-config-merge.cjs');
 
@@ -271,5 +272,34 @@ describe('exemptions', () => {
         { code: `${code} // allow-adhoc-config-merge no reason`, filename: FILE, errors: [{ messageId: 'layerPathRead' }] },
       ],
     });
+  });
+});
+
+describe('property: a layer path is classified by how it is used, whatever the names around it', () => {
+  const SHAPES = [
+    "path.join(home, '.gsd', 'defaults.json')",
+    "path.join(planningDir(cwd), 'config.json')",
+    "path.join(planningRoot(cwd), 'config.json')",
+    "path.join(cwd, '.planning', 'config.json')",
+    "path.join(cwd, '.claude', 'settings.json')",
+    "path.join(cwd, '.claude', 'settings.local.json')",
+  ];
+  const ident = fc.stringMatching(/^[a-z0-9]{0,8}$/).map((s) => `v${s}`);
+  const linter = new Linter({ configType: 'flat' });
+  const ids = (code) => linter
+    .verify(code, [{
+      files: ['**/*.cts'],
+      plugins: { local: { rules: { 'no-adhoc-config-merge': rule } } },
+      rules: { 'local/no-adhoc-config-merge': 'error' },
+      languageOptions: { ecmaVersion: 2022, sourceType: 'commonjs' },
+    }], { filename: FILE })
+    .map((m) => m.messageId);
+
+  test('a probe or a read-modify-write never reports; any other consumer always does', () => {
+    fc.assert(fc.property(fc.constantFrom(...SHAPES), ident, (shape, name) => {
+      assert.deepEqual(ids(`const ${name} = ${shape}; fs.existsSync(${name});`), []);
+      assert.deepEqual(ids(`const ${name} = ${shape}; load(${name}); platformWriteSync(${name}, x);`), []);
+      assert.deepEqual(ids(`const ${name} = ${shape}; load(${name});`), ['layerPathRead']);
+    }));
   });
 });

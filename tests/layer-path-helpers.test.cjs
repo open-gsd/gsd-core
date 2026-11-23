@@ -17,6 +17,7 @@ const path = require('node:path');
 const loader = require('../gsd-core/bin/lib/config-loader.cjs');
 const { planningDir, planningRoot } = require('../gsd-core/bin/lib/planning-workspace.cjs');
 const hook = require('../hooks/lib/config-read.js');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 function withEnv(env, run) {
   const keys = Object.keys(env);
@@ -167,5 +168,44 @@ describe('hook-side helpers agree with the loader', () => {
       loader.claudeSettingsPath(user, 'local'),
       loader.claudeSettingsPath(user, 'shared'),
     ]);
+  });
+});
+
+describe('property: the hook-side and loader helpers agree for any input', () => {
+  const text = fc.string({ maxLength: 24 });
+
+  test('globalDefaultsPath: GSD_HOME when non-empty, else the home directory', () => {
+    fc.assert(fc.property(text, text, (gsdHome, home) => {
+      const expected = path.join(gsdHome || home, '.gsd', 'defaults.json');
+      assert.equal(hook.globalDefaultsPath({ GSD_HOME: gsdHome }, home), expected);
+      assert.equal(loader.globalDefaultsPath(gsdHome || home), expected);
+    }));
+  });
+
+  test('projectConfigPath: the planning dir config.json for any workstream name', () => {
+    fc.assert(fc.property(fc.stringMatching(/^[a-z0-9]{1,8}$/), (ws) => {
+      withEnv({ GSD_PROJECT: undefined }, () => {
+        assert.equal(loader.projectConfigPath(CWD, ws), path.join(planningDir(CWD, ws), 'config.json'));
+      });
+    }));
+  });
+
+  test('readConfigFilesQuiet: a workstream config overrides the root per key and keeps the rest', () => {
+    const fs = require('node:fs');
+    const { cleanup } = require('./helpers.cjs');
+    const flat = fc.dictionary(fc.stringMatching(/^k[a-z0-9]{0,5}$/), fc.integer({ min: 0, max: 99 }), { maxKeys: 5 });
+    fc.assert(fc.property(flat, flat, (root, scoped) => {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-quiet-prop-'));
+      try {
+        fs.mkdirSync(path.join(cwd, '.planning', 'workstreams', 'ws1'), { recursive: true });
+        fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify(root));
+        fs.writeFileSync(path.join(cwd, '.planning', 'workstreams', 'ws1', 'config.json'), JSON.stringify(scoped));
+        withEnv(NO_SCOPE, () => {
+          assert.deepEqual(loader.readConfigFilesQuiet(cwd, 'ws1').config, { ...root, ...scoped });
+        });
+      } finally {
+        cleanup(cwd);
+      }
+    }), { numRuns: 25 });
   });
 });

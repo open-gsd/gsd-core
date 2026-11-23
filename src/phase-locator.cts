@@ -430,7 +430,7 @@ function customPhaseNamingUsage(cwd: string, context: PhaseDirectoryContext): st
   try {
     const defaultsPath = configLoaderModule.globalDefaultsPath();
     const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')) as Record<string, unknown>;
-    if (typeof defaults.phase_naming === 'string' && defaults.phase_naming.toLowerCase() === 'custom' && fs.existsSync(path.join(planningDir(cwd), 'config.json'))) {
+    if (typeof defaults.phase_naming === 'string' && defaults.phase_naming.toLowerCase() === 'custom' && fs.existsSync(planningWorkspace.projectConfigPath(cwd))) {
       message += `; project config shadows phase_naming from ${defaultsPath}`;
     }
   } catch { /* Missing/unusable defaults do not change effective naming. */ }

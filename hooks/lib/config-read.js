@@ -72,7 +72,7 @@ function globalDefaultsPath(env = process.env, home = os.homedir()) {
  *   <dir>/.claude/settings.local.json, <dir>/.claude/settings.json,
  *   (CLAUDE_CONFIG_DIR || ~/.claude)/settings.local.json, settings.json.
  */
-function claudeSettingsPaths(dir, env) {
+function claudeSettingsPaths(dir, env = process.env) {
   const candidates = [];
   if (dir) {
     candidates.push(path.join(dir, '.claude', 'settings.local.json'));

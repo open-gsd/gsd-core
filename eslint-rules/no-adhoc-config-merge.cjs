@@ -51,7 +51,7 @@ const PATH_WRAPPERS = new Set(['toPosixPath', 'normalize', 'relative', 'basename
 
 /** A helper named like a write (`platformWriteSync`, `writeJsonAtomic`) mutates the file too. */
 const WRITE_NAME_RE = /^(?:platform)?(?:write|rename|unlink|mkdir|copy)|Write(?:Sync|File|Json)?$/;
-/** Helper calls that name a layer file, and the layer kind each names. */
+/** Owner helper calls that name a layer file; `helperKinds` (in `create`) maps each to its layer kind. */
 const LAYER_HELPERS = new Set([
   'projectConfigPath',
   'rootConfigPath',
@@ -87,21 +87,25 @@ function literalString(node) {
   return null;
 }
 
-/** Does this `join(...)` call name a configuration layer file? */
-function isLayerPathJoin(node) {
+/**
+ * The layer kind a `join(...)` call names, or null when it names no configuration layer file.
+ * The single place the layer literals are interpreted: `global`, `project`, `root`,
+ * `claude-local`, `claude-shared`.
+ */
+function layerKindOfJoin(node) {
   const args = node.arguments;
-  if (args.length < 2) return false;
+  if (args.length < 2) return null;
   const last = literalString(args[args.length - 1]);
-  if (last === null) return false;
+  if (last === null) return null;
   const literals = args.slice(0, -1).map(literalString);
   const hasLiteral = (seg) => literals.some((s) => s === seg || (s !== null && s.split(/[\\/]/).includes(seg)));
-  if (last === 'defaults.json') return hasLiteral('.gsd');
-  if (last === 'settings.json' || last === 'settings.local.json') return hasLiteral('.claude');
-  if (last === 'config.json') {
-    if (hasLiteral('.planning')) return true;
-    return args.slice(0, -1).some((a) => a.type === 'CallExpression' && PLANNING_CALLS.has(calleeName(a.callee)));
-  }
-  return false;
+  if (last === 'defaults.json') return hasLiteral('.gsd') ? 'global' : null;
+  if (last === 'settings.local.json') return hasLiteral('.claude') ? 'claude-local' : null;
+  if (last === 'settings.json') return hasLiteral('.claude') ? 'claude-shared' : null;
+  if (last !== 'config.json') return null;
+  const planning = args.slice(0, -1).find((a) => a.type === 'CallExpression' && PLANNING_CALLS.has(calleeName(a.callee)));
+  if (planning) return calleeName(planning.callee) === 'planningDir' ? 'project' : 'root';
+  return hasLiteral('.planning') ? 'root' : null;
 }
 
 /** @type {import('eslint').Rule.RuleModule} */
@@ -227,18 +231,6 @@ const rule = {
       pending.push({ node, messageId, data });
     }
 
-    /** The layer kind a `join(...)` layer path names. */
-    function joinKind(node) {
-      const args = node.arguments;
-      const last = literalString(args[args.length - 1]);
-      if (last === 'defaults.json') return 'global';
-      if (last === 'settings.local.json') return 'claude-local';
-      if (last === 'settings.json') return 'claude-shared';
-      const planningCall = args.slice(0, -1).find((a) => a.type === 'CallExpression' && PLANNING_CALLS.has(calleeName(a.callee)));
-      if (planningCall && calleeName(planningCall.callee) === 'planningDir') return 'project';
-      return 'root';
-    }
-
     /** The layer kinds a helper call names (a list for the plural settings helper). */
     function helperKinds(node) {
       const name = calleeName(node.callee);
@@ -270,8 +262,9 @@ const rule = {
       CallExpression(node) {
         const helper = calleeName(node.callee);
         if (helper !== null && LAYER_HELPERS.has(helper)) noteKinds(node, helperKinds(node));
-        if (isJoinCall(node) && isLayerPathJoin(node)) {
-          noteKinds(node, [joinKind(node)]);
+        const joinKind = isJoinCall(node) ? layerKindOfJoin(node) : null;
+        if (joinKind !== null) {
+          noteKinds(node, [joinKind]);
           if (!isWriteOrProbeUse(node, new Set())) {
             check(node, 'layerPathRead');
             return;
