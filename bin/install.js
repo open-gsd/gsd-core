@@ -4806,7 +4806,8 @@ function spliceCodexAgentsScalars(block, scalarLines) {
  *
  * Used by the uninstall path (`stripGsdFromCodexConfig`). Removes only what GSD
  * owns; user-authored `[agents.<name>]` and `[[agents]]` entries are preserved
- * so uninstall returns the file to its pre-GSD shape.
+ * so uninstall returns the file to its pre-GSD shape. Returns the cleaned
+ * content and the user scalars from the bare `[agents]` table it removes.
  *
  * Handles BOTH shapes so reinstall self-heals configs from all GSD versions:
  *   - Current (#2727): `[agents.gsd-*]` struct tables (Codex 0.120.0+).
@@ -4844,10 +4845,14 @@ function stripCodexGsdAgentSections(content) {
     return false;
   });
 
-  return removeContentRanges(
-    content,
-    sections.map(({ start, end }) => ({ start, end })),
-  );
+  const removedAgentsTable = sections.find((section) => !section.array && section.path === 'agents');
+  const preservedScalars = removedAgentsTable
+    ? extractCodexUserAgentsScalars(content.slice(removedAgentsTable.start, removedAgentsTable.end))
+    : [];
+  return {
+    content: removeContentRanges(content, sections.map(({ start, end }) => ({ start, end }))),
+    preservedScalars,
+  };
 }
 
 /**
@@ -4886,12 +4891,9 @@ function stripGsdFromCodexConfig(content) {
   cleaned = cleaned.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
   cleaned = cleaned.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
 
-  // #2088: recover the user's own AgentsToml scalars before the [agents] table is
-  // stripped, so they survive uninstall even in the no-marker fallback path.
-  const preservedScalars = extractCodexUserAgentsScalars(cleaned);
-
-  // Remove [agents.gsd-*] sections + the managed known-scalar [agents] table.
-  cleaned = stripCodexGsdAgentSections(cleaned);
+  // #5991: restore scalars only from the managed table removed by cleanup.
+  const { content: strippedAgents, preservedScalars } = stripCodexGsdAgentSections(cleaned);
+  cleaned = strippedAgents;
 
   // Remove [features] section if now empty (only header, no keys before next section)
   cleaned = cleaned.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
