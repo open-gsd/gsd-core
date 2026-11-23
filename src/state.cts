@@ -7738,12 +7738,27 @@ function restoreArchiveAfterFailedWrite(
 }
 
 /**
+ * #6542: the phase retention `state prune` applies. `undefined` is the default 3; otherwise a whole number >= 0, as
+ * a safe integer or a string of ASCII digits (`0` keeps no recent phase: the cutoff is the current phase). Anything
+ * else throws a TypeError before STATE.md is read. This replaces `parseInt(...) || 3`, which turned `0` into 3 and
+ * let a negative value move the cutoff past the current phase. The CLI rejects bad input as a usage error first.
+ */
+function parseKeepRecent(value: unknown): number {
+  if (value === undefined) return 3;
+  const n = typeof value === 'number' ? value : typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new TypeError(`state prune: keepRecent must be a whole number >= 0 (got ${typeof value === 'string' ? JSON.stringify(value) : typeof value === 'number' ? String(value) : typeof value})`);
+  }
+  return n;
+}
+
+/**
  * Prune old entries from STATE.md sections that grow unboundedly (#1970).
  * Moves decisions, recently-completed summaries, and resolved blockers
  * older than keepRecent phases to STATE-ARCHIVE.md.
  *
  * Options:
- *   keepRecent: number of recent phases to retain (default: 3)
+ *   keepRecent: number of recent phases to retain, a whole number >= 0 (default: 3; #6542)
  *   dryRun: if true, return what would be pruned without modifying STATE.md
  *
  * Returns the result object it emits (also when `silent`), so callers can tell
@@ -7758,7 +7773,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): S
   };
   const statePath = planningPaths(cwd).state;
 
-  const keepRecent = parseInt(String(options.keepRecent), 10) || 3;
+  const keepRecent = parseKeepRecent(options.keepRecent);
   const dryRun = !!options.dryRun;
   // Resolve the current phase via `resolveCurrentPhaseId` — the shared owner of
   // the canonical frontmatter → `Current Phase` field → scoped prose ladder

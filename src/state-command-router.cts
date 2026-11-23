@@ -19,6 +19,9 @@ import { STATE_SUBCOMMANDS } from './command-aliases.cjs';
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6542 io.cjs is a CommonJS module
+import ioMod = require('./io.cjs');
+const { ERROR_REASON, formatDiagnosticToken } = ioMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,7 +63,7 @@ interface RouteStateCommandOptions {
   args: string[];
   cwd: string;
   raw: boolean;
-  error: (message: string) => void;
+  error: (message: string, reason?: string) => void;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
@@ -209,8 +212,28 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
         state.cmdStateSync(cwd, { verify: a['verify'] }, raw);
       },
       prune: () => {
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['keep-recent'], booleanFlags: ['dry-run'], positionals: 2 }, error);
-        state.cmdStatePrune(cwd, { keepRecent: strArg(a, 'keep-recent') || '3', dryRun: a['dry-run'] === true }, raw);
+        const a = parseNamedArgsOrExit(
+          args,
+          { valueFlags: ['keep-recent'], nonEmptyFlags: ['keep-recent'], booleanFlags: ['dry-run'], positionals: 2 },
+          error,
+        );
+        // #6542: --keep-recent is a whole number >= 0 in ASCII digits (0 keeps no recent phase). Anything else,
+        // and a repeated flag, is a usage error; an absent flag keeps the default of 3.
+        const keepRecent = strArg(a, 'keep-recent');
+        if (keepRecent !== null && keepRecent !== undefined) {
+          if (args.slice(2).filter((t) => t === '--keep-recent').length > 1) {
+            error('state prune: --keep-recent was given more than once', ERROR_REASON.USAGE);
+            return;
+          }
+          if (!/^[0-9]+$/.test(keepRecent) || !Number.isSafeInteger(Number(keepRecent))) {
+            error(
+              `state prune: --keep-recent must be a whole number >= 0 (got ${formatDiagnosticToken(keepRecent)})`,
+              ERROR_REASON.USAGE,
+            );
+            return;
+          }
+        }
+        state.cmdStatePrune(cwd, { keepRecent: keepRecent ?? '3', dryRun: a['dry-run'] === true }, raw);
       },
       rebuild: () => {
         const a = parseNamedArgsOrExit(args, { booleanFlags: ['dry-run', 'verbose'], positionals: 2 }, error);
