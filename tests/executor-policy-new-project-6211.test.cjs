@@ -8,7 +8,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const REPO = path.join(__dirname, '..');
 const projects = new Set();
@@ -23,8 +22,8 @@ function project() {
   return dir;
 }
 
-function projectEnv(dir) {
-  return isolatedEnv({ home: dir, base: {}, override: { GSD_HOME: dir } });
+function isolatedEnv(dir) {
+  return { HOME: dir, USERPROFILE: dir, GSD_HOME: dir };
 }
 
 function configPath(dir) {
@@ -32,7 +31,7 @@ function configPath(dir) {
 }
 
 function newProject(dir, choices) {
-  return runGsdTools(['config-new-project', JSON.stringify(choices)], dir, projectEnv(dir));
+  return runGsdTools(['config-new-project', JSON.stringify(choices)], dir, isolatedEnv(dir));
 }
 
 function writtenRouting(dir) {

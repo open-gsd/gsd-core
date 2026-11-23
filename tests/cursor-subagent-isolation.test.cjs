@@ -55,6 +55,7 @@ function runHook(payload, extraEnv = {}) {
   Object.assign(env, extraEnv);
   // A home override comes from isolatedEnv(): it sets HOME and USERPROFILE together (os.homedir() reads USERPROFILE on
   // Windows) and blanks GSD_HOME, which the defaults store reads as "use HOME" (#5017). Keep the two keys deleted above unset.
+  // The wrapper starts from process.env, so ambient GSD_* still reaches the hook: isolatedEnv's stripping does not apply here.
   for (const key of ['GSD_RUNTIME', 'CURSOR_CONFIG_DIR']) if (env[key] === '') delete env[key];
   return toLegacyResult(runNode([HOOK_PATH], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),

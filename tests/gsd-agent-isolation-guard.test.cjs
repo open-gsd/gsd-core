@@ -89,6 +89,7 @@ function runHook(payload, cwd, extraEnv = {}) {
   delete env.GSD_RUNTIME;
   Object.assign(env, extraEnv);
   // extraEnv comes from isolatedEnv(): HOME and USERPROFILE are redirected together (os.homedir() on Windows), and a test names GSD_HOME itself (#5017).
+  // The wrapper starts from process.env, so ambient GSD_* still reaches the hook: isolatedEnv's stripping does not apply here.
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     cwd,

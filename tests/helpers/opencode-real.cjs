@@ -99,13 +99,14 @@ function realSetup(t, { bin, v2, keepMcp = false, projectFiles = {} }) {
   const binDir = path.join(home, 'bin');
   fs.mkdirSync(binDir);
   fs.symlinkSync(fs.realpathSync(bin), path.join(binDir, 'opencode'));
-  const sandboxEnv = isolatedEnv({
+  // Blanks dropped: the binary under test sees the config-location keys unset (cleanEnv removes them from the host copy), not ''.
+  const sandboxEnv = Object.fromEntries(Object.entries(isolatedEnv({
     home, base: {}, path: `${binDir}${path.delimiter}${process.env.PATH}`,
     override: {
       XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
       XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true',
     },
-  });
+  })).filter(([, value]) => value !== ''));
   const install = runNode([INSTALL_SCRIPT, '--opencode', '--global', '--config-dir', cfg], { env: installerEnv(sandboxEnv), timeoutMs: INSTALL_TIMEOUT_MS });
   if (install.exitCode !== 0) throw new Error(`installer failed\n${install.stdout}\n${install.stderr}`);
   for (const [rel, content] of Object.entries(projectFiles)) {
