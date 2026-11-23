@@ -186,6 +186,18 @@ const DOCS_GUARD_TESTS = {
     'docs/zh-CN/CONFIGURATION.md',
     'docs/zh-CN/INVENTORY.md',
   ],
+  // #6573: the same, for the batch 9 contracts (tests/text-contracts.batch9.test.cjs copies these docs).
+  'tests/text-contracts.batch9.test.cjs': [
+    'docs/CONFIGURATION.md',
+    'docs/CONTEXT-INDEX.json',
+    'docs/adr/550-spec-phase-probe-contract.md',
+    'docs/ja-JP/reference/state-md.md',
+    'docs/ko-KR/reference/state-md.md',
+    'docs/pt-BR/reference/state-md.md',
+    'docs/reference/plan-md.md',
+    'docs/reference/state-md.md',
+    'docs/zh-CN/reference/state-md.md',
+  ],
   'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
@@ -233,7 +245,6 @@ const DOCS_GUARD_TESTS = {
   // #4974: doc/workflow content-parity checks read docs/CONFIGURATION.md's
   // Gate Settings section directly (see tests/gates-confirmation-toggle-config.test.cjs).
   'tests/gates-confirmation-toggle-config.test.cjs': ['docs/CONFIGURATION.md'],
-  'tests/context-index-sync.test.cjs': ['docs/CONTEXT-INDEX.json'],
   'tests/context-predicates-query.test.cjs': ['docs/contributor-standards.md'],
   'tests/contributor-standards.test.cjs': ['docs/contributor-standards.md'],
   'tests/cursor-reviewer.test.cjs': [
@@ -262,15 +273,7 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/ARCHITECTURE.md',
     'docs/pt-BR/INVENTORY.md',
   ],
-  'tests/docs-state-md-locale-parity.test.cjs': [
-    'docs/reference/state-md.md',
-    'docs/ja-JP/reference/state-md.md',
-    'docs/zh-CN/reference/state-md.md',
-    'docs/ko-KR/reference/state-md.md',
-    'docs/pt-BR/reference/state-md.md',
-  ],
   'tests/drift-detection.test.cjs': ['docs/CONFIGURATION.md', 'docs/reference/agents.md'],
-  'tests/edge-probe-docs-fixtures.test.cjs': ['docs/adr/550-spec-phase-probe-contract.md'],
   'tests/edit-phase.test.cjs': [
     'docs/INVENTORY.md',
     'docs/INVENTORY-MANIFEST.json',
@@ -384,7 +387,6 @@ const DOCS_GUARD_TESTS = {
     'docs/USER-GUIDE.md',
     'docs/ARCHITECTURE.md',
   ],
-  'tests/planner-estimate-emission.test.cjs': ['docs/reference/plan-md.md', 'docs/CONFIGURATION.md'],
   'tests/precondition-element.test.cjs': ['docs/reference/plan-md.md'],
   'tests/product-name-purity.test.cjs': [
     'docs/README.md',

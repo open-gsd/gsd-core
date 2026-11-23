@@ -37,7 +37,6 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/ci-conformance-pr-gating.test.cjs',
   'tests/ci-docs-guard-registry.test.cjs',
   'tests/ci-full-lane-sharding.test.cjs',
-  'tests/ci-merge-group-wiring.test.cjs',
   'tests/ci-pr-mergeability.test.cjs',
   'tests/ci-test-job-timeout-budget.test.cjs',
   'tests/ci-test-scope.test.cjs',
@@ -54,8 +53,10 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/release-backmerge-invariants.test.cjs',
   'tests/release-hotfix-empty-cherry-pick.test.cjs',
   'tests/release-notes-real-os-5922.test.cjs',
-  'tests/release-shard-lane-sharding.test.cjs',
-  'tests/release-tarball-smoke-workflow.test.cjs',
+  // #6573: release-shard-lane-sharding's boundary cases moved to shard-spec; ci-merge-group-wiring and
+  // release-tarball-smoke-workflow are text contracts whose workflow mutation cases are in the batch 9 test.
+  'tests/shard-spec.test.cjs',
+  'tests/text-contracts.batch9.test.cjs',
   'tests/require-issue-link-policy.test.cjs',
   'tests/security-scan.security.test.cjs',
   'tests/self-test-report-workflow.test.cjs',
@@ -96,7 +97,7 @@ const RULES = [
     fullMatrix: true,
     tests: [
       ...WORKFLOW_LINT_TESTS,
-      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/text-contracts.batch9.test.cjs', // #6573: release-tarball-smoke-workflow is a text contract
     ],
   },
   {
