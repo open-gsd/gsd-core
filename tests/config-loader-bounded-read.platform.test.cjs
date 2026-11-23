@@ -1216,7 +1216,7 @@ describe('#5759 every other rerouted reader returns on a FIFO config.json', { sk
     ['capability-activation resolveConfigKey', 'capability-activation',
       'm.resolveConfigKey("security_enforcement", { config: {}, cwd, registry: {} })'],
     ['capability-writer setCapabilityState', 'capability-writer', 'm.setCapabilityState(cwd, { id: "x", enabled: true })'],
-    ['configuration migrateOnDisk', 'configuration', 'm.migrateOnDisk(cwd, undefined, require("node:path").join(cwd, ".planning", "config.json"))'],
+    ['configuration migrateOnDisk', 'configuration', 'm.migrateOnDisk(cwd, require("node:path").join(cwd, ".planning", "config.json"))'],
     ['project-root findProjectRoot', 'project-root', 'm.findProjectRoot(require("node:path").join(cwd, "sub", "dir"))'],
     ['planning-snapshot buildConfigField', 'planning-snapshot', 'm.buildPlanningSnapshot(cwd)'],
     ['phase-locator phaseDirectoryOptions', 'phase-locator', 'm.phaseDirectoryOptions(cwd)'],
@@ -1310,7 +1310,7 @@ describe('#5759 every other rerouted reader returns on a FIFO config.json', { sk
     const script = [
       'const path = require("node:path");',
       'const m = require(path.join(process.argv[1], "configuration.cjs"));',
-      'process.stdout.write(JSON.stringify(m.migrateOnDisk(process.argv[2], undefined, path.join(process.argv[2], ".planning", "config.json"))));',
+      'process.stdout.write(JSON.stringify(m.migrateOnDisk(process.argv[2], path.join(process.argv[2], ".planning", "config.json"))));',
     ].join('\n');
 
     const r = runNode(['-e', script, LIB_DIR, tmpDir], {
@@ -2245,7 +2245,7 @@ describe('#5759 review round: every bounded reader and special-target writer ope
     'src/config-file-read (readConfigFileBounded)': (file) => require(path.join(LIB_DIR, 'config-file-read.cjs')).readConfigFileBounded(file),
     'src/capability-ledger (readSmallRegularFile)': (file) => require(path.join(LIB_DIR, 'capability-ledger.cjs')).readSmallRegularFile(file, 1024),
     'src/capability-ledger (readSmallRegularFileBuffer)': (file) => require(path.join(LIB_DIR, 'capability-ledger.cjs')).readSmallRegularFileBuffer(file, 1024),
-    'src/configuration (migrateOnDisk)': (file) => require(path.join(LIB_DIR, 'configuration.cjs')).migrateOnDisk(tmpDir, undefined, file),
+    'src/configuration (migrateOnDisk)': (file) => require(path.join(LIB_DIR, 'configuration.cjs')).migrateOnDisk(tmpDir, file),
     'hooks/lib/config-read': (file) => require(path.join(__dirname, '..', 'hooks', 'lib', 'config-read.js')).readConfigFileBounded(file),
   };
 
