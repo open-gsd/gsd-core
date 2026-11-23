@@ -72,6 +72,28 @@ function assertTierAtBaseline(count, baseline, label, constantName) {
   );
 }
 
+// Classify each listed test file and count the ones that need a real OS. The
+// tree is walked once and each file read afterwards, so a sibling test that
+// writes and unlinks a probe file in tests/ (run-tests-temp-root.test.cjs,
+// #4020) can remove a listed file before its read (#6544). A file that is gone
+// is not a test file and is not counted; any other read error is a real fault.
+function countTierFiles(absPaths, classify, forced = () => false) {
+  let tierCount = 0;
+  let readCount = 0;
+  for (const absPath of absPaths) {
+    let content;
+    try {
+      content = fs.readFileSync(absPath, 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    readCount++;
+    if (classify(content).needsRealOs || forced(absPath)) tierCount++;
+  }
+  return { tierCount, readCount };
+}
+
 // ─── Rows 1-15: classifyContent, pure fixtures ────────────────────────────────
 
 describe('classifyContent — happy-path signals', () => {
@@ -622,16 +644,57 @@ describe('conformance tier narrowing (#4641)', () => {
   // further down, which needs the same baseline rather than a second
   // independently-drifting copy of it).
 
-  // The tier is what a fresh sweep of the live tree puts in the list (the classifier plus the always-real-OS map and
-  // the platform siblings), the same count the committed generated files carry.
+  test('a test file that vanishes between the walk and its read is not counted and does not throw (#6544)', (t) => {
+    // tests/run-tests-temp-root.test.cjs writes tests/helpers-4020-probe.test.cjs
+    // into the real tests tree and unlinks it afterwards. A sibling that walked
+    // the tree in between lists a file whose read then fails with ENOENT.
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    const present = path.join(dir, 'present.test.cjs');
+    const vanished = path.join(dir, 'vanished.test.cjs');
+    fs.writeFileSync(present, "const os = require('node:os');\nos.platform();\n");
+
+    const { tierCount, readCount } = countTierFiles([present, vanished], classifyContent);
+
+    assert.equal(readCount, 1, 'only the file that exists is counted');
+    assert.equal(tierCount, 1, 'the surviving file is classified');
+  });
+
+  test('a read failure other than ENOENT still throws (#6544)', (t) => {
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    // A directory path reads as EISDIR: a real fault, not a vanished file.
+    assert.throws(() => countTierFiles([dir], classifyContent), { code: 'EISDIR' });
+  });
+
+  test('a file forced into the tier counts without a content signal; a forced file that vanished does not (#6551)', (t) => {
+    const dir = createTempDir('gsd-6551-');
+    t.after(() => cleanup(dir));
+    const plain = path.join(dir, 'plain.test.cjs');
+    const vanished = path.join(dir, 'vanished.test.cjs');
+    fs.writeFileSync(plain, "const x = 1;\n");
+
+    assert.equal(countTierFiles([plain], classifyContent).tierCount, 0, 'no signal, not forced');
+    assert.equal(countTierFiles([plain], classifyContent, () => true).tierCount, 1, 'forced in');
+    assert.equal(countTierFiles([plain, vanished], classifyContent, () => true).tierCount, 1, 'a vanished file is not counted even when forced');
+  });
+
+  // The tier is the files a fresh sweep of the live tree puts in the list: the classifier's hits plus the
+  // always-real-OS map entries (Windows only), the same count the committed generated files carry. Each file is read
+  // through countTierFiles, so one that vanishes after the walk is skipped (#6544).
+  const tierSize = (classify, forced) => {
+    const realTestsDir = path.join(ROOT, 'tests');
+    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+    const eligibleFiles = walkTestFiles(realTestsDir).filter((absPath) => suiteOf(absPath) === null);
+    return countTierFiles(eligibleFiles, classify, (absPath) => forced(`tests/${path.relative(realTestsDir, absPath).replace(/\\/g, '/')}`)).tierCount;
+  };
+
   test('conformance tier stays a tier, not the suite (#4641)', () => {
-    const fresh = classifyTree(path.join(ROOT, 'tests'));
-    assertTierAtBaseline(fresh.files.length, WINDOWS_TIER_SIZE_BASELINE, 'Windows', 'WINDOWS_TIER_SIZE_BASELINE');
+    assertTierAtBaseline(tierSize(classifyContent, (rel) => ALWAYS_REAL_OS.has(rel)), WINDOWS_TIER_SIZE_BASELINE, 'Windows', 'WINDOWS_TIER_SIZE_BASELINE');
   });
 
   test('macos conformance tier stays within its size baseline (#4641)', () => {
-    const fresh = classifyMacosTree(path.join(ROOT, 'tests'));
-    assertTierAtBaseline(fresh.files.length, MACOS_TIER_SIZE_BASELINE, 'macOS', 'MACOS_TIER_SIZE_BASELINE');
+    assertTierAtBaseline(tierSize(classifyMacosContent, () => false), MACOS_TIER_SIZE_BASELINE, 'macOS', 'MACOS_TIER_SIZE_BASELINE');
   });
 
   // The ratchet itself: a tier above its baseline, below it, or empty fails, and the message names the constant to edit.

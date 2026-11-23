@@ -1319,6 +1319,125 @@ describe('gsd-secret-read-guard: a heredoc left waiting by a substitution closed
   });
 });
 
+// #6433: procps `watch` takes a value in a separate word for -n/--interval and -q/--equexit, and the shell removes a
+// backslash before `"` in a backtick span that sits inside a double-quoted string. The guard knew only `-n`, and left `\"`.
+describe('gsd-secret-read-guard: watch value options and backticks inside double quotes (#6433)', () => {
+  const WATCH_BLOCKS = [
+    ['-q with a separate value, then -x and a shell', `watch -x -q 2 sh -c 'cat .env'`],
+    ['-q with an attached value', `watch -x -q2 sh -c 'cat .env'`],
+    ['-q ending a cluster, value next', `watch -xq 2 sh -c 'cat .env'`],
+    ['--equexit with a separate value', `watch -x --equexit 2 sh -c 'cat .env'`],
+    ['--equexit=N attached', `watch -x --equexit=2 sh -c 'cat .env'`],
+    ['-n and -q together', `watch -x -n 1 -q 2 sh -c 'cat .env'`],
+    ['--interval and --equexit together', `watch --exec --interval 1 --equexit 2 sh -c 'cat .env'`],
+    ['-q then a plain command that reads', 'watch -x -q 2 cat .env'],
+    ['a flag between value options', `watch -q 2 -x -n 5 sh -c 'cat .env'`],
+    ['an abbreviated --interval with a separate value', `watch -x --int 1 sh -c 'cat .env'`],
+    ['a shorter abbreviation of --interval', `watch -x --i 1 sh -c 'cat .env'`],
+    ['an abbreviated --equexit with a separate value', `watch -x --equ 2 sh -c 'cat .env'`],
+    ['an abbreviated --exec', `watch --ex --interval 1 sh -c 'cat .env'`],
+    ['an ambiguous abbreviation is no option: the joined string stays a script', `watch --e cat .env`],
+    ['-d with q attached to its value, then a shell', `watch -x -dq sh -c 'cat .env'`],
+    ['-d with n attached to its value, then a shell', `watch -x -dn sh -c 'cat .env'`],
+    ['-d with a longer attached value', `watch -x -dpermanent sh -c 'cat .env'`],
+    ['-d before and after value options', `watch -x -n 1 -dq -q 2 sh -c 'cat .env'`],
+    ['-d with q attached, no -x, a quoted name', `watch -dq cat '".env"'`],
+    ['no -x: the joined string is a script', `watch -q 2 'cat .env'`],
+  ];
+
+  for (const [label, command] of WATCH_BLOCKS) {
+    test(`blocks: watch ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { code: 'secret-read', tool: 'Bash' });
+    });
+  }
+
+  const WATCH_ALLOWS = [
+    ['-n 5 date', 'watch -n 5 date'],
+    ['-x ls', 'watch -x ls'],
+    ['-x -n 1 -q 2 ls', 'watch -x -n 1 -q 2 ls'],
+    ['--interval=5 date', 'watch --interval=5 date'],
+    ['-d with no value, a harmless command', `watch -x -d sh -c 'echo ok'`],
+    ['an abbreviated --exec runs a file named with quotes, no shell re-reads it', `watch --ex cat '".env"'`],
+    ['an abbreviated --interval value is not the command', `watch -x --int 1 sh -c 'echo ok'`],
+    ['-q 2 with a shell reading a template', `watch -x -q 2 sh -c 'cat .env.example'`],
+  ];
+
+  for (const [label, command] of WATCH_ALLOWS) {
+    test(`allows: watch ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
+
+  test('a watch command is located past any spelling of its value options', () => {
+    const options = fc.constantFrom('-n 1', '-n1', '-q 2', '-q2', '--interval 1', '--interval=1', '--equexit 2', '--equexit=2', '--int 1', '--equ 2', '--inter 3', '-d', '-dq', '-dn', '-t', '-e', '-g', '-p');
+    fc.assert(
+      fc.property(fc.array(options, { maxLength: 4 }), (opts) => {
+        const command = `watch -x ${opts.join(' ')} sh -c 'cat .env'`;
+        assertBlocked(runHook(bash(command)), command, { code: 'secret-read', tool: 'Bash' });
+        const harmless = `watch -x ${opts.join(' ')} sh -c 'echo ok'`;
+        assertAllowed(runHook(bash(harmless)), harmless);
+      }),
+      { numRuns: 60 },
+    );
+  });
+
+  const BACKTICK_BLOCKS = [
+    ['an escaped quote around the name in a double-quoted backtick', 'echo "`cat \\".env\\"`"'],
+    ['an escaped quote in a double-quoted backtick with a path', 'echo "`cat \\"./.env\\"`"'],
+    ['an escaped quote opening a name word', 'echo "`cat \\".en\\"v`"'],
+    ['the plain backtick still read', 'echo "`cat .env`"'],
+    ['a backtick in a ${ } default inside double quotes', 'echo "${x:-`cat \\".env\\"`}"'],
+    ['a double-quoted ${ } default holding a quoted backtick', 'echo "${x:-"`cat \\".env\\"`"}"'],
+    ['a backtick in $(( )) inside double quotes (dash and zsh)', 'echo "$((`cat \\".env\\"`))"'],
+    ['a backtick in an unquoted heredoc body (dash)', 'cat <<E\n`cat \\".env\\"`\nE'],
+    ['a ${ } backtick in an unquoted heredoc body (dash)', 'cat <<E\n${x:-`cat \\".env\\"`}\nE'],
+  ];
+
+  for (const [label, command] of BACKTICK_BLOCKS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { code: 'secret-read', tool: 'Bash' });
+    });
+  }
+
+  const XARGS_BLOCKS = [
+    ['a here-string feeding xargs', 'xargs cat <<< .env'],
+    ['a here-string with -I and a replace string', 'xargs -I{} cat {} <<< .env'],
+    ['a quoted here-string', "xargs cat <<< '.env'"],
+    ['a here-string of several words', "xargs cat <<< 'a.txt .env'"],
+    ['a here-string feeding xargs sh -c', "xargs -I{} sh -c 'cat {}' <<< .env"],
+    ['a here-string with quotes xargs removes', "xargs cat <<< '\".env\"'"],
+    ['a pipe and a here-string both feeding xargs', 'echo a | xargs cat <<< .env'],
+    ['several here-strings feeding xargs', 'xargs cat <<< a <<< .env'],
+    ['a heredoc feeding xargs', 'xargs cat <<E\n.env\nE'],
+    ['a heredoc with several names', 'xargs cat <<E\na.txt\n.env\nE'],
+    ['a heredoc feeding xargs sh -c', "xargs -I{} sh -c 'cat {}' <<E\n.env\nE"],
+  ];
+
+  for (const [label, command] of XARGS_BLOCKS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { code: 'secret-read', tool: 'Bash' });
+    });
+  }
+
+  test('allows: xargs fed a here-string that names no secret', () => {
+    assertAllowed(runHook(bash('xargs cat <<< notes.md')), 'a harmless here-string');
+    assertAllowed(runHook(bash('xargs cat <<< .env.example')), 'a template here-string');
+    assertAllowed(runHook(bash('xargs ls <<< .env')), 'a non-reading sub-command');
+    assertAllowed(runHook(bash('xargs cat <<E\nnotes.md\nE')), 'a harmless heredoc');
+  });
+
+  const BACKTICK_ALLOWS = [
+    ['a harmless double-quoted backtick', 'echo "`date`"'],
+    ['an escaped quote around a harmless word', 'echo "`echo \\"hello\\"`"'],
+  ];
+
+  for (const [label, command] of BACKTICK_ALLOWS) {
+    test(`allows: ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
+});
+
 // #5214: the debug session manager is told to spawn gsd-debugger with
 // Agent(run_in_background=false), but on a real 1.15.0 run it routed around that
 // literal and shelled out to `claude --agent gsd-debugger` through Bash with
