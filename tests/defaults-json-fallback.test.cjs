@@ -79,7 +79,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     assert.strictEqual(config.context_window, 200000);
   });
 
-  test('project config exists → project config wins', (t) => {
+  test('project config exists → project keys win, a key it does not set comes from defaults.json (#4071)', (t) => {
     const tmpDir = createBareTmpDir();
     fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
     fs.writeFileSync(
@@ -100,7 +100,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
 
     const config = loadConfig(tmpDir);
     assert.strictEqual(config.model_profile, 'budget');
-    assert.strictEqual(config.context_window, 200000);
+    assert.strictEqual(config.context_window, 1000000);
   });
 
   test('defaults.json with unknown keys → unknown keys NOT passed through', (t) => {

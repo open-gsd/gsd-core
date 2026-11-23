@@ -5335,6 +5335,133 @@ describe('regressions (#5787): state begin-phase plan total', () => {
   });
 });
 
+describe('regressions (#6399): state begin-phase --plans needs somewhere to record the count', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  // STATE.md bodies: `Current Position` without a `Plan:` line, with or without a `Total Plans in Phase:` field.
+  const state = ({ total, planLine }) => [
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 3 (x) — PLANNED',
+    ...(planLine ? ['Plan: 0 of 0'] : []),
+    ...(total ? ['Total Plans in Phase: 5'] : []),
+    'Status: Planned',
+    '',
+  ].join('\n');
+
+  function beginPhase(shape, plansArgs, t) {
+    const tmpDir = createTempProject('gsd-6399-');
+    t.after(() => cleanup(tmpDir));
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, state(shape), 'utf-8');
+    const before = fs.readFileSync(statePath, 'utf-8');
+    const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '3', '--name', 'x', ...plansArgs], tmpDir);
+    const after = fs.readFileSync(statePath, 'utf-8');
+    return { result, before, after, content: after };
+  }
+
+  test('--plans with no total field and no Plan: line refuses with plans_no_line and writes nothing', (t) => {
+    const { result, before, after } = beginPhase({ total: false, planLine: false }, ['--plans', '3'], t);
+    assert.equal(result.success, false, 'begin-phase must not exit 0 without recording the count');
+    const payload = JSON.parse(result.error);
+    assert.equal(payload.reason, 'plans_no_line');
+    assert.match(payload.message, /Total Plans in Phase/);
+    assert.equal(after, before, 'STATE.md must be byte-identical');
+  });
+
+  test('a refusal leaves no milestone claim or state contract file behind', (t) => {
+    const tmpDir = createTempProject('gsd-6399c-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), state({ total: false, planLine: false }), 'utf-8');
+    const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '3', '--name', 'x', '--plans', '3'], tmpDir);
+    assert.equal(result.success, false);
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'milestone.lock')), false, 'no milestone claim');
+    assert.equal(fs.existsSync(path.join(tmpDir, '.planning', 'state.json')), false, 'no published state contract');
+  });
+
+  // Shapes where the count lands (no refusal) and shapes where it cannot (refusal), each on its own STATE.md body.
+  const SHAPES = [
+    ['a bold Total Plans in Phase field', '# Project State\n\n## Current Position\n\nPhase: 3 (x) — PLANNED\n**Total Plans in Phase:** 0\nStatus: Planned\n', true],
+    ['a pipe-table Total Plans in Phase row', '# Project State\n\n## Current Position\n\n| Field | Value |\n|-------|-------|\n| Phase | 3 |\n| Total Plans in Phase | 0 |\n| Status | Planned |\n', true],
+    ['CRLF line endings with the field', '# Project State\r\n\r\n## Current Position\r\n\r\nPhase: 3 (x) — PLANNED\r\nTotal Plans in Phase: 0\r\nStatus: Planned\r\n', true],
+    ['a field shown only inside a code fence', '# Project State\n\n## Current Position\n\nPhase: 3 (x) — PLANNED\nStatus: Planned\n\n```\nTotal Plans in Phase: 0\nPlan: 0 of 0\n```\n', false],
+    ['a Plan: line outside Current Position and no total field', '# Project State\n\nPlan: 0 of 0\n\n## Current Position\n\nPhase: 3 (x) — PLANNED\nStatus: Planned\n', false],
+  ];
+  for (const [label, body, lands] of SHAPES) {
+    test(`shape: ${label} ${lands ? 'records the count' : 'refuses with plans_no_line'}`, (t) => {
+      const tmpDir = createTempProject('gsd-6399s-');
+      t.after(() => cleanup(tmpDir));
+      const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, body, 'utf-8');
+      const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '3', '--name', 'x', '--plans', '3'], tmpDir);
+      if (lands) {
+        assert.equal(result.success, true, result.error);
+        assert.match(fs.readFileSync(statePath, 'utf-8'), /Total Plans in Phase(?::\*\*|:| \|)\s*3/);
+      } else {
+        assert.equal(result.success, false);
+        assert.equal(JSON.parse(result.error).reason, 'plans_no_line');
+        assert.equal(fs.readFileSync(statePath, 'utf-8'), body);
+      }
+    });
+  }
+
+  test('--plans 0 is a count too: it refuses when there is nowhere to record it', (t) => {
+    const { result, before, after } = beginPhase({ total: false, planLine: false }, ['--plans', '0'], t);
+    assert.equal(result.success, false);
+    assert.equal(JSON.parse(result.error).reason, 'plans_no_line');
+    assert.equal(after, before);
+  });
+
+  test('with a Total Plans in Phase field the count is recorded as before', (t) => {
+    const { result, content } = beginPhase({ total: true, planLine: false }, ['--plans', '3'], t);
+    assert.equal(result.success, true, result.error);
+    assert.equal(stateExtractField(content, 'Total Plans in Phase'), '3');
+  });
+
+  test('with only a Plan: line in Current Position the count is recorded there', (t) => {
+    const { result, content } = beginPhase({ total: false, planLine: true }, ['--plans', '3'], t);
+    assert.equal(result.success, true, result.error);
+    assert.equal(stateExtractField(content, 'Plan'), '1 of 3');
+  });
+
+  test('without --plans begin-phase is unchanged, whatever lines STATE.md has', (t) => {
+    const { result, content } = beginPhase({ total: false, planLine: false }, [], t);
+    assert.equal(result.success, true, result.error);
+    assert.match(content, /Executing Phase 3/);
+  });
+
+  test('property: begin-phase --plans N succeeds exactly when a total field or a Plan: line can hold the count', () => {
+    fc.assert(fc.property(
+      fc.boolean(),
+      fc.boolean(),
+      fc.integer({ min: 0, max: 9 }),
+      (total, planLine, plans) => {
+        const tmpDir = createTempProject('gsd-6399p-');
+        try {
+          const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+          fs.writeFileSync(statePath, state({ total, planLine }), 'utf-8');
+          const before = fs.readFileSync(statePath, 'utf-8');
+          const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '3', '--name', 'x', '--plans', String(plans)], tmpDir);
+          if (total || planLine) {
+            assert.equal(result.success, true, result.error);
+            const content = fs.readFileSync(statePath, 'utf-8');
+            assert.equal(total ? stateExtractField(content, 'Total Plans in Phase') : stateExtractField(content, 'Plan'), total ? String(plans) : `1 of ${plans}`);
+          } else {
+            assert.equal(result.success, false);
+            assert.equal(JSON.parse(result.error).reason, 'plans_no_line');
+            assert.equal(fs.readFileSync(statePath, 'utf-8'), before);
+          }
+        } finally {
+          cleanup(tmpDir);
+        }
+      },
+    ), { seed: 6399, numRuns: 24 });
+  });
+});
+
 describe('#5676: isStatePastPhase under milestone-prefixed', () => {
   const fm = (cp) => ['---', `current_phase: ${cp}`, '---', '# State', ''].join('\n');
   const MP = 'milestone-prefixed';

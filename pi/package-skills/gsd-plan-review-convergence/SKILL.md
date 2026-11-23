@@ -51,6 +51,7 @@ Phase number: extracted from the `<arguments>` block (required)
 - `--kimi-code` — Use Kimi Code CLI as reviewer (Moonshot AI)
 - `--all` — Use all available CLIs and running local model servers
 - `--max-cycles N` — Maximum replan→review cycles (default: 3)
+- `--on-escalation ask|exit` — What happens when cycles run out without converging (default: `ask`, the interactive Proceed anyway / Manual review question). `exit` asks nothing: the run prints the final `CYCLE_SUMMARY` line and both concern sections, then ends with `CONVERGENCE_STATUS: open_conflicts|stalled|max_cycles` (a converged run ends with `converged`). For unattended callers (#4617).
 
 **Feature gate:** This command requires `workflow.plan_review_convergence=true`. Enable with:
 `gsd config-set workflow.plan_review_convergence true`. A dispatch carrying `--override-gate` —

@@ -32,6 +32,7 @@
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, cleanup, withIsolatedProcessState } = require('./helpers.cjs');
@@ -219,7 +220,7 @@ describe('workflow.compact_content via config-new-project (#4139, CONF-01)', () 
       model_profile: 'adaptive',
       workflow: { research: true, plan_check: true, verifier: true, nyquist_validation: false },
     });
-    const r = runGsdTools(['config-new-project', choices], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const r = runGsdTools(['config-new-project', choices], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, r.error);
     const config = readConfig();
     assert.strictEqual(config.workflow.compact_content, false);
@@ -234,7 +235,7 @@ describe('workflow.compact_content via config-new-project (#4139, CONF-01)', () 
       model_profile: 'adaptive',
       workflow: { research: true, plan_check: true, verifier: true, nyquist_validation: false, compact_content: true },
     });
-    const r = runGsdTools(['config-new-project', choices], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const r = runGsdTools(['config-new-project', choices], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, r.error);
     const config = readConfig();
     assert.strictEqual(config.workflow.compact_content, true);
@@ -249,7 +250,7 @@ describe('workflow.compact_content via config-new-project (#4139, CONF-01)', () 
       model_profile: 'adaptive',
       workflow: { research: true, plan_check: true, verifier: true, nyquist_validation: false, compact_content: false },
     });
-    const r = runGsdTools(['config-new-project', choices], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const r = runGsdTools(['config-new-project', choices], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, r.error);
     const config = readConfig();
     assert.strictEqual(config.workflow.compact_content, false);
@@ -265,7 +266,7 @@ describe('workflow.compact_content via config-new-project (#4139, CONF-01)', () 
       model_profile: 'adaptive',
       workflow: { research: true, plan_check: true, verifier: true, nyquist_validation: false, compact_content: true },
     });
-    const setup = runGsdTools(['config-new-project', choices], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const setup = runGsdTools(['config-new-project', choices], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(setup.success, setup.error);
 
     const r = runGsdTools(['config-get', 'workflow.compact_content', '--raw'], tmpDir);
