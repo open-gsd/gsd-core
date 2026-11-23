@@ -1,0 +1,498 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TestStatus = exports.ReportFormat = void 0;
+exports.parseTestReport = parseTestReport;
+/** Format adapters for RED evidence. Parsing never depends on the runner command. */
+const tap_parser_cjs_1 = require("./vendor/tap-parser.cjs");
+const saxes_cjs_1 = require("./vendor/saxes.cjs");
+const js_yaml_cjs_1 = require("./vendor/js-yaml.cjs");
+exports.ReportFormat = {
+    Tap: 'tap', Junit: 'junit', SwiftTesting: 'swift-testing', Unittest: 'unittest', GoTest: 'go-test', Unknown: 'unknown',
+};
+exports.TestStatus = { Passed: 'passed', Failed: 'failed', Skipped: 'skipped', Todo: 'todo' };
+/**
+ * A name that is a JS/TS test source file, as opposed to a Java class or method. Limited to the
+ * extensions vitest, jest and node:test load: a wider list (`go`, `rs`, `py`, ...) would flag a
+ * Surefire class-level entry whose FQN ends in that segment (`com.acme.go`, #4724).
+ */
+const TEST_FILE_NAME = /\.[cm]?[jt]sx?$/;
+/** jest-junit's classNameTemplate for a suite that produced no results (utils/buildJsonResults.js). */
+const JEST_SUITE_FAILED_TO_RUN = 'Test suite failed to run';
+/** The interruption signals a diagnostic block can carry; both the parsed and the #5819 recovered path refuse them. */
+const INTERRUPTING_FAILURE_TYPES = ['cancelledByParent', 'hookFailed', 'testTimeoutFailure'];
+const INTERRUPTION_ISSUE = 'Test run interrupted by cancellation, hook failure, or timeout';
+/** Thrown from inside the js-yaml `listener` callback; never surfaces past `recoverDuplicateKeyDiagnostic`. */
+class AnchorDetectedSignal extends Error {
+}
+/**
+ * Decode each top-level key/value write before a last-wins merge can hide it.
+ * A base-indent key starts a segment with its continuation lines. The YAML parser
+ * decodes escapes and explicit keys, and text inside scalar values stays a value.
+ * A segment must parse strictly as one mapping entry. This rules out nested and
+ * flow duplicates, as well as explicit keys with a separate base-indent `:` line.
+ */
+function decodedKeyWrites(body, parseSegment) {
+    const segments = [];
+    let base = null;
+    for (const line of body.split('\n')) {
+        if (line.trim() === '' || line.trimStart().startsWith('#')) {
+            if (segments.length > 0)
+                segments[segments.length - 1].push(line);
+            continue;
+        }
+        const indent = line.length - line.trimStart().length;
+        if (base === null)
+            base = indent;
+        if (indent < base)
+            return null;
+        if (indent === base) {
+            segments.push([line]);
+        }
+        else {
+            segments[segments.length - 1].push(line);
+        }
+    }
+    const writes = [];
+    for (const segment of segments) {
+        let parsed;
+        try {
+            parsed = parseSegment(`${segment.join('\n')}\n`);
+        }
+        catch {
+            return null;
+        }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+            return null;
+        const entries = Object.entries(parsed);
+        if (entries.length !== 1)
+            return null;
+        writes.push({ key: entries[0][0], value: entries[0][1] });
+    }
+    return writes;
+}
+/**
+ * #5819: node:test repeats `error` and `stack` in the diagnostic block of a failed
+ * `assert.throws`/`assert.rejects` RegExp assertion, and the vendored tap-parser's YAML
+ * rejects duplicate mapping keys, so the whole block comes back as non-TAP data (an
+ * `extra` event plus a strict-mode `tapError` failure) and a genuine RED is refused.
+ * A block whose ONLY defect is repeated keys is recovered here: a last-key-wins parse
+ * (`json: true`) succeeds exactly where a strict parse fails with `duplicated mapping key`.
+ * Everything else stays non-TAP data — any other YAML error, anchors/aliases (refused from
+ * inside the parse listener, ADR-3473 §8.1 posture), a block truncated before its closing
+ * `...` line (tap-parser emits those without the closer), and a block whose repeated key is
+ * `failureType` itself: the interruption signal must stay unambiguous, so it is never
+ * recovered. Returns the recovered mapping, or null when the block is not recoverable.
+ */
+function recoverDuplicateKeyDiagnostic(extra) {
+    // Bound the extra YAML work after tap-parser has already refused the block.
+    // Count UTF-16 code units and physical lines, including the framing markers.
+    const maxDiagnosticLines = 4096;
+    if (extra.length > 1024 * 1024)
+        return null;
+    const lines = extra.split('\n', maxDiagnosticLines + 2);
+    if (lines.length > maxDiagnosticLines + 1)
+        return null;
+    // Framing: `---`, at least one body line, `...` — the shape tap-parser re-emits for a
+    // diagnostic block its YAML refused (emitExtra may indent the whole block by 4 spaces).
+    if (lines.at(-1) !== '' || lines.length < 4)
+        return null;
+    // No lone-CR guard is needed: tap-parser's own line splitter (`/^.*\r?\n/`) stops
+    // `.*` before a mid-line `\r`, so the line never matches and stays buffered — a
+    // block carrying one never reaches this function from its only caller (#5819
+    // re-review; the earlier guard was unreachable dead code and is removed).
+    lines.pop();
+    const openIndent = /^(\s*)---$/.exec(lines[0] ?? '')?.[1];
+    if (openIndent === undefined || /^(\s*)\.\.\.$/.exec(lines.at(-1) ?? '')?.[1] !== openIndent)
+        return null;
+    const body = `${lines.slice(1, -1).join('\n')}\n`;
+    const refuseAnchors = {
+        listener: (_event, state) => {
+            if (state.anchor != null)
+                throw new AnchorDetectedSignal();
+        },
+    };
+    let tolerant;
+    try {
+        tolerant = (0, js_yaml_cjs_1.load)(body, { json: true, schema: js_yaml_cjs_1.FAILSAFE_SCHEMA, ...refuseAnchors });
+    }
+    catch {
+        return null;
+    }
+    if (typeof tolerant !== 'object' || tolerant === null || Array.isArray(tolerant))
+        return null;
+    try {
+        (0, js_yaml_cjs_1.load)(body, { schema: js_yaml_cjs_1.FAILSAFE_SCHEMA, ...refuseAnchors });
+        // Parses strictly without the duplicate-key relaxation: the block did not come back
+        // for duplicate keys, and recovery must not widen acceptance beyond the known defect.
+        return null;
+    }
+    catch (err) {
+        if (!(err instanceof js_yaml_cjs_1.YAMLException) || !/duplicated mapping key/i.test(err.message))
+            return null;
+    }
+    // Every gate-relevant signal is judged over its WRITES, not the last-wins merge: the
+    // interruption signal must be unambiguous (failureType written at most once), and the
+    // #5721 load-failure signature must not be maskable by writing a benign value over it.
+    // Each write's key and value are decoded by a strict parse of its own
+    // segment (see decodedKeyWrites); a body whose key set cannot be derived that way —
+    // flow mappings included — is refused whole rather than counted in text.
+    const writes = decodedKeyWrites(body, (segment) => (0, js_yaml_cjs_1.load)(segment, { schema: js_yaml_cjs_1.FAILSAFE_SCHEMA, ...refuseAnchors }));
+    if (writes === null)
+        return null;
+    // The interruption signal: `failureType` written twice, in any spelling, is ambiguous.
+    if (writes.filter((write) => write.key === 'failureType').length > 1)
+        return null;
+    // #5721: a `not ok N - <file>` diagnostic whose error is 'test failed' with
+    // ERR_TEST_FAILURE asserted nothing — a file that crashed at load is load failure,
+    // never RED. The assert handler flags that signature from the PARSED diagnostic; a
+    // recovered block bypasses that channel (its diag is null), so ANY error write decoding
+    // to 'test failed' together with ANY code write decoding to ERR_TEST_FAILURE refuses
+    // the recovery — a later benign write cannot mask an earlier signature write.
+    const sawLoadFailureError = writes.some((write) => write.key === 'error' && write.value === 'test failed');
+    const sawLoadFailureCode = writes.some((write) => write.key === 'code' && write.value === 'ERR_TEST_FAILURE');
+    if (sawLoadFailureError && sawLoadFailureCode)
+        return null;
+    return tolerant;
+}
+function parseTap(output) {
+    const report = { format: exports.ReportFormat.Tap, valid: true, tests: [], issues: [] };
+    const parser = new tap_parser_cjs_1.Parser({ strict: true });
+    const assertions = [];
+    const openBuffered = new Map();
+    const recoveredBlocks = [];
+    let completed = false;
+    const watch = (p) => {
+        p.on('child', (child) => {
+            if (child.buffered)
+                openBuffered.set(p, (openBuffered.get(p) ?? 0) + 1);
+            watch(child);
+        });
+        // tap-parser finalizes buffered children at EOF even without their closing
+        // brace. Track its child/line events so that truncation cannot prove RED.
+        p.on('line', (line) => {
+            if (line === '}\n')
+                openBuffered.set(p, (openBuffered.get(p) ?? 0) - 1);
+        });
+        p.on('assert', (result) => {
+            if (!result.closingTestPoint)
+                assertions.push({ result, owner: p });
+            if (result.buffered && !result.closingTestPoint)
+                report.issues.push('Missing buffered TAP subtest');
+            const diag = result.diag;
+            if (diag && INTERRUPTING_FAILURE_TYPES.includes(String(diag['failureType']))) {
+                report.issues.push(INTERRUPTION_ISSUE);
+            }
+        });
+        p.on('extra', (extra) => {
+            if (!extra.trim())
+                return;
+            const recovered = recoverDuplicateKeyDiagnostic(extra);
+            if (!recovered) {
+                report.issues.push('Non-TAP data in report');
+                return;
+            }
+            // The tolerant path must still apply the interruption check to the block it accepts.
+            if (INTERRUPTING_FAILURE_TYPES.includes(String(recovered['failureType']))) {
+                report.issues.push(INTERRUPTION_ISSUE);
+            }
+            recoveredBlocks.push(extra);
+        });
+        p.on('complete', (summary) => {
+            if (p === parser)
+                completed = true;
+            const { start, end } = summary.plan;
+            if (start !== 1 || end === null || summary.count !== end)
+                report.issues.push('Missing or incomplete TAP plan');
+            if (summary.bailout)
+                report.issues.push('TAP bailout');
+            // A recovered block's strict-mode `tapError` failure carries the block as `data`. A
+            // subtest's failure keeps the block's original indentation while the root `extra`
+            // event is 4-space shifted by emitExtra, so the pairing compares per-line dedented.
+            const dedent = (text) => text.split('\n').map((line) => line.replace(/^\s+/, '')).join('\n');
+            const recoveredKeys = new Set(recoveredBlocks.map(dedent));
+            const malformed = summary.failures.some((failure) => failure.tapError
+                && !(typeof failure.data === 'string' && recoveredKeys.has(dedent(failure.data))));
+            if (malformed)
+                report.issues.push('Malformed TAP');
+        });
+    };
+    watch(parser);
+    parser.end(output);
+    if ([...openBuffered.values()].some((count) => count !== 0))
+        report.issues.push('Unclosed buffered TAP subtest');
+    for (const { result, owner } of assertions) {
+        let skipped = Boolean(result.skip);
+        let todo = Boolean(result.todo);
+        for (let parent = owner; parent; parent = parent.parent) {
+            skipped ||= Boolean(parent.closingTestPoint?.skip);
+            todo ||= Boolean(parent.closingTestPoint?.todo);
+        }
+        // node:test reports a file that exits non-zero without a failing subtest as `not ok N - <file>`
+        // with `error: 'test failed'` / `code: 'ERR_TEST_FAILURE'` (#5721): it asserted nothing.
+        const diag = result.diag;
+        const fileFailure = !result.ok && diag?.['error'] === 'test failed' && diag['code'] === 'ERR_TEST_FAILURE'
+            && TEST_FILE_NAME.test(result.name);
+        report.tests.push({
+            name: result.name,
+            identities: [...new Set([result.name, result.fullname])],
+            group: null,
+            groupIdentities: [],
+            status: skipped ? exports.TestStatus.Skipped : todo ? exports.TestStatus.Todo : result.ok ? exports.TestStatus.Passed : exports.TestStatus.Failed,
+            ...(fileFailure ? { loadFailure: true } : {}),
+        });
+    }
+    if (!completed)
+        report.issues.push('Incomplete TAP stream');
+    report.valid = report.issues.length === 0;
+    return report;
+}
+/** Surefire and Failsafe share the JUnit XML report shape. */
+function parseJunit(output) {
+    const report = { format: exports.ReportFormat.Junit, valid: true, tests: [], issues: [] };
+    const parser = new saxes_cjs_1.SaxesParser({ xmlns: false });
+    const elements = [];
+    const suites = [];
+    let current = null;
+    parser.on('error', () => { report.issues.push('Malformed XML'); });
+    parser.on('doctype', () => { report.issues.push('JUnit reports must not declare a DTD'); });
+    parser.on('opentag', (tag) => {
+        const parent = elements.at(-1);
+        if (!parent && tag.name !== 'testsuite' && tag.name !== 'testsuites')
+            report.issues.push('Not a JUnit report');
+        if (tag.name === 'testsuite' || tag.name === 'testsuites') {
+            if (parent && parent !== 'testsuite' && parent !== 'testsuites')
+                report.issues.push('Misplaced test suite');
+            const count = tag.attributes['tests'];
+            const planned = count === undefined ? null : Number(count);
+            if (count !== undefined && (!/^\d+$/.test(count) || !Number.isSafeInteger(planned)))
+                report.issues.push('Invalid JUnit test count');
+            suites.push({ firstTest: report.tests.length, planned });
+        }
+        else if (tag.name === 'testcase') {
+            if (parent !== 'testsuite' || current)
+                report.issues.push('Misplaced test case');
+            const name = tag.attributes['name'] ?? '';
+            const className = tag.attributes['classname'] ?? '';
+            const qualified = className ? `${className}#${name}` : name;
+            if (!name)
+                report.issues.push('Unnamed test case');
+            current = {
+                name: qualified,
+                identities: [...new Set([name, qualified])],
+                group: className || null,
+                groupIdentities: className ? [className, className.split('.').at(-1)] : [],
+                status: exports.TestStatus.Passed,
+                ...(className === JEST_SUITE_FAILED_TO_RUN || (name === className && TEST_FILE_NAME.test(name))
+                    ? { loadFailure: true } : {}),
+            };
+        }
+        else if (current && parent === 'testcase') {
+            if (tag.name === 'failure' || tag.name === 'error') {
+                if (current.status === exports.TestStatus.Skipped)
+                    report.issues.push('Contradictory JUnit status');
+                current.status = exports.TestStatus.Failed;
+            }
+            if (tag.name === 'skipped') {
+                if (current.status === exports.TestStatus.Failed)
+                    report.issues.push('Contradictory JUnit status');
+                current.status = exports.TestStatus.Skipped;
+            }
+        }
+        elements.push(tag.name);
+    });
+    parser.on('closetag', (tag) => {
+        if (tag.name === 'testcase' && current) {
+            report.tests.push(current);
+            current = null;
+        }
+        else if (tag.name === 'testsuite' || tag.name === 'testsuites') {
+            const suite = suites.pop();
+            if (!suite || (suite.planned !== null && suite.planned !== report.tests.length - suite.firstTest)) {
+                report.issues.push('Incomplete JUnit test suite');
+            }
+        }
+        elements.pop();
+    });
+    parser.write(output).close();
+    report.valid = report.issues.length === 0;
+    return report;
+}
+/**
+ * swift-testing console output (#4957). Only the anchored aggregate line marks
+ * the format; every declared test must have its own result line. The aggregate
+ * counts skipped tests too, and a parameterized test names its case count.
+ * A test is named by its quoted display name (with `(aka 'function()')` under
+ * --verbose) or, without one, by its bare function name. Windows consoles
+ * print √ × - in place of ✔ ✘ ━. swift-testing 6.1 omits the suite count from
+ * the aggregate and marks skipped tests with ✘ (later sources add the count
+ * and use ➜).
+ */
+const SWIFT_AGGREGATE = /^[ \t]*[✘✔━×√-][ \t]*Test run with (\d+) tests?(?: in \d+ suites?)? (passed|failed)\b/gm;
+const SWIFT_RESULT = /^[ \t]*[✘✔━➜×√-][ \t]*Test (?:"([^"]+)"(?: \(aka '([^']+)'\))?|([^\s"]\S*\)))(?: with \d+ test cases?)? (?:(failed|passed|was cancelled) after [\d.]+ seconds?(?: with \d+ [^\n]*?)?(?:\.|: "[^\n]*")|(skipped)(?:\.|: "[^\n]*"))$/gm;
+function parseSwiftTesting(output) {
+    const report = { format: exports.ReportFormat.SwiftTesting, valid: true, tests: [], issues: [] };
+    let declared = 0;
+    let runPassed = true;
+    for (const match of output.matchAll(SWIFT_AGGREGATE)) {
+        declared += Number(match[1]);
+        runPassed &&= match[2] === 'passed';
+    }
+    for (const match of output.matchAll(SWIFT_RESULT)) {
+        const fn = match[2] ?? match[3];
+        report.tests.push({
+            name: match[1] ?? match[3],
+            identities: [...new Set([match[1], fn, fn?.replace(/\(.*\)$/, '')].filter((id) => Boolean(id)))],
+            group: null,
+            groupIdentities: [],
+            status: match[4] === 'failed' ? exports.TestStatus.Failed : match[4] === 'passed' ? exports.TestStatus.Passed : exports.TestStatus.Skipped,
+        });
+    }
+    if (report.tests.length !== declared)
+        report.issues.push('Incomplete swift-testing report');
+    if (runPassed && report.tests.some((test) => test.status === exports.TestStatus.Failed)) {
+        report.issues.push('Contradictory swift-testing status');
+    }
+    report.valid = report.issues.length === 0;
+    return report;
+}
+/**
+ * Python stdlib unittest text output (#4970). Passing tests are unnamed unless
+ * verbose, so they are counted from the summary; failures are named by their
+ * FAIL:/ERROR: headers, which must account for every counted failure. Each
+ * failing subTest repeats its method's header and counts as a failure, while
+ * Ran counts methods, so identical headers collapse into one failed test. An
+ * unexpected success fails the run but is a test that passed.
+ */
+const UNITTEST_RAN = /^Ran (\d+) tests? in [\d.]+s$/gm;
+const UNITTEST_HEADER = /^(?:FAIL|ERROR): (\S+)(?: \(([^)]*)\))?/gm;
+function parseUnittest(output) {
+    const report = { format: exports.ReportFormat.Unittest, valid: true, tests: [], issues: [] };
+    const runs = [...output.matchAll(UNITTEST_RAN)];
+    if (runs.length !== 1) {
+        report.issues.push('Expected exactly one unittest summary');
+        report.valid = false;
+        return report;
+    }
+    const ran = Number(runs[0][1]);
+    const outcome = /^(OK|FAILED)(?: \(([^)]*)\))?$/m.exec(output.slice(runs[0].index + runs[0][0].length));
+    const counts = {};
+    for (const part of outcome?.[2]?.split(', ') ?? []) {
+        const [key, value] = part.split('=');
+        counts[key] = Number(value);
+    }
+    if (!outcome || Object.keys(counts).some((key) => !['failures', 'errors', 'skipped', 'expected failures', 'unexpected successes'].includes(key))) {
+        report.issues.push('Unsupported unittest outcome');
+    }
+    let headers = 0;
+    const failedIds = new Set();
+    for (const match of output.matchAll(UNITTEST_HEADER)) {
+        headers++;
+        const id = match[2] ?? '';
+        const key = `${match[1]} ${id}`;
+        if (failedIds.has(key))
+            continue;
+        failedIds.add(key);
+        // unittest synthesizes _FailedTest for an import/collection crash; its
+        // method name can equal the target, so it is a load failure, never RED.
+        if (id.includes('_FailedTest')) {
+            report.issues.push('unittest module failed to load');
+            continue;
+        }
+        report.tests.push({
+            name: match[1],
+            identities: [...new Set([match[1], id].filter(Boolean))],
+            group: null,
+            groupIdentities: [],
+            status: exports.TestStatus.Failed,
+        });
+    }
+    const failed = (counts['failures'] ?? 0) + (counts['errors'] ?? 0);
+    const skipped = counts['skipped'] ?? 0;
+    const runFailed = failed > 0 || (counts['unexpected successes'] ?? 0) > 0;
+    if (headers !== failed || (outcome?.[1] === 'FAILED') !== runFailed || failedIds.size + skipped > ran) {
+        report.issues.push('Incomplete unittest report');
+    }
+    const unnamed = (status) => ({ name: '', identities: [], group: null, groupIdentities: [], status });
+    for (let i = 0; i < skipped; i++)
+        report.tests.push(unnamed(exports.TestStatus.Skipped));
+    for (let i = Math.max(ran - failedIds.size - skipped, 0); i > 0; i--)
+        report.tests.push(unnamed(exports.TestStatus.Passed));
+    report.valid = report.issues.length === 0;
+    return report;
+}
+/**
+ * `go test` text output (#5106). Plain console text, so the shape is matched by line:
+ *   --- FAIL: TestName (0.00s)          one per failed test (every test with -v; subtests indented)
+ *   FAIL\texample.com/pkg\t0.004s        one package summary per package, after that package's tests
+ *   FAIL\texample.com/pkg [build failed]   the package did not compile — nothing asserted anything
+ * A test's name carries no package, so each test is also known as `<package>.<name>`, attributed to
+ * the next package summary line. The same name failing in two packages is ambiguous until qualified.
+ * `go test -json` is not text and stays unsupported.
+ */
+const GO_TEST_RESULT = /^[ \t]*-{3} (PASS|FAIL|SKIP): (\S+) \(\d+(?:\.\d+)?s\)$/; // -{3}: not a literal fence, see frontmatter-fence-drift
+const GO_PACKAGE_LINE = /^(ok|FAIL|\?)[ \t]+(\S+)[ \t]+(?:\d+(?:\.\d+)?s\b|\(cached\)|\[([a-z ]+)\])/;
+function isGoTestOutput(output) {
+    if (/^TAP version \d+/.test(output.trimStart()))
+        return false;
+    return output.split(/\r?\n/).some((line) => GO_TEST_RESULT.test(line) || GO_PACKAGE_LINE.test(line));
+}
+function parseGoTest(output) {
+    const report = { format: exports.ReportFormat.GoTest, valid: true, tests: [], issues: [] };
+    let segment = [];
+    let packages = 0;
+    for (const line of output.split(/\r?\n/)) {
+        const result = GO_TEST_RESULT.exec(line);
+        if (result) {
+            const name = result[2];
+            const status = result[1] === 'FAIL' ? exports.TestStatus.Failed : result[1] === 'SKIP' ? exports.TestStatus.Skipped : exports.TestStatus.Passed;
+            if (!segment.some((test) => test.name === name && test.status === status)) {
+                segment.push({ name, identities: [name], group: null, groupIdentities: [], status });
+            }
+            continue;
+        }
+        const pkg = GO_PACKAGE_LINE.exec(line);
+        if (!pkg)
+            continue;
+        packages++;
+        const [, outcome, importPath, bracket] = pkg;
+        if (outcome === 'FAIL' && (bracket === 'build failed' || bracket === 'setup failed')) {
+            report.buildFailed = true;
+            report.issues.push(`go test package ${importPath} ${bracket}`);
+        }
+        else if (outcome === 'ok' && segment.some((test) => test.status === exports.TestStatus.Failed)) {
+            report.issues.push(`go test package ${importPath} is ok but its output reports a failed test`);
+        }
+        for (const test of segment)
+            test.identities.push(`${importPath}.${test.name}`);
+        report.tests.push(...segment);
+        segment = [];
+    }
+    if (packages === 0)
+        report.issues.push('Missing go test package summary');
+    if (segment.length > 0)
+        report.issues.push('go test results without a following package summary');
+    report.valid = report.issues.length === 0;
+    return report;
+}
+const adapters = [
+    // Before TAP: a run whose first package is fine begins `ok  <TAB>pkg`, which the TAP matcher reads as a point.
+    { matches: isGoTestOutput, parse: parseGoTest },
+    { matches: (output) => /^(?:TAP version \d+|(?:not )?ok\b|1\.\.\d+|#)/.test(output.trimStart()), parse: parseTap },
+    { matches: (output) => output.trimStart().startsWith('<'), parse: parseJunit },
+    { matches: (output) => new RegExp(SWIFT_AGGREGATE.source, 'm').test(output), parse: parseSwiftTesting },
+    { matches: (output) => new RegExp(UNITTEST_RAN.source, 'm').test(output), parse: parseUnittest },
+];
+/** Parse supported reports into one result contract; unknown/malformed input fails closed. */
+function parseTestReport(output) {
+    const adapter = adapters.find((candidate) => candidate.matches(output));
+    if (!adapter)
+        return { format: exports.ReportFormat.Unknown, valid: false, tests: [], issues: ['Unsupported report format'] };
+    try {
+        const report = adapter.parse(output);
+        // One entry per problem: a long run of bad lines must not amplify the payload.
+        return { ...report, issues: [...new Set(report.issues)] };
+    }
+    catch {
+        return { format: exports.ReportFormat.Unknown, valid: false, tests: [], issues: ['Malformed report'] };
+    }
+}

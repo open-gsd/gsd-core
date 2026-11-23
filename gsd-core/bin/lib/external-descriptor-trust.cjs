@@ -1,0 +1,97 @@
+/**
+ * External-descriptor trust gate (ADR-1239 Phase C-2, #1681).
+ *
+ * Load-time `configHome` write-confinement for installed third-party host-plugin
+ * descriptors. The opt-in loader (`loadRegistry({includeInstalled:true})`) already
+ * applies schema validation + consent + first-party-wins + fail-closed gates;
+ * this adds defense-in-depth: **before** a third-party descriptor's install plan
+ * is ever executed, assert every destSubpath it declares resolves within the
+ * user-approved `configHome`. A path-escaping or malformed descriptor is
+ * rejected fail-closed.
+ *
+ * This is the load-time twin of Phase 2's install-time gate
+ * (`assertDestWithinConfigHome` in runtime-artifact-install-plan.cts, #1679 AC3).
+ * The two are defense-in-depth: load-time rejects malformed descriptors early
+ * (before consent even matters); install-time bounds the actual writes.
+ *
+ * Do NOT conflate with ADR-1577's prompt-injection circuit-breaker — separate
+ * concern sharing the word "trust".
+ */
+'use strict';
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.isPathConfined = isPathConfined;
+exports.assertDescriptorConfined = assertDescriptorConfined;
+const security_cjs_1 = require("./security.cjs");
+/**
+ * Pure LEXICAL path-containment check (cross-platform). `target` is confined
+ * to `root` iff resolving it relative to `root` (via `path.resolve` — string
+ * manipulation, no filesystem access) yields a path equal to or under `root`.
+ * Absolute paths outside `root` and `..`-escapes return false.
+ *
+ * NOT a realpath check: this function never calls `fs.realpathSync` and does
+ * not detect a symlink along `target` (or an existing path component of
+ * `root`) that would redirect the LEXICALLY-confined path to a physically
+ * different, unconfined location on disk. A caller relying on this for a
+ * write-confinement guarantee against a symlink-planting attacker must pair
+ * it with a symlink check (or refuse to follow symlinks at write time). Only
+ * the capability-loader.cts route into assertDescriptorConfined gets this for
+ * free today: capability-source.cts's staging path rejects symlinks upstream,
+ * before a target ever reaches a lexical-only check like this one — see
+ * copyDirRecursive's `entry.isSymbolicLink()` throw (capability-source.cts:585-586)
+ * and the post-copy budget-walk re-check (capability-source.cts:671-674). This
+ * does NOT extend to isPathConfined's other callers: install-engine.cts:1608
+ * and install-profiles.cts:755,880 do not go through capability-source.cts's
+ * adapters at all and have no symlink guard of their own here. Of the
+ * remaining callers, only retired-artifact-cleanup.cts:69 carries its own
+ * defense, via a local `lstatSync(destDir).isSymbolicLink()` check at line 77.
+ *
+ * `opts.pathImpl` (default: the ambient `path` module) lets a caller inject
+ * `path.win32` or `path.posix`. This is security-relevant: the win32 branch
+ * (drive letters, UNC paths, `\` separator) is otherwise only reachable by
+ * actually running this process on a Windows host, so without injection a
+ * win32-specific confinement escape would be unverified on every other
+ * platform. This mirrors the platform-injection seam already used elsewhere
+ * in this repo, e.g. src/shell-command-projection.cts's `opts.platform`
+ * (#4641). All existing 2-arg callers are unaffected: the default resolves to
+ * the ambient `path`, preserving byte-identical behaviour.
+ *
+ * The containment DECISION here now comes from the canonical predicate in
+ * src/security.cts (`tryWithinRootLexical`, ADR-4650 decision 6) — this
+ * function keeps only the lexical RESOLUTION policy (no realpath, no
+ * filesystem access) as its own choice; the comparison itself is shared.
+ */
+function isPathConfined(target, root, opts = {}) {
+    if (typeof target !== 'string' || typeof root !== 'string' || target.length === 0 || root.length === 0) {
+        return false;
+    }
+    return (0, security_cjs_1.tryWithinRootLexical)(target, root, { pathImpl: opts.pathImpl }) !== null;
+}
+/**
+ * Assert every destSubpath the descriptor declares (global + local artifact
+ * layout) resolves within `configHome`. Throws fail-closed naming the offending
+ * descriptor + path on the first escape. A descriptor with no artifact layout
+ * passes (nothing to confine).
+ */
+function assertDescriptorConfined(descriptor, configHome) {
+    if (!descriptor || typeof descriptor !== 'object')
+        return;
+    const id = typeof descriptor.id === 'string' ? descriptor.id : '<unknown>';
+    const layout = descriptor.runtime?.artifactLayout;
+    if (!layout || typeof layout !== 'object')
+        return;
+    const check = (scope, kinds) => {
+        if (!Array.isArray(kinds))
+            return;
+        for (const kind of kinds) {
+            const dest = kind?.destSubpath;
+            if (typeof dest !== 'string' || dest.length === 0)
+                continue;
+            if (!isPathConfined(dest, configHome)) {
+                throw new Error(`external-descriptor-trust: descriptor '${id}' declares an unconfined ${scope} destSubpath ` +
+                    `${JSON.stringify(dest)} (resolves outside configHome ${JSON.stringify(configHome)}) — rejected fail-closed.`);
+            }
+        }
+    };
+    check('global', layout.global);
+    check('local', layout.local);
+}

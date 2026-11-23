@@ -1,0 +1,256 @@
+"use strict";
+/**
+ * STATE.md Field Schema — the one declaration (ADR-3473 §8.8, issue #3873).
+ *
+ * Phase 3 substrate. Before this module, "which STATE.md keys exist and what
+ * they carry" was declared in THREE hand-maintained places that were already
+ * observed to disagree (see the `last_activity` docstring below):
+ *
+ *   - `FIELD_CLASSIFICATION` (`src/state-transition.cts`) — source/preservation/
+ *     guard/mergeStrategy per frontmatter key (ADR-1769 §4 / ADR-3408).
+ *   - `FRONTMATTER_BODY_SOURCE` (`src/state-transition.cts`) — which BODY field
+ *     a frontmatter key derives from.
+ *   - `FRONTMATTER_KEY_TO_BODY_LABEL` (`src/state.cts`) — the Title-Case label
+ *     a report speaks a preserved field in (ADR-3408 §8.4/§8.5).
+ *
+ * This module is the single row-per-key declaration those three now PROJECT
+ * from at load time (`state-transition.cts` / `state.cts`), rather than
+ * hand-maintaining a fourth copy of the same knowledge. Every exported shape
+ * of the three original tables is unchanged — same keys, same key ORDER, same
+ * frozen/null-prototype-ness — so every existing consumer (the preservation
+ * dispatch loop, `getFieldClassification`, `getPreserveWhenUnchangedFields`,
+ * `bodyLabelFor`, and issue #3872's `declaredLeavesOf`) keeps working without
+ * an edit. See `.gsd/phase/feat-3873-state-md-schema/40-design.md`.
+ *
+ * LEAF MODULE, DELIBERATELY. This file imports from neither `state-transition.cts`
+ * nor `state.cts` — both of those import THIS module, and either importing
+ * back would be the exact CJS require-cycle `src/health-diagnostic-types.cts`'s
+ * own docstring describes breaking for the health-diagnostic rule tables
+ * (`module.exports` read before it is assigned, so a destructured value comes
+ * back `undefined`). `FieldSource` / `FieldPreservation` / `FieldGuard` /
+ * `FieldMergeStrategy` therefore live HERE now and are re-exported (by the same
+ * name, so no importer of `state-transition.cts` needs to change) from
+ * `state-transition.cts`.
+ *
+ * ADR-457 build-at-publish: source in `src/state-md-schema.cts`, compiled to
+ * `gsd-core/bin/lib/state-md-schema.cjs` (gitignored).
+ *
+ * Design: .gsd/phase/feat-3873-state-md-schema/40-design.md
+ * Test matrix: .gsd/phase/feat-3873-state-md-schema/50-test-matrix.md
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.STATE_FIELD_SCHEMA = exports.STATE_MD_ENTRY_MAX_CHARS = exports.STATE_MD_LINE_TARGET = exports.STATUS_LIFECYCLE_ENUM = void 0;
+/**
+ * The seven CANONICAL values `normalizeStateStatus` (`src/state-document.cts`)
+ * maps recognized raw status prose TO — the function's default fallback plus
+ * each vocabulary entry's literal output. This is NOT the raw body prose
+ * vocabulary `CONTEXT.md`'s "STATE.md Status Lifecycle (ADR-2207)" entry
+ * documents (`Ready to plan` → `All phases complete` → `<version> milestone
+ * complete` → `Awaiting next milestone`, plus the handler-authored strings
+ * in `KNOWN_TEMPLATE_DEFAULTS['Status']`) — that is free-form prose
+ * `normalizeStateStatus` READS.
+ *
+ * CORRECTED (#3873 phase-3 test-matrix row 26 — verified by executing
+ * `normalizeStateStatus`, not by reading this docstring's prior claim):
+ * this is NOT a closed set the `status` frontmatter key is restricted to at
+ * runtime. `normalizeStateStatus` is deliberately LENIENT: its fallback
+ * returns the caller's raw, UNRECOGNIZED prose unchanged — when none of its
+ * vocabulary entries recognize the whole-field input, that raw value is what
+ * the function returns. A status value outside this seven-member set is not
+ * rejected, coerced, or normalized; it passes straight through into the
+ * frontmatter. `STATUS_LIFECYCLE_ENUM` is therefore the set of values the
+ * normalizer maps recognized input ONTO, not a runtime-enforced closed
+ * vocabulary for the field.
+ *
+ * #4186: recognition is ANCHORED (whole-field match against the declared
+ * `STATUS_EXACT_TOKENS` / `STATUS_ANCHORED_PATTERNS` tables in
+ * `src/state-document.cts`), never a substring scan of the prose — prose
+ * merely CONTAINING a status word (a `.planning/` path, `verifica*`,
+ * `completezza`) passes through verbatim instead of being rewritten to a
+ * credible wrong token.
+ */
+exports.STATUS_LIFECYCLE_ENUM = Object.freeze([
+    'unknown',
+    'paused',
+    'executing',
+    'planning',
+    'discussing',
+    'verifying',
+    'completed',
+]);
+/**
+ * STATE.md's documented size target, in lines (#5830). The one code-side
+ * copy of the number `gsd-core/templates/state.md`'s `<size_constraint>`,
+ * `gsd-core/workflows/execute-plan.md` and `docs/reference/state-md.md` state
+ * in prose ("Keep STATE.md under 100 lines"). The health rule W031 warns when
+ * STATE.md is more than 3x this target.
+ */
+exports.STATE_MD_LINE_TARGET = 100;
+/**
+ * The length bound for one STATE.md digest entry, in UTF-16 code units
+ * (JavaScript `string.length`, so an astral-plane emoji counts as 2). Set by
+ * #2618 for "Pending Todos" bullets (`PENDING_TODO_BULLET_MAX_CHARS`,
+ * `src/init.cts`, which truncates to it) and reused by #5830 for the Quick
+ * Tasks `Description` cell (`QUICK_TASK_DESCRIPTION_MAX_CHARS`,
+ * `src/markdown-table.cts`, which only warns past it). Both name this one
+ * constant so the two bounds cannot drift apart.
+ */
+exports.STATE_MD_ENTRY_MAX_CHARS = 240;
+// ─── The one declaration ────────────────────────────────────────────────────
+//
+// Row order below is `FIELD_CLASSIFICATION`'s (`src/state-transition.cts`,
+// pre-#3873) ORIGINAL literal order, verified by direct read and preserved
+// deliberately: the `FIELD_CLASSIFICATION` projection built from this table
+// (`state-transition.cts`) walks `Object.keys(STATE_FIELD_SCHEMA)` directly,
+// so this row order IS that projection's key order, and key order is
+// observable (the preservation dispatch loop iterates it). The two other
+// projections (`FRONTMATTER_BODY_SOURCE`, `FRONTMATTER_KEY_TO_BODY_LABEL`) do
+// NOT reuse this same order — their pre-#3873 literals were independently
+// hand-written and already disagreed with each other and with this order (see
+// each projection's own ordering constant in its home module) — so each
+// projection module declares its OWN explicit key-order list rather than
+// re-deriving order from this table's iteration, which would silently change
+// two of the three tables' observable order out from under every consumer.
+exports.STATE_FIELD_SCHEMA = Object.freeze(Object.assign(Object.create(null), {
+    // Schema
+    gsd_state_version: {
+        type: 'string', cardinality: 'one', source: 'free', preservation: 'derive', emitted: 'always',
+    },
+    // Milestone (external — from ROADMAP.md)
+    milestone: {
+        type: 'string', cardinality: 'optional', source: 'external', preservation: 'preserve-if-placeholder', emitted: 'when-present',
+    },
+    milestone_name: {
+        type: 'string', cardinality: 'optional', source: 'external', preservation: 'preserve-if-placeholder', emitted: 'when-present',
+    },
+    // Phase / plan position (body-derived)
+    current_phase: {
+        type: 'string', cardinality: 'optional', source: 'body', preservation: 'preserve-when-unchanged',
+        bodySource: Object.freeze(['Current Phase']), bodyLabel: 'Current Phase', emitted: 'when-present',
+    },
+    current_phase_name: {
+        type: 'string', cardinality: 'optional', source: 'curated', preservation: 'preserve-when-unchanged',
+        bodySource: Object.freeze(['Current Phase Name']), bodyLabel: 'Current Phase Name', emitted: 'when-present',
+    },
+    current_plan: {
+        type: 'string', cardinality: 'optional', source: 'body', preservation: 'preserve-when-unchanged',
+        bodySource: Object.freeze(['Current Plan']), bodyLabel: 'Current Plan',
+        // #3873 phase-3 test-matrix row 25 (verified by executing
+        // `advancePlanCore`, `src/state-transition.cts:1306`, not by reading
+        // its docstring): TODAY the `Current Plan` body field parses in
+        // exactly ONE shape — a bare number `N`, paired with a separate
+        // `Total Plans in Phase` field. The hybrid compound `N of M` written
+        // directly into `Current Plan` (no `Total Plans in Phase` sibling)
+        // does NOT parse: `legacyTotal` is absent, `planField` reads the
+        // DIFFERENT `Plan` field (also absent), so the function falls to its
+        // NaN/NaN error branch. Feeding `Current Plan: 2 of 5` WITH a
+        // `Total Plans in Phase` sibling present does not change this — it
+        // "succeeds" only because `parseInt("2 of 5", 10)` truncates to `2`
+        // and the sibling supplies the total; the `of 5` half is silently
+        // discarded, which is `parseInt` coincidence, not shape recognition.
+        // `Plan: N of M` (a DIFFERENT field name) DOES parse the hybrid shape,
+        // but `buildStateFrontmatter` never reads `Plan` into `current_plan`
+        // (verified: it calls `stateExtractField(bodyContent, 'Current Plan')`
+        // only), so that shape is out of scope for this row regardless.
+        //
+        // #3784/#3791 WIDENED THIS ROW. The paragraph above describes the
+        // pre-#3791 parser and is kept as the record of what the shape was
+        // before, because row 25 exists to stop exactly that reading from
+        // being re-asserted by accident.
+        //
+        // `advancePlanCore` now accepts the hybrid shape, so the declared set
+        // is `['N', 'N of M']`. Two properties of the widening matter to a
+        // future reader:
+        //
+        //   - It is ANCHORED. The parser matches `/^(\d+)\s+of\s+(\d+)\s*$/`
+        //     against the whole value, so `4 — blocked on review of 2 PRs`
+        //     is REJECTED rather than yielding a total of 2 out of prose.
+        //     Declaring `'N of M'` is a claim about that grammar, not about
+        //     "contains the word of".
+        //   - `'N/M'` stays UNDECLARED and must keep failing. Row 23 probes
+        //     the undeclared remainder of `SHAPE_EXAMPLES`, so it needs at
+        //     least one member outside the declared set to stay non-vacuous.
+        //
+        // Widening this row without widening the parser (or the reverse) goes
+        // RED on rows 23/24/25. That coupling is the forcing function, and it
+        // is the reason this row is data rather than a predicate: §8.8's
+        // "parsers are checked, not generated".
+        acceptedShapes: Object.freeze(['N', 'N of M']),
+        emitted: 'when-present',
+    },
+    // Status / lifecycle (body-derived; #1230 delta heuristic applies)
+    // guard: the 'unknown' sentinel is the ONLY true executor-side guard in
+    // this table (stopped_at's `## Session` scoping is caller-side delta
+    // extraction, not an executor condition) — ADR-3408 Decision 1.
+    status: {
+        type: 'string', enum: exports.STATUS_LIFECYCLE_ENUM, cardinality: 'one', source: 'body', preservation: 'preserve-when-unchanged',
+        guard: 'non-sentinel-unknown', bodySource: Object.freeze(['Status']), bodyLabel: 'Status', emitted: 'always',
+    },
+    stopped_at: {
+        type: 'string', cardinality: 'optional', source: 'body', preservation: 'preserve-when-unchanged',
+        bodySource: Object.freeze(['Stopped At', 'Stopped at']), bodyLabel: 'Stopped At', emitted: 'when-present',
+    },
+    paused_at: {
+        type: 'string', cardinality: 'optional', source: 'body', preservation: 'preserve-when-unchanged',
+        bodySource: Object.freeze(['Paused At']), bodyLabel: 'Paused At', emitted: 'when-present',
+    },
+    // Activity log
+    last_updated: {
+        type: 'string', cardinality: 'one', source: 'free', preservation: 'derive', emitted: 'always',
+    }, // realClock.nowIso()
+    // #3873: THE LIVE DISAGREEMENT. Pre-schema, `FRONTMATTER_BODY_SOURCE`
+    // carried this key (`last_activity: ['Last Activity', 'Last activity']`)
+    // while `FRONTMATTER_KEY_TO_BODY_LABEL` did NOT — same field, two
+    // tables, two different answers to "does this key have a reportable
+    // body label". Resolved by DECLARATION, not by picking whichever table
+    // "looks right": `bodySource` is present below (this key IS derived from
+    // a body field and `buildStateFrontmatter` — `src/state.cts` — reads it
+    // via that exact two-case-variant fallback), and `bodyLabel` is
+    // deliberately ABSENT, because that is what ships TODAY —
+    // `last_activity`'s `preservation` is `'derive'`, never
+    // `'preserve-when-unchanged'`, so it can never reach `bodyLabelFor`'s
+    // (`src/state.cts`) `STATE_BODY_LABEL_UNWIRED_ROW` throw in the first
+    // place; the absent label is inert, not a latent bug. Pinned by
+    // `tests/state.test.cjs`'s pre-existing
+    // `lastActivityLabelResolutionMatchesShippedBehavior`. Do NOT "tidy"
+    // this by adding a label — that would be shipping a policy change
+    // disguised as a consolidation, exactly the #3427 failure this epic is
+    // named after.
+    last_activity: {
+        type: 'string', cardinality: 'optional', source: 'body', preservation: 'derive',
+        bodySource: Object.freeze(['Last Activity', 'Last activity']), emitted: 'when-present',
+    }, // always refresh on transition
+    last_activity_desc: {
+        type: 'string', cardinality: 'optional', source: 'body', preservation: 'preserve-when-unchanged',
+        bodySource: Object.freeze(['Last Activity Description']), bodyLabel: 'Last Activity Description', emitted: 'when-present',
+    },
+    // Commit provenance (#2573) — ambient git read, recomputed on every write,
+    // exactly like last_updated. Never preserved: a stale stamp would claim
+    // STATE.md was written against a commit it wasn't.
+    state_head: {
+        type: 'string', cardinality: 'optional', source: 'free', preservation: 'derive', emitted: 'when-present',
+    }, // #2573
+    // Progress block (disk-derived, except the curated progress ratchet)
+    // mergeStrategy: 'progress-ratchet' — completed_plans/completed_phases
+    // only ever ratchet UP toward the derived value (#2969); everything
+    // else in the merge is either always-derived (#2440) or always-curated.
+    progress: {
+        type: 'object', cardinality: 'optional', source: 'curated', preservation: 'preserve-always',
+        mergeStrategy: 'progress-ratchet', emitted: 'when-present',
+    }, // #3242, #1446
+    'progress.total_phases': {
+        type: 'number', cardinality: 'optional', source: 'disk', preservation: 'derive', emitted: 'when-present',
+    },
+    'progress.completed_phases': {
+        type: 'number', cardinality: 'optional', source: 'disk', preservation: 'derive', emitted: 'when-present',
+    },
+    'progress.total_plans': {
+        type: 'number', cardinality: 'optional', source: 'disk', preservation: 'derive', emitted: 'when-present',
+    },
+    'progress.completed_plans': {
+        type: 'number', cardinality: 'optional', source: 'disk', preservation: 'derive', emitted: 'when-present',
+    },
+    'progress.percent': {
+        type: 'number', cardinality: 'optional', source: 'disk', preservation: 'derive', emitted: 'when-present',
+    },
+}));
