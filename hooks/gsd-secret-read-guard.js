@@ -121,10 +121,14 @@
 //   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
 //   the option's value). Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
-//   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
-//   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
-//   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
-//   `$VAR` gap; a heredoc tag whose `${…}` holds a quoted `}`, which only
+//   a `${…}` form that is not a default (`${x/y/.env}`, `${x:0:1}.env`,
+//   `${x:-${y}.env}`, whose inner expansion is unknown), or a default another
+//   command produces (`${x:-$(echo .env)}`); a quoted default whose bare name is
+//   its own word (`"${x:-update .env docs}"`, also with text around the
+//   expansion) is denied as the unquoted one; a word with no whitespace of its
+//   own and more than 12 optional defaults (or past 2 MB of variants) is denied
+//   outright, one with whitespace (a script, a sentence) gets each default on
+//   its own, all and none past that; a heredoc tag whose `${…}` holds a quoted `}`, which only
 //   the bash and zsh readings read and only with a trigger
 //   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); some arithmetic the
 //   scan reads differently from the shell, given here by example with the
@@ -1977,6 +1981,319 @@ const CLUSTER_FLAG_CHAR_RE = /[A-Za-z0-9]/;
 // letters and digits, so `-fapp.env` is denied although `cat app.env` is not:
 // a fail-safe false positive, pinned in tests.
 function operandNamesSecret(text) {
+  return operandSecretMatch(text) !== null;
+}
+
+// The text that names the secret: the word itself, or the variant or field of it that does (#6132), so the denial names
+// `.env` and not the whole word. null when nothing does.
+function namesSecretVariant(text) {
+  return namesSecretOperand(text) || paramVariantsMatch(text, namesSecretOperand) !== null;
+}
+
+function operandSecretMatch(text) {
+  if (operandWordNamesSecret(text)) return text;
+  return paramVariantsMatch(text, operandWordNamesSecret);
+}
+
+// A script text a shell runs (`eval`, `-c`, a process substitution, a heredoc or here-string fed to a shell) scanned as
+// written and with each `${…}` default expanded, so `eval ${x:-cat .env}` reads what `eval cat .env` does. Fails closed past
+// the bounds, like the operand check.
+function findSecretReadWithDefaults(text, depth) {
+  const direct = findSecretRead(text, depth);
+  if (direct || !text.includes('${')) return direct;
+  return findSecretReadInVariants(text, depth);
+}
+
+// The scan of each variant of `text` (paramVariants), expanded again until none holds a default; null when none reads.
+function findSecretReadInVariants(text, depth) {
+  if (!text.includes('${')) return null;
+  if (text.length > MAX_PARAM_TEXT) return secretRead(text);
+  let layer = [text];
+  for (let level = 0; level < MAX_PARAM_LEVELS; level++) {
+    const next = [];
+    for (const word of layer) {
+      const expanded = paramVariants(word, MAX_SCRIPT_VARIANTS, true);
+      if (expanded.overflow) return secretRead(text);
+      for (const variant of expanded.variants) {
+        const hit = findSecretRead(variant, depth);
+        if (hit) return hit;
+        if (variant.includes('${')) next.push(variant);
+      }
+    }
+    if (next.length === 0) return null;
+    if (next.length > MAX_SCRIPT_VARIANTS) return secretRead(text);
+    layer = next;
+  }
+  return secretRead(text);
+}
+
+// `text` with every balanced `${…}` removed: whitespace left in it means the word is a script or a quoted sentence, whose
+// own spaces are not field separators.
+// `text` split on whitespace that is not inside a `${…}` (a subscript or default may hold spaces).
+function splitOutsideParams(text) {
+  const fields = [];
+  let current = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '$' && text[i + 1] === '{') {
+      const close = paramCloseIndex(text, i + 2);
+      const end = close === -1 ? text.length - 1 : close;
+      current += text.slice(i, end + 1);
+      i = end + 1;
+    } else if (/\s/.test(text[i])) {
+      if (current !== '') fields.push(current);
+      current = '';
+      i++;
+    } else current += text[i++];
+  }
+  if (current !== '') fields.push(current);
+  return fields;
+}
+
+function textOutsideParams(text) {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('${', pos);
+    if (open === -1) return out + text.slice(pos);
+    out += text.slice(pos, open);
+    const close = paramCloseIndex(text, open + 2);
+    if (close === -1) return out;
+    pos = close + 1;
+  }
+}
+
+// The first variant of a word holding `${…}` (paramVariants) that names a secret by `check`, or one of its fields.
+// A default can hold another expansion (`${x:-${y:-.env}}`): the variants are expanded again until none holds one. Past
+// a bound, or for an expansion that never balances, the word cannot be read exhaustively and fails closed: the name can be
+// assembled from decoded or split defaults, so what the raw word spells proves nothing.
+function paramVariantsMatch(text, check) {
+  if (!text.includes('${')) return null;
+  if (text.length > MAX_PARAM_TEXT) return text;
+  // An unquoted expansion's value is split into fields (bash, dash), each its own operand, but only in a word that has no
+  // whitespace of its own: `cat ${x:-a .env}` splits, `bash -c 'echo ${P:-3}; [ -f .env ]'` is a script.
+  const splitFields = !/\s/.test(textOutsideParams(text));
+  let layer = [text];
+  for (let level = 0; level < MAX_PARAM_LEVELS; level++) {
+    const next = [];
+    for (const word of layer) {
+      const expanded = paramVariants(word, MAX_PARAM_VARIANTS, !splitFields);
+      if (expanded.overflow) return text;
+      for (const variant of expanded.variants) {
+        if (check(variant)) return variant;
+        if (splitFields && /\s/.test(variant)) {
+          const piece = variant.split(/\s+/).find((field) => field !== '' && check(field));
+          if (piece !== undefined) return piece;
+        }
+        if (variant.includes('${')) next.push(variant);
+      }
+    }
+    if (next.length === 0) return null;
+    if (next.length > MAX_PARAM_VARIANTS) return text;
+    layer = next;
+  }
+  return text;
+}
+
+// #6132: the words a word holding `${name<op>WORD}` or an empty `${}` can expand to. The shell takes WORD when the
+// variable is unset (`-`, `:-`, `=`, `:=`, `?`, `:?`) or set (`+`, `:+`), and nothing in the other case, so each such
+// expansion is replaced by its quote-removed WORD, and by nothing; an empty `${}` by nothing (zsh reads it so). The guard
+// cannot know the variable, so every combination is a candidate (at most MAX_PARAM_VARIANTS): `cat ${x:-$'.env'}`,
+// `cat ${x-$'.e\x6ev'}`, `cat ${x:+a}.env` and `cat .env${}` all name `.env`. Any other `${…}` form is left as it is.
+const MAX_PARAM_VARIANTS = 4096;
+const MAX_SCRIPT_VARIANTS = 256; // a script text is scanned in full once per variant
+const MAX_PARAM_LEVELS = 32;
+// Bounds on the work a word can cost: its length, and the characters its variants add up to (the product of many nested
+// groups grows fast); past either the word fails closed.
+const MAX_PARAM_TEXT = 262144;
+const MAX_PARAM_VARIANT_CHARS = 2000000;
+// The name before the operator: a variable (also indirect `!name`, subscripted), a positional or special parameter, and in
+// zsh an empty name, `(flags)name` or a nested `${…}`.
+// Where the operator of a `${…}`'s inner text ends (the index after `-`, `:-`, `+`, `:+`, `=` or `:=`), or -1 when it has
+// none: after optional zsh prefix flags (`=`, `~`, `^`, `+`), a `(flags)` group, a name that is any number of nested `${…}`
+// then a variable (also `!name`), a positional or special parameter, or nothing (zsh), and an optional quote-aware
+// `[subscript]`.
+function paramOperatorEnd(inner) {
+  let i = 0;
+  while (i < inner.length && '=~^+'.includes(inner[i])) i++;
+  if (inner[i] === '(') {
+    let depth = 0;
+    let j = i;
+    for (; j < inner.length; j++) {
+      if (inner[j] === '\\') { j++; continue; }
+      if (inner[j] === '(') depth++;
+      else if (inner[j] === ')' && --depth === 0) break;
+    }
+    if (j >= inner.length) return -1;
+    i = j + 1;
+  }
+  for (;;) {
+    if (inner.startsWith('${', i)) {
+      const close = paramCloseIndex(inner, i + 2);
+      if (close === -1) return -1;
+      i = close + 1;
+    } else break;
+  }
+  if (inner[i] === '!') i++;
+  const name = /[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*!?#$-]/y;
+  name.lastIndex = i;
+  const m = name.exec(inner);
+  if (m) i += m[0].length;
+  if (inner[i] === '[') {
+    let depth = 0;
+    let j = i;
+    for (; j < inner.length; j++) {
+      const ch = inner[j];
+      if (ch === '\\') { j++; continue; }
+      if (ch === "'" || ch === '"') {
+        const k = inner.indexOf(ch, j + 1);
+        if (k === -1) return -1;
+        j = k;
+        continue;
+      }
+      if (ch === '[') depth++;
+      else if (ch === ']' && --depth === 0) break;
+    }
+    if (j >= inner.length) return -1;
+    i = j + 1;
+  }
+  if (inner[i] === ':') i++;
+  return '-+='.includes(inner[i]) && i < inner.length ? i + 1 : -1;
+}
+
+// The index of the `}` closing the `${` whose text starts at `i`, or -1: quotes, `$'…'` spans and nested `${` are read.
+function paramCloseIndex(str, i) {
+  let depth = 1;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (ch === "'") {
+      const j = str.indexOf("'", i + 1);
+      if (j === -1) return -1;
+      i = j + 1;
+      continue;
+    }
+    if (ch === '"') {
+      i++;
+      while (i < str.length && str[i] !== '"') i += str[i] === '\\' ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (ch === '$' && str[i + 1] === "'") {
+      const end = ansiCQuoteEnd(str, i + 1);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
+    }
+    if (ch === '$' && str[i + 1] === '{') { depth++; i += 2; continue; }
+    if (ch === '}' && --depth === 0) return i;
+    i++;
+  }
+  return -1;
+}
+
+// WORD with its quotes and backslashes removed as the shell removes them, or null for a `$'…'` span with no value.
+function unquoteParamWord(word) {
+  let out = '';
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (ch === '\\') {
+      if (word[i + 1] === '\n') { i++; continue; } // a line continuation: the shell removes both
+      if (i + 1 < word.length) out += word[++i];
+      continue;
+    }
+    if (ch === "'") {
+      const j = word.indexOf("'", i + 1);
+      out += word.slice(i + 1, j === -1 ? word.length : j);
+      i = j === -1 ? word.length : j;
+      continue;
+    }
+    if (ch === '"' || (ch === '$' && word[i + 1] === '"')) {
+      let j = ch === '"' ? i + 1 : i + 2;
+      while (j < word.length && word[j] !== '"') {
+        if (word[j] === '\\' && j + 1 < word.length) {
+          const next = word[j + 1];
+          if (next === '\n') { j += 2; continue; } // a line continuation
+          if ('"\\$`'.includes(next)) { out += next; j += 2; continue; }
+        }
+        out += word[j++];
+      }
+      i = j;
+      continue;
+    }
+    if (ch === '$' && word[i + 1] === "'") {
+      const end = ansiCQuoteEnd(word, i + 1);
+      const decoded = decodeAnsiC(word.slice(i + 2, end === -1 ? word.length : end), 'bash');
+      if (decoded === null) return null;
+      out += decoded;
+      i = end === -1 ? word.length : end;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function paramVariants(text, cap = MAX_PARAM_VARIANTS, linear = false) {
+  const parts = []; // a literal string, or the choices an expansion can take
+  let pos = 0;
+  let changed = false;
+  for (;;) {
+    const open = text.indexOf('${', pos);
+    parts.push(text.slice(pos, open === -1 ? text.length : open));
+    if (open === -1) break;
+    const close = paramCloseIndex(text, open + 2);
+    if (close === -1) {
+      // `${x:-"${y:-.env}}`: the quote skipper ran out of text; whatever follows an operator may still be read.
+      if (paramOperatorEnd(text.slice(open + 2)) !== -1) return { variants: [], overflow: true };
+      parts.push(text.slice(open));
+      break;
+    }
+    const inner = text.slice(open + 2, close);
+    const operatorEnd = paramOperatorEnd(inner);
+    let choices;
+    if (inner === '') choices = [''];
+    else if (operatorEnd !== -1) {
+      const value = unquoteParamWord(inner.slice(operatorEnd));
+      choices = value === null || value === '' ? [''] : [value, ''];
+    } else choices = [text.slice(open, close + 1)];
+    if (choices.length !== 1 || choices[0] !== text.slice(open, close + 1)) changed = true;
+    parts.push(choices);
+    pos = close + 1;
+  }
+  if (!changed) return { variants: [], overflow: false };
+  const groups = parts.filter((part) => Array.isArray(part) && part.length > 1).length;
+  let tooBig = 2 ** Math.min(groups, 30) > cap;
+  if (!tooBig) {
+    let variants = [''];
+    let chars = 0;
+    for (const part of parts) {
+      const choices = Array.isArray(part) ? part : [part];
+      const next = [];
+      for (const v of variants) {
+        for (const c of choices) {
+          next.push(v + c);
+          chars += v.length + c.length;
+        }
+      }
+      if (chars > MAX_PARAM_VARIANT_CHARS) { tooBig = true; break; }
+      variants = next;
+    }
+    if (!tooBig) return { variants, overflow: false };
+  }
+  if (!linear) return { variants: [], overflow: true };
+  // A script with many defaults: each expansion on its own with the others empty, all of them, and none. A name assembled
+  // from several of them is then not seen (a gap; the operand check keeps the full product).
+  const build = (take) => parts.map((part, index) => {
+    if (!Array.isArray(part)) return part;
+    return part.length > 1 && take(index) ? part[0] : (part.length > 1 ? '' : part[0]);
+  }).join('');
+  const indexes = parts.map((part, index) => (Array.isArray(part) && part.length > 1 ? index : -1)).filter((index) => index !== -1);
+  const variants = [build(() => true), build(() => false), ...indexes.map((chosen) => build((index) => index === chosen))];
+  return { variants, overflow: false };
+}
+
+function operandWordNamesSecret(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
   if (v.startsWith('--')) {
@@ -2047,7 +2364,7 @@ function requestItemSecretRead(base, operands) {
       const eq = field.indexOf('=');
       if (eq === -1) continue;
       const value = field.slice(eq + 1);
-      if (value.startsWith('@') && value !== '@-' && namesSecretOperand(value.slice(1))) return text;
+      if (value.startsWith('@') && value !== '@-' && namesSecretVariant(value.slice(1))) return text;
     }
     return null;
   }
@@ -2062,7 +2379,7 @@ function requestItemSecretRead(base, operands) {
       if (operand.isUrl) continue;
       const item = HTTPIE_FILE_ITEM_RE.exec(operand.text);
       // `file@path;type=mime` and `;filename=` follow the path after a `;`: both readings are judged.
-      if (item && (namesSecretOperand(item[1]) || namesSecretOperand(item[1].split(';')[0]))) return operand.text;
+      if (item && (namesSecretVariant(item[1]) || namesSecretVariant(item[1].split(';')[0]))) return operand.text;
     }
   }
   return null;
@@ -3010,7 +3327,7 @@ function scanCommand(command, depth, reading) {
           k++;
           if (t.text.endsWith('<<<')) hereStrings.push(target.text); // stdin data for a shell
           // Input redirects are reads regardless of the command's exemption.
-          else if (t.read && namesSecretOperand(target.text)) return secretRead(target.text);
+          else if (t.read && (namesSecretOperand(target.text) || paramVariantsMatch(target.text, namesSecretOperand) !== null)) return secretRead(target.text);
         }
         continue;
       }
@@ -3023,9 +3340,32 @@ function scanCommand(command, depth, reading) {
     const { base, operands } = cmd;
     const heredocs = heredocsBySeg.get(s) || [];
 
+    // The command word holds a default (`${x:-cat} .env`, `time ${x:-cat .env}`): the segment is read as the script it
+    // becomes when each default is expanded (#6132).
+    const rawBase = words[words.length - operands.length - 1].text;
+    if (rawBase.includes('${')) {
+      const named = paramVariants(rawBase);
+      if (named.overflow) return secretRead(rawBase);
+      // Each variant is scanned with the operands re-quoted as one word each, as the shell hands them over.
+      const quotedOperands = operands.map((w) => `'${w.text.replace(/'/g, "'\\''")}'`).join(' ');
+      for (const variant of named.variants) {
+        if (variant.trim() === '') continue;
+        const hit = findSecretRead(`${variant} ${quotedOperands}`, depth + 1);
+        if (hit) return hit;
+      }
+      // A shell or xargs named by the default takes the segment's heredocs, here-strings and piped text as its input.
+      for (const variant of named.variants) {
+        const inner = resolveCommand([...variant.split(/\s+/).filter(Boolean).map((text) => ({ text })), ...operands]);
+        let found = null;
+        if (inner && SHELL_INTERPRETERS.has(inner.base)) found = scanShellInterpreter(inner.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
+        else if (inner && inner.base === 'xargs') found = scanXargsPipe(inner.operands, s, bySeg, sepAfter, depth, reading);
+        if (found) return found;
+      }
+    }
+
     // eval concatenates ALL its operands and runs the result.
     if (base === 'eval') {
-      const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1);
+      const hit = findSecretReadWithDefaults(operands.map((w) => w.text).join(' '), depth + 1);
       if (hit) return hit;
       continue;
     }
@@ -3036,7 +3376,7 @@ function scanCommand(command, depth, reading) {
         if (w.procsub !== undefined) {
           const src = reconstructedProcsub(w.procsub, reading);
           if (src !== null) {
-            const hit = findSecretRead(src, depth + 1);
+            const hit = findSecretReadWithDefaults(src, depth + 1);
             if (hit) return hit;
           }
         } else if (operandNamesSecret(w.text)) return secretRead(w.text);
@@ -3086,7 +3426,8 @@ function scanCommand(command, depth, reading) {
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      const named = operandSecretMatch(operands[k].text);
+      if (named !== null) return secretRead(named);
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
@@ -3261,7 +3602,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   if (cIdx !== -1) {
     // Mode c: the next operand is the script; stdin is DATA (not scanned).
     const script = operands[cIdx + 1];
-    if (script) return findSecretRead(script.text, depth + 1);
+    if (script) return findSecretReadWithDefaults(script.text, depth + 1);
     return null;
   }
   let fileTok;
@@ -3276,21 +3617,21 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (fileTok.procsub !== undefined) {
       const src = reconstructedProcsub(fileTok.procsub, reading);
-      if (src !== null) return findSecretRead(src, depth + 1);
+      if (src !== null) return findSecretReadWithDefaults(src, depth + 1);
     }
     return null;
   }
   // Mode stdin: heredoc bodies, here-strings, and a piped echo/printf source.
   for (const h of heredocs) {
-    const hit = findSecretRead(h.text, depth + 1);
+    const hit = findSecretReadWithDefaults(h.text, depth + 1);
     if (hit) return hit;
   }
   for (const hs of hereStrings) {
-    const hit = findSecretRead(hs, depth + 1);
+    const hit = findSecretReadWithDefaults(hs, depth + 1);
     if (hit) return hit;
   }
   const src = pipeSourceText(s, bySeg, sepAfter);
-  if (src !== null) return findSecretRead(src, depth + 1);
+  if (src !== null) return findSecretReadWithDefaults(src, depth + 1);
   return null;
 }
 
@@ -3361,14 +3702,14 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   };
 
   // A here-string feeds xargs its text as stdin (`xargs cat <<< .env`, #6433): each word of it is a candidate.
-  const hereWords = hereStringTargets(bySeg.get(s) || []).flatMap((text) => text.split(/\s+/).filter(Boolean)).map((text) => ({ text }));
+  const hereWords = hereStringTargets(bySeg.get(s) || []).flatMap((text) => splitOutsideParams(text)).map((text) => ({ text }));
   if (hereWords.length) {
     const hit = judgeStdinWords(hereWords);
     if (hit) return hit;
   }
   // A heredoc is stdin the same way: its body's words are the names xargs reads.
   const bodyWords = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || [])
-    .flatMap((h) => h.text.split(/\s+/).filter(Boolean)).map((text) => ({ text }));
+    .flatMap((h) => splitOutsideParams(h.text)).map((text) => ({ text }));
   if (bodyWords.length) {
     const hit = judgeStdinWords(bodyWords);
     if (hit) return hit;
@@ -3445,7 +3786,7 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
   if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
-  if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1);
+  if (cmd.base === 'eval') return findSecretReadWithDefaults(cmd.operands.map((w) => w.text).join(' '), depth + 1);
   if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
   if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading);
   return null;
