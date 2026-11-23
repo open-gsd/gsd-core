@@ -31,24 +31,33 @@ const isMapping = (value) => value !== null && typeof value === 'object' && !Arr
 const isDotSegment = (segment) => segment === '.' || segment === '..';
 
 // The concatenated content of every fenced block (fence markers excluded; an unterminated block runs to the end): a live
-// resolver call only ever sits in one. The fence rules (backtick or tilde, any length) have one owner, the sectionizer;
-// leading blanks are stripped first so an indented fence counts, as it did for the test. A list marker is stripped only
-// from a line outside every fence that then starts a fence, so a "- ```" line inside a fence stays content.
+// resolver call only ever sits in one. One linear walk with the sectionizer's fence rules: after the leading blanks are
+// stripped, an opener is a run of three or more backticks or tildes, and a closer is a run of the same character at least
+// as long with nothing else on the line. A list marker is stripped only from a line outside every fence that then starts
+// a fence, so a "- ```" line inside a fence stays content.
 function fencedCodeOnly(content) {
-  const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
-  const lines = content.split('\n').map((line) => line.replace(/^[ \t]+/, ''));
-  let blocks = scanFencedBlocks(lines);
-  for (let i = 0; i < lines.length; i += 1) {
-    if (blocks.some((block) => i >= block.openLineIdx && i <= (block.closeLineIdx === -1 ? lines.length : block.closeLineIdx))) continue;
-    const bare = lines[i].replace(/^(?:[-*+]|\d{1,9}[.)])[ \t]+/, '');
-    if (bare !== lines[i] && (bare.startsWith('```') || bare.startsWith('~~~'))) {
-      lines[i] = bare;
-      blocks = scanFencedBlocks(lines);
+  const kept = [];
+  let open = null;
+  for (const raw of content.split('\n')) {
+    let line = raw.replace(/^[ \t]+/, '');
+    if (open === null) {
+      const bare = line.replace(/^(?:[-*+]|\d{1,9}[.)])[ \t]+/, '');
+      if (bare !== line && (bare.startsWith('```') || bare.startsWith('~~~'))) line = bare;
+    }
+    const char = line[0];
+    let run = 0;
+    if (char === '`' || char === '~') {
+      while (line[run] === char) run += 1;
+    }
+    if (open === null) {
+      if (run >= 3) open = { char, len: run };
+    } else if (char === open.char && run >= open.len && line.slice(run).trim() === '') {
+      open = null;
+    } else {
+      kept.push(line);
     }
   }
-  return blocks
-    .map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'))
-    .join('\n');
+  return kept.join('\n');
 }
 
 module.exports = {

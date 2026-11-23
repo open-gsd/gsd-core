@@ -39,6 +39,7 @@ function allowedTools(text) {
     let body = rest;
     let close = body.indexOf(']');
     for (let i = at + 1; close === -1 && i < lines.length; i += 1) {
+      if (lines[i].trim().startsWith('#')) continue;
       if (lines[i] !== '' && !/^\s/.test(lines[i]) && !lines[i].startsWith(']')) break;
       const part = withoutComment(lines[i]);
       body += ` ${part}`;

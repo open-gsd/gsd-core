@@ -1054,6 +1054,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['a list item fence holding a resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('- ```bash\n  gsd-sdk query config-get code_quality.fallow.enabled\n  ```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a numbered list item fence holding a resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('1. ```bash\n   gsd-sdk query config-get code_quality.fallow.enabled\n   ```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a list item fence marker line inside a fenced block before a resolver call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('```bash\n- ```\ngsd-sdk query config-get code_quality.fallow.enabled\n```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['two list item fenced blocks in sequence with a resolver call in each', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('- ```bash\n  gsd-sdk query config-get code_quality.fallow.enabled\n  ```\n- ```bash\n  gsd-sdk query config-get code_quality.fallow.enabled\n  ```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['an unterminated fence holding a resolver call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('```bash\ngsd-sdk query config-get code_quality.fallow.enabled'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a duplicate section id in autonomous.md', 'gsd-core/workflows/autonomous.md', swap('id="converge-banner"', 'id="converge-fail-fast"'), 'resolver-hoist-guard', /the fragment parser failed: workflow-fragments: duplicate section id/],
         ['the default-local assignment gone from autonomous.md', 'gsd-core/workflows/autonomous.md', swap('PLAN_STRATEGY="local"', 'PLAN_STRATEGY="other"'), 'resolver-hoist-guard', /the default-local assignment must survive the converge-hoist/],
@@ -1217,6 +1218,14 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
           append('options: [ {label:"a"},{label:"b["},{label:"c"},{label:"d"},{label:"e"} ]'), 'new-project-mvp-prompt', /has 5 options/],
         ['an escaped quote then ] inside a label does not close a five-label array early (#1516)', 'gsd-core/workflows/new-project.md',
           append('options: [ {label:"a"},{label:"b\\"]"},{label:"c"},{label:"d"},{label:"e"} ]'), 'new-project-mvp-prompt', /has 5 options/],
+        ['x_timeout is not a standalone timeout (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => text.replace(/\btimeout\b/gi, 'x_timeout'), 'debugger-fix-acceptance', /the reference must mention a timeout/],
+        ['GSD_TIMEOUT is not a standalone timeout (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => text.replace(/\btimeout\b/gi, 'GSD_TIMEOUT'), 'debugger-fix-acceptance', /the reference must mention a timeout/],
+        ['my_git is not a standalone git (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          (text) => text.replace(/\bgit\b/gi, 'my_git'), 'debugger-fix-acceptance', /must bound the git subprocess/],
+        ['_60s is not a standalone 60s bound (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          swap('60s', '_60s'), 'debugger-fix-acceptance', /the 60s npm\/Stryker bound/],
         ['the standalone word git gone from the reference, only digit remains (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           erase(/\bgit\b/gi), 'debugger-fix-acceptance', /must bound the git subprocess/],
         ['the standalone word timeout gone, only timeouts remains (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
@@ -2066,6 +2075,25 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     gapCases('trailing blanks after the calibration date', PLAN_CHECKER, 'few-shot-calibration', (text, gap) => text.replace(/^last_calibrated: (\S+)/m, (_, date) => `last_calibrated: ${date}${' '.repeat(gap)}`), 20, /plan-checker.md frontmatter must carry a last_calibrated date/);
     passes('a nine digit version in the plan-checker reference', PLAN_CHECKER, (text) => text.replace(/^version: \d+\n/m, 'version: 123456789\n'), 'few-shot-calibration');
     findsOne('a ten digit version in the plan-checker reference', PLAN_CHECKER, (text) => text.replace(/^version: \d+\n/m, 'version: 1234567890\n'), 'few-shot-calibration', 'plan-checker.md frontmatter must carry a numeric version');
+
+    // resolver-hoist-guard: many list item fences are read in one pass and give the verdict of one.
+    const MANY_STEP = 'gsd-core/workflows/code-review/steps/structural-pre-pass.md';
+    for (const [label, count] of [['one', 1], ['two', 2], ['200', 200]]) {
+      test(`${label} list item fenced blocks holding a resolver call are findings of resolver-hoist-guard`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, ...MANY_STEP.split('/'));
+        const block = '- ```bash\n  gsd-sdk query config-get code_quality.fallow.enabled\n  ```\n';
+        fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${block.repeat(count)}`);
+        const findings = runShipped(root, ['resolver-hoist-guard']);
+        assert.equal(findings.filter((f) => f.message.includes('must not itself call the resolver for that fact')).length, 1, JSON.stringify(findings));
+      });
+    }
+    test('200 list item fence marker lines without a call leave resolver-hoist-guard satisfied', (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...MANY_STEP.split('/'));
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${'- ```bash\n  echo ok\n  ```\n'.repeat(200)}`);
+      assert.deepEqual(runShipped(root, ['resolver-hoist-guard']), []);
+    });
   }
 
   {
@@ -2295,12 +2323,12 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     // debugger-fix-acceptance: an underscore does not join a word to its neighbours (timeout_ms, GSD_TIMEOUT, git_dir, 60s_).
     passes('timeout_ms stands alone as a timeout mention', DEBUGGER_REF,
       (text) => text.replace(/timeout/gi, 'timeout_ms'), 'debugger-fix-acceptance');
-    passes('GSD_TIMEOUT stands alone as a timeout mention', DEBUGGER_REF,
-      (text) => text.replace(/timeout/gi, 'GSD_TIMEOUT'), 'debugger-fix-acceptance');
     passes('git_dir stands alone as a git mention', DEBUGGER_REF,
       (text) => text.replace(/\bgit\b/gi, 'git_dir'), 'debugger-fix-acceptance');
     passes('60s_ stands alone as the 60s bound', DEBUGGER_REF, swap('60s', '60s_'), 'debugger-fix-acceptance');
     passes('60 seconds stands alone as the bound', DEBUGGER_REF, swap('60s', '60 seconds'), 'debugger-fix-acceptance');
+    passes('a column-0 comment line inside a multi-line allowed-tools flow list does not end it', 'commands/gsd/extract-learnings.md',
+      (text) => text.replace(/allowed-tools:\n(?: {2}- [A-Za-z]{1,10}\n){1,6}/, 'allowed-tools: [Read,\n# a comment at column 0\n  Write, Bash, Grep, Glob, Agent]\n'), 'extract-learnings');
   }
 
   // A file a batch 9 contract reads that is gone from the tree is one finding for that file.

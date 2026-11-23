@@ -39,13 +39,15 @@ function paragraphsOf(text) {
 }
 
 const isAlnum = (ch) => ch !== undefined && /[a-z0-9]/.test(ch);
+const isWordChar = (ch) => ch === '_' || isAlnum(ch);
 
-// The word stands alone in the (lower-cased) text: no letter or digit right before or after it (an underscore does
-// not join it, so timeout_ms and GSD_TIMEOUT count; digit, legit and timeouts do not).
+// The word stands alone in the (lower-cased) text: no letter, digit or underscore right before it and no letter or
+// digit right after it (a trailing underscore does not join it, so timeout_ms and git_dir count; digit, legit,
+// timeouts, x_timeout and GSD_TIMEOUT do not).
 function hasWord(lower, word) {
   let at = lower.indexOf(word);
   while (at !== -1) {
-    if (!isAlnum(lower[at - 1]) && !isAlnum(lower[at + word.length])) return true;
+    if (!isWordChar(lower[at - 1]) && !isAlnum(lower[at + word.length])) return true;
     at = lower.indexOf(word, at + 1);
   }
   return false;
@@ -55,7 +57,7 @@ function hasWord(lower, word) {
 function hasSixtySeconds(lower) {
   let at = lower.indexOf('60');
   while (at !== -1) {
-    if (!isAlnum(lower[at - 1])) {
+    if (!isWordChar(lower[at - 1])) {
       if (lower[at + 2] === 's' && !isAlnum(lower[at + 3])) return true;
       for (const skip of [0, 1]) {
         if (skip === 1 && lower[at + 2] === '\n') continue;
