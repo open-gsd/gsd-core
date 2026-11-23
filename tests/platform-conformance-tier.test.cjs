@@ -63,6 +63,28 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 const WINDOWS_TIER_RATIO_CEILING = 0.33;
 const MACOS_TIER_RATIO_CEILING = 0.25;
 
+// Classify each listed test file and count the ones that need a real OS. The
+// tree is walked once and each file read afterwards, so a sibling test that
+// writes and unlinks a probe file in tests/ (run-tests-temp-root.test.cjs,
+// #4020) can remove a listed file before its read (#6544). A file that is gone
+// is not a test file and is not counted; any other read error is a real fault.
+function countTierFiles(absPaths, classify) {
+  let tierCount = 0;
+  let readCount = 0;
+  for (const absPath of absPaths) {
+    let content;
+    try {
+      content = fs.readFileSync(absPath, 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    readCount++;
+    if (classify(content).needsRealOs) tierCount++;
+  }
+  return { tierCount, readCount };
+}
+
 // ─── Rows 1-15: classifyContent, pure fixtures ────────────────────────────────
 
 describe('classifyContent — happy-path signals', () => {
@@ -635,20 +657,36 @@ describe('conformance tier narrowing (#4641)', () => {
   // further down, which needs the same ceiling rather than a second
   // independently-drifting copy of it).
 
+  test('a test file that vanishes between the walk and its read is not counted and does not throw (#6544)', (t) => {
+    // tests/run-tests-temp-root.test.cjs writes tests/helpers-4020-probe.test.cjs
+    // into the real tests tree and unlinks it afterwards. A sibling that walked
+    // the tree in between lists a file whose read then fails with ENOENT.
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    const present = path.join(dir, 'present.test.cjs');
+    const vanished = path.join(dir, 'vanished.test.cjs');
+    fs.writeFileSync(present, "const os = require('node:os');\nos.platform();\n");
+
+    const { tierCount, readCount } = countTierFiles([present, vanished], classifyContent);
+
+    assert.equal(readCount, 1, 'only the file that exists is counted');
+    assert.equal(tierCount, 1, 'the surviving file is classified');
+  });
+
+  test('a read failure other than ENOENT still throws (#6544)', (t) => {
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    // A directory path reads as EISDIR: a real fault, not a vanished file.
+    assert.throws(() => countTierFiles([dir], classifyContent), { code: 'EISDIR' });
+  });
+
   test('conformance tier stays a tier, not the suite (#4641)', () => {
     const realTestsDir = path.join(ROOT, 'tests');
     const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
 
     const absoluteFiles = walkTestFiles(realTestsDir);
     const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    const eligibleCount = eligibleFiles.length;
-
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      const content = fs.readFileSync(absPath, 'utf8');
-      const { needsRealOs } = classifyContent(content);
-      if (needsRealOs) tierCount++;
-    }
+    const { tierCount, readCount: eligibleCount } = countTierFiles(eligibleFiles, classifyContent);
 
     const ratio = tierCount / eligibleCount;
     assert.ok(
@@ -664,14 +702,7 @@ describe('conformance tier narrowing (#4641)', () => {
 
     const absoluteFiles = walkTestFiles(realTestsDir);
     const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    const eligibleCount = eligibleFiles.length;
-
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      const content = fs.readFileSync(absPath, 'utf8');
-      const { needsRealOs } = classifyMacosContent(content);
-      if (needsRealOs) tierCount++;
-    }
+    const { tierCount, readCount: eligibleCount } = countTierFiles(eligibleFiles, classifyMacosContent);
 
     const ratio = tierCount / eligibleCount;
     assert.ok(

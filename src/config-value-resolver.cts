@@ -11,7 +11,9 @@
 import path from 'node:path';
 import { CONFIG_DEFAULTS, normalizeLegacyKeys, isConfigSection } from './configuration.cjs';
 import { getGlobalConfigDir, resolveGsdHome } from './runtime-homes.cjs';
-import { platformReadSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 config-file-read.cjs is an export= CommonJS module
+import configFileRead = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileRead;
 import { parseJsonc } from './settings-jsonc.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import loader = require('./config-loader.cjs');
@@ -75,7 +77,10 @@ type RuntimeIo = { readFile?: (file: string) => string | null; userDir?: string 
 function readConfigLayer(file: string, family: ConfigFamily, readFile?: (file: string) => string | null): LayerRead {
   let raw: string | null;
   try {
-    raw = (readFile ?? platformReadSync)(file);
+    // Bounded regular-file read (#5759): a FIFO, device or oversized layer is a fault here, never a
+    // blocking open. Migrated readers inherit this guarantee from the resolver. A caller that holds
+    // the text already (family B, #6031) supplies its own `readFile`.
+    raw = readFile ? readFile(file) : readConfigFileBounded(file);
   } catch (err) {
     return { kind: 'fault', fault: {
       reason: CONFIG_REASON.CONFIG_UNREADABLE,
@@ -207,14 +212,23 @@ function resolveConfigValue(
   opts: {
     cwd: string;
     family?: ConfigFamily;
+    configSchema?: Record<string, unknown>;
+    quiet?: boolean;
+    honorGlobal?: (key: string) => boolean;
     /** Family B only: a layer whose value is not of this type is skipped as a type mismatch (#6031). */
     valueType?: 'string';
     io?: RuntimeIo;
   },
 ): ConfigValueResolution {
+  // `configSchema` lets a caller that already holds a capability registry snapshot resolve
+  // against it; `quiet` keeps a read that must never write to stderr (an activation gate, #5139)
+  // from reporting an unusable layer. `honorGlobal` lets a caller that must stay inside what the
+  // loader reads from the global defaults file (`honorsGlobalDefaults`) skip that layer for a key
+  // outside it. None of the three changes which of the remaining layers wins.
+  const warn: typeof warnUnusableInput = opts.quiet === true ? () => false : warnUnusableInput;
   let cachedSchema: Record<string, unknown> | undefined;
   const capabilitySchema = (): Record<string, unknown> =>
-    cachedSchema ??= getCapabilityConfigSchema(opts.cwd);
+    cachedSchema ??= opts.configSchema ?? getCapabilityConfigSchema(opts.cwd);
   const family = keyFamily(key, capabilitySchema);
   const missing = (reason: ConfigReason): ConfigValueResolution => ({
     found: false, value: undefined, layer: null, reason,
@@ -234,6 +248,7 @@ function resolveConfigValue(
   const runtimeIo = family === 'B' ? opts.io : undefined;
   const layers = fileLayers(opts.cwd, family, runtimeIo);
   for (const [rank, { layer, file }] of layers.entries()) {
+    if (layer === 'global-defaults' && opts.honorGlobal && !opts.honorGlobal(key)) continue;
     const read = readConfigLayer(file, family, runtimeIo?.readFile);
     if (read.kind === 'fault') {
       faults.push({ rank, fault: read.fault });
@@ -247,7 +262,7 @@ function resolveConfigValue(
     if (Object.keys(read.data).length === 0) emptyFile = true;
     const data = family === 'A' ? normalizeLegacyKeys(read.data) : null;
     if (data?.skipped.length) {
-      warnUnusableInput({ reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: file });
+      warn({ reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: file });
     }
     if (data?.normalizations.some((normalization) => normalization.requiresFilesystem)) {
       const planningSection = data.parsed['planning'];
@@ -301,7 +316,7 @@ function resolveConfigValue(
   const relevant = faults.filter(({ rank }) => rank < winnerRank);
   const hasRelevantTypeMismatch = typeMismatchRanks.some((rank) => rank < winnerRank);
   for (const { fault } of relevant) {
-    warnUnusableInput({ reason: UNUSABLE_REASON.CONFIG_UNREADABLE, source: fault.path });
+    warn({ reason: UNUSABLE_REASON.CONFIG_UNREADABLE, source: fault.path });
   }
   const faultReason = relevant.length > 0 ? relevant[0].fault.reason : null;
   const mismatchReason = hasRelevantTypeMismatch ? CONFIG_REASON.CONFIG_TYPE_MISMATCH : null;

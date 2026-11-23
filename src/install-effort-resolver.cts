@@ -32,6 +32,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveGsdHome } from './runtime-homes.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configLoader = require('./config-loader.cjs');
+const { _deepMergeConfig, globalDefaultsPath } = configLoader;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
 const { unboundedConfigFileReason, printablePath, readConfigFileBounded } = configFileReadMod;
@@ -204,7 +207,7 @@ function _findAncestorGsdConfigPath(targetDir: string): string | null {
  */
 function readGsdEffectiveEffortConfig(targetDir: string | null = null): EffortConfig | null {
   const homeDefaults = _readGsdConfigFile(
-    path.join(resolveGsdHome(), '.gsd', 'defaults.json'),
+    globalDefaultsPath(resolveGsdHome()),
     '~/.gsd/defaults.json',
   );
 
@@ -231,20 +234,16 @@ function readGsdEffectiveEffortConfig(targetDir: string | null = null): EffortCo
   // home block's `light`/`standard` entries (the top-level spread would
   // otherwise replace the whole block, the same defect class as the
   // manifest-replacement this change fixes).
-  return {
-    ...(homeEffort || {}),
-    ...(projectEffort || {}),
-    // Deep-merge agent_overrides (project wins per-key)
-    agent_overrides: {
-      ...((homeEffort && homeEffort.agent_overrides) || {}),
-      ...((projectEffort && projectEffort.agent_overrides) || {}),
-    },
-    // Deep-merge routing_tier_defaults (project wins per-tier)
-    routing_tier_defaults: {
-      ...((homeEffort && homeEffort.routing_tier_defaults) || {}),
-      ...((projectEffort && projectEffort.routing_tier_defaults) || {}),
-    },
-  };
+  // One merge owner (#6030): the loader's deep merge, with both blocks normalized first so a
+  // non-object `agent_overrides` or `routing_tier_defaults` is treated as absent here.
+  const block = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const asBlocks = (effort: EffortConfig | null): Record<string, unknown> => ({
+    ...(effort || {}),
+    agent_overrides: block(effort && effort.agent_overrides),
+    routing_tier_defaults: block(effort && effort.routing_tier_defaults),
+  });
+  return _deepMergeConfig(asBlocks(homeEffort), asBlocks(projectEffort)) as EffortConfig;
 }
 
 /**

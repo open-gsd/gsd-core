@@ -82,6 +82,74 @@ describe('doc.has and doc.lacks', () => {
   });
 });
 
+describe('ctx.list', () => {
+  const listAndRead = "for (const rel of ctx.list('wf', '.md', 'workflows')) ctx.doc(rel).has(/ok/, 'needs ok');";
+
+  test('lists nested files by suffix, sorted, and reads each; a satisfied scan reports nothing', (t) => {
+    const tree = makeTree(t, { 'wf/b.md': 'ok\n', 'wf/a.md': 'ok\n', 'wf/sub/c.md': 'ok\n', 'wf/skip.txt': 'no\n' }, { l1: listAndRead });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a file in a subdirectory that breaks the contract is found and named by its path', (t) => {
+    const tree = makeTree(t, { 'wf/a.md': 'ok\n', 'wf/sub/deep/c.md': 'bad\n' }, { l2: listAndRead });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'wf/sub/deep/c.md');
+  });
+
+  test('the order is sorted whatever the directory order', (t) => {
+    const tree = makeTree(t, { 'wf/z.md': 'ok\n', 'wf/a.md': 'ok\n', 'wf/m/b.md': 'ok\n' }, {
+      l3: "const seen = ctx.list('wf', '.md', 'w'); ctx.doc('wf/a.md').satisfies(() => JSON.stringify(seen) === JSON.stringify(['wf/a.md', 'wf/m/b.md', 'wf/z.md']) || JSON.stringify(seen), 'sorted');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a missing directory is one finding and the scan has nothing to pass vacuously', (t) => {
+    const findings = runTree(makeTree(t, {}, { l4: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l4: cannot read the directory: ENOENT$/);
+  });
+
+  test('a directory with no file of the suffix is a finding', (t) => {
+    const findings = runTree(makeTree(t, { 'wf/a.txt': 'x\n' }, { l5: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l5: workflows \(no \.md file under wf\)$/);
+  });
+
+  test('a trailing slash on the directory is the same directory', (t) => {
+    const tree = makeTree(t, { 'wf/a.md': 'ok\n' }, { l6: "for (const rel of ctx.list('wf/', '.md', 'workflows')) ctx.doc(rel).has(/ok/, 'needs ok');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a path that leaves the tree is a finding and lists nothing', (t) => {
+    const tree = makeTree(t, {}, { l7: "ctx.list('../outside', '.md', 'escape');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /not a repo-relative path inside the repository/);
+  });
+
+  test('a directory that is itself a symlink is a finding and is not listed', (t) => {
+    const tree = makeTree(t, { 'elsewhere/b.md': 'ok\n' }, { l9: listAndRead });
+    fs.symlinkSync(path.join(tree.root, 'elsewhere'), path.join(tree.root, 'wf'), 'dir');
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l9: workflows \(wf is a symlink, expected a directory\)$/);
+  });
+
+  test('a regular file where the directory should be is a finding', (t) => {
+    const findings = runTree(makeTree(t, { 'wf': 'not a directory\n' }, { l10: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /wf is not a directory, expected a directory/);
+  });
+
+  test('a symlink is not followed: a linked file is neither listed nor read', (t) => {
+    const tree = makeTree(t, { 'wf/a.md': 'ok\n', 'elsewhere/b.md': 'bad\n' }, { l8: listAndRead });
+    fs.symlinkSync(path.join(tree.root, 'elsewhere', 'b.md'), path.join(tree.root, 'wf', 'link.md'));
+    fs.symlinkSync(path.join(tree.root, 'elsewhere'), path.join(tree.root, 'wf', 'linkdir'), 'dir');
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
 describe('doc.satisfies', () => {
   test('a predicate returning true reports nothing and counts as an assertion', (t) => {
     const tree = makeTree(t, { 'a.md': 'one\ntwo\n' }, { sat1: "ctx.doc('a.md').satisfies((text) => text.split('\\n').length === 3, 'two lines');" });
@@ -463,6 +531,8 @@ const SHIPPED = [
   'cline-support', 'inventory-headings-countfree', 'policy-release-no-npm-self-upgrade', 'phase6-capability-docs',
   'playwright-ui-verify',
   'release-coverage-scope', 'gsd-researcher-flow-diagram', 'import-command', 'gates-taxonomy', 'ios-scaffold-safety',
+  'audit-milestone-filename-guard', 'branch-no-track-guard', 'execute-plan-interrupted-agent-guard', 'handoff-next-step',
+  'transition-verification-gate',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -487,6 +557,9 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'agents/gsd-phase-researcher.md', 'gsd-core/templates/research.md', 'commands/gsd/import.md', 'gsd-core/workflows/import.md',
     'gsd-core/references/gates.md', 'gsd-core/workflows/execute-phase.md', 'agents/gsd-plan-checker.md', 'agents/gsd-verifier.md',
     'gsd-core/references/ios-scaffold.md', 'agents/gsd-executor.md', 'gsd-core/references/universal-anti-patterns.md',
+    'gsd-core/workflows/audit-milestone.md', 'gsd-core/workflows/execute-plan.md', 'gsd-core/workflows/transition.md',
+    'commands/gsd/new-project.md', 'skills/gsd-new-project/SKILL.md', 'pi/package-skills/gsd-new-project/SKILL.md',
+    'commands/gsd/new-milestone.md', 'skills/gsd-new-milestone/SKILL.md', 'pi/package-skills/gsd-new-milestone/SKILL.md',
   ];
 
   function copyOfRepoFiles(t) {
@@ -883,6 +956,201 @@ describe('the shipped contracts hold on the real files, and fail when a contract
         if (fails) assert.match(findings[0].message, new RegExp(`${job} job cap must be at least 30 \\(was 29\\)`));
       });
     }
+  }
+
+  // The five batch-6 contracts.
+  const AUDIT_READER = 'v{version}-MILESTONE-AUDIT.md';
+  const WRITER_LINE = 'Create `${PLANNING_ROOT}/v{version}-MILESTONE-AUDIT.md` with:';
+  const PROBE = '[ -f .planning/current-agent-id.txt ]';
+  const CLEAR = 'rm -f .planning/current-agent-id.txt';
+  // The text of the init_agent_tracking step, edited and put back.
+  const inTrackingStep = (edit) => (text) => {
+    const open = '<step name="init_agent_tracking">';
+    const at = text.indexOf(open);
+    const close = text.indexOf('</step>', at);
+    return text.slice(0, at) + edit(text.slice(at, close)) + text.slice(close);
+  };
+  // The file with only `keep` readers of the report filename left outside the writer line.
+  const withReaders = (keep) => (text) => {
+    let total = text.split(AUDIT_READER).length - 1;
+    return text.split('\n').map((line) => {
+      if (line === WRITER_LINE) return line;
+      let out = line;
+      while (total > keep && out.includes(AUDIT_READER)) {
+        out = out.replace(AUDIT_READER, 'v{version}-AUDIT.md');
+        total -= 1;
+      }
+      return out;
+    }).join('\n');
+  };
+  const HANDOFF_FILES = [
+    ['commands/gsd/new-project.md', '/gsd:'], ['skills/gsd-new-project/SKILL.md', '/gsd-'],
+    ['pi/package-skills/gsd-new-project/SKILL.md', '/skill:gsd-'], ['commands/gsd/new-milestone.md', '/gsd:'],
+    ['skills/gsd-new-milestone/SKILL.md', '/gsd-'], ['pi/package-skills/gsd-new-milestone/SKILL.md', '/skill:gsd-'],
+  ];
+  for (const [title, rel, edit, contract, expected] of [
+    ['a doubled version segment back in audit-milestone (#3796)', 'gsd-core/workflows/audit-milestone.md',
+      append('v{version}-v{version}-MILESTONE-AUDIT.md'), 'audit-milestone-filename-guard', /no doubled version segment may appear/],
+    ['the writer line back at a root .planning/ path (#5861)', 'gsd-core/workflows/audit-milestone.md',
+      swap(WRITER_LINE, 'Create `.planning/v{version}-MILESTONE-AUDIT.md` with:'), 'audit-milestone-filename-guard', /the writer line must create exactly/],
+    ['the audit-milestone readers gone (#3796)', 'gsd-core/workflows/audit-milestone.md',
+      withReaders(0), 'audit-milestone-filename-guard', /found 1, expected at least 5/],
+    ['git checkout -b from origin/$DEFAULT_BRANCH without --no-track added to plan-phase (#2498)', 'gsd-core/workflows/plan-phase.md',
+      append('git checkout -b gsd/new origin/$DEFAULT_BRANCH'), 'branch-no-track-guard', /needs --no-track/],
+    ['a tab-separated git checkout -b from origin/$BASE_BRANCH added to execute-plan (#2498)', 'gsd-core/workflows/execute-plan.md',
+      append('git\tcheckout\t-b gsd/new origin/$BASE_BRANCH'), 'branch-no-track-guard', /needs --no-track/],
+    ['a git checkout -b from origin/$MAIN_BRANCH added to a nested workflow file (#2498)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+      append('git checkout -b gsd/new origin/$MAIN_BRANCH'), 'branch-no-track-guard', /line \d+: git checkout -b gsd\/new origin\/\$MAIN_BRANCH/],
+    ['the interrupted-agent probe gone from the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      dropAll(PROBE), 'execute-plan-interrupted-agent-guard', /must probe for a surviving current-agent-id\.txt/],
+    ['the stale-id clear gone from the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      dropAll(CLEAR), 'execute-plan-interrupted-agent-guard', /must clear the stale id for the fresh run/],
+    ['the clear ahead of the probe in the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      (text) => text.split(PROBE).join('@@').split(CLEAR).join(PROBE).split('@@').join(CLEAR), 'execute-plan-interrupted-agent-guard', /existence check must run BEFORE the rm/],
+    ['INTERRUPTED_ID no longer captured (#3795)', 'gsd-core/workflows/execute-plan.md',
+      swap('INTERRUPTED_ID=$(', 'SEEN=$('), 'execute-plan-interrupted-agent-guard', /surviving id must be captured/],
+    ['the resume prompt gone from the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      inTrackingStep((block) => block.split('resume').join('restart')), 'execute-plan-interrupted-agent-guard', /resume-or-fresh prompt/],
+    ['the tracking step renamed (#3795)', 'gsd-core/workflows/execute-plan.md',
+      swap('<step name="init_agent_tracking">', '<step name="track">'), 'execute-plan-interrupted-agent-guard', /marker .*init_agent_tracking.* not found/],
+    ['the preliminary verification check gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/preliminary check blocks obviously unresolved verification/gi, 'a check'), 'transition-verification-gate', /preliminary check must block obviously unresolved verification/],
+    ['fail-closes gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/fail-closes/gi, 'fails'), 'transition-verification-gate', /phase\.complete must fail-close/],
+    ['the authoritative stale-aware gate gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/authoritative stale-aware gate/gi, 'gate'), 'transition-verification-gate', /authoritative stale-aware gate must be named/],
+    ['the canonical `passed` requirement gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/canonical verification\s+status is `passed`/gi, 'verification is fine'), 'transition-verification-gate', /canonical verification status must be required/],
+    ['"does NOT block transition" back in transition (#1522)', 'gsd-core/workflows/transition.md',
+      append('Unresolved verification does NOT block transition.'), 'transition-verification-gate', /must not be described as not blocking/],
+    ['"carry forward as debt" back in transition (#1522)', 'gsd-core/workflows/transition.md',
+      append('Unresolved items carry forward as debt.'), 'transition-verification-gate', /must not be carried forward as debt/],
+    ...HANDOFF_FILES.map(([rel, prefix]) => [`${prefix}execute-phase gone from the hand-off of ${rel} (#5723)`, rel,
+      swap(`${prefix}execute-phase`, `${prefix}run-phase`), 'handoff-next-step', /execute-phase does not follow/]),
+    ['the hand-off of new-project no longer names discuss-phase (#5723)', 'commands/gsd/new-project.md',
+      swap('/gsd:discuss-phase', '/gsd:zzz-phase'), 'handoff-next-step', /does not name \/gsd:discuss-phase/],
+    ['the hand-off of new-project no longer names plan-phase after discuss-phase (#5723)', 'commands/gsd/new-project.md',
+      swap('/gsd:plan-phase', '/gsd:zzz-phase'), 'handoff-next-step', /\/gsd:plan-phase does not follow \/gsd:discuss-phase/],
+    ['fail-closes only ahead of the first phase.complete in transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => `fail-closes\n${text.replace(/fail-closes/gi, 'fails')}`, 'transition-verification-gate', /expected "fail-closes" after "phase\.complete"/],
+    ['the hand-off of new-project says it starts execution (#5723)', 'commands/gsd/new-project.md',
+      (text) => text.replace('**After this command:**', '**After this command:** This starts execution.'), 'handoff-next-step', /says it starts execution/],
+    ['the hand-off of new-project loses "to execute." (#5723)', 'commands/gsd/new-project.md',
+      swap(' to execute.', ' now.'), 'handoff-next-step', /is not followed by "to execute\."/],
+    ['a second hand-off line in new-milestone (#5723)', 'commands/gsd/new-milestone.md',
+      append('**After:** also run something'), 'handoff-next-step', /2 hand-off lines, expected exactly one/],
+    ['the hand-off of new-milestone gone (#5723)', 'commands/gsd/new-milestone.md',
+      (text) => text.replace('**After:**', '**Next:**'), 'handoff-next-step', /0 hand-off lines, expected exactly one/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The audit-milestone readers are a floor of five: four fails, five passes.
+  for (const [keep, fails] of [[4, true], [5, false]]) {
+    test(`audit-milestone with ${keep} readers of the report filename ${fails ? 'fails' : 'satisfies'} audit-milestone-filename-guard`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'audit-milestone.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      assert.ok(text.split(AUDIT_READER).length - 1 > keep, 'the real file has more readers than the boundary, so the mutation removes some');
+      fs.writeFileSync(abs, withReaders(keep)(text));
+      const findings = runShipped(root, ['audit-milestone-filename-guard']);
+      assert.equal(findings.length, fails ? 1 : 0, JSON.stringify(findings));
+      if (fails) assert.match(findings[0].message, new RegExp(`found ${keep}, expected at least 5`));
+    });
+  }
+
+  // Lines that are not a branch created from a remote-tracking ref stay clean.
+  for (const line of [
+    'git checkout -b gsd/new --no-track origin/$DEFAULT_BRANCH',
+    'git checkout -b gsd/new origin/$BASE_BRANCH --no-track',
+    'git checkout -b gsd/new "$LOCAL_BRANCH"',
+    'git checkout origin/$DEFAULT_BRANCH',
+    'git switch -c gsd/new origin/$DEFAULT_BRANCH',
+  ]) {
+    test(`a workflow with the line ${JSON.stringify(line)} still satisfies branch-no-track-guard`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'plan-phase.md');
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
+      assert.deepEqual(runShipped(root, ['branch-no-track-guard']), []);
+    });
+  }
+
+  // The bounds of the batch-6 patterns: limit - 1 and limit are scanned, limit + 1 is the stated edge.
+  const boundaryCases = [
+    ['git and checkout separated by 199 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(199)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', true],
+    ['git and checkout separated by 200 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(200)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', true],
+    ['git and checkout separated by 201 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(201)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', false],
+    ['a remote ref variable with 199 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(199)}BRANCH`, 'branch-no-track-guard', true],
+    ['a remote ref variable with 200 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(200)}BRANCH`, 'branch-no-track-guard', true],
+    ['a remote ref variable with 201 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(201)}BRANCH`, 'branch-no-track-guard', false],
+  ];
+  for (const [title, rel, line, contract, caught] of boundaryCases) {
+    test(`${title} ${caught ? 'fails' : 'is past the bound of'} ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
+      assert.equal(runShipped(root, [contract]).length, caught ? 1 : 0);
+    });
+  }
+
+  // The hand-off's execute-phase span up to its closing backtick is bounded at 500 characters.
+  for (const [span, ok] of [[499, true], [500, true], [501, false]]) {
+    test(`a hand-off execute-phase span of ${span} characters ${ok ? 'satisfies' : 'is past the bound of'} handoff-next-step`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'commands', 'gsd', 'new-project.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const tail = '/gsd:execute-phase 1`';
+      assert.ok(text.includes(tail), 'the real hand-off ends its execute step this way');
+      fs.writeFileSync(abs, text.replace(tail, `/gsd:execute-phase${'x'.repeat(span - '/gsd:execute-phase'.length)}\``));
+      const findings = runShipped(root, ['handoff-next-step']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
+    });
+  }
+
+  // The whitespace in "canonical verification status" is bounded at 20 characters.
+  for (const [gap, ok] of [[19, true], [20, true], [21, false]]) {
+    test(`${gap} whitespace characters inside "canonical verification status" ${ok ? 'satisfy' : 'are past the bound of'} transition-verification-gate`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'transition.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const phrase = /canonical verification\s+status is `passed`/i;
+      assert.ok(phrase.test(text), 'the real file carries the phrase');
+      fs.writeFileSync(abs, text.replace(phrase, `canonical verification${' '.repeat(gap)}status is \`passed\``));
+      const findings = runShipped(root, ['transition-verification-gate']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
+    });
+  }
+
+  test('branch-no-track-guard with no workflow file under gsd-core/workflows is a finding, not a pass over nothing', (t) => {
+    const root = copyOfRepoFiles(t);
+    cleanup(path.join(root, 'gsd-core', 'workflows'));
+    const findings = runShipped(root, ['branch-no-track-guard']);
+    assert.ok(findings.some((f) => /cannot read the directory|no \.md file under gsd-core\/workflows/.test(f.message)), JSON.stringify(findings));
+  });
+
+  // A file one of the batch-6 contracts reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    ['gsd-core/workflows/audit-milestone.md', 'audit-milestone-filename-guard'],
+    ['gsd-core/workflows/execute-plan.md', 'execute-plan-interrupted-agent-guard'],
+    ['gsd-core/workflows/transition.md', 'transition-verification-gate'],
+    ['skills/gsd-new-project/SKILL.md', 'handoff-next-step'],
+    ['pi/package-skills/gsd-new-milestone/SKILL.md', 'handoff-next-step'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract} (batch 6)`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
+    });
   }
 
   // A file one of the batch-5 contracts reads that is gone from the tree is one finding for that file.
