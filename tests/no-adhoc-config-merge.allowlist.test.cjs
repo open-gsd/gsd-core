@@ -31,7 +31,8 @@ function collect(dir, predicate, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name !== 'node_modules') collect(full, predicate, out);
+      // hooks/dist is the installer's staged copy of hooks/ (build output, gitignored).
+      if (entry.name !== 'node_modules' && entry.name !== 'dist') collect(full, predicate, out);
     } else if (predicate(full)) out.push(full);
   }
   return out;
