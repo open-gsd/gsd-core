@@ -53,12 +53,15 @@ module.exports = {
         return examples.some((example) => example.tokens.length > 0) || 'no non-empty depends_on example';
       }, 'the template must carry depends_on examples to check (non-vacuous)')
       // A bound of the example pattern must not fail open: a `depends_on:` line it does not parse (indented, spaced or
-      // listed past a bound, or malformed) would drop out of the examples and let a short-form id hide behind it.
+      // listed past a bound, a YAML list item `- depends_on: ...`, or malformed) would drop out of the examples and let a
+      // short-form id hide behind it. The test had the list-item gap too.
       .satisfies((text) => {
         const parsed = new Set(extractDependsOnExamples(text).map((example) => example.line));
         const unparsed = [];
         text.split('\n').forEach((line, i) => {
-          if (line.trimStart().startsWith('depends_on:') && !parsed.has(i + 1)) unparsed.push(`line ${i + 1}: ${line.trim().slice(0, 80)}`);
+          const bare = line.trimStart();
+          const key = (bare.startsWith('- ') ? bare.slice(2) : bare).trimStart();
+          if (key.startsWith('depends_on:') && !parsed.has(i + 1)) unparsed.push(`line ${i + 1}: ${line.trim().slice(0, 80)}`);
         });
         return unparsed.length === 0 || unparsed.join('; ');
       }, 'a depends_on line that cannot be parsed by the example pattern (past a bound, or malformed) would hide short-form ids from the check')

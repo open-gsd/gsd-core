@@ -25,9 +25,27 @@ const onWorkflow = (check) => (text) => {
   const parsed = loadWorkflow(text);
   return parsed.error ? true : check(parsed.workflow);
 };
-const stepsOf = (workflow, jobName) => (workflow && workflow.jobs && workflow.jobs[jobName] && workflow.jobs[jobName].steps) || [];
+const isMapping = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const jobOf = (workflow, jobName) => (isMapping(workflow) && isMapping(workflow.jobs) && isMapping(workflow.jobs[jobName]) ? workflow.jobs[jobName] : undefined);
+// The mapping steps of a job, in order; a malformed `steps` or entry is reported by the structure assertion, not thrown on here.
+const stepsOf = (workflow, jobName) => {
+  const job = jobOf(workflow, jobName);
+  return job && Array.isArray(job.steps) ? job.steps.filter(isMapping) : [];
+};
 const stepNamed = (workflow, jobName, name) => stepsOf(workflow, jobName).find((step) => step.name === name);
 const indexOfStep = (steps, name) => steps.findIndex((step) => step.name === name);
+// The first malformed spot of the two jobs this contract reads, or true.
+const structureOf = (workflow) => {
+  if (!isMapping(workflow)) return 'release.yml is not a mapping';
+  for (const jobName of ['finalize', 'rc']) {
+    const job = jobOf(workflow, jobName);
+    if (!job) continue; // a missing job is reported by the assertions that read its steps
+    if (!Array.isArray(job.steps)) return `${jobName}.steps is not a list`;
+    const bad = job.steps.findIndex((step) => !isMapping(step));
+    if (bad > -1) return `${jobName}.steps[${bad}] is not a mapping`;
+  }
+  return true;
+};
 const runOf = (workflow, jobName, name) => {
   const step = stepNamed(workflow, jobName, name);
   return step && typeof step.run === 'string' ? step.run : undefined;
@@ -39,6 +57,7 @@ module.exports = {
   check(ctx) {
     ctx.doc('.github/workflows/release.yml')
       .satisfies((text) => loadWorkflow(text).error || true, 'release.yml must be valid YAML')
+      .satisfies(onWorkflow(structureOf), 'the finalize and rc jobs of release.yml must be mappings with a list of mapping steps')
       .satisfies(onWorkflow((workflow) => runOf(workflow, 'finalize', CREATE_STEP) !== undefined), 'finalize must have a "Create GitHub Release" step with a run script')
       .satisfies(onWorkflow((workflow) => {
         const run = runOf(workflow, 'finalize', CREATE_STEP);

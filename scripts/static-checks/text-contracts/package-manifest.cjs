@@ -9,8 +9,9 @@ const SH_HOOKS = ['gsd-session-state.sh', 'gsd-validate-commit.sh', 'gsd-phase-b
 // package.json "files", or the reason it cannot be read.
 function filesField(text) {
   try {
-    const files = JSON.parse(text).files;
-    return Array.isArray(files) ? { files } : { error: 'package.json has no "files" array' };
+    const parsed = JSON.parse(text);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'package.json is not a JSON object' };
+    return Array.isArray(parsed.files) ? { files: parsed.files } : { error: 'package.json has no "files" array' };
   } catch (err) {
     return { error: `package.json is not valid JSON: ${err.message}` };
   }

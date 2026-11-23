@@ -7,6 +7,29 @@
 
 const RESOLVER_REF = 'references/gsd-run-resolver.md';
 
+// The offset of the start of the line holding the first gsd_run call, or -1: optional indent, optional `NAME=$(`
+// with an upper-case name, `gsd_run`, whitespace, a lower-case word. A linear scan, so no length of indent, name or
+// gap hides a call that runs before the resolver.
+function firstGsdRunCall(text) {
+  let lineStart = 0;
+  for (;;) {
+    let i = lineStart;
+    while (text[i] === ' ' || text[i] === '\t') i++;
+    let j = i;
+    while (/[A-Z_]/.test(text[j] || '')) j++;
+    if (j > i && text.startsWith('=$(', j)) i = j + 3;
+    if (text.startsWith('gsd_run', i)) {
+      let k = i + 'gsd_run'.length;
+      const gapStart = k;
+      while (k < text.length && /\s/.test(text[k])) k++;
+      if (k > gapStart && /[a-z]/.test(text[k] || '')) return lineStart;
+    }
+    const newline = text.indexOf('\n', lineStart);
+    if (newline === -1) return -1;
+    lineStart = newline + 1;
+  }
+}
+
 module.exports = {
   id: 'verifier-gsd-run-all-modes',
   issue: '#5004',
@@ -21,7 +44,7 @@ module.exports = {
       }, 'there must be exactly one resolver include')
       .satisfies((text) => {
         const includeAt = text.indexOf(RESOLVER_REF);
-        const firstUse = text.search(/^[ \t]{0,200}(?:[A-Z_]{1,60}=\$\()?gsd_run\s{1,20}[a-z]/m);
+        const firstUse = firstGsdRunCall(text);
         return firstUse > includeAt || `the first gsd_run call is at ${firstUse}, the resolver include at ${includeAt}`;
       }, 'the first gsd_run invocation must come after the resolver include');
 

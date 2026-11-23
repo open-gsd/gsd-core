@@ -41,9 +41,9 @@ module.exports = {
       .has(/async_jobs|async-jobs/, 'the HANDOFF must record async job manifests');
 
     // The words below must be in the manifest-schema section itself, not anywhere in the page (`version`, `status`,
-    // `failed` and `contract` occur all over planning-artifacts.md). The section runs to the next `##` heading.
+    // `failed` and `contract` occur all over planning-artifacts.md). The section runs to the next `##` or `###` heading.
     const artifacts = ctx.doc('docs/reference/planning-artifacts.md')
-      .slice('### `.planning/async-jobs/<job>.json`', '\n## ')
+      .slice('### `.planning/async-jobs/<job>.json`', ['\n## ', '\n### '])
       .has(/contract/i, 'the manifest must be framed as a stability contract');
     for (const field of MANIFEST_FIELDS) artifacts.has(field, `the manifest schema must document the field ${field}`);
     for (const state of MANIFEST_STATES) artifacts.has(state, `the status enum must document the state ${state}`);

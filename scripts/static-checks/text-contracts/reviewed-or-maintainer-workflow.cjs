@@ -22,7 +22,9 @@ const onWorkflow = (fn) => (text) => {
   if (!job) return `no ${JOB} job`;
   return fn({ doc, job, triggers: doc.on ?? doc[true] ?? {} });
 };
-const stepNamed = (job, name) => (job.steps || []).find((step) => step.name === name);
+// The steps that are mappings (a null or scalar entry cannot throw a later property read).
+const stepsOf = (job) => (Array.isArray(job.steps) ? job.steps.filter((step) => step && typeof step === 'object') : []);
+const stepNamed = (job, name) => stepsOf(job).find((step) => step.name === name);
 
 module.exports = {
   id: 'reviewed-or-maintainer-workflow',
@@ -33,8 +35,12 @@ module.exports = {
       .satisfies(onWorkflow(({ triggers }) => {
         const keys = Object.keys(triggers).sort().join(',');
         if (keys !== 'merge_group,pull_request_review,pull_request_target') return `triggers: ${keys}`;
-        if (JSON.stringify(triggers.pull_request_review.types) !== '["submitted","dismissed"]') return 'pull_request_review types changed';
-        return JSON.stringify(triggers.merge_group.types) === '["checks_requested"]' || 'merge_group types changed';
+        const review = triggers.pull_request_review;
+        const queue = triggers.merge_group;
+        if (!review || typeof review !== 'object') return 'pull_request_review has no configuration';
+        if (!queue || typeof queue !== 'object') return 'merge_group has no configuration';
+        if (JSON.stringify(review.types) !== '["submitted","dismissed"]') return 'pull_request_review types changed';
+        return JSON.stringify(queue.types) === '["checks_requested"]' || 'merge_group types changed';
       }), 'the workflow must trigger on target, review and merge_group events only')
       .satisfies(onWorkflow(({ triggers }) => !Object.prototype.hasOwnProperty.call(triggers, 'pull_request')), 'the plain pull_request trigger, whose workflow file the PR controls, must never be used')
       .satisfies(onWorkflow(({ doc, job }) => {
@@ -46,17 +52,17 @@ module.exports = {
       }), 'the token must be read-only')
       .satisfies(onWorkflow(({ job }) => job.if === "github.event_name != 'merge_group'" || `if: ${job.if}`), 'the job must be skipped on merge_group')
       .satisfies(onWorkflow(({ job }) => {
-        const checkout = (job.steps || []).find((step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@'));
+        const checkout = stepsOf(job).find((step) => typeof step.uses === 'string' && step.uses.startsWith('actions/checkout@'));
         if (!checkout) return 'no checkout step';
         if (!checkout.with || checkout.with.ref !== '${{ github.event.pull_request.base.sha }}') return 'checkout ref is not the base sha';
         return checkout.with['persist-credentials'] === false || 'credentials are persisted';
       }), 'the job must check out the base sha and persist no credentials')
       .satisfies(onWorkflow(({ job }) => {
-        const bad = (job.steps || []).filter((step) => typeof step.uses === 'string' && !/@[0-9a-f]{40}$/.test(step.uses));
+        const bad = stepsOf(job).filter((step) => typeof step.uses === 'string' && !/@[0-9a-f]{40}$/.test(step.uses));
         return bad.length === 0 || bad.map((step) => step.uses).join(', ');
       }), 'actions must be pinned to a full commit sha')
       .satisfies(onWorkflow(({ job }) => {
-        const bad = (job.steps || []).filter((step) => typeof step.run === 'string' && step.run.includes('${{'));
+        const bad = stepsOf(job).filter((step) => typeof step.run === 'string' && step.run.includes('${{'));
         return bad.length === 0 || bad.map((step) => `step "${step.name}"`).join(', ');
       }), 'no run: script may interpolate a ${{ }} expression')
       .satisfies(onWorkflow(({ job }) => {
@@ -68,12 +74,14 @@ module.exports = {
       .satisfies(onWorkflow(({ job }) => {
         const collect = stepNamed(job, 'Collect reviews and reviewer permissions');
         if (!collect) return 'no collect step';
+        if (typeof collect.run !== 'string') return 'the collect step has no run script';
         if (!collect.run.includes('[bot]')) return 'the login filter does not mention [bot]';
         return !collect.run.includes('(\\[bot\\])?$') || 'the login filter admits a [bot] suffix';
       }), 'reviewer bots must never be looked up for a role')
       .satisfies(onWorkflow(({ job }) => {
         const collect = stepNamed(job, 'Collect reviews and reviewer permissions');
-        return (collect && collect.run.includes('::warning::')) || 'no ::warning::';
+        if (!collect || typeof collect.run !== 'string') return 'no collect step run script';
+        return collect.run.includes('::warning::') || 'no ::warning::';
       }), 'a failed role lookup must be reported, not silently turned into no approval')
       .satisfies(onWorkflow(({ job }) => {
         const evaluate = stepNamed(job, 'Evaluate');
@@ -95,11 +103,13 @@ module.exports = {
         } catch (err) {
           return `not valid JSON: ${err.message}`;
         }
-        if (!Array.isArray(spec.rules)) return 'no rules array';
+        if (!spec || !Array.isArray(spec.rules)) return 'no rules array';
         for (const rule of spec.rules) {
-          if (rule.type === 'required_status_checks' && !(rule.parameters && Array.isArray(rule.parameters.required_status_checks))) return 'a required_status_checks rule without its checks list';
-          const contexts = rule.type === 'required_status_checks' ? rule.parameters.required_status_checks.map((check) => check.context) : [];
-          if (contexts.includes('Reviewed or maintainer')) return 'requires it';
+          if (!rule || typeof rule !== 'object') return 'a rule that is not an object';
+          if (rule.type !== 'required_status_checks') continue;
+          if (!(rule.parameters && Array.isArray(rule.parameters.required_status_checks))) return 'a required_status_checks rule without its checks list';
+          if (rule.parameters.required_status_checks.some((check) => !check || typeof check !== 'object')) return 'a required status check that is not an object';
+          if (rule.parameters.required_status_checks.some((check) => check.context === 'Reviewed or maintainer')) return 'requires it';
         }
         return true;
       }, 'Reviewed or maintainer must not be a required status check before the trial');

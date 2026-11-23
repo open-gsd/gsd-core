@@ -220,7 +220,10 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
   const passes = (title, rel, edit, contract) => test(title, (t) => {
     const root = copyOfRepoFiles(t);
     const abs = path.join(root, ...rel.split('/'));
-    fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
+    const before = fs.readFileSync(abs, 'utf8');
+    const after = edit(before);
+    assert.notEqual(after, before, 'the edit changed the file');
+    fs.writeFileSync(abs, after);
     assert.deepEqual(runShipped(root, [contract]), []);
   });
 
@@ -259,21 +262,21 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
   for (const [title, rel, edit, contract, expected] of [
         // workflow-token-permissions
         ['contents: write dropped from the dependabot auto-merge job (#5136)', '.github/workflows/dependabot-auto-merge.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); delete wf.jobs['auto-merge'].permissions.contents; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /job "auto-merge" must grant contents: write/],
+          yamlEdit((wf) => { delete wf.jobs['auto-merge'].permissions.contents; }), 'workflow-token-permissions', /job "auto-merge" must grant contents: write/],
         ['pull-requests: write dropped from the dependabot auto-merge job (#5136)', '.github/workflows/dependabot-auto-merge.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); delete wf.jobs['auto-merge'].permissions['pull-requests']; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /job "auto-merge" must grant pull-requests: write/],
+          yamlEdit((wf) => { delete wf.jobs['auto-merge'].permissions['pull-requests']; }), 'workflow-token-permissions', /job "auto-merge" must grant pull-requests: write/],
         ['the job-level block removed, so the empty workflow-level block applies (#5136)', '.github/workflows/dependabot-auto-merge.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); delete wf.jobs['auto-merge'].permissions; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /job "auto-merge" must grant contents: write/],
+          yamlEdit((wf) => { delete wf.jobs['auto-merge'].permissions; }), 'workflow-token-permissions', /job "auto-merge" must grant contents: write/],
         ['no permissions block at either level (#5136)', '.github/workflows/dependabot-auto-merge.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); delete wf.jobs['auto-merge'].permissions; delete wf.permissions; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /job "auto-merge" must declare explicit permissions/],
+          yamlEdit((wf) => { delete wf.jobs['auto-merge'].permissions; delete wf.permissions; }), 'workflow-token-permissions', /job "auto-merge" must declare explicit permissions/],
         ['the auto-merge command gone from the dependabot workflow (#5136)', '.github/workflows/dependabot-auto-merge.yml',
           swap('gh pr merge --auto --squash "$PR_URL"', 'gh pr merge --squash "$PR_URL"'), 'workflow-token-permissions', /dependabot-auto-merge\.yml must enable auto-merge/],
         ['a second auto-merge job in the dependabot workflow (#5136)', '.github/workflows/dependabot-auto-merge.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); wf.jobs.second = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'write', 'pull-requests': 'write' }, steps: [{ run: 'gh pr merge 1 --auto' }] }; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /dependabot-auto-merge\.yml must enable auto-merge/],
+          yamlEdit((wf) => { wf.jobs.second = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'write', 'pull-requests': 'write' }, steps: [{ run: 'gh pr merge 1 --auto' }] }; }), 'workflow-token-permissions', /dependabot-auto-merge\.yml must enable auto-merge/],
         ['an auto-merge job without write permissions in another workflow (#5136)', '.github/workflows/test.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); wf.jobs.sneaky = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 --auto' }] }; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /job "sneaky" must grant contents: write \(has "read"\)/],
+          yamlEdit((wf) => { wf.jobs.sneaky = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 --auto' }] }; }), 'workflow-token-permissions', /job "sneaky" must grant contents: write \(has "read"\)/],
         ['a wrapped gh pr merge --auto in another workflow, with no permissions (#5136)', '.github/workflows/test.yml',
-          (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); wf.jobs.wrapped = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7 \\\n  --auto' }] }; delete wf.permissions; for (const job of Object.values(wf.jobs)) delete job.permissions; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions', /job "wrapped" must declare explicit permissions/],
+          yamlEdit((wf) => { wf.jobs.wrapped = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7 \\\n  --auto' }] }; delete wf.permissions; for (const job of Object.values(wf.jobs)) delete job.permissions; }), 'workflow-token-permissions', /job "wrapped" must declare explicit permissions/],
 
         // verifier-gsd-run-all-modes
         ['the resolver include gone from the verifier (#5004)', 'agents/gsd-verifier.md',
@@ -496,6 +499,32 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           swap('"${PLANNING_ROOT}/milestones/" ', ''), 'close-phase-todos-stage-deletion', /the destinations and STATE\.md must stay under --files/],
         ['--files itself gone from the cleanup archive commit (#4208)', 'gsd-core/workflows/cleanup.md',
           swap('--files "${PLANNING_ROOT}/milestones/" "${PLANNING_ROOT}/STATE.md"', '"${PLANNING_ROOT}/milestones/" "${PLANNING_ROOT}/STATE.md"'), 'close-phase-todos-stage-deletion', /the destinations and STATE\.md must stay under --files/],
+
+        // second round: malformed input is a finding, not a throw
+        ['an invalid YAML dependabot workflow (#5136)', '.github/workflows/dependabot-auto-merge.yml',
+          append('jobs: [unclosed'), 'workflow-token-permissions', /dependabot-auto-merge\.yml must enable auto-merge .*the workflow does not parse/],
+        ['an invalid YAML workflow file is a finding for that file (#5136)', '.github/workflows/test.yml',
+          append('this: is: not: valid: [yaml'), 'workflow-token-permissions', /the workflow does not parse/],
+        ['a workflow that is a list, not a mapping (#5136)', '.github/workflows/test.yml',
+          () => '- a\n- b\n', 'workflow-token-permissions', /the workflow is not a mapping/],
+        ['jobs that is a string, not a mapping (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs = 'x'; }), 'workflow-token-permissions', /jobs is not a mapping/],
+        ['a null job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.broken = null; }), 'workflow-token-permissions', /job "broken" is not a mapping/],
+        ['a job whose steps are a string (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.broken = { 'runs-on': 'ubuntu-latest', steps: 'echo hi' }; }), 'workflow-token-permissions', /job "broken" has steps that are not a list/],
+        ['a null step (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.broken = { 'runs-on': 'ubuntu-latest', steps: [null, { run: 'echo hi' }] }; }), 'workflow-token-permissions', /job "broken" has a step that is not a mapping/],
+        ['a null job in the dependabot workflow (#5136)', '.github/workflows/dependabot-auto-merge.yml',
+          yamlEdit((wf) => { wf.jobs.broken = null; }), 'workflow-token-permissions', /dependabot-auto-merge\.yml must enable auto-merge .*job "broken" is not a mapping/],
+        ['a manifest that is not valid JSON (#3801)', 'gsd-core/bin/shared/config-defaults.manifest.json',
+          append('}'), 'inline-plan-threshold-default', /the manifest is not valid JSON/],
+        ['a manifest that is null (#3801)', 'gsd-core/bin/shared/config-defaults.manifest.json',
+          () => 'null\n', 'inline-plan-threshold-default', /not registered in config-defaults\.manifest\.json/],
+        ['a manifest whose workflow section is a list (#3801)', 'gsd-core/bin/shared/config-defaults.manifest.json',
+          () => '{"workflow": []}\n', 'inline-plan-threshold-default', /not registered in config-defaults\.manifest\.json/],
+        ['planning-config with no parseable table (#3801)', 'gsd-core/references/planning-config.md',
+          swap('|', ':'), 'inline-plan-threshold-default', /planning-config\.md must document inline_plan_threshold and agree with the manifest's 2 \(no parseable defaults table\)/],
         // add-todo
         ['the infer_severity step gone from add-todo (#2337)', 'gsd-core/workflows/add-todo.md', eraseAll('<step name="infer_severity">'), 'add-todo', /add-todo\.md must define an infer_severity step/],
         ['create_file ahead of infer_severity in add-todo (#2337)', 'gsd-core/workflows/add-todo.md', (text) => `<step name="create_file">\n${text}`, 'add-todo', /infer_severity must precede create_file/],
@@ -655,6 +684,15 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         ['a git mv with 30 spaces after git in Step A (#5845)', 'gsd-core/workflows/execute-phase.md', within('**Step A: Persist human verification items', '**Step B: Present to user**', (step) => `${step}\ngit${' '.repeat(30)}mv old-UAT.md old-UAT.md.bak\n`), 'execute-phase-human-needed-uat-merge', /old file must never be renamed aside/],
         ['a Track outstanding_debt line with 50 spaces after Track: in step 1.6 (#3782)', 'gsd-core/workflows/progress.md', within('**Step 1.6: Cross-phase health check**', '**Step 1.7:', (step) => `${step}\nTrack:${' '.repeat(50)}\`outstanding_debt\`${' '.repeat(50)}\u2014${' '.repeat(50)}\`summary.total_items\`\n`), 'progress-debt-segmentation-guard', /outstanding_debt must not read the cross-population summary\.total_items/],
         ['an inline verification fence 300 whitespace characters after its label in the manager (#1523)', 'gsd-core/workflows/manager.md', within('### Compound Action', '### Discuss Phase N', (block) => `${block}\nInline verification:${' '.repeat(300)}\`\`\`\nSkill(skill="gsd-verify-work", args="{PHASE_NUM}")\n\`\`\`\n`), 'ui-review-next-guidance', /must not carry an inline verification fence/],
+        ['a null pull_request_review trigger (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { d.on.pull_request_review = null; }), 'reviewed-or-maintainer-workflow', /must trigger on target, review and merge_group events only/],
+        ['a null merge_group trigger (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { d.on.merge_group = null; }), 'reviewed-or-maintainer-workflow', /must trigger on target, review and merge_group events only/],
+        ['a collect step with no run script (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { delete d.jobs['reviewed-or-maintainer'].steps.find((s) => s.name === 'Collect reviews and reviewer permissions').run; }), 'reviewed-or-maintainer-workflow', /reviewer bots must never be looked up for a role/],
+        ['a ruleset that is JSON null (#5607)', '.github/rulesets/next-queue.json', () => 'null', 'reviewed-or-maintainer-workflow', /no rules array/],
+        ['a null rule in a ruleset (#5607)', '.github/rulesets/next-queue.json', (text) => { const spec = JSON.parse(text); spec.rules.push(null); return JSON.stringify(spec, null, 2); }, 'reviewed-or-maintainer-workflow', /a rule that is not an object/],
+        ['a null entry in a required checks list (#5607)', '.github/rulesets/next-queue.json', (text) => { const spec = JSON.parse(text); spec.rules.push({ type: 'required_status_checks', parameters: { required_status_checks: [null] } }); return JSON.stringify(spec, null, 2); }, 'reviewed-or-maintainer-workflow', /a required status check that is not an object/],
+        ['a mv after a form feed in Step A (#5845)', 'gsd-core/workflows/execute-phase.md', within('**Step A: Persist human verification items', '**Step B: Present to user**', (step) => `${step}\n\fmv old-UAT.md old-UAT.md.bak\n`), 'execute-phase-human-needed-uat-merge', /old file must never be renamed aside/],
+        ['a mv after a vertical tab in Step A (#5845)', 'gsd-core/workflows/execute-phase.md', within('**Step A: Persist human verification items', '**Step B: Present to user**', (step) => `${step}\n\vmv old-UAT.md old-UAT.md.bak\n`), 'execute-phase-human-needed-uat-merge', /old file must never be renamed aside/],
+        ['a git mv separated by a form feed in Step A (#5845)', 'gsd-core/workflows/execute-phase.md', within('**Step A: Persist human verification items', '**Step B: Present to user**', (step) => `${step}\ngit\fmv old-UAT.md old-UAT.md.bak\n`), 'execute-phase-human-needed-uat-merge', /old file must never be renamed aside/],
         // ---- group 3: doc-writer-no-run-mode (both variants, every asserted phrase)
         ...['agents/gsd-doc-writer.md', 'agents/gsd-doc-writer.compact.md'].flatMap((rel) => [
           [`no standalone run mode gone from getting-started in ${rel} (#4928)`, rel, within('<template_getting_started>', '</template_getting_started>', erase(/no\s+standalone\s+run\s+mode/gi)), 'doc-writer-no-run-mode', /getting-started "First run" must fall back to an explicit/],
@@ -708,11 +746,38 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           swap('      - name: Verify CHANGELOG promoted\n', '      - name: Check the CHANGELOG\n'), 'release-finalize-notes-5922', /must be built from the promoted CHANGELOG, after the "Verify CHANGELOG promoted" step/],
         ['release.yml no longer valid YAML (#5922)', '.github/workflows/release.yml', (text) => `: [\n${text}`, 'release-finalize-notes-5922', /release\.yml is not valid YAML/],
         ['the jobs key gone from release.yml (#5922)', '.github/workflows/release.yml',
-          (text) => { const yaml = require('js-yaml'); const workflow = yaml.load(text); delete workflow.jobs; return yaml.dump(workflow); }, 'release-finalize-notes-5922', /must have a "Create GitHub Release" step with a run script/],
+          yamlEdit((workflow) => { delete workflow.jobs; }), 'release-finalize-notes-5922', /must have a "Create GitHub Release" step with a run script/],
         ['the finalize job gone from release.yml (#5922)', '.github/workflows/release.yml',
-          (text) => { const yaml = require('js-yaml'); const workflow = yaml.load(text); delete workflow.jobs.finalize; return yaml.dump(workflow); }, 'release-finalize-notes-5922', /must have a "Build GitHub Release notes" step/],
+          yamlEdit((workflow) => { delete workflow.jobs.finalize; }), 'release-finalize-notes-5922', /must have a "Build GitHub Release notes" step/],
         ['the rc job gone from release.yml (#5922)', '.github/workflows/release.yml',
-          (text) => { const yaml = require('js-yaml'); const workflow = yaml.load(text); delete workflow.jobs.rc; return yaml.dump(workflow); }, 'release-finalize-notes-5922', /rc job \(X\.Y\.0 only, hotfix rcs are rejected\) must keep GitHub-generated notes/],
+          yamlEdit((workflow) => { delete workflow.jobs.rc; }), 'release-finalize-notes-5922', /rc job \(X\.Y\.0 only, hotfix rcs are rejected\) must keep GitHub-generated notes/],
+        // Malformed structures are findings, not exceptions that end the contract after one finding.
+        ['a null step in the finalize job of release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.finalize.steps.splice(1, 0, null); }), 'release-finalize-notes-5922', /finalize\.steps\[1\] is not a mapping/],
+        ['a null step in the rc job of release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.rc.steps.splice(0, 0, null); }), 'release-finalize-notes-5922', /rc\.steps\[0\] is not a mapping/],
+        ['the finalize steps no longer a list in release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.finalize.steps = 'x'; }), 'release-finalize-notes-5922', /finalize\.steps is not a list/],
+        ['the rc steps no longer a list in release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.rc.steps = { not: 'a list' }; }), 'release-finalize-notes-5922', /rc\.steps is not a list/],
+        ['release.yml a list instead of a mapping (#5922)', '.github/workflows/release.yml', () => '- a\n- b\n', 'release-finalize-notes-5922', /release\.yml is not a mapping/],
+        ['release.yml a scalar instead of a mapping (#5922)', '.github/workflows/release.yml', () => 'just text\n', 'release-finalize-notes-5922', /release\.yml is not a mapping/],
+        ['package.json null instead of an object (#1852)', 'package.json', () => 'null', 'package-manifest', /package\.json is not a JSON object/],
+        ['package.json an array instead of an object (#1852)', 'package.json', () => '[]', 'package-manifest', /package\.json is not a JSON object/],
+        ['package.json files a string instead of an array (#1852)', 'package.json',
+          (text) => { const pkg = JSON.parse(text); pkg.files = 'hooks'; return JSON.stringify(pkg, null, 2); }, 'package-manifest', /package\.json has no "files" array/],
+        // The manifest-schema section ends at the next `###` heading too: the words only after a sibling heading do not count.
+        ...[
+          [/contract/gi, 'contract', /manifest must be framed as a stability contract/],
+          [/find .planning\/async-jobs|grep -lE/g, 'grep -lE', /glob-safe matching probe must be documented/],
+          [/2>\/dev\/null|\|\| true/g, '|| true', /probe must be null-safe/],
+          [/untrusted/gi, 'untrusted', /schema must state manifest commands are untrusted/],
+          [/confirm/gi, 'confirm', /user confirmation must be required before executing manifest commands/],
+          [/exact `?plan_id`?|match.{0,20}plan_id/gi, 'exact plan_id', /schema must specify exact plan_id matching/],
+          [/fail closed|fail-closed/gi, 'fail closed', /fail-closed must be required on multiple or malformed manifests/],
+          [/every dispatch path/gi, 'every dispatch path', /discovery must exclude waiting plans beyond has_summary/],
+        ].map(([pattern, sample, why]) => [`${pattern} only after a sibling ### heading of the manifest-schema section (#1165)`, 'docs/reference/planning-artifacts.md',
+          (text) => within('### `.planning/async-jobs/<job>.json`', '\n## ', erase(pattern))(text).replace('\n## Naming conventions', `\n### Sibling\n${sample}\n\n## Naming conventions`), 'external-job-waiting', why]),
         // ---- check-predicate-dispatch-phase-flags-4483
         ...[
           ['execute-phase/steps/verify-phase-goal.md', ['--phase-dir', '--phase-number']],
@@ -974,6 +1039,8 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
     ['the queue ruleset without a parameters object', '.github/rulesets/next-queue.json', swap('"parameters": {', '"parameters_x": {'), 'next-queue-ruleset', /merge_queue has no parameters/],
     ['the queue ruleset a JSON null', '.github/rulesets/next-queue.json', () => 'null', 'next-queue-ruleset', /not a JSON object/],
     ['another ruleset a JSON null', '.github/rulesets/release-branches.json', () => 'null', 'next-queue-ruleset', /not a JSON object/],
+    ['the queue ruleset a JSON array', '.github/rulesets/next-queue.json', () => '[]', 'next-queue-ruleset', /not a JSON object/],
+    ['the queue ruleset with a rules value that is not an array', '.github/rulesets/next-queue.json', swap('"rules": [', '"rules_x": ['), 'next-queue-ruleset', /must carry exactly one rule, the merge queue/],
     ['the queue ruleset no longer valid JSON', '.github/rulesets/next-queue.json', append('}'), 'next-queue-ruleset', /not valid JSON/],
     ['two rulesets with the same name', '.github/rulesets/main-protection.json', swap('"name": "main-protection"', '"name": "next-queue"'), 'next-queue-ruleset', /ruleset names must be unique across files/],
     ['a ruleset with an unknown target', '.github/rulesets/main-protection.json', swap('"target": "branch"', '"target": "repo"'), 'next-queue-ruleset', /main-protection\.json must have a name, a target and a rules array/],
@@ -1000,8 +1067,11 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
     ['every depends_on example gone from the template (#3427)', 'gsd-core/templates/phase-prompt.md', (text) => text.split('\n').map((line) => (/^\s*depends_on:/.test(line) ? 'x' : line)).join('\n'), 'template-phase-prompt-dependson-3427', /the template must carry depends_on examples to check/],
     ['every non-empty depends_on example emptied (#3427)', 'gsd-core/templates/phase-prompt.md', (text) => text.replace(/depends_on: \[[^\]]+\]/g, 'depends_on: []'), 'template-phase-prompt-dependson-3427', /no non-empty depends_on example/],
     ['a depends_on line the example pattern cannot parse (#3427)', 'gsd-core/templates/phase-prompt.md', append('depends_on: ["01"'), 'template-phase-prompt-dependson-3427', /cannot be parsed by the example pattern/],
+    ['a YAML list item depends_on line the example pattern does not parse (#3427)', 'gsd-core/templates/phase-prompt.md', append('- depends_on: ["01"]'), 'template-phase-prompt-dependson-3427', /cannot be parsed by the example pattern/],
+    ['an indented YAML list item depends_on line (#3427)', 'gsd-core/templates/phase-prompt.md', append('    - depends_on: ["01"]'), 'template-phase-prompt-dependson-3427', /cannot be parsed by the example pattern/],
     ['a depends_on line indented past the pattern bound (#3427)', 'gsd-core/templates/phase-prompt.md', append(`${' '.repeat(60)}depends_on: ["01"]`), 'template-phase-prompt-dependson-3427', /cannot be parsed by the example pattern/],
     // release-finalize-syncs-next-version
+    ['release.yml with no jobs at all (#2423)', '.github/workflows/release.yml', () => 'name: Release\n', 'release-finalize-syncs-next-version', /the rc job must exist/],
     ['the rc job renamed in release.yml (#2423)', '.github/workflows/release.yml', swap('\n  rc:\n', '\n  rcx:\n'), 'release-finalize-syncs-next-version', /the rc job must exist/],
     ['the sync script gone from the rc job (#2423)', '.github/workflows/release.yml', within('\n  rc:\n', '\n  install-smoke-finalize:', eraseAll('scripts/sync-next-version.cjs')), 'release-finalize-syncs-next-version', /the rc job must call scripts\/sync-next-version\.cjs/],
     ['the finalize job renamed in release.yml (#2423)', '.github/workflows/release.yml', swap('\n  finalize:\n', '\n  finalizex:\n'), 'release-finalize-syncs-next-version', /the finalize job must exist/],
@@ -1032,9 +1102,9 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       passes('installer-migrations.md, a historical record, is skipped by todos-done-rename-guard', 'docs/installer-migrations.md',
         append('The old layout archived to .planning/todos/done/.'), 'todos-done-rename-guard');
       passes('a workflow with an auto-merge job granting both write scopes satisfies workflow-token-permissions', '.github/workflows/test.yml',
-        (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); wf.jobs.fine = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'write', 'pull-requests': 'write' }, steps: [{ run: 'gh pr merge 7 --auto' }] }; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions');
+        yamlEdit((wf) => { wf.jobs.fine = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'write', 'pull-requests': 'write' }, steps: [{ run: 'gh pr merge 7 --auto' }] }; }), 'workflow-token-permissions');
       passes('a gh pr merge without --auto and without permissions satisfies workflow-token-permissions', '.github/workflows/test.yml',
-        (text) => { const yaml = require(require.resolve('js-yaml', { paths: [process.cwd()] })); const wf = yaml.load(text); wf.jobs.plain = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7 --squash' }] }; ; return yaml.dump(wf, { lineWidth: -1 }); }, 'workflow-token-permissions');
+        yamlEdit((wf) => { wf.jobs.plain = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7 --squash' }] }; }), 'workflow-token-permissions');
       passes('a doc block reformatted but data-equal still satisfies prohibition-probe.docs-fixtures', 'gsd-core/references/prohibition-probe.md',
         within('```json prohibition-probe:01-streak-reminder/expected.json', '\n```', (block) => {
           const lineEnd = block.indexOf('\n');
@@ -1067,10 +1137,25 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       });
 
       // ─── batch 8, group 1: bounds (limit - 1 and limit are matched, limit + 1 is the stated edge) ──────────────────────────
-      gapCases('whitespace between gh and pr', '.github/workflows/dependabot-auto-merge.yml', 'workflow-token-permissions',
-        (text, gap) => text.replace('gh pr merge --auto --squash "$PR_URL"', `gh${' '.repeat(gap)}pr merge --auto --squash "$PR_URL"`), 20, /dependabot-auto-merge\.yml must enable auto-merge/);
-      gapCases('characters between merge and --auto', '.github/workflows/dependabot-auto-merge.yml', 'workflow-token-permissions',
-        (text, gap) => text.replace('gh pr merge --auto --squash "$PR_URL"', `gh pr merge ${'x'.repeat(gap - 2)} --auto --squash "$PR_URL"`), 2000, /dependabot-auto-merge\.yml must enable auto-merge/);
+      // The auto-merge command is read whatever the whitespace between gh, pr and merge and whatever lies before --auto on
+      // the line (a token walk, no bound): the dependabot workflow keeps its one auto-merge job, and a job in another
+      // workflow that hides the command behind a long gap is still held to its permissions.
+      for (const gap of [19, 20, 21, 300]) {
+        passes(`${gap} spaces between gh and pr still read as the auto-merge command in workflow-token-permissions`, '.github/workflows/dependabot-auto-merge.yml',
+          (text) => text.replace('gh pr merge --auto --squash "$PR_URL"', `gh${' '.repeat(gap)}pr merge --auto --squash "$PR_URL"`), 'workflow-token-permissions');
+        passes(`${gap} spaces between pr and merge still read as the auto-merge command in workflow-token-permissions`, '.github/workflows/dependabot-auto-merge.yml',
+          (text) => text.replace('gh pr merge --auto --squash "$PR_URL"', `gh pr${' '.repeat(gap)}merge --auto --squash "$PR_URL"`), 'workflow-token-permissions');
+        findsOne(`an under-permissioned job with ${gap} spaces between gh and pr is not hidden from workflow-token-permissions`, '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.evader = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: `gh${' '.repeat(gap)}pr merge 7 --auto` }] }; }), 'workflow-token-permissions', 'job "evader" must grant contents: write');
+        findsOne(`an under-permissioned job with ${gap} spaces between pr and merge is not hidden from workflow-token-permissions`, '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.evader = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: `gh pr${' '.repeat(gap)}merge 7 --auto` }] }; }), 'workflow-token-permissions', 'job "evader" must grant contents: write');
+      }
+      for (const gap of [1999, 2000, 2001, 5000]) {
+        passes(`${gap} characters between merge and --auto still read as the auto-merge command in workflow-token-permissions`, '.github/workflows/dependabot-auto-merge.yml',
+          (text) => text.replace('gh pr merge --auto --squash "$PR_URL"', `gh pr merge ${'x'.repeat(gap - 2)} --auto --squash "$PR_URL"`), 'workflow-token-permissions');
+        findsOne(`an under-permissioned job with ${gap} characters between merge and --auto is not hidden from workflow-token-permissions`, '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.evader = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: `gh pr merge 7 ${'x'.repeat(gap - 2)} --auto` }] }; }), 'workflow-token-permissions', 'job "evader" must grant contents: write');
+      }
 
       gapCases('spaces after default: and before the opening backtick of the settings default', 'gsd-core/workflows/settings-advanced.md', 'inline-plan-threshold-default',
         (text, gap) => text.replace('inline_plan_threshold` (default: `2`', `inline_plan_threshold\` (default:${' '.repeat(gap)}\`2\``), 20, /settings-advanced\.md must name the inline_plan_threshold default/);
@@ -1103,19 +1188,21 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           (text, gap) => text.replace(from, build(gap)), 20, /docs\/CONFIGURATION\.md must name the inline_plan_threshold default/);
       }
 
-      // A gsd_run call is found with up to 20 whitespace characters before its argument and up to 200 spaces of indent; the
-      // first call before the resolver include is then a finding. Past either bound the line is not read as a call.
-      for (const [label, line] of [['whitespace before the gsd_run argument', (gap) => `gsd_run${' '.repeat(gap)}query state`], ['indent before gsd_run', (gap) => `${' '.repeat(gap)}gsd_run query state`]]) {
-        const limit = label.startsWith('indent') ? 200 : 20;
-        for (const [gap, caught] of [[limit - 1, true], [limit, true], [limit + 1, false]]) {
-          test(`${label} of ${gap} characters ahead of the resolver ${caught ? 'fails' : 'is past the bound of'} verifier-gsd-run-all-modes`, (t) => {
+      // A gsd_run call ahead of the resolver include is found whatever the indent, the upper-case name before =$( or the
+      // whitespace before its argument (a linear scan, no bound), so a long gap cannot hide it.
+      for (const [label, line, sizes] of [
+        ['whitespace before the gsd_run argument', (gap) => `gsd_run${' '.repeat(gap)}query state`, [19, 20, 21, 300]],
+        ['indent before gsd_run', (gap) => `${' '.repeat(gap)}gsd_run query state`, [199, 200, 201, 300]],
+        ['upper-case variable name before =$(', (gap) => `${'A'.repeat(gap)}=$(gsd_run query state)`, [59, 60, 61, 300]],
+      ]) {
+        for (const gap of sizes) {
+          test(`${label} of ${gap} characters ahead of the resolver fails verifier-gsd-run-all-modes`, (t) => {
             const root = copyOfRepoFiles(t);
             const abs = path.join(root, 'agents', 'gsd-verifier.md');
             const text = fs.readFileSync(abs, 'utf8');
             fs.writeFileSync(abs, text.replace('## Resolver Bootstrap (Every Mode)\n', `## Resolver Bootstrap (Every Mode)\n${line(gap)}\n`));
             const findings = runShipped(root, ['verifier-gsd-run-all-modes']);
-            if (caught) assert.ok(findings.some((f) => /the first gsd_run invocation must come after the resolver include/.test(f.message)), JSON.stringify(findings));
-            else assert.deepEqual(findings, []);
+            assert.ok(findings.some((f) => /the first gsd_run invocation must come after the resolver include/.test(f.message)), JSON.stringify(findings));
           });
         }
       }
@@ -1245,18 +1332,6 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       gapCases('whitespace between the first pipe and number in the CONFIGURATION default row', 'docs/CONFIGURATION.md', 'inline-plan-threshold-default',
         (text, gap) => text.replace('`workflow.inline_plan_threshold` | number | `2`', `\`workflow.inline_plan_threshold\` |${' '.repeat(gap)}number | \`2\``), 20, /docs\/CONFIGURATION\.md must name the inline_plan_threshold default/);
 
-      // The first gsd_run call may be an assignment from a command substitution with an upper-case name of up to 60 characters.
-      for (const [gap, caught] of [[59, true], [60, true], [61, false]]) {
-        test(`a ${gap}-character variable assigned from gsd_run ahead of the resolver ${caught ? 'fails' : 'is past the bound of'} verifier-gsd-run-all-modes`, (t) => {
-          const root = copyOfRepoFiles(t);
-          const abs = path.join(root, 'agents', 'gsd-verifier.md');
-          fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').replace('## Resolver Bootstrap (Every Mode)\n', `## Resolver Bootstrap (Every Mode)\n${'A'.repeat(gap)}=$(gsd_run query state)\n`));
-          const findings = runShipped(root, ['verifier-gsd-run-all-modes']);
-          if (caught) assert.ok(findings.some((f) => /the first gsd_run invocation must come after the resolver include/.test(f.message)), JSON.stringify(findings));
-          else assert.deepEqual(findings, []);
-        });
-      }
-
       // The reverse order of the truths lift: must_haves.truths before prohibition, up to 500 characters apart on one line.
       for (const [gap, flagged] of [[499, true], [500, true], [501, false]]) {
         test(`${gap} characters between must_haves.truths and prohibition ${flagged ? 'is flagged by' : 'is past the bound of'} prohibition-probe.planner-contract`, (t) => {
@@ -1290,8 +1365,7 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         fs.writeFileSync(path.join(root, '.github', 'workflows', 'x.txt'), UNDERPERMISSIONED);
         assert.deepEqual(runShipped(root, ['workflow-token-permissions']), []);
       });
-      gapCases('whitespace between pr and merge', '.github/workflows/dependabot-auto-merge.yml', 'workflow-token-permissions',
-        (text, gap) => text.replace('gh pr merge --auto --squash "$PR_URL"', `gh pr${' '.repeat(gap)}merge --auto --squash "$PR_URL"`), 20, /dependabot-auto-merge\.yml must enable auto-merge/);
+
 
       // close-phase-todos-stage-deletion: every bound of the commit, mv and comment patterns, at limit - 1, limit and limit + 1.
       const closePhase = (edit) => (text) => inStepOf('close_phase_todos', edit)(text);
@@ -1315,22 +1389,36 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         (text, gap) => closePhase((block) => block.replace('mv "$TODO_FILE" "$COMPLETED_DIR/"', `mv "$TODO_FILE"${' '.repeat(gap)}"$COMPLETED_DIR/"`))(text), 20, /close_phase_todos must use plain shell mv to move the file/);
       gapCases('characters of a git mv comment after the hash in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => `${block}\n#${'x'.repeat(gap - ' git mv'.length)} git mv\n`)(text), 2000, /close_phase_todos must NOT use git mv as the move command/);
-      // `git` and `mv` up to 20 whitespace characters apart are the ban; 21 evades it (the stated bound).
-      for (const [gap, banned] of [[19, true], [20, true], [21, false]]) {
-        test(`git and mv ${gap} whitespace characters apart ${banned ? 'is banned by' : 'is past the bound of'} close-phase-todos-stage-deletion`, (t) => {
+      // `git` and `mv` are found whatever the whitespace between them (a word walk, no bound): a long gap does not evade the ban.
+      for (const gap of [19, 20, 21, 300]) {
+        test(`git and mv ${gap} whitespace characters apart is banned by close-phase-todos-stage-deletion`, (t) => {
           const root = copyOfRepoFiles(t);
           const abs = path.join(root, 'gsd-core', 'workflows', 'execute-phase.md');
           fs.writeFileSync(abs, closePhase((block) => `${block}\ngit${' '.repeat(gap)}mv a b\n`)(fs.readFileSync(abs, 'utf8')));
           const findings = runShipped(root, ['close-phase-todos-stage-deletion']);
-          if (banned) assert.ok(findings.some((f) => /close_phase_todos must NOT use git mv as the move command/.test(f.message)), JSON.stringify(findings));
-          else assert.deepEqual(findings, []);
+          assert.ok(findings.some((f) => /close_phase_todos must NOT use git mv as the move command/.test(f.message)), JSON.stringify(findings));
         });
       }
+      test('git and mv on different lines are banned by close-phase-todos-stage-deletion', (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, 'gsd-core', 'workflows', 'execute-phase.md');
+        fs.writeFileSync(abs, closePhase((block) => `${block}\ngit\n\n   mv a b\n`)(fs.readFileSync(abs, 'utf8')));
+        assert.ok(runShipped(root, ['close-phase-todos-stage-deletion']).some((f) => /must NOT use git mv/.test(f.message)));
+      });
       const archiveCommit = /cleanup\.md must commit the archive via gsd_run query commit/;
       gapCases('whitespace between gsd_run and query in the cleanup archive commit', 'gsd-core/workflows/cleanup.md', 'close-phase-todos-stage-deletion',
         (text, gap) => text.replace('gsd_run query commit "chore: archive', `gsd_run${' '.repeat(gap)}query commit "chore: archive`), 20, archiveCommit);
       gapCases('whitespace between query and commit in the cleanup archive commit', 'gsd-core/workflows/cleanup.md', 'close-phase-todos-stage-deletion',
         (text, gap) => text.replace('gsd_run query commit "chore: archive', `gsd_run query${' '.repeat(gap)}commit "chore: archive`), 20, archiveCommit);
+
+      test('an invalid YAML workflow does not stop the other workflow files from being checked by workflow-token-permissions', (t) => {
+        const root = copyOfRepoFiles(t);
+        fs.writeFileSync(path.join(root, '.github', 'workflows', 'test.yml'), 'this: is: not: valid: [yaml\n');
+        fs.writeFileSync(path.join(root, '.github', 'workflows', 'x.yaml'), UNDERPERMISSIONED);
+        const findings = runShipped(root, ['workflow-token-permissions']);
+        assert.ok(findings.some((f) => f.file === '.github/workflows/test.yml' && /the workflow does not parse/.test(f.message)), JSON.stringify(findings));
+        assert.ok(findings.some((f) => f.file === '.github/workflows/x.yaml' && /job "lift" must grant contents: write/.test(f.message)), JSON.stringify(findings));
+      });
   }
 
   {
@@ -1431,6 +1519,28 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       gapCases('characters between "argument-hint:" and "--all"', 'commands/gsd/discuss-phase.md', 'discuss-all-flag',
         (text, gap) => text.replace(/^argument-hint:.*$/m, `argument-hint:${'x'.repeat(gap)}--all`), 500, /argument-hint should include --all/);
 
+      // secure-phase-single-writer: a comment line inside the tools list does not end it.
+      passes('a comment line inside the auditor tools list satisfies secure-phase-single-writer', 'agents/gsd-security-auditor.md',
+        (text) => text.replace('  - Read\n', '  - Read\n  # keep the list short\n'), 'secure-phase-single-writer');
+
+      // reviewed-or-maintainer-workflow: a ruleset requiring some other status check is fine.
+      passes('a ruleset requiring another status check satisfies reviewed-or-maintainer-workflow', '.github/rulesets/next-queue.json',
+        (text) => { const spec = JSON.parse(text); spec.rules.push({ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'some other check' }] } }); return JSON.stringify(spec, null, 2); }, 'reviewed-or-maintainer-workflow');
+
+      // add-todo: `severity:[ \t]{0,20}\[blocker|...` tolerates 20 spaces or tabs after the colon.
+      gapCases('whitespace after "severity:" in the add-todo template', 'gsd-core/workflows/add-todo.md', 'add-todo',
+        (text, gap) => text.replace(/^severity:[ \t]{0,20}\[blocker\|major\|minor\|cosmetic/gm, `severity:${' '.repeat(gap)}[blocker|major|minor|cosmetic`), 20, /frontmatter template must include a severity field/);
+
+      // progress-debt-segmentation-guard: the non-archived selection tolerates 20 whitespace characters on each side of the pipe.
+      gapCases('whitespace before the pipe of the non-archived selection', 'gsd-core/workflows/progress.md', 'progress-debt-segmentation-guard',
+        (text, gap) => within('**Step 1.6: Cross-phase health check**', '**Step 1.7:', (step) => step.replace(/select\(has\("archived_milestone"\)\s{0,20}\|\s{0,20}not\)/g, `select(has("archived_milestone")${' '.repeat(gap)}| not)`))(text), 20, /select results WITHOUT the archived_milestone stamp/);
+      gapCases('whitespace after the pipe of the non-archived selection', 'gsd-core/workflows/progress.md', 'progress-debt-segmentation-guard',
+        (text, gap) => within('**Step 1.6: Cross-phase health check**', '**Step 1.7:', (step) => step.replace(/select\(has\("archived_milestone"\)\s{0,20}\|\s{0,20}not\)/g, `select(has("archived_milestone")|${' '.repeat(gap)}not)`))(text), 20, /select results WITHOUT the archived_milestone stamp/);
+
+      // discuss-all-flag: `argument-hint:[^\n]{0,500}--all` tolerates 500 characters between the key and the flag.
+      gapCases('characters between "argument-hint:" and "--all"', 'commands/gsd/discuss-phase.md', 'discuss-all-flag',
+        (text, gap) => text.replace(/^argument-hint:.*$/m, `argument-hint:${'x'.repeat(gap)}--all`), 500, /argument-hint should include --all/);
+
       // init-debug-workflow-contract: a query name is read up to 200 characters; a longer token never equals a replaced call, so the bound cannot change a verdict.
       for (const length of [199, 200, 201]) {
         passes(`a ${length}-character query name starting with state.load does not count as the replaced state.load call`, 'gsd-core/workflows/debug.md',
@@ -1458,6 +1568,10 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         fs.writeFileSync(path.join(nested, 'requires-it.json'), JSON.stringify({ rules: [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'Reviewed or maintainer' }] } }] }));
         assert.deepEqual(runShipped(root, ['reviewed-or-maintainer-workflow']), []);
       });
+
+      // reviewed-or-maintainer-workflow: a null entry among the steps does not stop the contract and is not a finding.
+      passes('a null step entry in the reviewed-or-maintainer job satisfies reviewed-or-maintainer-workflow', '.github/workflows/reviewed-or-maintainer.yml',
+        yamlEdit((d) => { d.jobs['reviewed-or-maintainer'].steps.push(null); }), 'reviewed-or-maintainer-workflow');
   }
 
   {
@@ -1487,16 +1601,23 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       // (the word is removed there and put back at the top of the page, where it must not count).
       for (const [kind, words] of [['field', ['version', 'job_id', 'plan_id', 'backend', 'status', 'expected_artifacts', 'verification_command', 'resume_command', 'terminal_details']], ['state', ['submitted', 'running', 'completed-unverified', 'failed', 'cancelled', 'timeout']]]) {
         for (const word of words) {
-          test(`${word} only outside the planning-artifacts manifest-schema section fails external-job-waiting (${kind})`, (t) => {
-            const root = copyOfRepoFiles(t);
-            const abs = path.join(root, 'docs', 'reference', 'planning-artifacts.md');
-            const text = fs.readFileSync(abs, 'utf8');
-            const scoped = within('### `.planning/async-jobs/<job>.json`', '\n## ', (section) => section.split(word).join(''))(text);
-            assert.notEqual(scoped, text, 'the real section carries the word');
-            fs.writeFileSync(abs, `${word}\n${scoped}`);
-            const findings = runShipped(root, ['external-job-waiting']);
-            assert.ok(findings.some((f) => f.message.includes(kind === 'field' ? `must document the field ${word}` : `must document the state ${word}`)), JSON.stringify(findings));
-          });
+          for (const [where, place] of [
+            ['at the top of the page', (scoped) => `${word}\n${scoped}`],
+            ['after a sibling ### heading', (scoped) => scoped.replace('\n## Naming conventions', `\n### Sibling\n${word}\n\n## Naming conventions`)],
+          ]) {
+            test(`${word} only ${where} (outside the planning-artifacts manifest-schema section) fails external-job-waiting (${kind})`, (t) => {
+              const root = copyOfRepoFiles(t);
+              const abs = path.join(root, 'docs', 'reference', 'planning-artifacts.md');
+              const text = fs.readFileSync(abs, 'utf8');
+              const scoped = within('### `.planning/async-jobs/<job>.json`', '\n## ', (section) => section.split(word).join(''))(text);
+              assert.notEqual(scoped, text, 'the real section carries the word');
+              const placed = place(scoped);
+              assert.notEqual(placed, scoped, 'the word was placed outside the section');
+              fs.writeFileSync(abs, placed);
+              const findings = runShipped(root, ['external-job-waiting']);
+              assert.ok(findings.some((f) => f.message.includes(kind === 'field' ? `must document the field ${word}` : `must document the state ${word}`)), JSON.stringify(findings));
+            });
+          }
         }
       }
 
@@ -1739,7 +1860,7 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         return text.replace(/overwrit(?:e|ing) any existing date/gi, (match) => { seen += 1; return seen <= keep ? match : 'XX'; });
       };
       findsOne('map-codebase with four overwrite sites fails codebase-mapper-date-restamp', 'gsd-core/workflows/map-codebase.md', g4KeepSites(4), 'codebase-mapper-date-restamp', /found 4, expected at least 5/);
-      passes('map-codebase with five overwrite sites satisfies codebase-mapper-date-restamp', 'gsd-core/workflows/map-codebase.md', g4KeepSites(5), 'codebase-mapper-date-restamp');
+      passes('map-codebase with five overwrite sites satisfies codebase-mapper-date-restamp', 'gsd-core/workflows/map-codebase.md', (text) => `${g4KeepSites(5)(text)}\nNotes on the date instructions.\n`, 'codebase-mapper-date-restamp');
       // codebase-mapper-date-restamp: bounds
       gapCases('whitespace between "overwrite" and "any"', 'agents/gsd-codebase-mapper.md', 'codebase-mapper-date-restamp',
         (text, gap) => `${text.replace(/overwrit(?:e|ing)\s+(?:any|whatever)[^.\n]*date/gi, '')}\noverwrite${g4Spaces(gap)}any date\n`, 20, /must tell the agent to overwrite a prior concrete date/);
@@ -1867,6 +1988,7 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         (text, gap) => `${text}\ndepends_on: ["01"]${g4Spaces(gap)}\n`, 50, g4Shape, /cannot be parsed by the example pattern/);
       g4BoundCases('the trailing comment of a short-form depends_on', g4Template, 'template-phase-prompt-dependson-3427',
         (text, gap) => `${text}\ndepends_on: ["01"] #${'c'.repeat(gap)}\n`, 500, g4Shape, /cannot be parsed by the example pattern/);
+      passes('the real phase-prompt template has no unparsed depends_on line', g4Template, append('Notes on depends_on usage.'), 'template-phase-prompt-dependson-3427');
       test('good and bad depends_on samples classify correctly (the helper of template-phase-prompt-dependson-3427)', () => {
         const { extractDependsOnExamples, shortFormTokens } = textContracts.loadContracts().find((c) => c.id === 'template-phase-prompt-dependson-3427');
         const good = extractDependsOnExamples(['depends_on: []', 'depends_on: ["03-01"]', 'depends_on: ["03-01", "03-02"]  # trailing comment', 'depends_on: ["01-01"]'].join('\n'));

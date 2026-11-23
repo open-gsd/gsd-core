@@ -13,6 +13,29 @@ const filesListOf = (stepBody) => /gsd_run\s{1,20}query\s{1,20}commit\b[^\n]{0,2
 // The step body with bash comment lines removed, so a rationale comment naming `git mv` does not count.
 const withoutComments = (stepBody) => stepBody.replace(/^[ \t]{0,200}#[^\n]{0,2000}$/gm, '');
 
+// `git mv` as two consecutive words, however much whitespace (spaces, tabs, newlines) lies between them: a linear
+// walk over the words, so a long gap cannot hide the command. `git` and `mv` keep the word boundaries of `\bgit` and `mv\b`.
+function hasGitMv(text) {
+  const isWord = (ch) => ch !== undefined && /\w/.test(ch);
+  const words = [];
+  let current = '';
+  for (const ch of text) {
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v') {
+      if (current !== '') words.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current !== '') words.push(current);
+  for (let i = 0; i + 1 < words.length; i++) {
+    const git = words[i];
+    const mv = words[i + 1];
+    if (git.endsWith('git') && !isWord(git[git.length - 4]) && mv.startsWith('mv') && !isWord(mv[2])) return true;
+  }
+  return false;
+}
+
 // The cleanup.md archive commit line, split into the --files half and the --files-removed half.
 function archiveCommit(text) {
   const line = text.split('\n').find((l) => /gsd_run\s{1,20}query\s{1,20}commit\b/.test(l) && l.includes('--files-removed'));
@@ -43,7 +66,7 @@ module.exports = {
       .has(/ADDED\+=\("\$COMPLETED_DIR\/\$f"\)/, 'ADDED must be built from $COMPLETED_DIR, the destination of the move')
       .has(/REMOVED\+=\("\$PENDING_DIR\/\$f"\)/, 'REMOVED must be built from $PENDING_DIR, the source whose deletion #2415 requires')
       .satisfies((body) => /\bmv\s{1,20}"\$TODO_FILE"\s{1,20}"\$COMPLETED_DIR\/"/.test(withoutComments(body)) || 'no plain mv of $TODO_FILE', 'close_phase_todos must use plain shell mv to move the file')
-      .satisfies((body) => !/\bgit\s{1,20}mv\b/.test(withoutComments(body)) || 'a git mv command', 'close_phase_todos must NOT use git mv as the move command: it fails on untracked todos and on non-git .planning dirs');
+      .satisfies((body) => !hasGitMv(withoutComments(body)) || 'a git mv command', 'close_phase_todos must NOT use git mv as the move command: it fails on untracked todos and on non-git .planning dirs');
 
     ctx.doc('gsd-core/workflows/cleanup.md')
       .satisfies(onArchive((archive) => {

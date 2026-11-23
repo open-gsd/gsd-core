@@ -25,8 +25,14 @@ module.exports = {
   issue: '#3801',
   check(ctx) {
     ctx.doc('gsd-core/bin/shared/config-defaults.manifest.json').satisfies((text) => {
-      const manifest = JSON.parse(text);
-      if (!manifest.workflow || !Object.prototype.hasOwnProperty.call(manifest.workflow, 'inline_plan_threshold')) {
+      let manifest;
+      try {
+        manifest = JSON.parse(text);
+      } catch (err) {
+        return `the manifest is not valid JSON: ${err.message}`;
+      }
+      if (manifest === null || typeof manifest !== 'object' || !manifest.workflow || typeof manifest.workflow !== 'object'
+        || !Object.prototype.hasOwnProperty.call(manifest.workflow, 'inline_plan_threshold')) {
         return 'the key is not registered in config-defaults.manifest.json';
       }
       return manifest.workflow.inline_plan_threshold === Number(DEFAULT) || `the manifest default is ${manifest.workflow.inline_plan_threshold}`;
@@ -44,7 +50,8 @@ module.exports = {
     ctx.doc('gsd-core/references/planning-config.md').satisfies((text) => {
       const parsed = lib('markdown-table.cjs').parseMarkdownTable(text);
       if (!parsed.ok) return 'no parseable defaults table';
-      const rows = parsed.value.rows.filter((row) => String(row['Option']).includes('inline_plan_threshold'));
+      const rows = ((parsed.value && Array.isArray(parsed.value.rows)) ? parsed.value.rows : [])
+        .filter((row) => row !== null && typeof row === 'object' && String(row['Option']).includes('inline_plan_threshold'));
       if (rows.length < 1) return 'no inline_plan_threshold row';
       for (const row of rows) {
         const value = String(row['Default']).replace(/`/g, '').trim();

@@ -9,15 +9,15 @@
 // A line that is, after any indent, an optional `git` and then `mv` followed by whitespace or the end of the line
 // (no bounded quantifier: a bound on a `lacks` would let a longer indent or gap evade it).
 function hasMvLine(text) {
-  const blank = (ch) => ch === ' ' || ch === '\t';
+  const blank = (ch) => /\s/.test(ch);
   return text.split('\n').some((line) => {
     let at = 0;
     while (at < line.length && blank(line[at])) at += 1;
-    if (line.startsWith('git', at) && blank(line[at + 3] || '')) {
+    if (line.startsWith('git', at) && at + 3 < line.length && blank(line[at + 3])) {
       at += 3;
       while (at < line.length && blank(line[at])) at += 1;
     }
-    return line.startsWith('mv', at) && (at + 2 === line.length || /\s/.test(line[at + 2]));
+    return line.startsWith('mv', at) && (at + 2 === line.length || blank(line[at + 2]));
   });
 }
 
