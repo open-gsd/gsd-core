@@ -63,27 +63,14 @@ function bracedNames(text) {
 function promptBody(text) {
   const fences = text.split('\n').filter((line) => line.trim() === '```text').length;
   if (fences !== 1) return { error: `the fragment must hold exactly one text fence (the prompt template), found ${fences}` };
-  let body;
-  try {
-    body = require(SECTIONIZER).extractFencedBlock(text, 'text');
-  } catch (err) {
-    return { error: `the fence scanner cannot be loaded: ${String(err.message).split('\n')[0]}` };
-  }
+  const body = require(SECTIONIZER).extractFencedBlock(text, 'text');
   return body === null ? { error: 'the text fence must close' } : { body: `${body}\n` };
 }
 
-// A check that needs a library of the repo: a load or scan failure is the finding, not an exception.
-const safely = (check) => (text) => {
-  try {
-    return check(text);
-  } catch (err) {
-    return `the check could not run: ${String(err.message).split('\n')[0]}`;
-  }
-};
-
+// The fence error is reported once, by the first check of the contract; the checks on the template pass without it.
 const onBody = (check) => (text) => {
   const prompt = promptBody(text);
-  return prompt.error || check(prompt.body);
+  return prompt.error ? true : check(prompt.body);
 };
 
 const has = (pattern, miss) => onBody((body) => pattern.test(body) || miss);
@@ -132,6 +119,7 @@ module.exports = {
   check(ctx) {
     let placeholders = [];
     ctx.doc(DISPATCH)
+      .satisfies((text) => promptBody(text).error || true, 'the prompt template must be exactly one closed text fence')
       .satisfies(has(/<required_reading>/, 'no <required_reading>'), 'the prompt must carry the required-reading contract')
       .satisfies(has(/\{phase_dir\}\/\{plan_file\}/, 'no {phase_dir}/{plan_file}'), 'the prompt must name the explicit plan path')
       .satisfies(has(/\{project_rel\}/, 'no {project_rel}'), 'project context is required reading')
@@ -148,7 +136,7 @@ module.exports = {
       .satisfies(has(/steps\s{0,20}0\/0a\/0b/, 'no steps 0/0a/0b'), 'the per-commit HEAD/cwd-drift/path-guard discipline must be pointed at')
       .satisfies(has(/prior_wave_summaries/, 'no prior_wave_summaries'), 'prior-wave SUMMARY files must be required reading on this parallel-wave backend')
       .satisfies(has(/\$\{AGENT_SKILLS\}/, 'no ${AGENT_SKILLS}'), 'the gsd-executor persona variable must be spliced into the prompt')
-      .satisfies(safely((text) => {
+      .satisfies((text) => {
         const lines = text.split('\n');
         const sentence = lines.find((line) => line.includes('Before running each bash block below'));
         if (!sentence) return 'the substitution instruction does not exist';
@@ -164,15 +152,15 @@ module.exports = {
           if (substitutePlaceholders(rest) !== rest) return 'a placeholder of a fenced block is missing from the instruction';
         }
         return true;
-      }), 'the substitution instruction must name every placeholder any fenced block of the fragment uses')
-      .satisfies(safely((text) => {
+      }, 'the substitution instruction must name every placeholder any fenced block of the fragment uses')
+      .satisfies((text) => {
         const lines = text.split('\n');
         const { scanFencedBlocks } = require(SECTIONIZER);
         const bash = scanFencedBlocks(lines).filter((block) => block.infoString === 'bash').map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'));
         if (bash.length === 0) return 'the fragment holds no bash blocks';
         const inBash = ['<objective>', '<mcp_tools>', '[gsd:dispatch'].find((marker) => bash.some((body) => body.includes(marker)));
         return inBash ? `${inBash} sits in a bash block` : true;
-      }), 'the template text must sit in no bash block')
+      }, 'the template text must sit in no bash block')
       .has('with your file-writing tool and never through the shell', 'the template is written with the file tool, never through the shell')
       .satisfies(onBody((body) => {
         const missing = ['Inline the actual contents', '${TDD_APPLICABLE'].find((marker) => !body.includes(marker));

@@ -29,7 +29,7 @@ function taggedJsonBlocks(markdown) {
     if (block.closeLineIdx === -1) continue;
     const info = block.infoString || '';
     if (!info.startsWith(TAG_PREFIX)) continue;
-    out.push([info.slice(TAG_PREFIX.length).trim(),lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')]);
+    out.push([info.slice(TAG_PREFIX.length).trim(), lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')]);
   }
   return out;
 }

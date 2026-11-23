@@ -710,6 +710,10 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['a one-line debugger spawn with a parenthesis in a quoted prompt in the manager', 'agents/gsd-debug-session-manager.md', append('Agent(prompt="a ) b", subagent_type="gsd-debugger")'), 'debug-manager-blocking-spawn', /full variant: expected exactly one gsd-debugger spawn block/],
         ['an agent file with a nested-call spawn that never states run_in_background', 'agents/gsd-executor.md', append('Agent(prompt=f(x), subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /an agent that spawns a subagent must decide whether that spawn blocks/],
         ['an agent file with a quoted-parenthesis spawn that never states run_in_background', 'agents/gsd-executor.md', append('Agent(prompt="a ) b", subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /an agent that spawns a subagent must decide whether that spawn blocks/],
+        // review round 3
+        ['a prose line with an unmatched Agent( before a one-line spawn that never states run_in_background', 'agents/gsd-executor.md', append('See the Agent( call below\nAgent(subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /an agent that spawns a subagent must decide whether that spawn blocks/],
+        ['a multi-line spawn with an unbalanced parenthesis before a one-line spawn that never states run_in_background', 'agents/gsd-executor.md', append('Agent(\n  prompt=f(x,\n  subagent_type="gsd-planner",\n  run_in_background=false\n)\nAgent(subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /an agent that spawns a subagent must decide whether that spawn blocks/],
+        ['a prose line with an unmatched Agent( before a second one-line spawn literal in the manager', 'agents/gsd-debug-session-manager.md', append('See the Agent( call below\nAgent(subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /exactly one Agent\(\) spawn literal may exist/],
         // tdd-reference-correctness
         ['a cited section name gone from the execute-plan pointer (Red-Green-Refactor Cycle)', 'gsd-core/workflows/execute-plan.md', within('<tdd_plan_execution>', '</tdd_plan_execution>', swap('"Red-Green-Refactor Cycle"', '"Cycle"')), 'tdd-reference-correctness', /execute-plan\.md: the commit-scope contract must cite "Red-Green-Refactor Cycle"/],
         ['a cited section name gone from the execute-plan pointer (Fail-Fast Rules)', 'gsd-core/workflows/execute-plan.md', within('<tdd_plan_execution>', '</tdd_plan_execution>', swap('"Fail-Fast Rules"', '"Fast"')), 'tdd-reference-correctness', /execute-plan\.md: the fail-fast rule must cite "Fail-Fast Rules" by its literal section name/],
@@ -844,8 +848,6 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the third understanding question gone from execute-phase', 'gsd-core/workflows/execute-phase.md', eraseAll('structural mechanism'), 'anti-pattern-enforcement', /execute-phase\.md must ask "What structural mechanism prevents it\?"/],
         ['the mandatory marker gone from execute-phase', 'gsd-core/workflows/execute-phase.md', eraseAll('MANDATORY'), 'anti-pattern-enforcement', /execute-phase\.md must indicate that the blocking anti-pattern understanding check cannot be skipped/],
         // executor-isolation-prompt-contract
-        ['the text fence of the dispatch fragment gone', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', swap('```text', '```txt'), 'executor-isolation-prompt-contract', /the prompt must carry the required-reading contract \(the fragment must hold exactly one text fence/],
-        ['a second text fence in the dispatch fragment', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', append('```text\nx\n```'), 'executor-isolation-prompt-contract', /the prompt must carry the required-reading contract \(the fragment must hold exactly one text fence \(the prompt template\), found 2\)/],
         ['required_reading gone from the executor prompt', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', eraseAll('<required_reading>'), 'executor-isolation-prompt-contract', /the prompt must carry the required-reading contract/],
         ['the explicit plan path gone from the executor prompt', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', eraseAll('{phase_dir}/{plan_file}'), 'executor-isolation-prompt-contract', /the prompt must name the explicit plan path/],
         ['project_rel gone from the executor prompt', 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', eraseAll('{project_rel}'), 'executor-isolation-prompt-contract', /project context is required reading/],
@@ -1041,6 +1043,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['a tilde fenced resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('~~~bash\ngsd-sdk query config-get code_quality.fallow.enabled\n~~~'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a four backtick fenced resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('````bash\ngsd-sdk query config-get code_quality.fallow.enabled\n````'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a stray fence marker in prose before a fenced resolver call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('A stray ``` in prose.\n```bash\ngsd-sdk query config-get code_quality.fallow.enabled\n```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['a four space indented fenced resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('    ```bash\n    gsd-sdk query config-get code_quality.fallow.enabled\n    ```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['a tab indented fenced resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('\t```bash\n\tgsd-sdk query config-get code_quality.fallow.enabled\n\t```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['an unterminated fence holding a resolver call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('```bash\ngsd-sdk query config-get code_quality.fallow.enabled'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a duplicate section id in autonomous.md', 'gsd-core/workflows/autonomous.md', swap('id="converge-banner"', 'id="converge-fail-fast"'), 'resolver-hoist-guard', /the fragment parser failed: workflow-fragments: duplicate section id/],
         ['the default-local assignment gone from autonomous.md', 'gsd-core/workflows/autonomous.md', swap('PLAN_STRATEGY="local"', 'PLAN_STRATEGY="other"'), 'resolver-hoist-guard', /the default-local assignment must survive the converge-hoist/],
@@ -1196,6 +1200,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
           swap('\ndescription:', '\nsummary: description:'), 'extract-learnings', /the command must have description frontmatter/],
         ['the step marker gone from the Step 1.5 line start in gsd-phase-researcher (#1988)', 'agents/gsd-phase-researcher.md',
           swap('\n## Step 1.5:', '\n see ## Step 1.5:'), 'gsd-researcher-app-aware', /no Step 1\.5 heading names the Architectural Responsibility Map/],
+        ['a stray [ inside an options label leaves the array unclosed (#1516)', 'gsd-core/workflows/new-project.md',
+          append('options: [ { label: "Foo [beta" }, { label: "b" } ]'), 'new-project-mvp-prompt', /options array #\d{1,4} is never closed/],
         ['the rejection words gone after the deletion rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           erase(/reject|justif|rca|root cause/gi), 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
         ['every accept wording gone, so revert-and-reconfirm has no ordering rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
@@ -1593,6 +1599,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     passes('Heisenbug alone, with Mandelbug erased, defines the class', 'gsd-core/references/debugger-bug-taxonomy.md', erase(/mandelbug/gi), 'debugger-bug-taxonomy');
     findsOne('a fixer spawn whose prompt names the reviewer type is labelled by the first routed agent in list order', 'gsd-core/workflows/quick.md', append('Agent(subagent_type="gsd-code-fixer", prompt="""x subagent_type="gsd-code-reviewer" y""")'), 'model-routing-spawn-threading', /gsd-code-reviewer spawn missing model=/);
     passes('a model= written inside the prompt string satisfies the model param check, as in the old test', 'gsd-core/workflows/quick.md', append('Agent(subagent_type="gsd-code-fixer", prompt="""use model=x""")'), 'model-routing-spawn-threading');
+    passes('a multi-line spawn that closes on its last argument line is claimed by neither form, so it is not checked', 'agents/gsd-executor.md', append('Agent(\n  subagent_type="gsd-planner",\n  prompt="x")'), 'debug-manager-blocking-spawn');
   }
 
   {
@@ -1766,6 +1773,10 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     for (const [title, content] of FENCE_CASES) test(`${title} does not make a template (the fence owner needs LF or CRLF)`, (t) => assert.equal(fenceFindings(t, content).length > 0, true));
     passes('the Severity word in lowercase alone satisfies the pause-work column check', 'gsd-core/workflows/pause-work.md', swap('Severity', 'Sevxrity'), 'anti-pattern-enforcement');
     passes('the Severity word capitalised alone satisfies the pause-work column check', 'gsd-core/workflows/pause-work.md', swap('severity', 'sevxrity'), 'anti-pattern-enforcement');
+    findsOne('the text fence of the dispatch fragment gone is one finding', DISPATCH_FRAGMENT, swap('```text', '```txt'), 'executor-isolation-prompt-contract', /the prompt template must be exactly one closed text fence \(the fragment must hold exactly one text fence \(the prompt template\), found 0\)/);
+    findsOne('a second text fence in the dispatch fragment is one finding', DISPATCH_FRAGMENT, append('```text\nx\n```'), 'executor-isolation-prompt-contract', /the prompt template must be exactly one closed text fence \(the fragment must hold exactly one text fence \(the prompt template\), found 2\)/);
+    test('a template closed by --- and a tab is found (the fence owner accepts trailing tabs)', (t) => assert.deepEqual(fenceFindings(t, PLANNER_BLOCK('---\t')), []));
+    for (const pad of [2, 5, 6, 7]) test(`a template opened by --- and ${pad} trailing spaces is not a template (only an exact --- opens a block)`, (t) => assert.equal(fenceFindings(t, PLANNER_BLOCK('---').replace('---\n', `---${' '.repeat(pad)}\n`)).length > 0, true));
   }
 
   {
@@ -2018,6 +2029,11 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
 
     passes('a Bad example whose open PR line is followed by internal review of the PR on the same line', 'gsd-core/references/planner-antipatterns.md', swap('Wave 1: Open PR; automatic external review starts', 'Wave 1: Open PR, then internal review of the PR'), 'prompt-thinning');
     passes('the thinning conditional written without a space before the less-than sign', 'gsd-core/workflows/execute-phase.md', swap('CONTEXT_WINDOW < 200000', 'CONTEXT_WINDOW< 200000'), 'prompt-thinning');
+
+    // few-shot-calibration: a value may be followed by up to 20 blanks on its line.
+    gapCases('trailing blanks after the component', PLAN_CHECKER, 'few-shot-calibration', (text, gap) => text.replace('component: plan-checker', `component: plan-checker${' '.repeat(gap)}`), 20, /plan-checker.md frontmatter must name its component/);
+    gapCases('trailing blanks after the version', PLAN_CHECKER, 'few-shot-calibration', (text, gap) => text.replace(/^version: (\d+)/m, (_, digits) => `version: ${digits}${' '.repeat(gap)}`), 20, /plan-checker.md frontmatter must carry a numeric version/);
+    gapCases('trailing blanks after the calibration date', PLAN_CHECKER, 'few-shot-calibration', (text, gap) => text.replace(/^last_calibrated: (\S+)/m, (_, date) => `last_calibrated: ${date}${' '.repeat(gap)}`), 20, /plan-checker.md frontmatter must carry a last_calibrated date/);
   }
 
   {
@@ -2218,6 +2234,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     findsOne('an unclosed options array alone is a finding', NEW_PROJECT, append('options: [ { label: "a" }'), 'new-project-mvp-prompt', /is never closed/);
     findsOne('an unclosed options array followed by a five-label array still flags the five labels', NEW_PROJECT,
       append(`options: [ { label: "a" }\n${options(5)}`), 'new-project-mvp-prompt', /has 5 options/);
+    findsOne('a mid-line Step 2 mention inside the map step does not end it before a later tool call', 'agents/gsd-phase-researcher.md',
+      swap('\n## Step 2:', '\nsee ## Step 2: in prose, then WebSearch\n\n## Step 2:'), 'gsd-researcher-app-aware', 'found WebSearch');
   }
 
   // A file a batch 9 contract reads that is gone from the tree is one finding for that file.

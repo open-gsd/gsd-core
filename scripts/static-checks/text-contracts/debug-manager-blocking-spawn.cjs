@@ -15,8 +15,9 @@ const DEBUG_WORKFLOW = 'gsd-core/workflows/debug.md';
 const { agentCalls } = require('./model-routing-spawn-threading.cjs');
 
 // The `Agent(...)` spawn blocks of a file: the multi-line form (a call whose open paren is followed only by whitespace
-// that includes a newline, up to the first line that starts with `)`) and every call that closes on its own line, so a
-// one-line spawn cannot evade the class guard.
+// that includes a newline, up to the first line that starts with `)`) and every call that opens and closes on one line,
+// so a one-line spawn cannot evade the class guard. A call that opens on one line and closes at the end of a later line
+// that does not start with `)` is claimed by neither form.
 function agentSpawnBlocks(content) {
   const blocks = [];
   // Matches do not overlap: the scan resumes after a matched block, as a global regex scan does.
@@ -36,10 +37,12 @@ function agentSpawnBlocks(content) {
       next = close + 2;
     }
   }
-  // Single-line: the paren-aware call scan shared with model-routing-spawn-threading, so a nested call or a quoted
-  // parenthesis in the arguments does not end the block early.
-  for (const call of agentCalls(content)) {
-    if (!call.includes('\n') && call.endsWith(')')) blocks.push(call);
+  // Single-line: the paren-aware call scan shared with model-routing-spawn-threading, run on one line at a time so a
+  // call never reads past its own line and an unmatched parenthesis cannot swallow a later one-line spawn.
+  for (const line of content.split('\n')) {
+    for (const call of agentCalls(line)) {
+      if (call.endsWith(')')) blocks.push(call);
+    }
   }
   return blocks;
 }

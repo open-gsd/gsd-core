@@ -22,9 +22,9 @@ function armStepStart(text) {
   return -1;
 }
 
-// The text from `start` to the next `## Step 2:`, or the reason there is none.
+// The text from `start` to the next `## Step 2:` at a line start, or the reason there is none.
 function untilStep2(text, start) {
-  const end = text.indexOf('## Step 2:', start);
+  const end = text.indexOf('\n## Step 2:', start);
   return end === -1 ? { error: 'no "## Step 2:" heading after the step' } : { section: text.slice(start, end) };
 }
 

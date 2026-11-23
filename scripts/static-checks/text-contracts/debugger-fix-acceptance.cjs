@@ -72,7 +72,7 @@ module.exports = {
       .has(/mutation/i, 'signal 2: the mutation check')
       .has(/no-op|deletion|behavior-deleting/i, 'signal 3: the no-op/deletion detector')
       .has(/adjacent|held-out/i, 'signal 4: adjacent/held-out tests')
-      .has(/revert[\s-]{0,20}and[\s-]{0,20}reconfirm/i, 'signal 5: revert-and-reconfirm')
+      .has(REVERT_NAME, 'signal 5: revert-and-reconfirm')
       .has(/no Stryker|stryker (?:is )?(?:absent|unavailable|not configured)/i, 'the reference must document skipping the mutation check when Stryker is absent')
       .has(/no test suite/i, 'the reference must document the no-suite reduction path')
       .satisfies((text) => lineHasAny(text, [['skipped', 'log'], ['log', 'skip'], ['recorded', 'skip'], ['skip', 'record']]),

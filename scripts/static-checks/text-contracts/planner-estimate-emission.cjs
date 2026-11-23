@@ -1,20 +1,18 @@
 'use strict';
 
-// Planner estimate emission and the over-budget flag (#2631, ADR-2629): the planner's PLAN.md frontmatter template
-// carries an `estimate:` block (tokens, tasks, confidence) and a field-table row, and is told to apply the
-// calibration factor with confidence derived from the sample count; gsd-plan-checker reads the configured smart-zone
-// budget, runs the estimate-check verb, recommends splitting as a warning that is never a blocker, and consults the
-// estimate in Dimension 5; docs/reference/plan-md.md documents `estimate` as optional. Parity: every confidence word
-// the planner offers is in the module's CONFIDENCE_VALUES, and docs/CONFIGURATION.md states the shipped
-// smart_zone_tokens default. Was tests/planner-estimate-emission.test.cjs. The template is found by walking the
-// fenced blocks with the repo's one fence owner (locateFrontmatterFence), where the test used a lazy regex: a closing
-// fence there was `---` and nothing else, here it is `---` plus optional trailing spaces or tabs, or a `----` line
-// when no exact closer follows; a lone CR or U+2028 neither opens nor closes a block (a fence line must end in LF or CRLF). These are deliberate (one owner of the
-// fence rules, ADR-5057) and are pinned by cases. The confidence values are read from the template's own enumeration
-// comment (`# low | med | high`), where the test took every low/med/high word of the line and so could never see a
-// value the parser rejects. The test accepted
-// `calibration factor`, `derived` and `split` or `never a blocker` alone; the files carry `estimate-calibration`,
-// `sample count`, `re-slic` and `WARNING, never a blocker`, which are asked for.
+// Planner estimate emission and the over-budget flag (#2631, ADR-2629): the planner's PLAN.md template carries an
+// `estimate:` block (tokens, tasks, confidence) and a field-table row, with confidence derived from the sample count;
+// gsd-plan-checker reads the configured smart-zone budget, runs the estimate-check verb, recommends splitting as a
+// warning never a blocker, and consults the estimate in Dimension 5; plan-md.md documents `estimate` as optional;
+// CONFIGURATION.md states the shipped smart_zone_tokens default. Was tests/planner-estimate-emission.test.cjs.
+// The template is found with the repo's one fence owner (locateFrontmatterFence), not the test's lazy regex: a closing
+// fence is `---` plus optional trailing spaces or tabs, or a `----` line when no exact closer follows; a lone CR or
+// U+2028 neither opens nor closes a block; an opener is exactly `---` before LF or CRLF, as the regex's was. Cases pin
+// these (ADR-5057). The `m`-flag patterns on the body still treat U+2028 and U+2029 as line starts, as the test's did.
+// Confidence values come from the template's `# low | med | high` comment (the test took any low/med/high word, so
+// it could never see a value the parser rejects). The test accepted `calibration factor`, `derived` and `split` or
+// `never a blocker` alone; the files carry `estimate-calibration`, `sample count`, `re-slic` and
+// `WARNING, never a blocker`, which are asked for.
 
 const path = require('node:path');
 
@@ -29,7 +27,7 @@ const ESTIMATE_FIELDS = [
 
 // The fence rules (opening fence, whole-line closing fence) have one owner; this reads the planner's fenced
 // blocks (the PLAN.md template examples) through it, one block at a time.
-const FENCE_LIB = '../../../gsd-core/bin/lib/frontmatter-fence.cjs';
+const FENCE_LIB = path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'frontmatter-fence.cjs');
 
 // The first fenced block of the planner that declares both phase: and must_haves:, or null.
 function plannerFrontmatterTemplate(text) {
@@ -38,8 +36,9 @@ function plannerFrontmatterTemplate(text) {
   while (offset <= text.length) {
     const eol = text.indexOf('\n', offset);
     const line = text.slice(offset, eol === -1 ? text.length : eol);
-    // A fence line is short and starts with a hyphen; only those lines are offered to the fence owner.
-    if (line.length <= 8 && line.startsWith('-')) {
+    // Only a line of three characters before its trailing blanks, starting with a hyphen, is offered to the fence
+    // owner (which decides whether one opens here): this keeps the walk linear without a bound on the blanks.
+    if (line.startsWith('-') && line.trimEnd().length === 3) {
       const rest = text.slice(offset);
       const fence = locateFrontmatterFence(rest);
       if (fence) {
@@ -57,12 +56,7 @@ function plannerFrontmatterTemplate(text) {
 }
 
 const onTemplate = (check) => (text) => {
-  let template;
-  try {
-    template = plannerFrontmatterTemplate(text);
-  } catch (err) {
-    return `the fence owner cannot be loaded: ${String(err.message).split('\n')[0]}`;
-  }
+  const template = plannerFrontmatterTemplate(text);
   return template === null ? 'the PLAN.md frontmatter template is not in the planner' : check(template);
 };
 
@@ -85,13 +79,7 @@ module.exports = {
         const comment = line.split('#')[1];
         const words = comment === undefined ? [] : comment.split('\u2014')[0].split('|').map((word) => word.trim()).filter((word) => word.length > 0);
         if (words.length === 0) return 'the confidence line must enumerate the allowed values';
-        let CONFIDENCE_VALUES;
-        try {
-          ({ CONFIDENCE_VALUES } = require(ESTIMATION_LIB));
-        } catch (err) {
-          return `the estimation module cannot be loaded: ${String(err.message).split('\n')[0]}`;
-        }
-        if (!Array.isArray(CONFIDENCE_VALUES)) return 'the estimation module exports no CONFIDENCE_VALUES list';
+        const { CONFIDENCE_VALUES } = require(ESTIMATION_LIB);
         const rejected = words.filter((word) => !CONFIDENCE_VALUES.includes(word));
         return rejected.length === 0 || `the planner offers ${rejected.join(', ')} but CONFIDENCE_VALUES does not accept it`;
       }), 'every confidence value the planner may emit must be accepted by the parser');
