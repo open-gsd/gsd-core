@@ -16,6 +16,32 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const stepsOf = (job) => (Array.isArray(job.steps) ? job.steps.filter(isObject) : []);
 const dependsOn = (job, name) => (Array.isArray(job.needs) ? job.needs.includes(name) : job.needs === name);
 
+// The `i/n` shard-spec grammar of scripts/run-tests.cjs (parseShardArg): digits, a slash, digits, a total of at least 1 and an
+// index in 1..total. The contract may not require the runner or the test helper (neither ships), so the grammar is copied here;
+// tests/shard-spec.test.cjs holds a parity property against tests/helpers/shard-spec.cjs.
+function parseShardSpec(spec) {
+  if (typeof spec !== 'string') return null;
+  const match = /^(\d+)\/(\d+)$/.exec(spec);
+  if (!match) return null;
+  const index = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isInteger(total) || total < 1) return null;
+  if (!Number.isInteger(index) || index < 1 || index > total) return null;
+  return { index, total };
+}
+
+// True iff `specs` is exactly one complete shard set: same total, numerators 1..total once each.
+function isCompleteShardSet(specs) {
+  if (specs.length === 0) return false;
+  const parsed = specs.map(parseShardSpec);
+  if (parsed.some((p) => p === null)) return false;
+  const total = parsed[0].total;
+  if (parsed.some((p) => p.total !== total)) return false;
+  if (parsed.length !== total) return false;
+  const seen = new Set(parsed.map((p) => p.index));
+  return seen.size === total && [...seen].every((i) => i >= 1 && i <= total);
+}
+
 // The jobs mapping of release.yml, or the reason it cannot be read.
 function readJobs(text) {
   let workflow;
@@ -29,10 +55,10 @@ function readJobs(text) {
 }
 
 module.exports = {
+  isCompleteShardSet,
   id: 'release-shard-lane-sharding',
   issue: '#4335',
   check(ctx) {
-    const { isCompleteShardSet } = require('../../../tests/helpers/shard-spec.cjs');
     const workflow = ctx.doc(WORKFLOW);
     // A workflow that cannot be read is one finding; the lane checks below need its jobs mapping.
     let loadedJobs = null;

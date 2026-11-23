@@ -11,6 +11,28 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { parseShardSpec, isCompleteShardSet } = require('./helpers/shard-spec.cjs');
+const contract = require('../scripts/static-checks/text-contracts/release-shard-lane-sharding.cjs');
+
+// The release-shard-lane-sharding contract ships, so it cannot require this helper (tests/ does not ship) and carries its own copy of
+// the shard-spec grammar. The runner (scripts/run-tests.cjs, through the helper) is the owner: this property fails if the copy diverges.
+test('property: the contract copy of isCompleteShardSet agrees with the helper on any list of specs (#4335)', () => {
+  const spec = fc.oneof(
+    fc.tuple(fc.integer({ min: 0, max: 7 }), fc.integer({ min: 0, max: 7 })).map(([i, n]) => `${i}/${n}`),
+    fc.tuple(fc.integer({ min: 0, max: 7 }), fc.integer({ min: 0, max: 7 })).map(([i, n]) => `0${i}/${n}`),
+    fc.constantFrom('', '1', '1/', '/3', 'a/3', '1/b', ' 1/3', '1/3 ', '1 /3', '1/3\n', '1/3/4', '-1/3', '1/-3', '1.5/3', `${'9'.repeat(400)}/${'9'.repeat(400)}`, '1/' + '9'.repeat(400)),
+    fc.string(),
+  );
+  fc.assert(fc.property(fc.array(spec, { maxLength: 9 }), (specs) => {
+    assert.equal(contract.isCompleteShardSet(specs), isCompleteShardSet(specs), JSON.stringify(specs));
+  }));
+  fc.assert(fc.property(fc.integer({ min: 1, max: 9 }), fc.nat(), fc.nat(), (total, a, b) => {
+    const specs = Array.from({ length: total }, (_, i) => `${i + 1}/${total}`);
+    assert.equal(contract.isCompleteShardSet(specs), true);
+    assert.equal(isCompleteShardSet(specs), true);
+    specs[a % total] = specs[b % total];
+    assert.equal(contract.isCompleteShardSet(specs), isCompleteShardSet(specs));
+  }));
+});
 
 test('shard-spec parsing is exact at its boundaries (#4335)', () => {
   assert.deepEqual(parseShardSpec('1/3'), { index: 1, total: 3 });
