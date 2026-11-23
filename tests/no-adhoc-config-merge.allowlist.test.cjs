@@ -17,10 +17,8 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 const { ESLint } = require('eslint');
-const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { assertWithinAllowlist } = require('../scripts/lib/allowlist-ratchet.cjs');
 const rule = require('../eslint-rules/no-adhoc-config-merge.cjs');
@@ -28,6 +26,23 @@ const allowlist = require('../eslint-rules/no-adhoc-config-merge.allowlist.json'
 
 const ROOT = path.join(__dirname, '..');
 const RULE_ID = 'local/no-adhoc-config-merge';
+
+function collect(dir, predicate, out) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name !== 'node_modules') collect(full, predicate, out);
+    } else if (predicate(full)) out.push(full);
+  }
+  return out;
+}
+
+/** A compiled twin: gsd-core/bin/lib/<path>.cjs built from src/<path>.cts, at any depth. */
+function isBuildOutput(file) {
+  const rel = path.relative(path.join(ROOT, 'gsd-core', 'bin', 'lib'), file);
+  if (rel.startsWith('..')) return false;
+  return fs.existsSync(path.join(ROOT, 'src', rel.replace(/\.cjs$/, '.cts')));
+}
 
 function ruleOnlyEslint() {
   const { parser } = require('typescript-eslint');
@@ -78,17 +93,15 @@ describe('no-adhoc-config-merge allowlist: shape', () => {
 
 describe('no-adhoc-config-merge: the first-party tree', () => {
   test('census zero: every offending file is allowlisted and every allowlisted file offends', async () => {
-    // Tracked source only: gsd-core/bin/lib/*.cjs is build output (gitignored), the compiled twin of
-    // src/*.cts, and is not a first-party surface the lint config reaches.
-    const tracked = execFileSync('git', ['ls-files', '-z', '--', 'src', 'hooks', 'gsd-core/bin', 'scripts', 'bin'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      timeout: GIT_TIMEOUT_MS,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
-    }).split('\0').filter(Boolean);
-    const files = tracked
-      .filter((f) => /^(?:src\/.*\.cts|hooks\/.*\.js|gsd-core\/bin\/.*\.cjs|scripts\/.*\.cjs|bin\/install\.js)$/.test(f))
-      .map((f) => path.join(ROOT, f));
+    // First-party source only: gsd-core/bin/lib/<name>.cjs with a src/<name>.cts twin is build output
+    // (gitignored), not a surface the lint config reaches.
+    const files = [
+      ...collect(path.join(ROOT, 'src'), (f) => f.endsWith('.cts'), []),
+      ...collect(path.join(ROOT, 'hooks'), (f) => f.endsWith('.js'), []),
+      ...collect(path.join(ROOT, 'scripts'), (f) => f.endsWith('.cjs'), []),
+      ...collect(path.join(ROOT, 'gsd-core', 'bin'), (f) => f.endsWith('.cjs') && !isBuildOutput(f), []),
+      path.join(ROOT, 'bin', 'install.js'),
+    ];
     // Without the allowlist options an offender is reported and an exempt file is not, so run the
     // rule bare and compare by identity with the temporary section.
     const { parser } = require('typescript-eslint');
