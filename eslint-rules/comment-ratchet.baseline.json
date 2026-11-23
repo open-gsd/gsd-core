@@ -684,7 +684,6 @@
     "directive": 2
   },
   "src/capability-activation.cts": {
-    "directive": 2,
     "block": 2
   },
   "src/capability-consent.cts": {
@@ -720,7 +719,7 @@
   },
   "src/capability-writer.cts": {
     "block": 2,
-    "directive": 14
+    "directive": 13
   },
   "src/check-command-router.cts": {
     "directive": 1
@@ -1635,9 +1634,6 @@
   "tests/agent-skills-compact-variant.test.cjs": {
     "block": 1
   },
-  "tests/agent-tracked-source-rule.test.cjs": {
-    "block": 1
-  },
   "tests/ai-evals.test.cjs": {
     "directive": 1
   },
@@ -1653,10 +1649,6 @@
   "tests/ask-user-questions-fallback.test.cjs": {
     "directive": 1,
     "block": 1
-  },
-  "tests/atomic-write-coverage.test.cjs": {
-    "block": 1,
-    "directive": 1
   },
   "tests/audit-command-cutover.test.cjs": {
     "block": 3
@@ -1954,9 +1946,6 @@
     "block": 1
   },
   "tests/context-utilization.property.test.cjs": {
-    "block": 1
-  },
-  "tests/context7-tool-name-parity.test.cjs": {
     "block": 1
   },
   "tests/continuation-grammar-parity.test.cjs": {
@@ -2546,9 +2535,6 @@
   "tests/ingest-docs.test.cjs": {
     "directive": 2
   },
-  "tests/init-debug-workflow-contract.test.cjs": {
-    "directive": 1
-  },
   "tests/init-debug.test.cjs": {
     "block": 1
   },
@@ -2903,9 +2889,6 @@
   },
   "tests/parallel-dependent-plans.test.cjs": {
     "directive": 3
-  },
-  "tests/partial-init-routing.test.cjs": {
-    "block": 1
   },
   "tests/path-replacement.test.cjs": {
     "directive": 1,
@@ -3526,9 +3509,6 @@
     "block": 1
   },
   "tests/ui-interaction-capture.test.cjs": {
-    "block": 1
-  },
-  "tests/ui-researcher-inventory-self-check.test.cjs": {
     "block": 1
   },
   "tests/ui-spec-inventory-provenance.test.cjs": {
