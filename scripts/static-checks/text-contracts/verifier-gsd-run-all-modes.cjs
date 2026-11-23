@@ -11,10 +11,12 @@ const RESOLVER_REF = 'references/gsd-run-resolver.md';
 // with an upper-case name, `gsd_run`, whitespace, a lower-case word. A linear scan, so no length of indent, name or
 // gap hides a call that runs before the resolver.
 function firstGsdRunCall(text) {
+  // A line ends at \n, \r, U+2028 or U+2029, the line terminators a multiline `^` starts after.
+  const isLineEnd = (ch) => ch === '\n' || ch === '\r' || ch === ' ' || ch === ' ';
   let lineStart = 0;
   for (;;) {
     let i = lineStart;
-    while (i < text.length && text[i] !== '\n' && /\s/.test(text[i])) i++; // any indent, form feed and vertical tab included
+    while (i < text.length && !isLineEnd(text[i]) && /\s/.test(text[i])) i++; // any indent, form feed and vertical tab included
     let j = i;
     while (/[A-Z_]/.test(text[j] || '')) j++;
     if (j > i && text.startsWith('=$(', j)) i = j + 3;
@@ -24,9 +26,10 @@ function firstGsdRunCall(text) {
       while (k < text.length && /\s/.test(text[k])) k++;
       if (k > gapStart && /[a-z]/.test(text[k] || '')) return lineStart;
     }
-    const newline = text.indexOf('\n', lineStart);
-    if (newline === -1) return -1;
-    lineStart = newline + 1;
+    let end = lineStart;
+    while (end < text.length && !isLineEnd(text[end])) end++;
+    if (end >= text.length) return -1;
+    lineStart = end + 1;
   }
 }
 

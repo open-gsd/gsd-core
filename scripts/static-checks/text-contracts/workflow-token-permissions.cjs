@@ -10,7 +10,6 @@
 // Was tests/workflow-token-permissions.test.cjs.
 
 const isWordChar = (ch) => ch !== undefined && /\w/.test(ch);
-const endsWithWord = (token, word) => token.endsWith(word) && (token.length === word.length || !isWordChar(token[token.length - word.length - 1]));
 const startsWithWord = (token, word) => token.startsWith(word) && (token.length === word.length || !isWordChar(token[word.length]));
 
 // True when `--auto` occurs in the text with a non-word character (or the end) after it, wherever it sits (a quoted flag too).
@@ -30,9 +29,10 @@ function joinWrapped(run) {
   for (const line of run.split('\n')) {
     if (carrying && line.trim() === '') continue;
     const piece = carrying ? line.trimStart() : line;
-    const stripped = piece.trimEnd();
-    if (stripped.endsWith('\\')) {
-      parts.push(`${stripped.slice(0, -1)} `);
+    // The backslash must be the last character before the newline (a carriage return before it aside): `\ ` is an escaped space.
+    const body = piece.endsWith('\r') ? piece.slice(0, -1) : piece;
+    if (body.endsWith('\\')) {
+      parts.push(`${body.slice(0, -1)} `);
       carrying = true;
     } else {
       parts.push(piece);
@@ -79,7 +79,8 @@ function enablesAutoMerge(run) {
     autoFrom[j] = hasAutoFlag(tokens[j].text) || (sameLineNext && autoFrom[j + 1]);
   }
   for (let i = 0; i + 2 < tokens.length; i++) {
-    if (!(endsWithWord(tokens[i].text, 'gh') && tokens[i + 1].text === 'pr' && startsWithWord(tokens[i + 2].text, 'merge'))) continue;
+    // The old pattern had no boundary before `gh`: any token that ends with it (xgh, my_gh, /usr/bin/gh) counts.
+    if (!(tokens[i].text.endsWith('gh') && tokens[i + 1].text === 'pr' && startsWithWord(tokens[i + 2].text, 'merge'))) continue;
     // `--auto` glued to `merge` itself, or in a later token of the same line.
     if (hasAutoFlag(tokens[i + 2].text.slice('merge'.length))) return true;
     if (i + 3 < tokens.length && tokens[i + 3].line === tokens[i + 2].line && autoFrom[i + 3]) return true;

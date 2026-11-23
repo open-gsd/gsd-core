@@ -557,6 +557,24 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           inStepOf('close_phase_todos', (block) => `${block}\ngit\u2028mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
         ['an ideographic space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
           inStepOf('close_phase_todos', (block) => `${block}\ngit\u3000mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+
+        // fourth round
+        ['a token ending in gh (xgh) before pr merge on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.xgh = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'xgh pr merge 7 --auto' }] }; }), 'workflow-token-permissions', /job "xgh" must grant contents: write/],
+        ['a path ending in gh before pr merge on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.path = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: '/usr/bin/gh pr merge 7 --auto' }] }; }), 'workflow-token-permissions', /job "path" must grant contents: write/],
+        ['an underscored name ending in gh before pr merge on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.under = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'my_gh pr merge 7 --auto' }] }; }), 'workflow-token-permissions', /job "under" must grant contents: write/],
+        ['--automatic ahead of the real --auto flag on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.second = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 --automatic --auto' }] }; }), 'workflow-token-permissions', /job "second" must grant contents: write/],
+        ['--auto-merge as the flag on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.hyphen = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 --auto-merge' }] }; }), 'workflow-token-permissions', /job "hyphen" must grant contents: write/],
+        ['a lone carriage return before a gsd_run call ahead of the resolver (#5004)', 'agents/gsd-verifier.md',
+          swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\rgsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
+        ['a line separator before a gsd_run call ahead of the resolver (#5004)', 'agents/gsd-verifier.md',
+          swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\u2028gsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
+        ['a paragraph separator before a gsd_run call ahead of the resolver (#5004)', 'agents/gsd-verifier.md',
+          swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\u2029gsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
         // add-todo
         ['the infer_severity step gone from add-todo (#2337)', 'gsd-core/workflows/add-todo.md', eraseAll('<step name="infer_severity">'), 'add-todo', /add-todo\.md must define an infer_severity step/],
         ['create_file ahead of infer_severity in add-todo (#2337)', 'gsd-core/workflows/add-todo.md', (text) => `<step name="create_file">\n${text}`, 'add-todo', /infer_severity must precede create_file/],
@@ -1471,6 +1489,12 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         yamlEdit((wf) => { wf.jobs.nextline = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7\necho --auto' }] }; }), 'workflow-token-permissions');
       passes('a word that only contains --auto before a word character is not the flag for workflow-token-permissions', '.github/workflows/test.yml',
         yamlEdit((wf) => { wf.jobs.word = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7 --automatic' }] }; }), 'workflow-token-permissions');
+
+      // fourth round: a backslash is a continuation only right before the newline (`\ ` is an escaped space in shell)
+      passes('a backslash followed by a space does not join the next line, so --auto there is not the command of workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.escaped = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 \\ \n--auto' }] }; }), 'workflow-token-permissions');
+      passes('a backslash followed by a tab does not join the next line, so --auto there is not the command of workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.escaped = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 \\\t\n--auto' }] }; }), 'workflow-token-permissions');
   }
 
   {
