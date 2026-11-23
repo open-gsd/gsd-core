@@ -35,7 +35,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   copyRuntimeFixture,
@@ -71,7 +70,7 @@ function reinstallOpencode(root, configDir = null, scope = 'global') {
   }
   const r = runNode(args, {
     cwd,
-    env: installerEnv(isolatedEnv({ home: root })),
+    env: installerEnv({ HOME: root, USERPROFILE: root }),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
