@@ -182,15 +182,10 @@ function bounded(value) {
 }
 
 /**
- * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result. The run fails on:
- * - a violation: a raw write, or a seam write or relocation without the STATE.md lock (each is
- *   printed with its caller file and line);
- * - a torn ledger line, which can be a violation record a killed process cut off, so it is
- *   unreadable evidence like an unreadable ledger (#5170, #5120 review Minor 5);
- * - fewer preload sentinels than chunks spawned (`chunksRun`) (#5120 review Minor 6).
- * The not-loaded lines name the shim (`shimPath`) and the NODE_OPTIONS the chunks received
- * (`nodeOptions`, bounded), because the runner deletes its events directory, shim and ledger
- * included, right after printing (#5120 re-review NEW-1).
+ * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result. The not-loaded
+ * lines name the shim (`shimPath`) and the NODE_OPTIONS the chunks received (`nodeOptions`,
+ * bounded), because the runner deletes its events directory, shim and ledger included, right after
+ * printing.
  */
 function formatStateWriteReport(
   { entries, installs = 0, preloadInstalls = 0, preloadTestFiles = [], tornLines = 0 },

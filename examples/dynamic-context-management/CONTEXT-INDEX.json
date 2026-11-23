@@ -936,7 +936,7 @@
     {
       "id": "RAW-STATE-WRITE.GUARD.SEAM.limits",
       "klass": "RAW-STATE-WRITE",
-      "value": "sees only code paths the suite executes; what it records: a call to one of the wrapped fs functions (writeFile/appendFile/rename/copyFile/cp in sync and callback form), made in a process where the check installed, at the outermost wrapped call, whose destination argument is a string, a Buffer or a URL instance with basename STATE.md, and whose caller is product code; the basename match is case-sensitive; the lock is checked when a callback or promise call is made, not when it lands; under the runner, node v24.22.1 exits at start with ERR_INVALID_PACKAGE_CONFIG in a directory whose nearest package.json it rejects as a package config (10 of 12 malformed package.json files tried), and starts there without the preload",
+      "value": "sees only code paths the suite executes; what it records: a call to one of the wrapped fs functions, made in a process where the check installed, at the outermost wrapped call, whose destination argument is a string, a Buffer or a URL instance with basename STATE.md, and whose caller is product code; the basename match is case-sensitive; truncation (truncateSync/ftruncateSync/truncate, fs.promises.truncate, FileHandle.truncate) is not recorded; the lock is checked when a callback or promise call is made, not when it lands; under the runner, node v24.22.1 exits at start with ERR_INVALID_PACKAGE_CONFIG in a directory whose nearest package.json it rejects as a package config (10 of 12 malformed package.json files tried), and starts there without the preload",
       "line": 926
     },
     {
@@ -948,7 +948,7 @@
     {
       "id": "RAW-STATE-WRITE.GUARD.SEAM.report",
       "klass": "RAW-STATE-WRITE",
-      "value": "one stderr line per run with the raw-write count, the seam-write-and-relocation count (relocations beside it), the count of those without the STATE.md lock and the unreadable-ledger-line count, then one line per violation naming its kind, fs function, destination (source -> destination for a relocation), caller file:line and test file; the run FAILS on a raw write, on a seam write or relocation without the STATE.md lock (#5120 review Major 1), on a missing or unreadable ledger (#5170), and on FEWER preload sentinels than chunks spawned",
+      "value": "one stderr line per run with the raw-write count, the seam-write-and-relocation count (relocations beside it), the count of those without the STATE.md lock and the unreadable-ledger-line count, then one line per violation naming its kind, fs function, destination (source -> destination for a relocation), caller file:line and test file",
       "line": 925
     },
     {

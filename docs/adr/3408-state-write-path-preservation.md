@@ -189,7 +189,7 @@ Both are **permanent entries in the ratchet with `owner: sanctioned-permanent`**
 
 *This paragraph is Amendment 2. The rule previously read "Every STATE.md write applies the pipeline", which is false by design for both rows and would have had Phase 2 route `cmdStateSync` through preservation — inverting a shipped feature with every gate green.*
 
-**Seam writes outside `writeStateMd`: a second list; adding to it is an amendment (Amendment 4).** These writes are a second exception to the rule above. Each writes STATE.md under the STATE.md lock through `platformWriteSync` or `platformRestoreFileSync` (the functions #5120's run-time guard counts as the seam). The list holds the writes the 2026-11-22 census found (Amendment 4 records the method).
+**A second list; adding to it is an amendment (Amendment 4).** These writes are a second exception to the rule above. Each writes STATE.md under the STATE.md lock through `platformWriteSync` or `platformRestoreFileSync` (the functions #5120's run-time guard counts as the seam).
 
 | Write | Reason |
 |---|---|
@@ -377,7 +377,7 @@ That is the **fourth consecutive time** a copy count in this epic proved a lower
 
 ### Amendment 4 (2026-11-22): §8.3 gains a second list of seam writes (#5120)
 
-The maintainer ruled on #6111 (2026-11-14) that `gsd_write_state` and the roadmap-upgrade rollback restore be placed explicitly in §8.3 in that PR. Placing them needed the rest of their kind placed too: STATE.md writes that go through the write primitives under the lock. They form §8.3's second list.
+The maintainer ruled on #6111 (2026-11-14) that `gsd_write_state` and the roadmap-upgrade rollback restore be placed explicitly in §8.3 in that PR.
 
 **How the list was derived (the census).** One full `npm test` run on 2026-11-22, on the merged #6111 head, recorded in the guard's ledger the caller of each STATE.md write the guard observed. Its distinct callers of `platformWriteSync` and `platformRestoreFileSync` onto STATE.md were `readModifyWriteStateMd`, `writeStateMd`, `applyStateWriteIntent`, `writePlanningFileSet` (`cmdPhaseComplete`'s envelope), `cmdMilestoneComplete`, and the seven writes listed above.
 

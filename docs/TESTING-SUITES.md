@@ -466,17 +466,12 @@ run-tests: raw STATE.md writes in product code: 0; seam writes and relocations o
 
 A violation is printed under that line with its kind, the fs function, the
 destination, the product file and line, and the test file whose run produced
-it (`unknown` for a child built with `isolated-env.cjs`). These also fail the
-run:
-
-- a missing or unreadable ledger;
-- fewer preload sentinels than chunks spawned.
+it (`unknown` for a child built with `isolated-env.cjs`).
 
 Limits:
 
 - It sees only code paths the suite executes.
-- What it records: a call to one of the wrapped `fs` functions (write,
-  append, rename, copy and cp in their sync and callback forms), made in a
+- What it records: a call to one of the wrapped `fs` functions, made in a
   process where the check installed, at the outermost wrapped call, whose
   destination argument is a string, a Buffer or a `URL` instance with the
   basename `STATE.md`, and whose caller is product code.
@@ -490,6 +485,8 @@ Limits:
 - The lock counts as held when the destination's `STATE.md.lock` file names
   this process's pid, which is what `withStateLock` writes.
 - The basename match is case-sensitive.
+- Truncation (`fs.truncateSync`, `fs.ftruncateSync`, `fs.truncate`,
+  `fs.promises.truncate`, a file handle's `truncate`) is not recorded.
 - The lock is checked when a callback or promise rename, copy or write is
   called, not when it lands: one called under the lock that lands after the
   lock is released reads as locked.
