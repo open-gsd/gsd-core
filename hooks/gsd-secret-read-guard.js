@@ -5133,15 +5133,7 @@ function segmentFedText(s, bySeg) {
 // Each character is charged to the reader budget for the words cut from it,
 // as printed text is (PRINTED_WORD_COST).
 function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter, curl, depth) {
-  const runs = curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length);
-  // scanXargsPipe has read xargs's own here-string or heredoc as names and as a shell's scripts (#6433); what this
-  // adds to that feed is curl's reading of its words, and the cut at a -d delimiter and at -I's lines.
-  const to = runs === -1 ? operands.length : runs;
-  if (curl === null && xargsDelimiter(operands, to) === null && xargsReplaceString(operands, 0, to) === null) {
-    const own = ownFeedWords(s, bySeg);
-    if (own.hereWords.length > 0 || own.bodyWords.length > 0) return null;
-  }
-  const words = xargsFedWords(operands, s, bySeg, sepAfter, runs);
+  const words = xargsFedWords(operands, s, bySeg, sepAfter, curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
   if (words === null) return null;
   const hit = shellOperands === null ? null : scanXargsShellScripts(shellOperands, xargsReplaceStr(operands, subIdx), words, depth);
   return hit || xargsPipedReadsSecret(operands, { base: '', operands: words }, curl);
