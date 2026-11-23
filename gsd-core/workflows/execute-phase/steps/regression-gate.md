@@ -3,7 +3,13 @@ Apply response_language to all user-facing prose — narration between tool call
 <step name="regression_gate">
 Run prior phases' test suites to catch cross-phase regressions BEFORE verification.
 
-**Skip if:** This is the first phase (no prior phases), or no prior VERIFICATION.md files exist.
+**When `DEFER_WAVE_TESTS` is true:** Go directly to Step 3, including
+on the first phase and when there are no prior verification reports. Run the
+full wave test command once on the integrated phase. On failure, use the
+choices in Step 4 and report the suite output. On success, report that the
+deferred phase tests passed and proceed to verification.
+
+**Otherwise, skip if:** This is the first phase (no prior phases), or no prior VERIFICATION.md files exist.
 
 **Step 1: Discover prior phases' test files**
 ```bash
@@ -40,7 +46,7 @@ GSD_REGRESSION_FILES
 # gsd-handoff:end regression-files-write
 ```
 
-**Step 3: Run regression tests (if any found)** — Read and execute `gsd-core/workflows/execute-phase/steps/regression-gate-run.md`. It resolves the project test command, normalizes it to a one-shot form (defeating vitest/jest watch mode via the shared `normalize-test-command` helper), runs it under `workflow.test_gate_timeout`, and aborts on timeout with a watch-mode hint (#1857). On `REGRESSION GATE ABORTED` (exit 124), HALT — do not proceed to verification.
+**Step 3: Run regression tests (if deferred or any found)** — Read and execute `gsd-core/workflows/execute-phase/steps/regression-gate-run.md`. It resolves the project test command, normalizes it to a one-shot form (defeating vitest/jest watch mode via the shared `normalize-test-command` helper), runs it under `workflow.test_gate_timeout`, and aborts on timeout with a watch-mode hint (#1857). On `REGRESSION GATE ABORTED` (exit 124), HALT — do not proceed to verification.
 
 **Step 4: Report results**
 

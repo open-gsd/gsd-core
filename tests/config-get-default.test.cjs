@@ -178,6 +178,14 @@ describe('config-get --default flag (#1893)', () => {
     assert.equal(result, 'fallback');
   });
 
+  test('workflow.defer_wave_tests defaults to false and accepts an opt-in', () => {
+    const configPath = path.join(planningDir, 'config.json');
+    fs.writeFileSync(configPath, '{}');
+    assert.equal(runRaw('config-get', 'workflow.defer_wave_tests'), 'false');
+    fs.writeFileSync(configPath, JSON.stringify({ workflow: { defer_wave_tests: true } }));
+    assert.equal(runRaw('config-get', 'workflow.defer_wave_tests'), 'true');
+  });
+
   test('absent key with --default "" returns empty string', () => {
     fs.writeFileSync(path.join(planningDir, 'config.json'), '{}');
     const result = runRaw('config-get', 'nonexistent.key', '--default', '');

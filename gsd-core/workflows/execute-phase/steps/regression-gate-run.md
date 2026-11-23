@@ -7,7 +7,14 @@ watch-mode runner (vitest defaults to watch in a TTY; jest `--watch`) cannot
 hang this gate forever (#1857). Uses the shared `normalize-test-command` helper
 — the same one the post-merge gate uses — so the two gate paths cannot drift.
 
-Reads the prior step's test-file list from the handoff file `regression-files` (#4915); a shell variable
+If `DEFER_WAVE_TESTS` is true, read and execute only Step B of
+`gsd-core/workflows/execute-phase/steps/post-merge-gate.md`, prepending
+`GSD_PHASE_TEST_GATE=true` in the same shell. This uses the same runner and
+timeout as the wave test gate, including full-suite auto-detection. Treat the
+shell exit status as `REG_TEST_EXIT` and return to the regression gate's
+reporting step. On exit 124, halt before verification.
+
+Otherwise, run the block below. It reads the prior step's test-file list from the handoff file `regression-files` (#4915); a shell variable
 cannot carry it, because each fenced `bash` block runs as its own shell.
 
 ```bash

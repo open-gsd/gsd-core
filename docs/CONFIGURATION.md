@@ -62,6 +62,7 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "cross_ai_command": null,
     "cross_ai_timeout": 300,
     "test_gate_timeout": 600,
+    "defer_wave_tests": false,
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
@@ -605,6 +606,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.cross_ai_command` | string | (none) | Shell command template for cross-AI execution. Receives the phase prompt via stdin. Must produce SUMMARY.md-compatible output. Required when `cross_ai_execution` is `true`. Added in v1.36 |
 | `workflow.cross_ai_timeout` | number | `300` | Timeout in seconds for cross-AI execution commands. Prevents runaway external processes. Added in v1.36 |
 | `workflow.test_gate_timeout` | number | `600` | Wall-clock timeout (seconds) for a verification test gate; a watch-mode runner (vitest/jest) that never exits is aborted after this budget instead of hanging the orchestrator (#1857) |
+| `workflow.defer_wave_tests` | boolean | `false` | Run the wave test suite once at the end-of-phase regression gate, including on the first phase. Post-merge builds still run after each wave. Uses `workflow.test_command` or the usual wave runner detection and honors `workflow.test_gate_timeout`. (#6466) |
 | `workflow.ai_integration_phase` | boolean | `true` | Enable the `/gsd-ai-integration-phase` command. When `false`, the command exits with a configuration gate message |
 | `workflow.api_coverage_gate` | boolean | `true` | Require an explicit API-coverage decision before a phase that integrates an external API/SDK/service can seal. At `plan:pre` the planner is prompted to produce a `COVERAGE.md` matrix (full coverage by default, every opt-out reasoned); at `verify:pre` a blocking gate fails the seal unless the matrix is complete. Independent of `ai_integration_phase` (#1562). A phase whose scope cannot be established at all (no plan body and no roadmap section) is held rather than passed, reporting `scope_unavailable` — see [Resolve a skipped capability probe](how-to/resolve-a-skipped-capability-probe.md) (#3909) |
 | `workflow.auto_prune_state` | boolean | `false` | When `true`, automatically prune stale entries from STATE.md at phase boundaries instead of prompting |

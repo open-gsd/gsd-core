@@ -71,6 +71,7 @@
     "workflow.cross_ai_timeout",
     "workflow.subagent_timeout",
     "workflow.test_gate_timeout",
+    "workflow.defer_wave_tests",
     "workflow.test_command",
     "workflow.build_command",
     "workflow.mvp_mode",
