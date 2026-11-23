@@ -32,11 +32,21 @@ const isDotSegment = (segment) => segment === '.' || segment === '..';
 
 // The concatenated content of every fenced block (fence markers excluded; an unterminated block runs to the end): a live
 // resolver call only ever sits in one. The fence rules (backtick or tilde, any length) have one owner, the sectionizer;
-// leading blanks and one list marker are stripped first so an indented or list-item fence counts, as it did for the test.
+// leading blanks are stripped first so an indented fence counts, as it did for the test. A list marker is stripped only
+// from a line outside every fence that then starts a fence, so a "- ```" line inside a fence stays content.
 function fencedCodeOnly(content) {
   const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
-  const lines = content.split('\n').map((line) => line.replace(/^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+/, '').replace(/^[ \t]+/, ''));
-  return scanFencedBlocks(lines)
+  const lines = content.split('\n').map((line) => line.replace(/^[ \t]+/, ''));
+  let blocks = scanFencedBlocks(lines);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (blocks.some((block) => i >= block.openLineIdx && i <= (block.closeLineIdx === -1 ? lines.length : block.closeLineIdx))) continue;
+    const bare = lines[i].replace(/^(?:[-*+]|\d{1,9}[.)])[ \t]+/, '');
+    if (bare !== lines[i] && (bare.startsWith('```') || bare.startsWith('~~~'))) {
+      lines[i] = bare;
+      blocks = scanFencedBlocks(lines);
+    }
+  }
+  return blocks
     .map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'))
     .join('\n');
 }
@@ -94,7 +104,7 @@ module.exports = {
       try {
         const { parseWorkflowSections } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'workflow-fragments.cjs'));
         const sections = parseWorkflowSections(text, AUTONOMOUS);
-        return { sections };
+        return Array.isArray(sections) && sections.every(isMapping) ? { sections } : { error: 'the fragment parser returned no list of sections' };
       } catch (err) {
         return { error: `the fragment parser failed: ${err.message}` };
       }

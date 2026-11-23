@@ -34,9 +34,17 @@ function allowedTools(text) {
   if (at === -1) return [];
   const rest = withoutComment(lines[at].trim().slice('allowed-tools:'.length));
   if (rest.startsWith('[')) {
+    // The text is the frontmatter alone (the engine strips the fences), so the list may span indented lines but never
+    // past a line at column 0 (the next key); an unclosed list has no items.
     let body = rest;
-    for (let i = at + 1; i < lines.length && !body.includes(']'); i += 1) body += ` ${withoutComment(lines[i])}`;
-    const close = body.indexOf(']');
+    let close = body.indexOf(']');
+    for (let i = at + 1; close === -1 && i < lines.length; i += 1) {
+      if (lines[i] !== '' && !/^\s/.test(lines[i]) && !lines[i].startsWith(']')) break;
+      const part = withoutComment(lines[i]);
+      body += ` ${part}`;
+      const found = part.indexOf(']');
+      if (found !== -1) close = body.length - part.length + found;
+    }
     if (close === -1) return [];
     return body.slice(1, close).split(',').map((item) => unquote(item.trim())).filter((item) => item !== '');
   }

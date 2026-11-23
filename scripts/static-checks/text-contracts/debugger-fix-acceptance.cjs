@@ -38,6 +38,38 @@ function paragraphsOf(text) {
   return out.map((paragraph) => paragraph.split(/\s/).filter(Boolean).join(' '));
 }
 
+const isAlnum = (ch) => ch !== undefined && /[a-z0-9]/.test(ch);
+
+// The word stands alone in the (lower-cased) text: no letter or digit right before or after it (an underscore does
+// not join it, so timeout_ms and GSD_TIMEOUT count; digit, legit and timeouts do not).
+function hasWord(lower, word) {
+  let at = lower.indexOf(word);
+  while (at !== -1) {
+    if (!isAlnum(lower[at - 1]) && !isAlnum(lower[at + word.length])) return true;
+    at = lower.indexOf(word, at + 1);
+  }
+  return false;
+}
+
+// `60s`, or `60`, at most one character, `second` or `seconds`, each standing alone as above.
+function hasSixtySeconds(lower) {
+  let at = lower.indexOf('60');
+  while (at !== -1) {
+    if (!isAlnum(lower[at - 1])) {
+      if (lower[at + 2] === 's' && !isAlnum(lower[at + 3])) return true;
+      for (const skip of [0, 1]) {
+        if (skip === 1 && lower[at + 2] === '\n') continue;
+        const word = at + 2 + skip;
+        if (!lower.startsWith('second', word)) continue;
+        const end = word + 'second'.length + (lower[word + 'second'.length] === 's' ? 1 : 0);
+        if (!isAlnum(lower[end])) return true;
+      }
+    }
+    at = lower.indexOf('60', at + 1);
+  }
+  return false;
+}
+
 const REVERT_NAME = /revert[\s-]{0,20}and[\s-]{0,20}reconfirm/i;
 
 // `surviv` + 1 to 50 word characters + " mutant" (any case), found by one walk over the text.
@@ -90,8 +122,8 @@ module.exports = {
       .satisfies((text) => paragraphsOf(text).some((paragraph) => REVERT_NAME.test(paragraph)
         && (inOrder(paragraph, ['before', 'accept']) || inOrder(paragraph, ['accept', 'after', 'revert']) || paragraph.toLowerCase().includes('prior to accept'))),
       'revert-and-reconfirm must run before a fix is accepted (in the paragraph that names revert-and-reconfirm)')
-      .has(/\btimeout\b/i, 'the reference must mention a timeout')
-      .has(/\b60s\b|\b60.?seconds?\b/i, 'the reference must state the 60s npm/Stryker bound')
-      .has(/\bgit\b/i, 'the reference must bound the git subprocess (signal 5) too');
+      .satisfies((text) => hasWord(text.toLowerCase(), 'timeout') || 'no standalone timeout', 'the reference must mention a timeout')
+      .satisfies((text) => hasSixtySeconds(text.toLowerCase()) || 'no standalone 60s or 60 seconds', 'the reference must state the 60s npm/Stryker bound')
+      .satisfies((text) => hasWord(text.toLowerCase(), 'git') || 'no standalone git', 'the reference must bound the git subprocess (signal 5) too');
   },
 };

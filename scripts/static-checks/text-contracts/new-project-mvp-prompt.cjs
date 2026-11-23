@@ -61,42 +61,44 @@ function aiModelsBlocks(text) {
 }
 
 // The first options array with more labels than the cap ({ index, count }), the first one never closed (its index, or
-// null) and how many options arrays there are. Every bracket outside a double-quoted string is matched once, in one pass.
+// null) and how many options arrays there are. One pass: outside an options array nothing is skipped (a quote in prose
+// cannot hide an array); inside one, double-, single- and backtick-quoted strings are skipped (a backslash escapes
+// the next character, and any string ends at the line end) so a bracket in a label does not close the array.
 function optionsArrays(text) {
   const closeOf = new Map();
+  const opens = [];
   const stack = [];
-  let inString = false;
+  let quote = '';
   for (let k = 0; k < text.length; k += 1) {
     const ch = text[k];
-    if (inString) {
-      // A double-quoted string ends at its closing quote (a backslash escapes the next character) or at the line end.
-      if (ch === '\\') k += 1;
-      else if (ch === '"' || ch === '\n') inString = false;
-    } else if (ch === '"') inString = true;
-    else if (ch === '[') stack.push(k);
-    else if (ch === ']' && stack.length > 0) closeOf.set(stack.pop(), k);
-  }
-  let questions = 0;
-  let offender = null;
-  let unclosed = null;
-  let at = text.indexOf('options');
-  while (at !== -1) {
-    let next = at + 1;
-    if (at === 0 || !isWord(text[at - 1])) {
-      const colon = skipBlank(text, at + 'options'.length);
+    if (quote !== '') {
+      if (ch === '\\' && text[k + 1] !== '\n') k += 1;
+      else if (ch === quote || ch === '\n') quote = '';
+    } else if (stack.length > 0 && (ch === '"' || ch === "'" || ch === '`')) {
+      quote = ch;
+    } else if (ch === '[') {
+      if (stack.length > 0) stack.push(k);
+    } else if (ch === ']') {
+      if (stack.length > 0) closeOf.set(stack.pop(), k);
+    } else if (ch === 'o' && text.startsWith('options', k) && (k === 0 || !isWord(text[k - 1]))) {
+      const colon = skipBlank(text, k + 'options'.length);
       const open = text[colon] === ':' ? skipBlank(text, colon + 1) : -1;
       if (open !== -1 && text[open] === '[') {
-        questions += 1;
-        const end = closeOf.get(open);
-        if (end === undefined && unclosed === null) unclosed = questions;
-        const count = end === undefined ? 0 : quotedAfter(text.slice(open, end + 1), 'label:').length;
-        if (count > OPTIONS_CAP && offender === null) offender = { index: questions, count };
-        next = open + 1;
+        opens.push(open);
+        stack.push(open);
+        k = open;
       }
     }
-    at = text.indexOf('options', next);
   }
-  return { questions, offender, unclosed };
+  let offender = null;
+  let unclosed = null;
+  opens.forEach((open, i) => {
+    const end = closeOf.get(open);
+    if (end === undefined && unclosed === null) unclosed = i + 1;
+    const count = end === undefined ? 0 : quotedAfter(text.slice(open, end + 1), 'label:').length;
+    if (count > OPTIONS_CAP && offender === null) offender = { index: i + 1, count };
+  });
+  return { questions: opens.length, offender, unclosed };
 }
 
 // The value of every `model_profile"\s*:\s*"value"` (an empty value allowed), in order.

@@ -59,14 +59,20 @@ function bracedNames(text) {
   return out;
 }
 
-// The prompt template: the one `text` fenced block the orchestrator writes to PROMPT_FILE (the sectionizer's own
-// fence scan, so a backtick or tilde fence counts and a fence inside another one does not), or the reason there is none.
+// The prompt template: the one `text` fence the orchestrator writes to PROMPT_FILE, or the reason there is none. A
+// fence is any line whose trim is the text fence opener (what the test counted, whatever its indentation or
+// surroundings) or a text-info-string block of the sectionizer's fence scan (backtick or tilde, any letter case); the
+// two sets are joined and must hold exactly one, and that one must be a closed block of the scan.
 function promptBody(text) {
   const lines = text.split('\n');
   const blocks = require(SECTIONIZER).scanFencedBlocks(lines).filter((block) => block.infoString.trim().toLowerCase() === 'text');
-  if (blocks.length !== 1) return { error: `the fragment must hold exactly one text fence (the prompt template), found ${blocks.length}` };
-  const [block] = blocks;
-  if (block.closeLineIdx === -1) return { error: 'the text fence must close' };
+  const opened = new Set(blocks.map((block) => block.openLineIdx));
+  lines.forEach((line, index) => {
+    if (line.trim() === '```text') opened.add(index);
+  });
+  if (opened.size !== 1) return { error: `the fragment must hold exactly one text fence (the prompt template), found ${opened.size}` };
+  const block = blocks.find((candidate) => opened.has(candidate.openLineIdx));
+  if (!block || block.closeLineIdx === -1) return { error: 'the text fence must close' };
   return { body: `${lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')}\n` };
 }
 
@@ -159,7 +165,7 @@ module.exports = {
       .satisfies((text) => {
         const lines = text.split('\n');
         const { scanFencedBlocks } = require(SECTIONIZER);
-        const bash = scanFencedBlocks(lines).filter((block) => block.infoString === 'bash').map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'));
+        const bash = scanFencedBlocks(lines).filter((block) => block.infoString.trim().toLowerCase().split(/\s/)[0] === 'bash').map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'));
         if (bash.length === 0) return 'the fragment holds no bash blocks';
         const inBash = ['<objective>', '<mcp_tools>', '[gsd:dispatch'].find((marker) => bash.some((body) => body.includes(marker)));
         return inBash ? `${inBash} sits in a bash block` : true;

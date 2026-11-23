@@ -64,7 +64,9 @@ module.exports = {
       return { committed };
     };
     const againstFresh = (check) => (text) => {
-      if (fresh === null) return parseError || 'no fresh parse to compare with';      const { committed, error } = committedOf(text);
+      if (fresh === null) return parseError || 'no fresh parse to compare with';
+      if (!isMapping(fresh) || !Array.isArray(fresh.predicates)) return 'the fresh CONTEXT.md parse has no predicates list';
+      const { committed, error } = committedOf(text);
       return error || check(committed);
     };
 
