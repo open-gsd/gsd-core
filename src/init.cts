@@ -719,7 +719,7 @@ function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
     // review.reviewer_instances) keeps the single-file read of the workstream-aware directory.
     if (resolved.reason !== configLoader.CONFIG_REASON.NOT_CONFIGURED) return undefined;
     // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    const raw = configLoader.readConfigFileBounded(planningWorkspace.projectConfigPath(cwd));
     if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
