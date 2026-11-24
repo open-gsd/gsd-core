@@ -859,6 +859,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       return;
     }
     if (sub === 'ledger') {
+      // Flags first, so a usage error names the flag; then the action.
+      const parsed = parseNamedArgsOrExit(args, specFor('executor.ledger'), error);
       const action = args[2];
       if (action !== 'record' && action !== 'read') {
         error(
@@ -867,7 +869,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         );
         return;
       }
-      const parsed = parseNamedArgsOrExit(args, specFor('executor.ledger'), error);
       if (action === 'record') executorGuard.cmdExecutorLedgerRecord(guardCtx, invokedFrom, parsed.phase, parsed.plan, raw);
       else executorGuard.cmdExecutorLedgerRead(guardCtx, invokedFrom, parsed.phase, parsed.plan, raw);
       return;
