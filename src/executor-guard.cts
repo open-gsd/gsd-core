@@ -188,7 +188,8 @@ interface WorktreeFacts {
 function readWorktree(deps: ExecutorGuardDeps | undefined, from: string): WorktreeFacts {
   const top = git(deps, from, ['rev-parse', '--show-toplevel']);
   if (top.exitCode !== 0 || top.stdout === '') return { root: null, layoutKnown: false, isolatedLayout: false };
-  const root = top.stdout;
+  // Native form: git prints `C:/…` on Windows.
+  const root = path.resolve(top.stdout);
   let dotGitFile = false;
   try {
     // Followed, as the shell's `[ -f .git ]` follows a link.
@@ -197,7 +198,7 @@ function readWorktree(deps: ExecutorGuardDeps | undefined, from: string): Worktr
   const dirs = git(deps, from, ['rev-parse', '--absolute-git-dir', '--git-common-dir']);
   const lines = dirs.stdout.split(/\r?\n/).filter((l) => l !== '');
   if (dirs.exitCode !== 0 || lines.length !== 2) return { root, layoutKnown: false, isolatedLayout: dotGitFile };
-  const gitDir = realpathOr(deps, lines[0]);
+  const gitDir = realpathOr(deps, path.resolve(from, lines[0]));
   const commonDir = realpathOr(deps, path.resolve(from, lines[1]));
   if (gitDir === null || commonDir === null) return { root, layoutKnown: false, isolatedLayout: dotGitFile };
   return { root, layoutKnown: true, isolatedLayout: dotGitFile || gitDir !== commonDir };
