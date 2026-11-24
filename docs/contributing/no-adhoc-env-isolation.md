@@ -17,7 +17,8 @@ a string key (`x['split'](…)`) or an expression-free template key (``x[`split`
 
 ### Arm 1: an inline PATH split or filter (`inlinePathFilter`)
 
-- A `.split(...)` call, with any argument, whose receiver is a process PATH read. The call may be
+- A `.split(...)` call, with any argument, whose receiver is a process PATH read, unless the call's
+  result is read only for `.length` (a count, not a filtered or rebuilt PATH). The call may be
   optional (`process.env.PATH?.split(…)`). A process PATH
   read is `process.env.PATH` or `process.env.Path` (the key Windows enumerates), where `process` is
   the bare identifier and `env` and `PATH` are identifiers or string keys
@@ -43,16 +44,31 @@ a string key (`x['split'](…)`) or an expression-free template key (``x[`split`
 
 - An object literal with a `HOME` or `USERPROFILE` key, written as an identifier (shorthand
   `{ HOME }` included), a string, or a computed string or expression-free template (`['HOME']`, ``
-  [`HOME`] ``), reported once per object.
+  [`HOME`] ``), reported once per object, unless the key's value cannot be a per-test sandbox (see
+  "Values that cannot be a sandbox" below).
 - An assignment, with any assignment operator (`=`, `+=`, `||=`, `??=`), to a member named `HOME` or
   `USERPROFILE` (`X.HOME`, `X['HOME']`, ``X[`HOME`]``) where `X` is not spelled `process.env`,
-  `process['env']` or ``process[`env`]``.
+  `process['env']` or ``process[`env`]``, unless the assigned value cannot be a per-test sandbox.
   So `globalThis.process.env.HOME = x` and `const env = process.env; env.HOME = x` are flagged.
 
-Both arms flag a form whatever it is for: a split of a process PATH read that only counts its
-entries, a `csv.delimiter` split that is filtered, an object with a `HOME` key used as a fixture.
-Both build an env by hand in the case the rule exists for: `{ ...process.env, HOME: tmp }`,
-`runNode([script], { env: { HOME: tmp } })`, `childEnv.HOME = tmp`.
+Both arms flag a form whatever else it does: a `csv.delimiter` split that is filtered, an object
+with a `HOME` key whose value is a variable. Both build an env by hand in the case the rule exists
+for: `{ ...process.env, HOME: tmp }`, `runNode([script], { env: { HOME: tmp } })`,
+`childEnv.HOME = tmp`.
+
+### Values that cannot be a sandbox
+
+A per-test sandbox is a directory made for that test, so its path is not known when the file is
+written. Arm 2 therefore skips a `HOME` or `USERPROFILE` property or assignment whose value is:
+
+- a string literal or an expression-free template (`{ HOME: '/h' }`, ``{ HOME: `/h` }``): a fixture
+  handed to a pure function, or the expected value in an assertion;
+- a read of the same key off `process.env` (`{ HOME: process.env.HOME }`, `saved.HOME =
+  process.env.HOME`): saving the ambient value, or passing it through unchanged. `HOME:
+  process.env.USERPROFILE` is a different key and is flagged.
+
+Arm 1 skips a split of a process PATH read whose result is read only for `.length`
+(`process.env.PATH.split(path.delimiter).length`): a count builds no PATH.
 
 ## Exempt file, allowlist and count
 

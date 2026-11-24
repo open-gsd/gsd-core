@@ -735,6 +735,11 @@ copies under `tests/`:
   `env.USERPROFILE` on any object other than `process.env`, which is the copy `isolatedEnv()`
   replaces.
 
+A value that cannot be a per-test sandbox is not a copy, so the rule skips it: a string literal
+(`{ HOME: '/h' }`, a fixture handed to a pure function or compared against), a read of the same key
+off `process.env` (`{ HOME: process.env.HOME }`, saving the ambient value), and a PATH split read
+only for `.length`.
+
 The rule and the count below read `tests/**/*.cjs` files only. A copy in a `.mjs`, `.js` or
 `.cts` test file, or in a file outside `tests/`, is neither flagged nor counted.
 
