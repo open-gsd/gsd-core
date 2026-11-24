@@ -409,7 +409,7 @@ gsd_stall_watch() {
   elapsed=$(( now - dispatch_ts ))
   marker_found="false"
   if [ -n "$(gsd_return_marker "$receipt" "${markers[@]}")" ]; then marker_found="true"; fi
-  # A receipt younger than RECEIPT_SETTLE_SECONDS: its final message may not have
+  # A receipt younger than the settle window: its final message may not have
   # arrived. Wait out the rest of the window here, then report it.
   if [ "$marker_found" = "true" ]; then
     settle_wait=$(_gsd_receipt_settle_wait "$receipt" "$now")
