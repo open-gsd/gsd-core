@@ -67,6 +67,13 @@ written. Arm 2 therefore skips a `HOME` or `USERPROFILE` property or assignment 
   process.env.HOME`): saving the ambient value, or passing it through unchanged. `HOME:
   process.env.USERPROFILE` is a different key and is flagged.
 
+The rule reads the value, not where the object goes, so a fixed string is skipped even in an env
+handed to a child process (`{ ...process.env, HOME: '/nonexistent' }`). That is deliberate: it
+leaves the `GSD_*` values, the config-location variables and the PATH untouched, and it names one
+directory shared by every test that uses it, so it is not the copy of `isolatedEnv()` the rule
+exists to stop. It is also not hermetic. Build a child env with `isolatedEnv()` whenever the test
+writes under its home.
+
 Arm 1 skips a split of a process PATH read whose result is read only for `.length`
 (`process.env.PATH.split(path.delimiter).length`): a count builds no PATH.
 
