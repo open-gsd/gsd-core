@@ -1041,6 +1041,17 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       });
     }
 
+    test('#5067 duplicate custom bracket identity refuses even with a different slug', () => {
+      const dir = project();
+      writeBracketFixture(dir);
+      writeCustomNamingConfig(dir);
+      const before = snapshotTree(planning(dir));
+      const result = runGsdTools(['--json-errors', 'phase', 'add', '--id', 'CK.02-01', 'Different Slug'], dir, isolatedEnv({ home: dir }));
+      assert.equal(result.success, false);
+      assert.match(result.error, /phase_id_collision/);
+      assert.deepEqual(snapshotTree(planning(dir)), before);
+    });
+
     test('phase add --id refuses under the bracket convention', () => {
       const dir = project('adr-612-bracket-add-custom-id-');
       writeBracketFixture(dir);

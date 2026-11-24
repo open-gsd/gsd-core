@@ -145,3 +145,14 @@ describe('#5067 initialization boundaries', () => {
     assert.equal(JSON.parse(result.output).config.project_code, 'NTC');
   });
 });
+
+
+test('#5067 explicit bracket codes cannot smuggle identity dimensions', () => {
+  for (const code of ['lower', '', 'CK.02-05', 'CK.02-05-tail', 'BAD-CODE', '7UP']) {
+    const dir = project();
+    const result = runGsdTools(['--json-errors', 'config-new-project', JSON.stringify({ project_code: code })], dir, isolatedEnv({ home: dir }));
+    assert.equal(result.success, false, code);
+    assert.equal(JSON.parse(result.error).reason, 'usage');
+    assert.equal(fs.existsSync(path.join(dir, '.planning', 'config.json')), false);
+  }
+});
