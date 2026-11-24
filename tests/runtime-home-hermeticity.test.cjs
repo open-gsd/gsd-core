@@ -24,7 +24,7 @@ const path = require('node:path');
 
 const { runNode, formatSeamResult, OUTCOME } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS, QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { createTempDir, cleanup, TEST_HOME_SANDBOX_MARKER } = require('./helpers.cjs');
+const { createTempDir, cleanup, TEST_HOME_SANDBOX_MARKER, CONFIG_LOCATION_ENV_KEYS } = require('./helpers.cjs');
 const { isolatedEnv, homePair } = require('./helpers/isolated-env.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -77,8 +77,13 @@ function hostileEnv() {
   const claudeConfigDir = path.join(root, 'ambient-claude');
   fs.mkdirSync(claudeConfigDir, { recursive: true });
 
+  // Ambient config-location variables other than the two this env sets on purpose would leak
+  // into the control too, so the control starts from the inherited env WITHOUT them.
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !CONFIG_LOCATION_ENV_KEYS.includes(key)),
+  );
   const env = {
-    ...process.env,
+    ...inherited,
     ...homePair(home),
     [TEST_HOME_SANDBOX_MARKER]: home,
     CLAUDE_CONFIG_DIR: claudeConfigDir,

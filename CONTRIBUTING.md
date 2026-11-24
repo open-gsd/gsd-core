@@ -753,6 +753,19 @@ file. [docs/contributing/no-adhoc-env-isolation.md](docs/contributing/no-adhoc-e
 states the forms each arm recognises. Every other spelling, such as a `HOME=` inside a shell
 script string, is out of scope; the page gives examples.
 
+`isolatedEnv()` covers the env a test hands to a child. A test that calls the product in-process,
+or a helper that spreads `process.env` (`runGsdTools`, `installSpawnEnv`), reads the env the runner
+passed down instead, so `scripts/run-tests.cjs` closes that case once for every chunk
+(`setupRunHermeticEnv`, #4635): it deletes every config-location variable in the registry-derived
+list (`CONFIG_LOCATION_ENV_KEYS` in `tests/helpers.cjs`, so `CODEX_HOME`, `KILO_CONFIG`,
+`ANTIGRAVITY_CONFIG_DIR` and the rest follow the registry, never a hand-written list) and sets
+`HOME` and `USERPROFILE` to a `gsd-test-userhome-*` directory under the run temp root. A real
+`~/.gsd/defaults.json` or `~/.claude` is not there for a chunk to read, and an exported
+`CLAUDE_CONFIG_DIR` does not reach one. The one variable kept is a `GSD_HOME` that is already a run
+sandbox. The step runs after the live-config guard has snapshotted the real config roots, so the
+guard still watches them. A test file run outside the runner (`node` on one file) does not get the
+step; use `isolatedEnv()` or `sandboxHome()` there.
+
 `eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
 and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
 A count falls as copies migrate. A new copy in a file the list does not name fails lint, and
