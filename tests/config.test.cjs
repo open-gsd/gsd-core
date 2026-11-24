@@ -843,7 +843,7 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assertNothingWritten(refused);
 
     const accepted = bareDir();
-    assert.ok(newProject([JSON.stringify({ project_code: '007' })], accepted).success);
+    assert.ok(newProject([JSON.stringify({ project_code: '007', phase_id_convention: 'sequential' })], accepted).success);
     assert.strictEqual(readProjectConfig(accepted).project_code, '007');
   });
 

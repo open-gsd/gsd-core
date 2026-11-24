@@ -1016,6 +1016,34 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       );
     }
 
+    for (const supplied of ['CK.02-05', '[CK.02] 05']) {
+      test(`#5067 custom bracket accepts ${supplied} without allocating or inferring dependencies`, () => {
+        const dir = project();
+        writeBracketFixture(dir);
+        writeCustomNamingConfig(dir);
+        fs.mkdirSync(planning(dir, 'phases', 'CK.02-99-later'));
+        const result = run(['phase', 'add', '--id', supplied, 'Custom Auth'], dir);
+        assert.equal(result.phase_number, 5);
+        assert.equal(result.padded, '05');
+        assert.equal(result.directory, '.planning/phases/CK.02-05-custom-auth');
+        const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+        assert.match(roadmap, /### \[CK\.02\] 05: Custom Auth/);
+        assert.doesNotMatch(roadmap, /Depends on/);
+      });
+    }
+    for (const supplied of ['05', 'AUTH', 'CK.2-05', 'CK.02-5', 'CK.02-05-01', 'CK.02-05-tail', 'XX.02-05', 'CK.03-05', '[CK.02]  05', ' CK.02-05']) {
+      test(`#5067 invalid custom bracket ${supplied} refuses with usage and zero writes`, () => {
+        const dir = project();
+        writeBracketFixture(dir);
+        writeCustomNamingConfig(dir);
+        const before = snapshotTree(planning(dir));
+        const result = runGsdTools(['--json-errors', 'phase', 'add', '--id', supplied, 'Auth'], dir, isolatedEnv({ home: dir }));
+        assert.equal(result.success, false);
+        assert.equal(JSON.parse(result.error).reason, 'usage');
+        assert.deepEqual(snapshotTree(planning(dir)), before);
+      });
+    }
+
     test('phase add --id refuses under the bracket convention', () => {
       const dir = project('adr-612-bracket-add-custom-id-');
       writeBracketFixture(dir);
@@ -1026,7 +1054,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       assert.equal(result.success, false, result.output);
       assert.match(result.error, /--id/);
       assert.match(result.error, /bracket/);
-      assert.match(result.error, /#5067/);
+      assert.match(result.error, /canonical bracket id|phase_naming/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
 
       // Outside the bracket convention --id and phase_naming custom keep
@@ -1053,7 +1081,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       assert.equal(result.success, false, result.output);
       assert.match(result.error, /phase_naming/);
       assert.match(result.error, /bracket/);
-      assert.match(result.error, /#5067/);
+      assert.match(result.error, /canonical bracket id|phase_naming/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
 
@@ -1068,7 +1096,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       assert.equal(result.success, false, result.output);
       assert.match(result.error, /phase_naming/);
       assert.match(result.error, /bracket/);
-      assert.match(result.error, /#5067/);
+      assert.match(result.error, /canonical bracket id|phase_naming/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
   });
