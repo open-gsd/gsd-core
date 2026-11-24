@@ -50,7 +50,6 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempProject, readFileNormalized, readWorkflowCombined, runGsdTools } = require('./helpers.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
@@ -1159,16 +1158,12 @@ function extractStallFunctionsBash() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // #5182 — the stall watch must observe the spawned agent's REAL return, not text
-// that merely mentions a marker.
-//
-// Pre-fix, every watch call site bound `{outputFile}` (a host-specific handle; on
+// that merely mentions a marker. Pre-fix, every watch call site bound `{outputFile}` (a host-specific handle; on
 // Claude Code the subagent JSONL transcript) and `gsd_stall_watch` grepped the
 // WHOLE file for the markers. The transcript holds the agent's prompt and its
-// definition snapshot before the agent replies, so the planner/checker watch
-// reported `marker_received` at its first check; the revision watch passed no
-// markers, so `stalled` was its only exit; and a host with no output file could
-// only ever reach `stalled`.
-//
+// definition snapshot before the agent replies, so the watch reported
+// `marker_received` at its first check; the revision watch passed no markers, so
+// `stalled` was its only exit; a host with no output file could only reach `stalled`.
 // The fix binds a GSD-owned, per-dispatch return receipt (`{receipt}`, printed by
 // `gsd_receipt_path`) that the agent writes as its LAST action, and matches a
 // marker only at the START of a receipt line (`gsd_return_marker`), which is also
@@ -1264,7 +1259,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const log = `${f.fwd}/sleeps.log`;
     fs.writeFileSync(log, '');
     const out = watch(dispatchTs, f.receipt, f.noPlans, markers, { prelude: `${prelude}\nsleep() { printf '%s\\n' "$1" >> ${q(log)}; }` });
-    return { out, sleeps: fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(Number) };
+    return { out, sleeps: splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean).map(Number) };
   }
 
   test('a receipt younger than the settle window is waited out in the same call, then reported; at the window it is not (#5182)', (t) => {
@@ -2855,15 +2850,10 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   // expansion left the literal pattern in place and a planner still writing plans was
   // reported `stalled`. find now matches the basename itself. This row runs the shipped
   // watch under a real zsh, so it needs a zsh on PATH and is skipped, visibly, where
-  // there is none (PATH is scanned without spawning anything).
+  // there is none (asked of bash through the process seam, never by splitting PATH here).
   function zshOnPath() {
-    const name = process.platform === 'win32' ? 'zsh.exe' : 'zsh';
-    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
-      if (!dir) continue;
-      const p = path.join(dir, name);
-      try { if (fs.statSync(p).isFile()) return p; } catch { /* not in this PATH entry */ }
-    }
-    return null;
+    const probe = runBashScript('command -v zsh >/dev/null 2>&1 && echo found\n', []);
+    return probe.status === 0 && probe.stdout.trim() === 'found' ? 'zsh' : null;
   }
 
   test('under zsh, a fresh *-PLAN.md in a spaced phase dir reads as active, with no shell error (Major 1)', (t) => {
