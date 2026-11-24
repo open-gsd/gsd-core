@@ -209,7 +209,7 @@ describe('executor.ledger (#6216): the plan base, recorded once in the worktree'
     const out = json(res);
     assert.equal(out.recorded, true);
     assert.equal(out.plan_head_before, base);
-    assert.equal(out.path, path.join(wt, '.gsd', 'executor-ledger', '02-04.json'));
+    assert.equal(out.path, path.join(wt, '.gsd', 'executor-ledger', '02+04.json'));
     assert.equal(JSON.parse(fs.readFileSync(out.path, 'utf8')).branch, 'agent-a1b2c3');
 
     assert.equal(git(['status', '--porcelain'], wt), '');
@@ -254,7 +254,7 @@ describe('executor.ledger (#6216): the plan base, recorded once in the worktree'
     const { tmp, wt } = mkFixture(t);
     const res = run(['executor.ledger', 'read', '--phase', '02', '--plan', '04'], wt, tmp);
     assert.equal(res.exitCode, 1);
-    assert.match(res.error, /no ledger record for 02-04/);
+    assert.match(res.error, /no ledger record for 02 04/);
   });
 
   test('read fails when the recorded base is not an ancestor of HEAD', (t) => {
@@ -429,8 +429,154 @@ describe('#4799 / #3819 / #2924 behaviours, now held by executor.guard', () => {
       const base = git(['rev-parse', 'HEAD'], wt);
       const res = run(['executor.guard', '--expected-base', base, '--expected-base-alternate', ''], wt, tmp);
       assert.equal(res.exitCode, GUARD_EXIT_CODE);
-      assert.deepEqual(failed(res), ['agent-namespace']);
+      assert.deepEqual(failed(res), ['not-protected', 'agent-namespace']);
+      assert.match(res.error, /is a protected branch/);
       assert.match(res.error, /is not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
     });
   }
+});
+
+describe('#6216 fix review: layouts, path resolution and ledger confinement', () => {
+  function unprotected(t, dir, branch) {
+    git(['checkout', '-q', '-b', branch], dir);
+    return dir;
+  }
+
+  test('a --separate-git-dir checkout (.git is a file) requires the agent namespace unless --sequential', (t) => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-sep-')));
+    t.after(() => cleanup(tmp));
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(repo);
+    git(['init', '-q', '-b', 'main', '--separate-git-dir', path.join(tmp, 'repo.git')], repo);
+    commitFile(repo, 'README.md');
+    unprotected(t, repo, 'feature/login');
+    assert.ok(fs.lstatSync(path.join(repo, '.git')).isFile());
+    const isolated = run(['executor.guard'], repo, tmp);
+    assert.equal(isolated.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(isolated), ['agent-namespace']);
+    assert.equal(run(['executor.guard', '--sequential'], repo, tmp).exitCode, 0);
+  });
+
+  test("a bare repository's first worktree requires the agent namespace unless --sequential", (t) => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-bare-')));
+    t.after(() => cleanup(tmp));
+    const seed = path.join(tmp, 'seed');
+    fs.mkdirSync(seed);
+    git(['init', '-q', '-b', 'main'], seed);
+    commitFile(seed, 'README.md');
+    git(['clone', '-q', '--bare', seed, path.join(tmp, 'bare.git')], tmp);
+    const first = path.join(tmp, 'first');
+    git(['worktree', 'add', '-q', '-b', 'feature/first', first, 'main'], path.join(tmp, 'bare.git'));
+    const isolated = run(['executor.guard'], first, tmp);
+    assert.equal(isolated.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(isolated), ['agent-namespace']);
+    assert.equal(run(['executor.guard', '--sequential'], first, tmp).exitCode, 0);
+  });
+
+  test('--path refuses a dangling link pointing outside, and a path below a regular file', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(outside);
+    fs.symlinkSync(path.join(outside, 'not-yet.txt'), path.join(wt, 'dangling'));
+    const dangling = run(['executor.guard', '--path', path.join(wt, 'dangling')], wt, tmp);
+    assert.equal(dangling.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(dangling), ['path']);
+
+    write(path.join(wt, 'regular.txt'), 'x\n');
+    const below = run(['executor.guard', '--path', 'regular.txt/child'], wt, tmp);
+    assert.equal(below.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(below), ['path']);
+  });
+
+  test('--path resolves a link before its .. segment, and reads ..cache as a name', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const outside = path.join(tmp, 'outside', 'deep');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, path.join(wt, 'linkdir'));
+    const viaLink = run(['executor.guard', '--path', 'linkdir/../r.txt'], wt, tmp);
+    assert.equal(viaLink.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(viaLink), ['path']);
+
+    const dotted = run(['executor.guard', '--path', '..cache/new.txt'], wt, tmp);
+    assert.equal(dotted.exitCode, 0, dotted.error);
+  });
+
+  test('record refuses a linked .gsd/executor-ledger and writes nothing through it', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const escaped = path.join(tmp, 'escaped');
+    fs.mkdirSync(escaped);
+    fs.mkdirSync(path.join(wt, '.gsd'));
+    fs.symlinkSync(escaped, path.join(wt, '.gsd', 'executor-ledger'));
+    const res = run(['executor.ledger', 'record', '--phase', '01', '--plan', '01'], wt, tmp);
+    assert.equal(res.exitCode, 1);
+    assert.match(res.error, /must be a real directory/);
+    assert.deepEqual(fs.readdirSync(escaped), []);
+  });
+
+  test('read refuses a record that is a link', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    run(['executor.ledger', 'record', '--phase', '01', '--plan', '01'], wt, tmp);
+    const dir = path.join(wt, '.gsd', 'executor-ledger');
+    const elsewhere = path.join(tmp, 'elsewhere.json');
+    fs.copyFileSync(path.join(dir, '01+01.json'), elsewhere);
+    fs.unlinkSync(path.join(dir, '01+01.json'));
+    fs.symlinkSync(elsewhere, path.join(dir, '01+01.json'));
+    const res = run(['executor.ledger', 'read', '--phase', '01', '--plan', '01'], wt, tmp);
+    assert.equal(res.exitCode, 1);
+    assert.match(res.error, /must be a regular file/);
+  });
+
+  test('record leaves a tracked .gsd/.gitignore untouched and stays out of git status, even under a negation', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    write(path.join(wt, '.gsd', '.gitignore'), '!/executor-ledger/\n');
+    git(['add', '.gsd/.gitignore'], wt);
+    git(['commit', '-q', '-m', 'track gsd ignore'], wt);
+    const res = run(['executor.ledger', 'record', '--phase', '02', '--plan', '05'], wt, tmp);
+    assert.equal(res.exitCode, 0, res.error);
+    assert.equal(git(['status', '--porcelain', '--untracked-files=all'], wt), '');
+  });
+
+  test('distinct phase/plan pairs never share a record', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const first = run(['executor.ledger', 'record', '--phase', 'a-b', '--plan', 'c'], wt, tmp);
+    commitFile(wt, 'between.txt');
+    const second = run(['executor.ledger', 'record', '--phase', 'a', '--plan', 'b-c'], wt, tmp);
+    assert.equal(json(first).recorded, true);
+    assert.equal(json(second).recorded, true);
+    assert.notEqual(json(first).plan_head_before, json(second).plan_head_before);
+  });
+
+  test('read refuses a recorded base that is not a commit (a tag object)', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    run(['executor.ledger', 'record', '--phase', '01', '--plan', '01'], wt, tmp);
+    git(['tag', '-a', '-m', 'annotated', 'v-test'], wt);
+    const tagObject = git(['rev-parse', 'v-test'], wt);
+    const file = path.join(wt, '.gsd', 'executor-ledger', '01+01.json');
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify({ ...record, plan_head_before: tagObject }));
+    const res = run(['executor.ledger', 'read', '--phase', '01', '--plan', '01'], wt, tmp);
+    assert.equal(res.exitCode, 1);
+    assert.match(res.error, /is not a commit/);
+  });
+
+  test('the base-branch resolver is not consulted at spawn time or on a detached HEAD', () => {
+    const commit = 'a'.repeat(40);
+    const layout = (args) => {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { exitCode: 0, stdout: '/w\n' };
+      if (args[0] === 'rev-parse' && args[1] === '--absolute-git-dir') return { exitCode: 0, stdout: '/w/.git\n/w/.git\n' };
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: `${commit}\n` };
+      return null;
+    };
+    const attachedGit = (args) => layout(args) ?? (args[0] === 'symbolic-ref' ? { exitCode: 0, stdout: 'refs/heads/agent-x\n' } : { exitCode: 1, stdout: '' });
+    const detachedGit = (args) => layout(args) ?? { exitCode: 1, stdout: '' };
+    const protectedStatus = () => { throw new Error('resolver must not be called'); };
+    const deps = (execGit) => ({ execGit, protectedStatus, realpath: (p) => p });
+
+    const spawn = evaluateGuard({ projectRoot: '/w' }, { invokedFrom: '/w', expectedBase: commit }, deps(attachedGit));
+    assert.equal(spawn.ok, true, JSON.stringify(spawn.checks));
+
+    const detached = evaluateGuard({ projectRoot: '/w' }, { invokedFrom: '/w' }, deps(detachedGit));
+    assert.deepEqual(detached.checks.filter((c) => !c.ok).map((c) => c.name), ['head-attached', 'not-protected']);
+    assert.equal(detached.checks.find((c) => c.name === 'not-protected').detail, 'no branch to test');
+  });
 });

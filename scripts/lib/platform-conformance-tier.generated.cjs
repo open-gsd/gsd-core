@@ -95,6 +95,7 @@ module.exports = {
   "tests/execute-phase-worktree-guard.test.cjs",
   "tests/execute-plan-update-codebase-map-diff-base.test.cjs",
   "tests/executed-plan.test.cjs",
+  "tests/executor-guard.test.cjs",
   "tests/executor-mvp-tdd-section.test.cjs",
   "tests/executor-policy-new-project-6211.test.cjs",
   "tests/external-descriptor-confinement.test.cjs",

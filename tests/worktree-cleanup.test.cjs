@@ -179,8 +179,6 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
         assert.ok(block.includes(`\`${name}\``),
           `worktree_branch_check must name \`${name}\` among the refused branches`);
       }
-      assert.ok(block.includes('the resolved default branch'),
-        'worktree_branch_check must say the resolved default branch is refused too');
     });
 
     test('block enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {

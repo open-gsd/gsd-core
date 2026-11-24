@@ -840,15 +840,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   // #6216 (ADR-6216): the executor's worktree guards and plan commit ledger as single commands.
-  // Rooted on ctx.worktreeRoot (the checkout the executor runs in), never on the project root,
-  // which is the main checkout when a linked worktree does not carry `.planning/`.
+  // They read the worktree the command ran in (invokingCwd, #4906/#4465), never the remapped
+  // project root, which is the main checkout when a linked worktree does not carry `.planning/`.
   function routeExecutor({ args, cwd, raw, error, ctx, invokingCwd }) {
     const sub = args[1];
-    const guardCtx = {
-      worktreeRoot: ctx.worktreeRoot,
-      projectRoot: ctx.projectRoot,
-      isLinkedWorktree: ctx.isLinkedWorktree,
-    };
+    const guardCtx = { projectRoot: ctx.projectRoot };
+    const invokedFrom = invokingCwd || cwd;
     if (sub === 'guard') {
       const parsed = parseNamedArgsOrExit(args, specFor('executor.guard'), error);
       executorGuard.cmdExecutorGuard(guardCtx, {
@@ -857,9 +854,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         toplevel: parsed.toplevel,
         path: parsed.path,
         sequential: parsed.sequential === true,
-        // A relative --path is the executor's own: resolve it from the directory it ran in
-        // (#4906/#4465), not from the remapped project root.
-        invokedFrom: invokingCwd || cwd,
+        invokedFrom,
       }, raw);
       return;
     }
@@ -873,8 +868,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         return;
       }
       const parsed = parseNamedArgsOrExit(args, specFor('executor.ledger'), error);
-      if (action === 'record') executorGuard.cmdExecutorLedgerRecord(guardCtx, parsed.phase, parsed.plan, raw);
-      else executorGuard.cmdExecutorLedgerRead(guardCtx, parsed.phase, parsed.plan, raw);
+      if (action === 'record') executorGuard.cmdExecutorLedgerRecord(guardCtx, invokedFrom, parsed.phase, parsed.plan, raw);
+      else executorGuard.cmdExecutorLedgerRead(guardCtx, invokedFrom, parsed.phase, parsed.plan, raw);
       return;
     }
     error(
@@ -5891,8 +5886,8 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // #6043: project-context prints the resolved ProjectContext itself, so it
   // needs no remapped cwd; the dispatcher hands every router `ctx`.
   'project-context',
-  // #6216: the executor verbs read ctx.worktreeRoot themselves and must run from a linked
-  // worktree whose `.planning/` is untracked, so they take no remapped cwd either.
+  // #6216: the executor verbs must run in a worktree with no resolvable project root of its own;
+  // they read the worktree from invokingCwd, not from the remapped cwd.
   'executor',
   // context-predicates is a pure repo-root CONTEXT.md read (like
   // prompt-budget); it never touches .planning/, so it needs no project

@@ -21,7 +21,7 @@ VERIFY-ONLY. Worktrees spawned by Claude Code's `isolation="worktree"` use the
 a sub-agent MUST NOT hold state-correction primitives (hard-reset, update-ref,
 force-move, index-discard) on a worktree it did not create (#48, #2924). Run the
 guard below as ONE plain command (#6216). It refuses a detached HEAD, a HEAD on
-`main`, `master`, `develop`, `trunk`, `release/*` or the resolved default branch, a
+`main`, `master`, `develop`, `trunk` or `release/*`, a
 branch outside the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace, and a
 HEAD that is neither expected base, and it exits 42 on any of them. On exit 42,
 HALT immediately — surface its FATAL lines and let the orchestrator (the lifecycle

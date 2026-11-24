@@ -3,20 +3,20 @@
  * `query executor.guard` and `query executor.ledger record|read`.
  *
  * `executor.guard` is VERIFY-ONLY and fails closed (#48): it reads HEAD, the branch and the
- * worktree root, never moves a ref or writes, prints a `FATAL:` line per failed check and exits
- * 42, the `worktree_branch_check` contract's code. `executor.ledger` records the plan's base once,
- * in the worktree's tool-owned `.gsd/executor-ledger/` (never under `.git/worktrees/<name>/`),
- * and reads it back at SUMMARY time (#3968). Git and filesystem I/O is injectable via `deps`.
+ * worktree the command runs in, never moves a ref or writes, prints a `FATAL:` line per failed
+ * check and exits 42, the `worktree_branch_check` contract's code. `executor.ledger` records the
+ * plan's base once, in that worktree's `.gsd/executor-ledger/` (never under `.git/`), and reads it
+ * back at SUMMARY time (#3968). Git and filesystem I/O is injectable via `deps`.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6216 CJS interop import, as in the sibling modules
 import io = require('./io.cjs');
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6216 CJS interop import, as in adr-parser.cts
 import cliExitModule = require('./cli-exit.cjs');
 import { resolveProtectedBranchStatus } from './git-base-branch.cjs';
-import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
 import { execGit as execGitSeam } from './shell-command-projection.cjs';
 
 const { output, error, ERROR_REASON } = io;
@@ -28,15 +28,15 @@ export const GUARD_EXIT_CODE = 42;
 /** Per-agent branch namespaces an isolated worktree must sit on (#2924, #1995). */
 export const AGENT_BRANCH_RE = /^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$/;
 
-/** Phase and plan tokens become one file name, so they are held to a plain-name alphabet. */
+/** The spawn-time block's protected names (#2924), checked without the base-branch resolver. */
+export const SPAWN_PROTECTED_RE = /^(main|master|develop|trunk|release\/.*)$/;
+
+/** Phase and plan ids: a letter or digit, then letters, digits, `.`, `_`, `-`. */
 const LEDGER_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-export const LEDGER_DIR = 'executor-ledger';
+const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
-const LEDGER_IGNORE = Object.freeze({
-  marker: '# gsd-core executor ledger',
-  rules: Object.freeze([`/${LEDGER_DIR}/`, '/.gitignore']),
-});
+export const LEDGER_DIR = 'executor-ledger';
 
 type GitResult = { exitCode: number; stdout: string; stderr?: string };
 type ExecGitFn = (args: string[], opts?: { cwd?: string; timeout?: number }) => GitResult;
@@ -51,11 +51,8 @@ export interface ExecutorGuardDeps {
 
 /** The slice of the dispatcher's ProjectContext these commands read. */
 export interface ExecutorGuardContext {
-  /** Top level of the checkout the process runs in. */
-  worktreeRoot: string;
   /** Directory holding `.planning` — where project config is read. */
   projectRoot: string;
-  isLinkedWorktree: boolean;
 }
 
 export interface GuardOptions {
@@ -64,7 +61,7 @@ export interface GuardOptions {
   toplevel?: string | null;
   path?: string | null;
   sequential?: boolean;
-  /** The directory the command was invoked from; a relative `--path` resolves against it. */
+  /** The directory the command ran in: the worktree is read from it, relative paths resolve from it. */
   invokedFrom: string;
 }
 
@@ -100,9 +97,97 @@ function realpathOr(deps: ExecutorGuardDeps | undefined, p: string): string | nu
   }
 }
 
-function isContained(root: string, candidate: string): boolean {
+function errCode(err: unknown): string | undefined {
+  return (err as { code?: string }).code;
+}
+
+/** True when `candidate` is `root` or below it; `..cache` is a name, `..` is a parent. */
+export function isContained(root: string, candidate: string): boolean {
   const rel = path.relative(root, candidate);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  if (rel === '') return true;
+  if (path.isAbsolute(rel)) return false;
+  return rel.split(path.sep)[0] !== '..';
+}
+
+/**
+ * Resolve a path one segment at a time, following each link where the filesystem would and
+ * never folding `..` before a link is resolved. A missing tail is kept as written. Fails on a
+ * link that cannot be resolved, on a non-directory with segments after it, and on `..` after a
+ * missing segment, so the result is where a write would land, or nothing.
+ */
+export function resolveLanding(
+  target: string,
+  deps?: ExecutorGuardDeps,
+): { landing: string } | { reason: string } {
+  const parsed = path.parse(target);
+  const root = realpathOr(deps, parsed.root);
+  if (root === null) return { reason: `cannot resolve ${parsed.root}` };
+  const segments = target.slice(parsed.root.length).split(/[\\/]+/).filter((s) => s !== '' && s !== '.');
+  let cur = root;
+  const tail: string[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (tail.length > 0) {
+      if (seg === '..') return { reason: `'..' follows a segment that does not exist (${tail.join('/')})` };
+      tail.push(seg);
+      continue;
+    }
+    if (seg === '..') {
+      cur = path.dirname(cur);
+      continue;
+    }
+    const next = path.join(cur, seg);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(next);
+    } catch (err) {
+      if (errCode(err) === 'ENOENT') {
+        tail.push(seg);
+        continue;
+      }
+      return { reason: `cannot read ${next}: ${errCode(err) ?? (err as Error).message}` };
+    }
+    if (st.isSymbolicLink()) {
+      const real = realpathOr(deps, next);
+      if (real === null) return { reason: `${next} is a link that does not resolve` };
+      cur = real;
+    } else {
+      cur = next;
+    }
+    if (i < segments.length - 1) {
+      let isDir = false;
+      try {
+        isDir = fs.statSync(cur).isDirectory();
+      } catch { /* not a directory */ }
+      if (!isDir) return { reason: `${cur} is not a directory` };
+    }
+  }
+  return { landing: tail.length > 0 ? path.join(cur, ...tail) : cur };
+}
+
+interface WorktreeFacts {
+  /** Top level of the worktree, or null when the directory is not in one. */
+  root: string | null;
+  /** The git layout could be read: `.git` entry and git dir vs common dir. */
+  layoutKnown: boolean;
+  /** `.git` is a file, or the git dir is not the common dir: a linked worktree, a submodule, a separate git dir. */
+  isolatedLayout: boolean;
+}
+
+function readWorktree(deps: ExecutorGuardDeps | undefined, from: string): WorktreeFacts {
+  const top = git(deps, from, ['rev-parse', '--show-toplevel']);
+  if (top.exitCode !== 0 || top.stdout === '') return { root: null, layoutKnown: false, isolatedLayout: false };
+  const root = top.stdout;
+  let dotGitFile = false;
+  try {
+    dotGitFile = fs.lstatSync(path.join(root, '.git')).isFile();
+  } catch { /* no .git entry at the top level */ }
+  const dirs = git(deps, root, ['rev-parse', '--absolute-git-dir', '--git-common-dir']);
+  const lines = dirs.stdout.split(/\r?\n/).filter((l) => l !== '');
+  if (dirs.exitCode !== 0 || lines.length !== 2) return { root, layoutKnown: false, isolatedLayout: dotGitFile };
+  const gitDir = realpathOr(deps, lines[0]) ?? lines[0];
+  const commonDir = realpathOr(deps, path.resolve(root, lines[1])) ?? path.resolve(root, lines[1]);
+  return { root, layoutKnown: true, isolatedLayout: dotGitFile || gitDir !== commonDir };
 }
 
 /**
@@ -114,25 +199,36 @@ export function evaluateGuard(
   opts: GuardOptions,
   deps?: ExecutorGuardDeps,
 ): GuardResult {
-  const cwd = ctx.worktreeRoot;
   const checks: GuardCheck[] = [];
+  const facts = readWorktree(deps, opts.invokedFrom);
+  const cwd = facts.root ?? opts.invokedFrom;
 
-  const symbolic = git(deps, cwd, ['symbolic-ref', '--quiet', 'HEAD']);
-  const attached = symbolic.exitCode === 0 && symbolic.stdout.startsWith('refs/heads/');
-  const branch = attached ? symbolic.stdout.slice('refs/heads/'.length) : '';
-  const headResult = git(deps, cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']);
-  const head = headResult.exitCode === 0 ? headResult.stdout : '';
+  const symbolic = facts.root === null ? null : git(deps, cwd, ['symbolic-ref', '--quiet', 'HEAD']);
+  const attached = symbolic !== null && symbolic.exitCode === 0 && symbolic.stdout.startsWith('refs/heads/');
+  const branch = attached && symbolic ? symbolic.stdout.slice('refs/heads/'.length) : '';
+  const headResult = facts.root === null ? null : git(deps, cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const head = headResult && headResult.exitCode === 0 ? headResult.stdout : '';
 
   checks.push({
     name: 'head-attached',
     ok: attached && head !== '',
-    detail: attached && head !== '' ? `HEAD is on '${branch}'` : 'HEAD is detached or unreadable',
+    detail: facts.root === null
+      ? `${opts.invokedFrom} is not inside a git worktree`
+      : attached && head !== '' ? `HEAD is on '${branch}'` : 'HEAD is detached or unreadable',
   });
 
-  // Fail closed: an unverifiable base branch counts as protected (#3057, the git.base-branch rule).
+  // Spawn-time (an expected base was passed): the block's own protected names, no resolver call.
+  // Pre-commit: the git.base-branch --is-protected rule, an unverifiable base branch counting as
+  // protected (#3057, #3819).
+  const expectedBase = opts.expectedBase ?? null;
   let protectedOk = false;
   let protectedDetail = 'no branch to test';
-  if (attached) {
+  if (attached && expectedBase !== null) {
+    protectedOk = !SPAWN_PROTECTED_RE.test(branch);
+    protectedDetail = protectedOk
+      ? `'${branch}' is not main, master, develop, trunk or release/*`
+      : `'${branch}' is a protected branch; refusing to commit or self-recover via 'git update-ref' (#2924)`;
+  } else if (attached) {
     try {
       const status = (deps?.protectedStatus ?? resolveProtectedBranchStatus)(ctx.projectRoot, branch);
       protectedOk = status.verified && !status.isProtected;
@@ -147,11 +243,11 @@ export function evaluateGuard(
   }
   checks.push({ name: 'not-protected', ok: protectedOk, detail: protectedDetail });
 
-  // The spawn-time check (an expected base was passed) always requires the namespace, as the
-  // worktree_branch_check block does; the pre-commit check requires it in an agent-isolated
-  // worktree unless the executor was dispatched onto the orchestrator's tree (#4799).
-  const expectedBase = opts.expectedBase ?? null;
-  const namespaceRequired = expectedBase !== null || (ctx.isLinkedWorktree && !opts.sequential);
+  // The namespace is required at spawn time, and before a commit in any worktree whose `.git` is
+  // a file or whose git dir is not the common dir, unless the executor was dispatched onto the
+  // orchestrator's tree (#4799). A layout that cannot be read requires it.
+  const namespaceRequired = expectedBase !== null ||
+    (!opts.sequential && (!facts.layoutKnown || facts.isolatedLayout));
   if (namespaceRequired) {
     const ok = attached && AGENT_BRANCH_RE.test(branch);
     checks.push({
@@ -177,46 +273,41 @@ export function evaluateGuard(
     });
   }
 
+  const realRoot = facts.root === null ? null : realpathOr(deps, facts.root);
+
   if (opts.toplevel !== undefined && opts.toplevel !== null) {
-    const want = realpathOr(deps, opts.toplevel);
-    const have = realpathOr(deps, cwd);
-    const ok = want !== null && have !== null && want === have;
+    const want = realpathOr(deps, path.resolve(opts.invokedFrom, opts.toplevel));
+    const ok = want !== null && realRoot !== null && want === realRoot;
     checks.push({
       name: 'toplevel',
       ok,
       detail: ok
-        ? `worktree root is ${have}`
-        : `worktree root is ${have ?? cwd}, expected ${opts.toplevel}; cd back to the expected root (#3097)`,
+        ? `worktree root is ${realRoot}`
+        : `worktree root is ${realRoot ?? '(none)'}, expected ${opts.toplevel}; cd back to the expected root (#3097)`,
     });
   }
 
   if (opts.path !== undefined && opts.path !== null) {
-    const root = realpathOr(deps, cwd) ?? cwd;
-    const target = path.resolve(opts.invokedFrom, opts.path);
-    // Resolve the deepest existing ancestor, so a not-yet-created file is judged by where it would land.
-    let probe = target;
-    let resolved: string | null = null;
-    const tail: string[] = [];
-    for (;;) {
-      resolved = realpathOr(deps, probe);
-      if (resolved !== null) break;
-      const parent = path.dirname(probe);
-      if (parent === probe) break;
-      tail.unshift(path.basename(probe));
-      probe = parent;
+    let ok = false;
+    let detail: string;
+    if (realRoot === null) {
+      detail = 'the worktree root does not resolve';
+    } else {
+      const target = path.isAbsolute(opts.path) ? opts.path : `${opts.invokedFrom}${path.sep}${opts.path}`;
+      const resolved = resolveLanding(target, deps);
+      if ('reason' in resolved) {
+        detail = `${opts.path}: ${resolved.reason}`;
+      } else {
+        ok = isContained(realRoot, resolved.landing);
+        detail = ok
+          ? `${opts.path} lands inside the worktree`
+          : `${opts.path} lands at ${resolved.landing}, outside the worktree (${realRoot}); use a path inside it (#3099)`;
+      }
     }
-    const landing = resolved === null ? target : path.join(resolved, ...tail);
-    const ok = opts.path !== '' && isContained(root, landing);
-    checks.push({
-      name: 'path',
-      ok,
-      detail: ok
-        ? `${opts.path} is inside the worktree`
-        : `${opts.path || '(empty)'} resolves outside the worktree (${root}); use a path inside it (#3099)`,
-    });
+    checks.push({ name: 'path', ok, detail });
   }
 
-  return { ok: checks.every((c) => c.ok), branch, head, worktree_root: cwd, checks };
+  return { ok: checks.every((c) => c.ok), branch, head, worktree_root: facts.root ?? '', checks };
 }
 
 /** CLI: `gsd-tools query executor.guard …`. Prints the result as JSON; exits 42 on any failed check. */
@@ -231,11 +322,14 @@ export function cmdExecutorGuard(
   for (const check of result.checks) {
     if (!check.ok) writeDiagnostic(`FATAL: executor.guard ${check.name}: ${check.detail}\n`);
   }
-  output(result, raw, String(result.ok));
   if (!result.ok) {
     writeDiagnostic('Refusing to continue: halt, do not self-recover, do not commit (#48).\n');
+    try {
+      output(result, raw, String(result.ok));
+    } catch { /* the verdict below stands even when the JSON cannot be written */ }
     throw new ExitError(GUARD_EXIT_CODE);
   }
+  output(result, raw, String(result.ok));
   return result;
 }
 
@@ -248,14 +342,10 @@ export interface LedgerRecord {
   recorded_at: string;
 }
 
-function ledgerPath(worktreeRoot: string, phase: string, plan: string): string {
-  return path.join(worktreeRoot, '.gsd', LEDGER_DIR, `${phase}-${plan}.json`);
-}
-
 function requireToken(name: string, value: string | null | undefined): string {
   if (value === undefined || value === null || !LEDGER_TOKEN_RE.test(value)) {
     error(
-      `executor.ledger: --${name} must be a plain phase/plan id (letters, digits, '.', '_', '-'); got '${value ?? ''}'`,
+      `executor.ledger: --${name} must be a plain id (a letter or digit, then letters, digits, '.', '_', '-'); got '${value ?? ''}'`,
       ERROR_REASON.USAGE,
     );
   }
@@ -266,22 +356,92 @@ function fail(message: string): never {
   throw new ExitError(1, `Error: executor.ledger: ${message}`);
 }
 
-function readRecord(file: string): LedgerRecord | null {
+/** `+` is outside the id alphabet, so two different phase/plan pairs never share a file. */
+function ledgerFileName(phase: string, plan: string): string {
+  return `${phase}+${plan}.json`;
+}
+
+function worktreeRootOrFail(deps: ExecutorGuardDeps | undefined, from: string): string {
+  const facts = readWorktree(deps, from);
+  if (facts.root === null) return fail(`${from} is not inside a git worktree`);
+  const real = realpathOr(deps, facts.root);
+  if (real === null) return fail(`cannot resolve the worktree root ${facts.root}`);
+  return real;
+}
+
+/** A real directory at exactly `want`: not a link, not resolving anywhere else. */
+function ensureRealDir(dir: string, want: string, create: boolean): void {
+  if (create) {
+    try {
+      fs.mkdirSync(dir);
+    } catch (err) {
+      if (errCode(err) !== 'EEXIST') fail(`cannot create ${dir}: ${(err as Error).message}`);
+    }
+  }
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(dir);
+  } catch (err) {
+    return fail(`cannot read ${dir}: ${(err as Error).message}`);
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) fail(`${dir} must be a real directory, not a link or a file`);
+  let real: string;
+  try {
+    real = fs.realpathSync(dir);
+  } catch (err) {
+    return fail(`cannot resolve ${dir}: ${(err as Error).message}`);
+  }
+  if (real !== want) fail(`${dir} resolves to ${real}, outside the worktree`);
+}
+
+/** The ledger directory, confined to `<root>/.gsd/executor-ledger` and ignored by its own `.gitignore`. */
+function ledgerDir(root: string, create: boolean): string {
+  const gsd = path.join(root, '.gsd');
+  const dir = path.join(gsd, LEDGER_DIR);
+  if (!create) {
+    try {
+      fs.lstatSync(dir);
+    } catch (err) {
+      if (errCode(err) === 'ENOENT') return dir;
+    }
+  }
+  ensureRealDir(gsd, gsd, create);
+  ensureRealDir(dir, dir, create);
+  if (create) {
+    const ignore = path.join(dir, '.gitignore');
+    try {
+      fs.writeFileSync(ignore, '*\n', { flag: 'wx' });
+    } catch (err) {
+      if (errCode(err) !== 'EEXIST') fail(`cannot write ${ignore}: ${(err as Error).message}`);
+      if (!fs.lstatSync(ignore).isFile()) fail(`${ignore} must be a regular file`);
+    }
+  }
+  return dir;
+}
+
+function readRecord(file: string, phase: string, plan: string): LedgerRecord | null {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(file);
+  } catch (err) {
+    if (errCode(err) === 'ENOENT') return null;
+    return fail(`cannot read ${file}: ${(err as Error).message}`);
+  }
+  if (!st.isFile()) fail(`${file} must be a regular file, not a link`);
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    if ((err as { code?: string }).code === 'ENOENT') return null;
     return fail(`cannot read ${file}: ${(err as Error).message}`);
   }
   try {
     const parsed = JSON.parse(text) as LedgerRecord;
-    if (parsed && parsed.schema === 1 && typeof parsed.plan_head_before === 'string' &&
-        /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(parsed.plan_head_before)) {
+    if (parsed && parsed.schema === 1 && parsed.phase === phase && parsed.plan === plan &&
+        typeof parsed.plan_head_before === 'string' && SHA_RE.test(parsed.plan_head_before)) {
       return parsed;
     }
   } catch { /* fall through */ }
-  return fail(`${file} is not a ledger record; remove it only if this plan has not committed yet`);
+  return fail(`${file} is not this plan's ledger record`);
 }
 
 /**
@@ -290,6 +450,7 @@ function readRecord(file: string): LedgerRecord | null {
  */
 export function cmdExecutorLedgerRecord(
   ctx: ExecutorGuardContext,
+  invokedFrom: string,
   phaseArg: string | null | undefined,
   planArg: string | null | undefined,
   raw: boolean,
@@ -297,16 +458,20 @@ export function cmdExecutorLedgerRecord(
 ): { recorded: boolean; path: string; plan_head_before: string } {
   const phase = requireToken('phase', phaseArg);
   const plan = requireToken('plan', planArg);
-  const file = ledgerPath(ctx.worktreeRoot, phase, plan);
-  const existing = readRecord(file);
-  if (existing) {
-    const result = { recorded: false, path: file, plan_head_before: existing.plan_head_before };
-    output(result, raw, existing.plan_head_before);
+  const root = worktreeRootOrFail(deps, invokedFrom);
+  const dir = ledgerDir(root, true);
+  const file = path.join(dir, ledgerFileName(phase, plan));
+  const keep = (rec: LedgerRecord) => {
+    const result = { recorded: false, path: file, plan_head_before: rec.plan_head_before };
+    output(result, raw, rec.plan_head_before);
     return result;
-  }
-  const head = git(deps, ctx.worktreeRoot, ['rev-parse', '--verify', '--quiet', 'HEAD']);
-  if (head.exitCode !== 0 || head.stdout === '') fail('HEAD does not resolve; nothing to record');
-  const symbolic = git(deps, ctx.worktreeRoot, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  };
+  const existing = readRecord(file, phase, plan);
+  if (existing) return keep(existing);
+
+  const head = git(deps, root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  if (head.exitCode !== 0 || !SHA_RE.test(head.stdout)) fail('HEAD does not resolve to a commit; nothing to record');
+  const symbolic = git(deps, root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   const record: LedgerRecord = {
     schema: 1,
     phase,
@@ -315,20 +480,20 @@ export function cmdExecutorLedgerRecord(
     branch: symbolic.exitCode === 0 ? symbolic.stdout : '',
     recorded_at: (deps?.now ?? (() => new Date()))().toISOString(),
   };
+  // Written whole to a temp name, then linked into place: the link fails if the record exists,
+  // and a reader never sees a partly written record.
+  const tmp = path.join(dir, `.tmp-${process.pid}-${randomBytes(6).toString('hex')}`);
   try {
-    const dir = ensureToolOwnedGsdDir(ctx.worktreeRoot, LEDGER_IGNORE);
-    fs.mkdirSync(path.join(dir, LEDGER_DIR), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
+    fs.writeFileSync(tmp, JSON.stringify(record, null, 2) + '\n', { flag: 'wx' });
+    fs.linkSync(tmp, file);
   } catch (err) {
-    if ((err as { code?: string }).code === 'EEXIST') {
-      const raced = readRecord(file);
-      if (raced) {
-        const result = { recorded: false, path: file, plan_head_before: raced.plan_head_before };
-        output(result, raw, raced.plan_head_before);
-        return result;
-      }
+    if (errCode(err) === 'EEXIST') {
+      const raced = readRecord(file, phase, plan);
+      if (raced) return keep(raced);
     }
     fail(`cannot write ${file}: ${(err as Error).message}`);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
   }
   const result = { recorded: true, path: file, plan_head_before: record.plan_head_before };
   output(result, raw, record.plan_head_before);
@@ -338,6 +503,7 @@ export function cmdExecutorLedgerRecord(
 /** Read the plan's base back and measure the plan's commits against the current HEAD. */
 export function cmdExecutorLedgerRead(
   ctx: ExecutorGuardContext,
+  invokedFrom: string,
   phaseArg: string | null | undefined,
   planArg: string | null | undefined,
   raw: boolean,
@@ -345,17 +511,22 @@ export function cmdExecutorLedgerRead(
 ): { plan_head_before: string; plan_head_after: string; commits: number; path: string } {
   const phase = requireToken('phase', phaseArg);
   const plan = requireToken('plan', planArg);
-  const file = ledgerPath(ctx.worktreeRoot, phase, plan);
-  const record = readRecord(file);
-  if (!record) fail(`no ledger record for ${phase}-${plan} at ${file}; it is written by 'executor.ledger record' before the plan's first commit`);
+  const root = worktreeRootOrFail(deps, invokedFrom);
+  const file = path.join(ledgerDir(root, false), ledgerFileName(phase, plan));
+  const record = readRecord(file, phase, plan);
+  if (!record) {
+    return fail(`no ledger record for ${phase} ${plan} at ${file}; it is written by 'executor.ledger record' before the plan's first commit`);
+  }
   const base = record.plan_head_before;
-  const head = git(deps, ctx.worktreeRoot, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const commit = git(deps, root, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]);
+  if (commit.exitCode !== 0 || commit.stdout !== base) fail(`recorded base ${base} is not a commit in this repository`);
+  const head = git(deps, root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   if (head.exitCode !== 0 || head.stdout === '') fail('HEAD does not resolve');
-  const ancestor = git(deps, ctx.worktreeRoot, ['merge-base', '--is-ancestor', base, head.stdout]);
+  const ancestor = git(deps, root, ['merge-base', '--is-ancestor', base, head.stdout]);
   if (ancestor.exitCode !== 0) {
     fail(`recorded base ${base} is not an ancestor of HEAD ${head.stdout}; the count cannot be measured from it`);
   }
-  const count = git(deps, ctx.worktreeRoot, ['rev-list', '--count', `${base}..${head.stdout}`]);
+  const count = git(deps, root, ['rev-list', '--count', `${base}..${head.stdout}`]);
   const commits = Number.parseInt(count.stdout, 10);
   if (count.exitCode !== 0 || !Number.isInteger(commits)) fail('git rev-list --count failed');
   const result = { plan_head_before: base, plan_head_after: head.stdout, commits, path: file };

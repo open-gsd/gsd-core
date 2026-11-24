@@ -21,37 +21,37 @@ When those blocks are refused, an executor splits them up by hand or skips them.
 | Check | Fails when | Replaces |
 |---|---|---|
 | `head-attached` | HEAD is detached or does not resolve | `worktree_branch_check`, step 0 |
-| `not-protected` | the branch is protected or the default branch, or the base branch cannot be verified (`resolveProtectedBranchStatus`, the `git.base-branch --is-protected` rule) | step 0 |
-| `agent-namespace` | the branch is outside `agent-*` / `worktree-agent-*` / `worktree-wf_*`; checked whenever `--expected-base` is given, and in a linked worktree unless `--sequential` | `worktree_branch_check`, step 0 |
+| `not-protected` | with `--expected-base`: the branch is `main`, `master`, `develop`, `trunk` or `release/*`, as in the spawn-time block. Otherwise: the branch is protected or the default branch, or the base branch cannot be verified (`resolveProtectedBranchStatus`, the `git.base-branch --is-protected` rule) | `worktree_branch_check`, step 0 |
+| `agent-namespace` | the branch is outside `agent-*` / `worktree-agent-*` / `worktree-wf_*`; checked whenever `--expected-base` is given, and otherwise unless `--sequential` in a worktree whose `.git` is a file or whose git dir is not the common dir (a linked worktree, a submodule, a separate git dir), or whose layout cannot be read | `worktree_branch_check`, step 0 |
 | `base` | HEAD is neither `--expected-base` nor a non-empty `--expected-base-alternate` | `worktree_branch_check` |
-| `toplevel` | the worktree root of the current directory is not `--toplevel` | step 0a |
-| `path` | `--path` (absolute, or relative to the current directory) lands outside the worktree root | step 0b |
+| `toplevel` | the worktree root of the current directory is not `--toplevel`, both resolved | step 0a |
+| `path` | `--path` (absolute, or relative to the current directory), resolved one segment at a time with each link followed, lands outside the worktree root; or it cannot be resolved (a link that does not resolve, a segment below a file, `..` below a missing segment) | step 0b |
 
-The verb reads HEAD, the branch and the worktree root, and writes nothing. It prints its checks as JSON, prints a `FATAL:` line on stderr for each failed check, and exits 42, the `worktree_branch_check` contract's code. Recovery stays with the orchestrator that owns the worktree (#48).
+The verb reads the worktree of the directory it runs in, its HEAD and branch, and writes nothing. It prints its checks as JSON, prints a `FATAL:` line on stderr for each failed check, and exits 42, the `worktree_branch_check` contract's code. Recovery stays with the orchestrator that owns the worktree (#48).
 
-### 2. The ledger lives in the worktree's tool-owned `.gsd/` directory
+### 2. The ledger lives in the worktree's `.gsd/executor-ledger/` directory
 
-`gsd_run query executor.ledger record --phase <phase> --plan <plan>` writes `<worktree root>/.gsd/executor-ledger/<phase>-<plan>.json`:
+`gsd_run query executor.ledger record --phase <phase> --plan <plan>` writes `<worktree root>/.gsd/executor-ledger/<phase>+<plan>.json`:
 
 ```json
 { "schema": 1, "phase": "02", "plan": "04", "plan_head_before": "<sha>", "branch": "agent-…", "recorded_at": "<ISO time>" }
 ```
 
-- **Root.** The worktree root is the dispatcher's `ProjectContext.worktreeRoot`, the top level of the checkout the command runs in. It is never the project root: a linked worktree whose `.planning/` is untracked has the main checkout as its project root, and the ledger must not land there.
-- **Directory.** `.gsd/` is created through `ensureToolOwnedGsdDir`, which refuses a symlinked or escaping `.gsd` and seeds `.gsd/.gitignore` so the record never shows in `git status`. The dispatch sentinel uses the same directory in the same way.
-- **Once.** The file is created with an exclusive open, and a later `record` for the same plan keeps the first base. The executor may run `record` before every commit.
-- **Names.** `--phase` and `--plan` must be plain ids (letters, digits, `.`, `_`, `-`, not starting with `.`), so a record cannot leave the directory.
+- **Root.** The worktree root is the top level of the checkout the command runs in. It is never the project root: a linked worktree whose `.planning/` is untracked has the main checkout as its project root, and the ledger must not land there.
+- **Directory.** `.gsd/` and `.gsd/executor-ledger/` must be real directories at exactly those paths, not links. `executor-ledger/` carries its own `.gitignore` (`*`), so its files stay out of `git status` whatever `.gsd/.gitignore` says, and `.gsd/.gitignore` is never edited. The record itself must be a regular file.
+- **Once.** The record is written whole to a temporary name and hard-linked into place, which fails when it already exists; a later `record` for the same plan keeps the first base. The executor may run `record` before every commit.
+- **Names.** `--phase` and `--plan` must be plain ids (a letter or digit, then letters, digits, `.`, `_`, `-`). `+` joins them in the file name and is outside that alphabet, so two pairs never share a record, and the record's own `phase` and `plan` must match.
 - **Lifetime.** The record is removed with the worktree.
 
-`gsd_run query executor.ledger read --phase <phase> --plan <plan>` prints `plan_head_before`, `plan_head_after` and `commits` (`git rev-list --count <base>..HEAD`). It exits 1 when the record is missing, unreadable, or its base is not an ancestor of HEAD; it never counts from a base it cannot trust.
+`gsd_run query executor.ledger read --phase <phase> --plan <plan>` prints `plan_head_before`, `plan_head_after` and `commits` (`git rev-list --count <base>..HEAD`). It exits 1 when the record is missing, unreadable or not this plan's, or its base is not a commit or not an ancestor of HEAD.
 
 ### 3. A named fallback when a verb cannot run
 
-When `gsd_run` cannot run, or `executor.ledger record` fails, the executor takes the base from the `{EXPECTED_BASE}` its dispatch prompt carried, and checks the root and the branch with single commands (`git rev-parse --show-toplevel`, `git rev-parse --abbrev-ref HEAD`), each in its own Bash call. The SUMMARY then records that base as `plan_head_before:`.
+When `gsd_run` cannot run, the executor checks the root and the branch with single commands (`git rev-parse --show-toplevel`, `git symbolic-ref --quiet --short HEAD`), each in its own Bash call. When `executor.ledger record` fails, it takes the base from the `head` its first `executor.guard` run printed before the first commit (or a `git rev-parse HEAD` run then) and keeps it as a literal; the SUMMARY records that base as `plan_head_before:`.
 
 ### 4. One git command per Bash call
 
-The executor runs each git command on its own, and the planner writes `<automated>` verify steps as single commands: one `git diff --name-only <base> -- <paths…>` in place of a loop over paths.
+The executor runs each git command it composes on its own, and the planner writes `<automated>` verify steps as single commands: one `git diff --name-only <base> -- <paths…>` in place of a loop over paths.
 
 ## Alternatives considered
 

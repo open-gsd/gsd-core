@@ -468,11 +468,11 @@ for the default branch: `git.allow_default_branch_commits: true` in the project 
 **If `gsd_run` cannot run (named fallback, ADR-6216):** check the root and the branch with
 single commands, each in its own Bash call. `git rev-parse --show-toplevel` must print the
 worktree root; `git symbolic-ref --quiet --short HEAD` must print a branch that is not `main`,
-`master`, `develop`, `trunk` or `release/*` and, without `<sequential_execution>`, is in the
-`agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace. HALT on any mismatch.
+`master`, `develop`, `trunk` or `release/*` and, in a worktree whose `.git` is a file and without
+`<sequential_execution>`, is in the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace. HALT on any mismatch.
 
-**Run each git command in its own Bash call.** Never chain git with `;`, `&&`, a pipe, a loop
-or a heredoc: a worktree-isolated runtime may refuse the compound form (#6216).
+**Run each git command you compose in its own Bash call.** Never chain git with `;`, `&&`, a pipe,
+a loop or a heredoc: a worktree-isolated runtime may refuse the compound form (#6216).
 
 **1. Check modified files:** `git status --short`
 
@@ -510,8 +510,8 @@ gsd_run query executor.ledger record --phase {phase} --plan {plan}
 The record lives in the worktree's own `.gsd/executor-ledger/` (ADR-6216), so it outlasts the
 fresh shell of each Bash call. The SUMMARY's `commits:` is MEASURED from it, the base recorded
 as `plan_head_before:` for `/gsd:verify-work`'s same-instrument check. If `record` fails, take
-the base from your prompt's `{EXPECTED_BASE}` (or, with none, a `git rev-parse HEAD` run before
-the first commit) and keep it as a literal. Multi-repo keeps commit-to-subrepo JSON hashes instead.
+the base from the `head` step 0's guard printed on its first run in this plan, before the first
+commit (or, if the guard could not run, a `git rev-parse HEAD` run then), and keep it as a literal. Multi-repo keeps commit-to-subrepo JSON hashes instead.
 
 Returns JSON with per-repo commit hashes: `{ committed: true, repos: { "backend": { hash: "abc", files: [...] }, ... } }`. Record all hashes for SUMMARY.
 
@@ -528,16 +528,13 @@ git commit -m "{type}({phase}-{plan}): {concise task description}
 - **Single-repo:** `TASK_COMMIT=$(git rev-parse --short HEAD)` — track for SUMMARY.
 - **Multi-repo (sub_repos):** Extract hashes from `commit-to-subrepo` JSON output (`repos.{name}.hash`). Record all hashes for SUMMARY (e.g., `backend@abc1234, frontend@def5678`).
 
-**6. Post-commit deletion check:** After recording the hash, verify the commit did not accidentally delete tracked files:
+**6. Post-commit deletion check:** After recording the hash, verify the commit did not accidentally delete tracked files. Every path this prints is a file the commit deleted, a WARNING to act on:
 ```bash
-DELETIONS=$(git show --first-parent --diff-filter=D --name-only --pretty=format: HEAD 2>/dev/null || true)
-if [ -n "$DELETIONS" ]; then
-  echo "WARNING: Commit includes file deletions: $DELETIONS"
-fi
+git show --first-parent --diff-filter=D --name-only --pretty=format: HEAD
 ```
 Intentional deletions (e.g., removing a deprecated file as part of the task) are expected — document them in the Summary. Unexpected deletions are a Rule 1 bug: revert and fix before proceeding.
 
-**7. Check for untracked files:** After running scripts or tools, check `git status --short | grep '^??'`. For any new untracked files: commit if intentional, add to `.gitignore` if generated/runtime output. Never leave generated files untracked.
+**7. Check for untracked files:** After running scripts or tools, run `git status --short` and read its `??` lines. For any new untracked files: commit if intentional, add to `.gitignore` if generated/runtime output. Never leave generated files untracked.
 </task_commit_protocol>
 
 <destructive_git_prohibition>

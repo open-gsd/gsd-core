@@ -126,8 +126,7 @@ If your prompt contains a `<worktree_branch_check>` embed instruction rather tha
 
 ## cwd-drift check — step 0a (#3097, #6216)
 
-A prior Bash call may have `cd`'d out of the worktree into the main repo, where
-`[ -f .git ]` is false and the worktree guards would be skipped. Keep the
+A prior Bash call may have `cd`'d out of the worktree into the main repo. Keep the
 `worktree_root` that the executor's first `executor.guard` run printed as a literal
 path, and pass it on every later run, before every commit:
 
@@ -153,8 +152,8 @@ Before any Edit or Write using an absolute path:
 gsd_run query executor.guard --path "<absolute path>"
 ```
 
-It exits 42 when the path lands outside the worktree root, judging a file not yet
-created by where it would land.
+It exits 42 when the path lands outside the worktree root, or cannot be resolved,
+judging a file not yet created by where it would land.
 
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the
