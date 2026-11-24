@@ -24,6 +24,7 @@
   "tests/pi-config-dir-env-override.test.cjs": 1,
   "tests/pi-package.test.cjs": 1,
   "tests/profile-output.test.cjs": 6,
+  "tests/repo-layout.test.cjs": 2,
   "tests/runtime-home-hermeticity.test.cjs": 1,
   "tests/tdd-mode.platform.test.cjs": 1,
   "tests/user-home-isolation-5594.test.cjs": 1,

@@ -262,6 +262,7 @@ module.exports = {
   "tests/release-ancestry.test.cjs",
   "tests/release-backmerge-invariants.test.cjs",
   "tests/release-notes-real-os-5922.test.cjs",
+  "tests/repo-layout.test.cjs",
   "tests/require-fs-op-fallback.rule.test.cjs",
   "tests/require-full-tmpdir-triad.rule.test.cjs",
   "tests/require-userprofile-with-home.rule.test.cjs",

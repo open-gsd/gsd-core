@@ -23,7 +23,6 @@ const { runGit, runNode } = require('./helpers/process-seam.cjs');
 const { GIT_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -62,7 +61,7 @@ test('repo-layout: installer writes AGENTS.md for a LOCAL Copilot install (cwd),
   try {
     const result = runNode(
       [INSTALL_SCRIPT, '--copilot', '--local'],
-      { cwd: localRoot, env: installerEnv(isolatedEnv({ home: localRoot })), timeoutMs: INSTALL_TIMEOUT_MS },
+      { cwd: localRoot, env: installerEnv({ HOME: localRoot, USERPROFILE: localRoot }), timeoutMs: INSTALL_TIMEOUT_MS },
     );
     assert.strictEqual(
       result.exitCode, 0,
@@ -91,7 +90,7 @@ test('repo-layout: installer does NOT write AGENTS.md for a GLOBAL Copilot insta
   try {
     const result = runNode(
       [INSTALL_SCRIPT, '--copilot', '--global', '--config-dir', globalConfigDir],
-      { cwd: globalCwd, env: installerEnv(isolatedEnv({ home: globalCwd })), timeoutMs: INSTALL_TIMEOUT_MS },
+      { cwd: globalCwd, env: installerEnv({ HOME: globalCwd, USERPROFILE: globalCwd }), timeoutMs: INSTALL_TIMEOUT_MS },
     );
     assert.strictEqual(
       result.exitCode, 0,
