@@ -324,6 +324,17 @@ describe('#4020 — run-tests temp root', () => {
       assert.equal(dropped.GSD_HOME, undefined);
     });
 
+    test('parity: the sandbox home prefix is a reserved temp prefix, so the chunk sweep never removes it', (t) => {
+      assert.ok(runner.RESERVED_TEMP_PREFIXES.includes(runner.RUN_USER_HOME_PREFIX));
+      const root = createTempDir('gsd-4635-sweep-');
+      t.after(() => cleanup(root));
+      const { home } = runner.setupRunHermeticEnv({ env: {}, root, keys: [], marker: 'M' });
+      fs.mkdirSync(path.join(root, 'gsd-leak-fixture'));
+      runner.sweepRunTempRoot(root);
+      assert.ok(fs.existsSync(home), 'the sandbox home survives the sweep');
+      assert.ok(!fs.existsSync(path.join(root, 'gsd-leak-fixture')), 'an unreserved entry is swept');
+    });
+
     test('the key list the runner deletes is the registry-derived list, so no hand-written copy can drift', () => {
       for (const key of ['CODEX_HOME', 'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'CODEBUDDY_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'GSD_AGENTS_DIR']) {
         assert.ok(helpers.CONFIG_LOCATION_ENV_KEYS.includes(key), `${key} is in the derived list`);
