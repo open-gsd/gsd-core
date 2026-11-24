@@ -768,7 +768,8 @@ off and still sees it. Entries are repository-relative, so run lint from the rep
 The count is per file. A PR that adds a copy fails it, as `grown` in a listed file and as `added`
 in any other; a PR that removes one copy and adds another in the same file leaves the count
 unchanged, so review sees that swap only in the diff. Build a child env with `isolatedEnv()`
-instead of a copy: `home` sets `HOME` and `USERPROFILE`, `claudeConfigDir` sets
+instead of a copy: `home` sets `HOME` and `USERPROFILE` (`userProfile` sets `USERPROFILE` to another
+directory, only for a test whose subject is the two diverging), `claudeConfigDir` sets
 `CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries every other key the test needs the
 helper to set or keep. A `HOME` or `USERPROFILE` key in `override` is an object-literal copy, so
 the rule flags it. Build a filtered PATH with `isolatedPath()`. If the helpers cannot build it, for

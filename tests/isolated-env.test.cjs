@@ -134,6 +134,25 @@ describe('isolatedEnv: home', () => {
     assert.equal(raw.home, hostile);
   });
 
+  test('userProfile sets USERPROFILE apart from HOME, defaults to home, and rejects a non-absolute path (#6638)', (t) => {
+    const home = tmp(t, 'gsd-6638-home-');
+    const profile = tmp(t, 'gsd-6638-profile-');
+
+    const split = isolatedEnv({ home, userProfile: profile, base: {} });
+    assert.equal(split.HOME, home);
+    assert.equal(split.USERPROFILE, profile);
+
+    assert.equal(isolatedEnv({ home, base: {} }).USERPROFILE, home, 'omitted: USERPROFILE is home');
+    assert.equal(isolatedEnv({ home, userProfile: undefined, base: {} }).USERPROFILE, home);
+
+    assert.throws(() => isolatedEnv({ home, userProfile: 'relative/dir', base: {} }), TypeError);
+    assert.throws(() => isolatedEnv({ home, userProfile: '', base: {} }), TypeError);
+    assert.throws(() => isolatedEnv({ home, userProfile: null, base: {} }), TypeError);
+    // an absolute path other than home is accepted, whatever its form.
+    const absolute = path.resolve(os.tmpdir());
+    assert.equal(isolatedEnv({ home, userProfile: absolute, base: {} }).USERPROFILE, absolute);
+  });
+
   test('rejects a missing or relative home', () => {
     assert.throws(() => isolatedEnv(), TypeError);
     assert.throws(() => isolatedEnv({}), TypeError);
