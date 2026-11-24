@@ -54,7 +54,12 @@ consumes the real returned result and removes the receipt the same way.
 not replace the runtime's own completion. If the spawned agent's real completion
 result reaches the orchestrator between cycles, stop the watch and route that
 result's recognized marker exactly as the `false` path does. Precedence: whichever
-of the two ends the wait routes it. The receipt carries only the marker; the full
+of the two ends the wait routes it. **A fresh receipt does not end the wait:** the agent
+writes it as its last tool action, before its final message, so the watch reads a
+receipt younger than `RECEIPT_SETTLE_SECONDS` (120) as `active` and counts it only once
+settled (an unreadable or future modification time counts at once). Every route below
+therefore sees a receipt only after its body had that long to arrive; a settled receipt
+with no body is a real gap, not a race. The receipt carries only the marker; the full
 return (the checker's issue list, the planner's plan count or checkpoint) always
 comes from the completion result. If both are present and name different markers,
 treat the return as unrecognized (9a/11a). A route that needs the body when it never
@@ -208,7 +213,8 @@ gsd_stall_should_recover() {
 # The receipt directory must also sit physically under ROOT: a checkout can commit
 # the phase dir, `.planning` or `.gsd-returns` as a symlink, and mkdir -p and the
 # .gitignore write would follow it out of the project. So a link on the walk from
-# the phase dir up to its nearest existing ancestor (a dangling one too), a phase
+# the phase dir up to its nearest existing ancestor, that ancestor included (a dangling one
+# too; a link further up passes when the physical path stays under ROOT and outside .git), a phase
 # dir that resolves outside ROOT, is ROOT, or holds a `.git` component below it (in
 # any letter case, and the names Windows reads as `.git`), and a symlinked
 # .gsd-returns or .gitignore (or a .gitignore other than exactly `*` and a newline) all disable the receipt; the watch then ends on the
@@ -338,6 +344,35 @@ gsd_return_marker() {
   return 0
 }
 
+# A receipt is written as the agent's LAST TOOL action, i.e. BEFORE its final message
+# (the body step 11/9/12 reads), so a receipt that exists is not yet a return that
+# arrived (#5182). Until it is RECEIPT_SETTLE_SECONDS old, gsd_stall_watch reads it as
+# `active` (keep waiting); the completion result, when it lands, still ends the wait
+# first. This is the ONE place that rule lives: every route that says "when the watch
+# ends" sees a receipt only after it settled, so "receipt, no body" there is a real
+# gap (9a/11a), not a race. A constant, not a config key: nothing here needs tuning.
+RECEIPT_SETTLE_SECONDS=120
+
+# _gsd_mtime FILE — print FILE's mtime as epoch seconds: GNU `stat -c %Y` (Linux, Git
+# Bash), then BSD `stat -f %m` (macOS). Prints nothing when neither works.
+_gsd_mtime() {
+  local t
+  t=$(stat -c %Y -- "$1" 2>/dev/null) || t=$(stat -f %m -- "$1" 2>/dev/null) || return 0
+  [[ "$t" =~ ^[0-9]{1,15}$ ]] && printf '%s\n' "$t"
+  return 0
+}
+
+# _gsd_receipt_unsettled FILE NOW — succeeds only when FILE's age (NOW minus mtime) is
+# under RECEIPT_SETTLE_SECONDS. An unreadable mtime or one in the future (clock skew)
+# is NOT unsettled: the receipt then counts at once, as before, so a bogus timestamp
+# can never keep the watch alive past the threshold.
+_gsd_receipt_unsettled() {
+  local m age
+  m=$(_gsd_mtime "$1"); [ -n "$m" ] || return 1
+  age=$(( $2 - m ))
+  [ "$age" -ge 0 ] && [ "$age" -lt "$RECEIPT_SETTLE_SECONDS" ]
+}
+
 # gsd_stall_watch — ONE bounded, real (non-LLM-side) sleep-and-check cycle, not
 # a long-lived loop (see "Single-cycle by design" above — a single Bash tool
 # call spanning the full threshold risks the host tool's own timeout killing
@@ -359,6 +394,11 @@ gsd_stall_watch() {
   elapsed=$(( now - dispatch_ts ))
   marker_found="false"
   if [ -n "$(gsd_return_marker "$receipt" "${markers[@]}")" ]; then marker_found="true"; fi
+  # A receipt younger than RECEIPT_SETTLE_SECONDS: the final message may not have
+  # arrived. Keep waiting, whatever the elapsed time (it is fresh proof of life).
+  if [ "$marker_found" = "true" ] && _gsd_receipt_unsettled "$receipt" "$now"; then
+    echo "active"; return 0
+  fi
   # -mmin -N ("modified less than N minutes ago"), not -newermt "@<epoch>":
   # -newermt's "@<epoch>" shorthand is a GNU-date convenience the shipped
   # BSD find(1) on macOS does NOT understand ("Can't parse date/time:
