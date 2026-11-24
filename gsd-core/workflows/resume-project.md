@@ -266,8 +266,6 @@ What would you like to do?
 **Note:** When offering phase planning, check for CONTEXT.md existence first:
 
 ```bash
-PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
-: "${PLANNING_ROOT:?}"
 ls "{phase_dir}"/*-CONTEXT.md 2>/dev/null || true
 ```
 

@@ -288,8 +288,6 @@ Update status in frontmatter to "diagnosed".
 
 Commit the updated UAT.md:
 ```bash
-PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
-: "${PLANNING_ROOT:?}"
 gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files "{phase_dir}/{padded_phase}-UAT.md"
 ```
 </step>
