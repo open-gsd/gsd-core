@@ -12,7 +12,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { runGsdToolsProcess, createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
+const { runGsdToolsProcess, createTempProject, cleanup } = require('./helpers.cjs');
 
 function makeTask(dir, name) {
   const taskDir = path.join(dir, '.planning', 'quick', name);
@@ -24,7 +24,7 @@ describe('#6530 query init.quick --resume through the spawned gsd-tools binary',
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.realpathSync.native(createTempProject('gsd-quick-resume-proc-'));
+    tmpDir = createTempProject('gsd-quick-resume-proc-');
   });
 
   afterEach(() => {
@@ -32,13 +32,14 @@ describe('#6530 query init.quick --resume through the spawned gsd-tools binary',
   });
 
   test('process exits 0 and prints the task\'s own ids when exactly one task matches', () => {
-    const taskDir = makeTask(tmpDir, '260101-abc-fix-login');
+    makeTask(tmpDir, '260101-abc-fix-login');
     const r = runGsdToolsProcess(['query', 'init.quick', '--resume', 'fix-login'], tmpDir);
     assert.equal(r.exitCode, 0, r.error);
     const out = JSON.parse(r.output);
     assert.equal(out.quick_id, '260101-abc');
     assert.equal(out.slug, 'fix-login');
-    assert.equal(out.task_dir, toPosixPath(taskDir));
+    // The child's cwd may resolve through a symlinked temp root, so compare the task's own directory name.
+    assert.equal(path.posix.basename(out.task_dir), '260101-abc-fix-login');
   });
 
   test('process exits 1 with the ambiguity reason and every candidate when two tasks match', () => {

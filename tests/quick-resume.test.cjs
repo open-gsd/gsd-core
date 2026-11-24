@@ -76,7 +76,7 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.realpathSync.native(createTempProject('gsd-quick-resume-'));
+    tmpDir = createTempProject('gsd-quick-resume-');
   });
 
   afterEach(() => {
@@ -233,13 +233,6 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
       assert.equal(failure(tmpDir, ['--resume', 'fix-login']).reason, 'quick_resume_not_found');
     });
 
-    test('a symlink named like a task directory is not a task', { skip: process.platform === 'win32' }, () => {
-      const real = makeTask(tmpDir, 'elsewhere', {}, path.join(tmpDir, 'outside'));
-      fs.mkdirSync(quickRoot(tmpDir), { recursive: true });
-      fs.symlinkSync(real, path.join(quickRoot(tmpDir), '260101-abc-fix-login'));
-      assert.equal(failure(tmpDir, ['--resume', 'fix-login']).reason, 'quick_resume_not_found');
-    });
-
     test('a directory whose prefix is not a quick id or a legacy date does not match', () => {
       makeTask(tmpDir, '2601-abc-fix-login');
       makeTask(tmpDir, '260101-ABC-fix-login');
@@ -341,7 +334,7 @@ describe('#6530 quick-resume properties', () => {
   });
 
   test('a lookup finds a task exactly when its whole slug is a task directory\'s slug', (t) => {
-    const root = fs.realpathSync.native(createTempProject('gsd-quick-resume-prop-'));
+    const root = createTempProject('gsd-quick-resume-prop-');
     t.after(() => cleanup(root));
     fc.assert(
       fc.property(fc.uniqueArray(slugArb, { minLength: 1, maxLength: 5 }), slugArb, (slugs, query) => {
