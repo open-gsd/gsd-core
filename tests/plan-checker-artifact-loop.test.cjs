@@ -7,6 +7,7 @@ const path = require('node:path');
 const { createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
 const { have, skipUnless } = require('./helpers/bash-probe.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { collectSection, scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -40,7 +41,7 @@ function runArtifactBlock(t, shell, files, variable = 'phase_dir') {
   const result = runHook('-c', [script, 'artifact-loop', toPosixPath(phaseDir)], {
     interpreter: shell,
     cwd: dir,
-    env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir },
+    env: isolatedEnv({ home: dir, base: {}, path: process.env.PATH, override: { ZDOTDIR: dir } }),
     timeoutMs: PROBE_TIMEOUT_MS,
   });
   assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
@@ -67,7 +68,7 @@ function runStructureStep(t, shell, heading, content, prelude, epilogue = [], bi
   const result = runHook('-c', [script, 'structure-step', dir, process.execPath, path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')], {
     interpreter: shell,
     cwd: dir,
-    env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir, SystemRoot: process.env.SystemRoot },
+    env: isolatedEnv({ home: dir, base: {}, path: process.env.PATH, override: { ZDOTDIR: dir, SystemRoot: process.env.SystemRoot } }),
     timeoutMs: PROBE_TIMEOUT_MS,
   });
   assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const runtime = require('../gsd-core/bin/gsd-tools.cjs');
 const commandAliases = require('../gsd-core/bin/lib/command-aliases.cjs');
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
@@ -429,11 +430,13 @@ function probeHostRouters() {
     assert.ok(Object.hasOwn(runtime.HOST_COMMAND_ROUTERS, root), `closed router ${root} must exist`);
     const dir = createTempProject('agent-query-router-');
     try {
-      // No ambient credentials or config homes: probes can only write fixtures.
+      // No ambient credentials or config homes: probes can only write fixtures. runGsdTools
+      // spreads process.env under the env it is handed, so every ambient key is masked first;
+      // isolatedEnv, built on an empty base, then supplies the home and nothing ambient.
       const env = Object.fromEntries(Object.keys(process.env).map((key) => [key, undefined]));
-      Object.assign(env, { HOME: dir, USERPROFILE: dir, PATH: process.env.PATH,
+      Object.assign(env, isolatedEnv({ home: dir, base: {}, path: process.env.PATH, override: {
         TMPDIR: fs.realpathSync(require('node:os').tmpdir()), GIT_CONFIG_NOSYSTEM: '1',
-        SystemRoot: process.env.SystemRoot });
+        SystemRoot: process.env.SystemRoot } }));
       const before = treeSnapshot(dir);
       const bogus = runGsdTools(['query', root, BOGUS_SUBCOMMAND], dir, env);
       const bare = bareRoots.has(root) ? runGsdTools(['query', root], dir, env) : null;

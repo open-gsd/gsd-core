@@ -8,7 +8,6 @@ module.exports = {
   "tests/adr-612-bracket-write-path.test.cjs",
   "tests/adr-index-gate.test.cjs",
   "tests/agent-install-check.test.cjs",
-  "tests/agent-query-contract.test.cjs",
   "tests/agent-skills.test.cjs",
   "tests/args-terminator-nonce.test.cjs",
   "tests/blocking-guard-budget-parity.test.cjs",
