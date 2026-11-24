@@ -972,7 +972,7 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     // ---- review round 1: one finding per cause for the gate prompt blocks, the default flow's HOW slice and the analyzer prompt
     exactly1('the gray-area-option marker gone is one finding', [['gsd-core/references/gate-prompts.md', swap('## Pattern: gray-area-option', '## Pattern: gray-areas')]], 'discuss-phase-power', 1, /marker "## Pattern: gray-area-option" not found/);
     exactly1('the context-handling marker gone is one finding', [['gsd-core/references/gate-prompts.md', swap('## Pattern: context-handling', '## Pattern: contexts')]], 'discuss-phase-power', 1, /marker "## Pattern: context-handling" not found/);
-    exactly1('a gray-area-option marker only before context-handling is one finding', [['gsd-core/references/gate-prompts.md', compose1(swap('## Pattern: gray-area-option', '## Pattern: other'), (text) => '## Pattern: gray-area-option\n' + text)]], 'discuss-phase-power', 1, /closing marker ## Pattern: gray-area-option not found after ## Pattern: context-handling/);
+    exactly1('a gray-area-option marker only before context-handling is one finding (it closes no block)', [['gsd-core/references/gate-prompts.md', compose1(swap('## Pattern: gray-area-option', '## Pattern: other'), (text) => '## Pattern: gray-area-option\n' + text)]], 'discuss-phase-power', 1, /closing marker ## Pattern: gray-area-option precedes ## Pattern: context-handling/);
     exactly1('the SPEC.md awareness heading gone is one finding', [['gsd-core/workflows/discuss-phase.md', swap('2b. **SPEC.md awareness**', '2b. **SPEC awareness**')]], 'discuss-phase-power', 1, /marker "2b\. \*\*SPEC\.md awareness\*\*" not found/);
     exactly1('the Gray areas heading gone is one finding', [['gsd-core/workflows/discuss-phase.md', swap('3. **Gray areas**', '3. **Areas**')]], 'discuss-phase-power', 1, /3\. \*\*Gray areas\*\*/);
     exactly1('the analyzer spawn gone is one finding', [['gsd-core/workflows/discuss-phase-assumptions.md', swap('Agent(subagent_type="gsd-assumptions-analyzer"', 'Agent(subagent_type="gsd-other"')]], 'discuss-phase-power', 1, /gsd-assumptions-analyzer/);
@@ -1001,6 +1001,30 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
       assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
       assert.match(findings[0].message, /the workflow is not valid YAML: bad/);
     });
+
+    // ---- review round 2: the text-lines loader seam, a gray-area-option marker before context-handling, an empty parent block
+    const seamRunOf1 = (t, root, name, factory) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-seam-'));
+      t.after(() => cleanup(dir));
+      const real = path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', `${name}.cjs`);
+      fs.writeFileSync(path.join(dir, `${name}.cjs`), `const real = require(${JSON.stringify(real)});\nmodule.exports = { id: real.id, check: ${factory} };\n`);
+      return textContracts.run({ root, dir, only: [name], minContracts: 1 });
+    };
+    const throwingLines1 = "real.walkers.buildCheck(() => { throw new Error('no module'); })";
+    test('a text-lines module that cannot be loaded is one finding', (t) => {
+      const findings = seamRunOf1(t, copyOfRepoFiles(t), 'discuss-phase-power', throwingLines1);
+      assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+      assert.match(findings[0].message, /gsd-core\/bin\/lib\/text-lines\.cjs cannot be loaded: no module/);
+    });
+    test('a text-lines module that cannot be loaded still runs the glob walk on a line feed split', (t) => {
+      const root = applyEdits1(t, [['gsd-core/workflows/discuss-phase/modes/auto.md', append('ls .planning/*-SPEC.md')]]);
+      const findings = seamRunOf1(t, root, 'discuss-phase-power', throwingLines1);
+      assert.equal(findings.length, 2, JSON.stringify(findings.map((f) => f.message)));
+      assert.ok(findings.some((f) => /cannot be loaded: no module/.test(f.message)));
+      assert.ok(findings.some((f) => /workflows read has_spec \/ spec_path from init instead of an ls over \*-SPEC\.md/.test(f.message)));
+    });
+    exactly1('a gray-area-option marker before context-handling and another after it is one finding', [['gsd-core/references/gate-prompts.md', (text) => '## Pattern: gray-area-option\n' + text]], 'discuss-phase-power', 1, /closing marker ## Pattern: gray-area-option precedes ## Pattern: context-handling/);
+    exactly1('an empty parent answer_validation block is one finding', [['gsd-core/workflows/discuss-phase.md', within('<answer_validation>', '</answer_validation>', () => '<answer_validation>')]], 'discuss-phase-power', 1, /answer_validation must match the parent canonical block exactly/);
   }
 
   {
@@ -1070,6 +1094,14 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     findsOne('an opening fence indented by four blanks is not a fence', REVIEW, swap('\n```markdown', '\n    ```markdown'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     findsOne('a line separator after the markdown info string is not the prompt block', REVIEW, swap('```markdown\n', '```markdown\u2028\n'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     findsOne('a paragraph separator after the markdown info string is not the prompt block', REVIEW, swap('```markdown\n', '```markdown\u2029\n'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
+    findsOne('a line separator after the closing fence is not a closing fence', REVIEW, (text) => {
+      const end = 'Output your review in markdown format.\n```';
+      return text.slice(0, text.indexOf(end) + end.length) + '\u2028\n';
+    }, 'review-default-reviewers-workflow', 'build_prompt markdown fence must be closed');
+    findsOne('a paragraph separator after the closing fence is not a closing fence', REVIEW, (text) => {
+      const end = 'Output your review in markdown format.\n```';
+      return text.slice(0, text.indexOf(end) + end.length) + '\u2029\n';
+    }, 'review-default-reviewers-workflow', 'build_prompt markdown fence must be closed');
     findsOne('a tilde opener is not the prompt block', REVIEW, swap('\n```markdown', '\n~~~markdown'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     findsOne('text after the markdown info string is not the prompt block', REVIEW, swap('```markdown\n', '```markdown x\n'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     test('instructions after the next heading of the prompt are outside the region', (t) => {

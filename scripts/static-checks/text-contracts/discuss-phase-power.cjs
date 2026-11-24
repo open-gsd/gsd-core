@@ -92,11 +92,9 @@ const SPEC_ANALYZER_OPEN = 'Agent(subagent_type="gsd-assumptions-analyzer"';
 const SPEC_ANALYZER_CLOSE = '${AGENT_SKILLS_ANALYZER}\n""")';
 const ENDS_WORKFLOW = ['end here', 'workflow is complete'];
 
-module.exports = {
-  id: 'discuss-phase-power',
-  issue: '#1513',
-  walkers: { hasWord, mentions, readsAgentDef, lsGlobsSpec, noSpecGlob, precedes },
-  check(ctx) {
+// The line splitter loads through `loadTextLines` so a test can hand in a loader that throws.
+function buildCheck(loadTextLines = () => require('../../../gsd-core/bin/lib/text-lines.cjs')) {
+  return function check(ctx) {
     const command = ctx.doc(COMMAND);
     const workflow = ctx.doc(WORKFLOW);
     const power = ctx.doc(POWER);
@@ -157,12 +155,12 @@ module.exports = {
     const contextOpen = '## Pattern: context-handling';
     // Only the first check reports a missing block marker; the second stays quiet on it.
     const inContext = (check, reportsMarkers) => (text) => {
-      const gray = text.indexOf(GRAY_AREA);
-      if (gray === -1) return true;
       const start = text.indexOf(contextOpen);
       if (start === -1) return reportsMarkers ? `marker "${contextOpen}" not found` : true;
-      const end = text.indexOf(GRAY_AREA, start + contextOpen.length);
-      if (end === -1) return reportsMarkers ? `closing marker ${GRAY_AREA} not found after ${contextOpen}` : true;
+      // The block ends at the first gray-area-option marker anywhere (a missing one is the slice below's finding).
+      const end = text.indexOf(GRAY_AREA);
+      if (end === -1) return true;
+      if (end < start) return reportsMarkers ? `closing marker ${GRAY_AREA} precedes ${contextOpen}` : true;
       return check(text.slice(start, end));
     };
     gate.satisfies(inContext((block) => need(block.includes('Update it | View it | Skip'), 'not found'), true),
@@ -183,10 +181,12 @@ module.exports = {
           `${label} auto_advance fallback must explicitly END the workflow (#2772)`);
     }
 
-    const parentAnswers = workflow.slice('<answer_validation>', '</answer_validation>');
+    let parentBlock; // stays undefined when the parent block is missing (already one finding)
+    workflow.slice('<answer_validation>', '</answer_validation>')
+      .satisfies((text) => { parentBlock = text; return true; }, 'the parent answer_validation block must load');
     const assumptionAnswers = assumptions.slice('<answer_validation>', '</answer_validation>');
     assumptionAnswers.has('"Other" with empty text', 'assumptions answer_validation must include the "Other" empty-text branch (was drifted) (#2772)')
-      .satisfies((text) => (parentAnswers.text === '' ? true : need(text === parentAnswers.text, 'the blocks differ')),
+      .satisfies((text) => (parentBlock === undefined ? true : need(text === parentBlock, 'the blocks differ')),
         'discuss-phase-assumptions answer_validation must match the parent canonical block exactly (single source of truth) (#2772)');
 
     // #5629: every discuss mode carries the same check_spec contract, and decides WHAT to discuss under HOW only.
@@ -229,7 +229,7 @@ module.exports = {
     plan.has('_gsd_field "$INIT" spec_path', 'plan-phase.md reads spec_path from its init payload');
 
     // No workflow globs for the phase SPEC itself; discuss-phase.md and plan-phase.md also keep their own literal out.
-    const lines = loadLib(() => require('../../../gsd-core/bin/lib/text-lines.cjs'), 'gsd-core/bin/lib/text-lines.cjs');
+    const lines = loadLib(loadTextLines, 'gsd-core/bin/lib/text-lines.cjs');
     if (lines.error) ctx.fail('gsd-core/bin/lib/text-lines.cjs', lines.error);
     const split = lines.error ? (text) => text.split('\n') : lines.lib.splitLines;
     const named = new Map([[WORKFLOW, workflow], [POWER, power], [POWER_MODE, powerMode], [ADVISOR, advisor], [AUTO, auto], [ASSUMPTIONS, assumptions], [PLAN_PHASE, plan]]);
@@ -237,5 +237,12 @@ module.exports = {
       (named.get(rel) || ctx.doc(rel)).satisfies((text) => noSpecGlob(text, OWN_SPEC_RULES[rel], split),
         'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
     }
-  },
+  };
+}
+
+module.exports = {
+  id: 'discuss-phase-power',
+  issue: '#1513',
+  walkers: { hasWord, mentions, readsAgentDef, lsGlobsSpec, noSpecGlob, precedes, buildCheck },
+  check: buildCheck(),
 };
