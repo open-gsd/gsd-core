@@ -38,7 +38,12 @@ function stripAnsi(value) {
 
 function runFirstInstall(targetDir) {
   const home = path.join(path.dirname(targetDir), 'home');
-  const env = isolatedEnv({ home, override: { GSD_HOME: home } });
+  // isolatedEnv strips NODE_TEST_CONTEXT; this child must keep it, because src/real-home-guard.cts
+  // arms the real-home guard from it and the installer is the process that could write to a real home.
+  const testContext = process.env.NODE_TEST_CONTEXT === undefined
+    ? {}
+    : { NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT };
+  const env = isolatedEnv({ home, override: { GSD_HOME: home, ...testContext } });
   return runNode(
     [installScript, '--claude', '--global', '--config-dir', targetDir, '--no-sdk'],
     { env, timeoutMs: INSTALL_TIMEOUT_MS }

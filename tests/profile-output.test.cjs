@@ -18,6 +18,7 @@ const {
   createTempGitProject,
   cleanup,
   withIsolatedProcessState,
+  homeSandboxEnv,
 } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
@@ -194,10 +195,13 @@ describe('write-profile command', () => {
   test('#2665: ambient CLAUDE_CONFIG_DIR cannot escape a HOME-only sandbox', () => {
     // The defect: TEST_ENV_BASE blanked session-identity vars but none of the
     // config-LOCATION vars, and the dot-home resolver is env-first. So an
-    // ambient CLAUDE_CONFIG_DIR in the DEVELOPER'S shell beat `isolatedEnv({ home: tmpDir })`
+    // ambient CLAUDE_CONFIG_DIR in the DEVELOPER'S shell beat a HOME-only `{ HOME: tmpDir }`
     // and the suite wrote into their real config directory. Setting it on the
     // PARENT process is the actual vector — passing it in the per-call env
-    // argument would test nothing, because that path was never broken.
+    // argument would test nothing, because that path was never broken. The per-call env is
+    // homeSandboxEnv(), the HOME/USERPROFILE pair alone, NOT isolatedEnv(): isolatedEnv blanks
+    // CLAUDE_CONFIG_DIR itself, which would hide a regression in the scrub this test guards
+    // (helpers.cjs inProcessOptions).
     const analysis = {
       profile_version: '1.0',
       dimensions: { communication_style: { rating: 'terse-direct', confidence: 'HIGH' } },
@@ -213,7 +217,7 @@ describe('write-profile command', () => {
       const result = runGsdTools(
         ['write-profile', '--input', analysisPath, '--raw'],
         tmpDir,
-        isolatedEnv({ home: tmpDir })
+        homeSandboxEnv(tmpDir)
       );
       assert.ok(result.success, `Failed: ${result.error}`);
       return JSON.parse(result.output);

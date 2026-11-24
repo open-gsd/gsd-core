@@ -335,7 +335,12 @@ const NOISY_FOR_SOURCE_REACHABILITY = new Set(['symlink-keyword']);
  * Adding an entry requires a recorded reason and should be rare: prefer
  * fixing the classifier (a new CATEGORIES signal) when the real-OS need IS
  * expressible as content; reach for this map only when it structurally is
- * not.
+ * not. Two kinds of need are not: one that lives in the code under test (the
+ * first entries below), and one that WAS expressible as content until the
+ * test stopped spelling it. A test that builds its env with isolatedEnv()
+ * sets HOME and USERPROFILE without a `windows-env-var` token in its text, so a
+ * file whose assertions are about the sandbox home declares itself here
+ * (#6638) rather than keeping a literal the lint rule forbids.
  *
  * Entries and their reasons live in the Map below (the single source); each
  * reason is a required value, so none can be added without one.
@@ -380,7 +385,8 @@ const ALWAYS_REAL_OS = new Map([
   ],
   [
     'tests/executor-policy-new-project-6211.test.cjs',
-    'Weaker: the store root is an explicit GSD_HOME, but a Windows run still proves the store path join.',
+    'The new-project store root is an explicit GSD_HOME inside the sandbox home; a Windows run proves ' +
+      'the store path join, which no Linux run reaches.',
   ],
   [
     'tests/in-process-cli.test.cjs',
@@ -699,9 +705,11 @@ function siblingRelForBase(baseRel) {
  *     genuine Windows signal (`classifyContent` on its own content) — the
  *     split did not actually remove the signal from the base.
  *   - `sibling-without-signal` — the sibling's OWN content carries no
- *     Windows signal, regardless of whether its base exists — a `.platform`
- *     file whose header claims a platform reason the classifier cannot see
- *     in its own text.
+ *     Windows signal and the sibling is not itself a key of `alwaysRealOs`
+ *     (#6638: a declared sibling carries its real-OS need by declaration),
+ *     regardless of whether its base exists — a `.platform` file whose
+ *     header claims a platform reason the classifier cannot see in its own
+ *     text.
  *   - `base-always-real-os` — the base is a key of `alwaysRealOs`: the
  *     escape hatch says the WHOLE base needs real-OS coverage, which
  *     contradicts splitting only some of its tests into a sibling.

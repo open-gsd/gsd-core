@@ -109,8 +109,9 @@ describe('#4976: config-new-project resolves the global-defaults store through G
     return JSON.parse(fs.readFileSync(path.join(home, '.gsd', 'defaults.json'), 'utf-8'));
   }
 
-  // withGsdHome: false leaves GSD_HOME to runGsdTools, which blanks it for
-  // every child — and a blank GSD_HOME is unset under `GSD_HOME || homedir()`.
+  // withGsdHome: false leaves GSD_HOME blank: isolatedEnv strips the ambient
+  // GSD_* and testEnvBase blanks GSD_HOME — and a blank GSD_HOME is unset
+  // under `GSD_HOME || homedir()`.
   function storeEnv({ withGsdHome = true } = {}) {
     const override = {};
     if (withGsdHome) override.GSD_HOME = gsdHome;

@@ -111,9 +111,9 @@ describe('isolatedEnv: home', () => {
     assert.throws(() => isolatedEnv({ home, userProfile: 'relative/dir', base: {} }), TypeError);
     assert.throws(() => isolatedEnv({ home, userProfile: '', base: {} }), TypeError);
     assert.throws(() => isolatedEnv({ home, userProfile: null, base: {} }), TypeError);
-    // limit: the smallest absolute path is accepted.
-    const smallest = path.resolve(os.tmpdir());
-    assert.equal(isolatedEnv({ home, userProfile: smallest, base: {} }).USERPROFILE, smallest);
+    // an absolute path other than home is accepted, whatever its form.
+    const absolute = path.resolve(os.tmpdir());
+    assert.equal(isolatedEnv({ home, userProfile: absolute, base: {} }).USERPROFILE, absolute);
   });
 
   test('rejects a missing or relative home', () => {
