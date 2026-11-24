@@ -252,7 +252,7 @@ For the current phase, display the progress banner:
 ### GSD ► AUTONOMOUS ▸ {phase_display}/{T}: {Name} [████░░░░] {P}%
 ```
 
-Use the resolved phase display; N is its ROADMAP phase number, T is milestone `phase_count`, and P = completed milestone phases / T × 100. Use the milestone total, not remaining phases. If N > T, render `{phase_display} ({position}/{T})`. Use an 8-character bar with █ and ░.
+N is the ROADMAP phase number, T the milestone `phase_count` (not remaining phases), P = completed milestone phases / T × 100. If N > T, render `{phase_display} ({position}/{T})`. Bar: 8 characters, █ and ░.
 
 **3a. Smart Discuss**
 
@@ -787,7 +787,7 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 2. **"Skip this phase"** — Mark phase as skipped, continue to the next incomplete phase
 3. **"Stop autonomous mode"** — Display summary of progress so far and exit cleanly
 
-**On "Fix and retry":** Retry execute_phase; track `RETRY_COUNT` per phase + step. Re-present options after failure, except **Retry ceiling (#3210):** after 3 failed retries on that step, halt as terminal `needs_human` without options. Display `{phase_display} ⛔ {Name} — needs_human`; list each attempt's unmet blocker; append/update STATE.md `## Needs Human` (`| ${PHASE_NUM} | needs_human | resolve blocker, then /gsd:autonomous --from ${PHASE_NUM} |`); stop with the standard stopped-summary banner. Three failed fixes need an operator, not an executable gap.
+**On "Fix and retry":** Retry execute_phase; track `RETRY_COUNT` per phase + step. Re-present options after failure. **Retry ceiling (#3210):** after 3 failed retries on that step, halt as terminal `needs_human` without options. Display `{phase_display} ⛔ {Name} — needs_human`; list each attempt's unmet blocker; append/update STATE.md `## Needs Human` (`| ${PHASE_NUM} | needs_human | resolve blocker, then /gsd:autonomous --from ${PHASE_NUM} |`); stop with the standard stopped-summary banner. That is an operator gate, not an executable gap.
 
 **On "Skip this phase":** Log `{phase_display} ⏭ {Name} — Skipped by user` and proceed to iterate.
 
