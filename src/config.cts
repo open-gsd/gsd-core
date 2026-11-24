@@ -7,9 +7,9 @@
  */
 
 import fs from 'node:fs';
-import { parsePhaseId } from './phase-id.cjs';
 import path from 'node:path';
 import os from 'node:os';
+import { parsePhaseId } from './phase-id.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
@@ -290,6 +290,15 @@ interface NewProjectConfigPlan {
   defaultsRewrite: { path: string; contents: string } | null;
 }
 
+/** Deterministic project abbreviation; collisions across projects are possible. */
+function deriveProjectCode(name: string): string {
+  const words = name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2').match(/[A-Za-z0-9]+/g) || [];
+  let code = (words.length > 1 ? words.map(word => word[0]).join('') : words[0] || '').toUpperCase().slice(0, 6);
+  if (/^[0-9]/.test(code)) code = `P${code}`;
+  return code || 'PROJ';
+}
+
 /**
  * Plan a fully-materialized config object for a new project. Writes nothing:
  * the user defaults rewrite comes back as data, for the caller to persist once
@@ -305,17 +314,12 @@ interface NewProjectConfigPlan {
  * Uses the canonical `git` namespace for branching keys (consistent with VALID_CONFIG_KEYS
  * and the settings workflow). loadConfig() handles both flat and nested formats, so this
  * is backward-compatible with existing projects that have flat keys.
+ *
+ * `newProjectRoot` is passed only by config-new-project (#5067): a new project then
+ * defaults to `phase_id_convention: 'bracket'` and derives its `project_code` from that
+ * root. Config repair (ensureConfigFile) omits it, so an existing project stays legacy.
  */
-/** Deterministic project abbreviation; collisions across projects are possible. */
-function deriveProjectCode(name: string): string {
-  const words = name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2').match(/[A-Za-z0-9]+/g) || [];
-  let code = (words.length > 1 ? words.map(word => word[0]).join('') : words[0] || '').toUpperCase().slice(0, 6);
-  if (/^[0-9]/.test(code)) code = `P${code}`;
-  return code || 'PROJ';
-}
-
-function planNewProjectConfig(userChoices: Record<string, unknown>, cwd?: string): NewProjectConfigPlan {
+function planNewProjectConfig(userChoices: Record<string, unknown>, newProjectRoot?: string): NewProjectConfigPlan {
   const choices = userChoices || {};
   let defaultsRewrite: NewProjectConfigPlan['defaultsRewrite'] = null;
   // #4976: the GSD-owned store resolves exactly as the config loader resolves
@@ -420,7 +424,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>, cwd?: string
     },
     project_code: null,
     phase_naming: 'generated',
-    ...(cwd ? { phase_id_convention: 'bracket' } : {}),
+    ...(newProjectRoot ? { phase_id_convention: 'bracket' } : {}),
     agent_skills: {},
     claude_md_path: './.claude/CLAUDE.md',
     plan_review: {
@@ -481,11 +485,11 @@ function planNewProjectConfig(userChoices: Record<string, unknown>, cwd?: string
   };
 
   if (config['phase_naming'] === 'sequential') config['phase_naming'] = 'generated';
-  if (cwd && config['phase_id_convention'] === 'bracket') {
+  if (newProjectRoot && config['phase_id_convention'] === 'bracket') {
     if (config['project_code'] == null) {
-      let name = path.basename(cwd);
+      let name = path.basename(newProjectRoot);
       try {
-        const project = fs.readFileSync(path.join(planningDir(cwd, null), 'PROJECT.md'), 'utf8');
+        const project = fs.readFileSync(path.join(planningDir(newProjectRoot, null), 'PROJECT.md'), 'utf8');
         const title = project.match(/^# +(.+?)[ \t]*$/m);
         if (title) name = title[1].trim();
       } catch { /* No project title: use the directory name. */ }

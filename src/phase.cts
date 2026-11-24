@@ -2155,6 +2155,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   const slug = generateSlugInternal(description) || '';
   if (convention === 'bracket') requireBracketCustomId(naming.phaseNaming, customId);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
+  // A caller-owned bracket id is validated once, before the lock and any write.
+  const suppliedId = bracketContext && customId ? suppliedBracketIdentity(bracketContext, customId) : null;
 
   const { newPhaseId, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -2165,7 +2167,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     let _dirName = '';
     if (bracketContext) {
-      const supplied = customId ? suppliedBracketIdentity(bracketContext, customId) : null;
+      const supplied = suppliedId;
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
       const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
       collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
@@ -2203,11 +2205,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     let phaseEntry: string;
     if (bracketContext) {
-      const id = customId ? suppliedBracketIdentity(bracketContext, customId) : bracketPhaseId(bracketContext, _newPhaseId);
+      const id = suppliedId ?? bracketPhaseId(bracketContext, _newPhaseId);
       const display = renderPhaseId(id);
       const declared = new Set<number>();
       addBracketRoadmapPhaseNumbers(content, declared);
-      const dependsOn = customId ? '' : dependsOnLine(Number(_newPhaseId), [...declared],
+      const dependsOn = suppliedId ? '' : dependsOnLine(Number(_newPhaseId), [...declared],
         (phase) => renderPhaseId(bracketPhaseId(bracketContext, phase)));
       phaseEntry =
         `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${bracketArtifactToken(id)} to break down)\n`;
@@ -2220,7 +2222,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
     const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, _newPhaseId, description, undefined,
-      bracketContext ? renderPhaseId(customId ? suppliedBracketIdentity(bracketContext, customId) : bracketPhaseId(bracketContext, _newPhaseId)) : undefined);
+      bracketContext ? renderPhaseId(suppliedId ?? bracketPhaseId(bracketContext, _newPhaseId)) : undefined);
 
     platformWriteSync(roadmapPath, recorded.content, { verbatim: true });
     return { newPhaseId: _newPhaseId, dirName: _dirName, roadmapEntry: recorded.entry };
