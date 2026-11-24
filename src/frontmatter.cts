@@ -25,7 +25,7 @@ import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
-import { platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
+import { platformReadSync as safeReadFile, platformReadBytesSync, platformWriteSync } from './shell-command-projection.cjs';
 import { textEncodingError } from './validate.cjs';
 import { splitLines } from './text-lines.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
@@ -1523,42 +1523,77 @@ function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: strin
   }
 }
 
+/**
+ * #5120 (pre-push review R3-m5): a target whose basename is `STATE.md` is read, spliced and written
+ * inside one STATE.md lock scope (ADR-3408 Amendment 4). The lock wait is acquireStateLock's. The
+ * basename match is case-sensitive, as the #5120 guard's and the stateIO adapter's are. state.cjs is
+ * loaded lazily because it imports this module.
+ */
+function underStateMdLock(fullPath: string, fn: () => void): void {
+  if (path.basename(fullPath) !== 'STATE.md') { fn(); return; }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: state.cjs imports this module, so it is loaded here, on first use
+  const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
+  withStateLock(fullPath, fn);
+}
+
+/**
+ * The target's content for set and merge, or null when it is gone. A STATE.md target is read under
+ * its lock (pre-push review R4-m2): lstat first, then the non-blocking read readModifyWriteStateMd uses.
+ */
+function readTarget(fullPath: string): string | null {
+  if (path.basename(fullPath) !== 'STATE.md') return fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : null;
+  let st: fs.Stats;
+  try { st = fs.lstatSync(fullPath); } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  if (!st.isFile()) error(`${fullPath} is not a regular file (a STATE.md that is a FIFO, device, socket, directory or symlink is refused)`);
+  const bytes = platformReadBytesSync(fullPath, { noFollow: true });
+  return bytes === null ? null : bytes.toString('utf-8');
+}
+
 function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefined, value: string | undefined, raw: boolean): void {
   if (!filePath || !field || value === undefined) { error('file, field, and value required'); }
   // Path traversal guard: reject null bytes
   if (filePath.includes('\0')) { error('file path contains null bytes'); }
   rejectControlCharacterFieldName(field as string);
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
-  const content = fs.readFileSync(fullPath, 'utf-8');
-  // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
-  // per file rather than per content digest (#1882, ADR-1411 wiring clause).
-  const fm = extractFrontmatter(content, fullPath);
-  let parsedValue: unknown;
-  try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
-  // #1660 (broadened): a lossy object-list field being genuinely CHANGED must fail closed
-  // before it is regenerated, not just when the regenerated result happens to be byte-identical
-  // to the original (see objectListFieldWouldLoseData's docblock).
-  const lossyErr = objectListFieldWouldLoseData(content, field as string, parsedValue);
-  if (lossyErr) {
-    output({ error: lossyErr, field }, raw, undefined);
-    return;
-  }
-  setOwnField(fm, field as string, parsedValue as FrontmatterValue);
-  const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
-  if (newContent === null) return;
-  // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
-  // frontmatter parser made the new value's projection equal the original's — the change
-  // did not apply (bites object-list fields like must_haves). Detection lives in the pure
-  // exported helper noOpObjectListSetError so the mutation gate (property/unit set) covers
-  // it — the cmd path itself is not in that set.
-  const noOpErr = noOpObjectListSetError(content, newContent, parsedValue);
-  if (noOpErr) {
-    output({ error: noOpErr, field }, raw, undefined);
-    return;
-  }
-  platformWriteSync(fullPath, newContent);
-  output({ updated: true, field, value: parsedValue }, raw, 'true');
+  // One report for a missing file, made before the lock and again under it (the file can be
+  // removed while the command waits for the lock).
+  const reportMissing = (): void => { output({ error: 'File not found', path: filePath }, raw, undefined); };
+  if (!fs.existsSync(fullPath)) { reportMissing(); return; }
+  underStateMdLock(fullPath, () => {
+    const content = readTarget(fullPath);
+    if (content === null) { reportMissing(); return; }
+    // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
+    // per file rather than per content digest (#1882, ADR-1411 wiring clause).
+    const fm = extractFrontmatter(content, fullPath);
+    let parsedValue: unknown;
+    try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
+    // #1660 (broadened): a lossy object-list field being genuinely CHANGED must fail closed
+    // before it is regenerated, not just when the regenerated result happens to be byte-identical
+    // to the original (see objectListFieldWouldLoseData's docblock).
+    const lossyErr = objectListFieldWouldLoseData(content, field as string, parsedValue);
+    if (lossyErr) {
+      output({ error: lossyErr, field }, raw, undefined);
+      return;
+    }
+    setOwnField(fm, field as string, parsedValue as FrontmatterValue);
+    const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
+    if (newContent === null) return;
+    // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
+    // frontmatter parser made the new value's projection equal the original's — the change
+    // did not apply (bites object-list fields like must_haves). Detection lives in the pure
+    // exported helper noOpObjectListSetError so the mutation gate (property/unit set) covers
+    // it — the cmd path itself is not in that set.
+    const noOpErr = noOpObjectListSetError(content, newContent, parsedValue);
+    if (noOpErr) {
+      output({ error: noOpErr, field }, raw, undefined);
+      return;
+    }
+    platformWriteSync(fullPath, newContent);
+    output({ updated: true, field, value: parsedValue }, raw, 'true');
+  });
 }
 
 /**
@@ -1636,11 +1671,10 @@ function objectListFieldWouldLoseData(content: string, field: string, newValue: 
 function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undefined, raw: boolean): void {
   if (!filePath || !data) { error('file and data required'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
-  const content = fs.readFileSync(fullPath, 'utf-8');
-  // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
-  // per file rather than per content digest (#1882, ADR-1411 wiring clause).
-  const fm = extractFrontmatter(content, fullPath);
+  // One report for a missing file, made before the lock and again under it (the file can be
+  // removed while the command waits for the lock).
+  const reportMissing = (): void => { output({ error: 'File not found', path: filePath }, raw, undefined); };
+  if (!fs.existsSync(fullPath)) { reportMissing(); return; }
   let mergeData: Record<string, FrontmatterValue>;
   try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
   // Only a JSON object names fields: an array or a string would spread into index-named
@@ -1650,21 +1684,29 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
     return;
   }
   for (const key of Object.keys(mergeData)) rejectControlCharacterFieldName(key);
-  // #1660 parity with `cmdFrontmatterSet`: a merged key that would flatten a lossy object-list
-  // field is refused before anything is written, reported in set's `{ error, field }` shape
-  // (found while implementing #5105).
-  for (const [key, value] of Object.entries(mergeData)) {
-    const lossyErr = objectListFieldWouldLoseData(content, key, value);
-    if (lossyErr) {
-      output({ error: lossyErr, field: key }, raw, undefined);
-      return;
+  const fields = mergeData;
+  underStateMdLock(fullPath, () => {
+    const content = readTarget(fullPath);
+    if (content === null) { reportMissing(); return; }
+    // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
+    // per file rather than per content digest (#1882, ADR-1411 wiring clause).
+    const fm = extractFrontmatter(content, fullPath);
+    // #1660 parity with `cmdFrontmatterSet`: a merged key that would flatten a lossy object-list
+    // field is refused before anything is written, reported in set's `{ error, field }` shape
+    // (found while implementing #5105).
+    for (const [key, value] of Object.entries(fields)) {
+      const lossyErr = objectListFieldWouldLoseData(content, key, value);
+      if (lossyErr) {
+        output({ error: lossyErr, field: key }, raw, undefined);
+        return;
+      }
     }
-  }
-  for (const [key, value] of Object.entries(mergeData)) setOwnField(fm, key, value);
-  const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
-  if (newContent === null) return;
-  platformWriteSync(fullPath, newContent);
-  output({ merged: true, fields: Object.keys(mergeData) }, raw, 'true');
+    for (const [key, value] of Object.entries(fields)) setOwnField(fm, key, value);
+    const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
+    if (newContent === null) return;
+    platformWriteSync(fullPath, newContent);
+    output({ merged: true, fields: Object.keys(fields) }, raw, 'true');
+  });
 }
 
 function cmdFrontmatterValidate(cwd: string, filePath: string, schemaName: string | undefined, raw: boolean): void {

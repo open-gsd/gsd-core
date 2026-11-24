@@ -8,6 +8,7 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const { computeMigrationPlan, applyMigration, rewriteRoadmapLines } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
+const { normalizeContent } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 /**
  * Build a git project whose `.planning/` is GITIGNORED (commit_docs:false) —
@@ -82,6 +83,252 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.deepEqual(after.phases, before.phases, 'phase dirs must be restored to their original names');
     assert.equal(after.roadmap, before.roadmap, 'ROADMAP.md must be restored to its original content');
     assert.equal(after.hasConfig, false, 'config.json created during migration must be removed on rollback');
+  });
+
+  test('a phase directory rename the rollback cannot reverse is named as NOT reversed (#5120 pre-push review m2)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.phases.length >= 1, 'precondition: the migration renames a phase directory');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+
+    const renamedPhase = plan.phases[0];
+    const oldPath = path.join(planning, 'phases', renamedPhase.oldDir);
+    const newPath = path.join(planning, 'phases', renamedPhase.newDir);
+    const realRename = fs.renameSync;
+    let reverseAttempts = 0;
+    mock.method(fs, 'renameSync', function (from, to, ...rest) {
+      if (String(to) === oldPath) {
+        reverseAttempts++;
+        throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+      }
+      return realRename.call(this, from, to, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Renames NOT reversed: phases/' + renamedPhase.newDir),
+    );
+    mock.restoreAll();
+    assert.equal(reverseAttempts, 1, 'precondition: the rollback tried to reverse the rename once');
+    assert.equal(fs.existsSync(oldPath), false, 'the directory is not back at its old path');
+    assert.ok(fs.existsSync(newPath), 'the renamed directory is still at its new path');
+  });
+
+  test('a renamed phase directory that is gone from both paths when the rollback runs is named as NOT reversed and missing (#5120 pre-push review R2-m3)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.phases.length >= 1, 'precondition: the migration renames a phase directory');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+
+    const renamedPhase = plan.phases[0];
+    const oldPath = path.join(planning, 'phases', renamedPhase.oldDir);
+    const newPath = path.join(planning, 'phases', renamedPhase.newDir);
+    const aside = path.join(dir, 'moved-aside');
+    const realRename = fs.renameSync;
+    const realOpen = fs.openSync;
+    const realStat = fs.statSync;
+    let movedAside = false;
+    const arm = (file) => {
+      if (!movedAside && String(file) === path.join(planning, 'config.json') && fs.existsSync(newPath)) {
+        movedAside = true;
+        realRename.call(fs, newPath, aside);
+      }
+    };
+    mock.method(fs, 'openSync', function (file, ...rest) { arm(file); return realOpen.call(this, file, ...rest); });
+    mock.method(fs, 'statSync', function (file, ...rest) { arm(file); return realStat.call(this, file, ...rest); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Renames NOT reversed: phases/' + renamedPhase.oldDir + ' (missing)'),
+    );
+    mock.restoreAll();
+    assert.equal(movedAside, true, 'precondition: the renamed directory was moved away before the rollback');
+    assert.equal(fs.existsSync(oldPath), false);
+    assert.equal(fs.existsSync(newPath), false);
+  });
+
+  test('a reverse rename that fails while both its paths exist is named as NOT reversed (#5120 pre-push review R3-m4)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.phases.length >= 1, 'precondition: the migration renames a phase directory');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+
+    // Another writer recreates the old phase directory, with a file in it, after the forward
+    // rename and before the rollback (armed on the failing config.json step), so the reverse
+    // rename of the renamed directory onto it fails and both paths exist.
+    const renamedPhase = plan.phases[0];
+    const oldPath = path.join(planning, 'phases', renamedPhase.oldDir);
+    const newPath = path.join(planning, 'phases', renamedPhase.newDir);
+    const realOpen = fs.openSync;
+    const realStat = fs.statSync;
+    let recreated = false;
+    const arm = (file) => {
+      if (!recreated && String(file) === path.join(planning, 'config.json') && fs.existsSync(newPath)) {
+        recreated = true;
+        fs.mkdirSync(oldPath);
+        fs.writeFileSync(path.join(oldPath, 'NOTE.md'), 'written by another writer\n');
+      }
+    };
+    mock.method(fs, 'openSync', function (file, ...rest) { arm(file); return realOpen.call(this, file, ...rest); });
+    mock.method(fs, 'statSync', function (file, ...rest) { arm(file); return realStat.call(this, file, ...rest); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Renames NOT reversed: phases/' + renamedPhase.newDir),
+    );
+    mock.restoreAll();
+    assert.equal(recreated, true, 'precondition: the old path was recreated before the rollback');
+    assert.ok(fs.existsSync(oldPath) && fs.existsSync(newPath), 'both paths exist after the rollback');
+    assert.ok(fs.existsSync(path.join(newPath, 'PLAN.md')), 'the renamed directory is still at the path the error names');
+  });
+
+  test('a rewritten plan file whose phase directory was not moved back is named there, not as removed by another writer (#5120 pre-push review R4-m5)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    fs.writeFileSync(path.join(planning, 'phases', '01-foo', '01-01-PLAN.md'), 'content at plan time\n');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+    // A plan with one directory rename and a depends_on rewrite inside it; the directory's reverse fails.
+    const plan = {
+      alreadyMigrated: false,
+      phases: [{ oldId: '1', newId: '1-01', oldDir: '01-foo', newDir: '1-01-foo',
+        dependsOnRewrites: [{ oldName: '01-01-PLAN.md', finalName: '01-01-PLAN.md', from: 'content at plan time\n', to: 'rewritten\n' }] }],
+      roadmapEdits: [], crossRefEdits: [],
+    };
+    const oldPath = path.join(planning, 'phases', '01-foo');
+    const realRename = fs.renameSync;
+    mock.method(fs, 'renameSync', function (from, to, ...rest) {
+      if (String(to) === oldPath) throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+      return realRename.call(this, from, to, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored: phases/1-01-foo/01-01-PLAN.md (its directory was not moved back). Renames NOT reversed: phases/1-01-foo',
+    );
+    mock.restoreAll();
+    assert.equal(fs.readFileSync(path.join(planning, 'phases', '1-01-foo', '01-01-PLAN.md'), 'utf8'), 'rewritten\n', 'the file is where the error names it');
+  });
+
+  // A hand-built plan: phase 01-foo -> 1-01-foo, its plan file renamed 01-01-PLAN.md -> 1-01-01-PLAN.md and
+  // rewritten (depends_on) at that final name; config.json is a directory, so the migration rolls back.
+  function renamedAndRewrittenPlan(dir) {
+    const planning = path.join(dir, '.planning');
+    fs.writeFileSync(path.join(planning, 'phases', '01-foo', '01-01-PLAN.md'), 'content at plan time\n');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+    return {
+      alreadyMigrated: false,
+      phases: [{ oldId: '1', newId: '1-01', oldDir: '01-foo', newDir: '1-01-foo',
+        fileRenames: [{ oldName: '01-01-PLAN.md', newName: '1-01-01-PLAN.md' }],
+        dependsOnRewrites: [{ oldName: '01-01-PLAN.md', finalName: '1-01-01-PLAN.md', from: 'content at plan time\n', to: 'rewritten\n' }] }],
+      roadmapEdits: [], crossRefEdits: [],
+    };
+  }
+  const CONFIG_EISDIR = 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR)';
+
+  for (const [label, failDir, expected, at] of [
+    ['and its directory both fail to reverse', true,
+      `${CONFIG_EISDIR}. NOT restored: phases/1-01-foo/1-01-01-PLAN.md (its rename was not reversed). Renames NOT reversed: phases/1-01-foo/1-01-01-PLAN.md, phases/1-01-foo`, ['1-01-foo', '1-01-01-PLAN.md']],
+    ['fails to reverse while its directory is moved back', false,
+      `${CONFIG_EISDIR}. NOT restored: phases/01-foo/1-01-01-PLAN.md (its rename was not reversed). Renames NOT reversed: phases/01-foo/1-01-01-PLAN.md`, ['01-foo', '1-01-01-PLAN.md']],
+  ]) {
+    test(`a rewritten plan file whose own rename ${label} is named where it is (#5120 pre-push review R5-m2, R5-m3)`, (t) => {
+      const dir = makeGitignoredPlanningProject();
+      t.after(() => cleanup(dir));
+      const planning = path.join(dir, '.planning');
+      const plan = renamedAndRewrittenPlan(dir);
+      const realRename = fs.renameSync;
+      mock.method(fs, 'renameSync', function (from, to, ...rest) {
+        const reverseOfFile = path.basename(String(from)) === '1-01-01-PLAN.md' && path.basename(String(to)) === '01-01-PLAN.md';
+        const reverseOfDir = String(to) === path.join(planning, 'phases', '01-foo');
+        if (reverseOfFile || (failDir && reverseOfDir)) throw Object.assign(new Error('EACCES: permission denied, rename'), { code: 'EACCES' });
+        return realRename.call(this, from, to, ...rest);
+      });
+      t.after(() => mock.restoreAll());
+
+      assert.throws(() => applyMigration(dir, plan, { dryRun: false }), (err) => err.message === expected);
+      mock.restoreAll();
+      assert.equal(fs.readFileSync(path.join(planning, 'phases', ...at), 'utf8'), 'rewritten\n', 'the file is where the error names it');
+    });
+  }
+
+  test('a rewritten plan file under a renamed directory gone from both paths is reported removed, not as not moved back (#5120 pre-push review R5-n6)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    const plan = renamedAndRewrittenPlan(dir);
+    plan.phases[0].fileRenames = [];
+    plan.phases[0].dependsOnRewrites[0].finalName = '01-01-PLAN.md';
+    const newPath = path.join(planning, 'phases', '1-01-foo');
+    const realRename = fs.renameSync;
+    const realOpen = fs.openSync;
+    const realStat = fs.statSync;
+    let movedAside = false;
+    const arm = (file) => {
+      if (!movedAside && String(file) === path.join(planning, 'config.json') && fs.existsSync(newPath)) {
+        movedAside = true;
+        realRename.call(fs, newPath, path.join(dir, 'moved-aside'));
+      }
+    };
+    mock.method(fs, 'openSync', function (file, ...rest) { arm(file); return realOpen.call(this, file, ...rest); });
+    mock.method(fs, 'statSync', function (file, ...rest) { arm(file); return realStat.call(this, file, ...rest); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), (err) =>
+      err.message === `${CONFIG_EISDIR}. NOT restored (changed by another writer after the migration wrote them, left as found): phases/01-foo/01-01-PLAN.md (removed). Renames NOT reversed: phases/01-foo (missing)`);
+    mock.restoreAll();
+    assert.equal(movedAside, true, 'precondition: the renamed directory was moved away before the rollback');
+  });
+
+  test('a file rename inside a renamed phase directory that fails to reverse is named where it is left (#5120 pre-push review R3-m4)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    cleanup(planning);
+    fs.cpSync(path.join(__dirname, 'fixtures', 'roadmap-upgrade-bracket', 'legacy-multi-milestone', 'planning'), planning, { recursive: true });
+    const plan = computeMigrationPlan(dir, { convention: 'bracket' });
+    const phase = plan.phases.find((p) => (p.fileRenames ?? []).length > 0);
+    assert.ok(phase, 'precondition: the fixture plans a file rename inside a renamed phase directory');
+    const fileRename = phase.fileRenames[0];
+    const roadmapPath = path.join(planning, 'ROADMAP.md');
+
+    // The ROADMAP.md write fails, so the migration rolls back after the renames. The reverse of the
+    // file rename fails; its directory's reverse then succeeds and carries the file to the old path.
+    const realWrite = fs.writeFileSync;
+    const realRename = fs.renameSync;
+    let failedReverse = false;
+    mock.method(fs, 'writeFileSync', function (file, ...rest) {
+      if (path.resolve(String(file)) === roadmapPath) throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+      return realWrite.call(this, file, ...rest);
+    });
+    mock.method(fs, 'renameSync', function (from, to, ...rest) {
+      if (!failedReverse && path.basename(String(from)) === fileRename.newName && path.basename(String(to)) === fileRename.oldName) {
+        failedReverse = true;
+        throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+      }
+      return realRename.call(this, from, to, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    const leftAt = `phases/${phase.oldDir}/${fileRename.newName}`;
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === `Migration failed and rolled back: EIO: i/o error, write. Renames NOT reversed: ${leftAt}`,
+    );
+    mock.restoreAll();
+    assert.equal(failedReverse, true, 'precondition: the file rename\'s reverse failed');
+    assert.ok(fs.existsSync(path.join(planning, leftAt)), 'the file is at the path the error names');
+    assert.equal(fs.existsSync(path.join(planning, 'phases', phase.newDir)), false, 'the directory rename was reversed');
   });
 
   test('a successful migration still applies (renames + roadmap rewrite + config), no rollback', (t) => {
@@ -249,6 +496,599 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
       assert.equal(fs.existsSync(path.join(dir, '.planning', 'config.json')), false);
     });
   }
+
+  // #5120: the rollback restored STATE.md with a raw `fs.writeFileSync`, outside
+  // the STATE.md lock, so a concurrent writer could interleave with the restore
+  // (the #500/#905/#1230 lost-update family). Reaching the restore needs a
+  // failure AFTER the STATE.md rewrite: a directory at config.json fails step 4.
+  test('a failure after the STATE.md rewrite restores STATE.md through the seam, under the STATE.md lock', (t) => {
+    const dir = setup('m13-state-restore-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '---\r\nstatus: executing\r\nlast_updated: "2020-01-01T00:00:00.000Z"\r\n---\r\n\r\n# Project State\r\n\r\n**Current Phase:** Phase 2: Bar\r\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    const writesOntoState = [];
+    const record = (destination) => {
+      if (path.resolve(String(destination)) === path.resolve(state)) {
+        writesOntoState.push({ lockHeld: fs.existsSync(`${state}.lock`) });
+      }
+    };
+    const realWrite = fs.writeFileSync;
+    const realRename = fs.renameSync;
+    mock.method(fs, 'writeFileSync', function (file, ...rest) { record(file); return realWrite.call(this, file, ...rest); });
+    mock.method(fs, 'renameSync', function (from, to) { record(to); return realRename.call(this, from, to); });
+    t.after(() => mock.restoreAll());
+
+    // #5759 made the config.json step refuse a non-regular file by name (EISDIR); the directory still fails step 4.
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /Migration failed and rolled back: config\.json cannot be updated/);
+    mock.restoreAll();
+
+    assert.equal(writesOntoState.length, 2, 'the forward rewrite and the restore each land one write on STATE.md');
+    assert.deepEqual(writesOntoState, [{ lockHeld: true }, { lockHeld: true }], 'every write onto STATE.md holds the STATE.md lock');
+    // The restore goes through the seam's byte-exact primitive (platformRestoreFileSync,
+    // #5831), so the CRLF backup comes back as it was, not in the seam's normalized form.
+    assert.notEqual(normalizeContent(state, original).content, original, 'precondition: the CRLF fixture is one platformWriteSync would normalize');
+    assert.equal(fs.readFileSync(state, 'utf8'), original, 'STATE.md restored to the backup, byte for byte');
+    assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released after the restore');
+  });
+
+  test('a STATE.md restore that cannot take the lock is named as NOT restored', (t) => {
+    const dir = setup('m13-state-restore-nolock-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    // The forward rewrite takes the lock first; the restore's acquisition fails
+    // with an errno acquireStateLock does not retry.
+    let lockOpens = 0;
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (String(file) === `${state}.lock` && ++lockOpens === 2) {
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored: STATE.md (the restore failed)',
+    );
+    mock.restoreAll();
+    assert.equal(lockOpens, 2, 'the restore attempted the lock');
+    assert.ok(fs.readFileSync(state, 'utf8').includes('Phase 1-02: Bar'), 'STATE.md still holds the migrated text the error names');
+  });
+
+  // #5120 pre-push review R3-m3: whether STATE.md was restored is decided under the lock that
+  // restored it.
+  test('a STATE.md the rollback restored is not reported as NOT restored when a queued writer lands after the lock is released', (t) => {
+    const dir = setup('m13-state-restored-then-writer-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    // At the unlink that releases the restore's lock (STATE.md holds its original bytes again), a
+    // writer queued on the lock takes it, appends a line and releases it.
+    const later = `${original}\n- later decision\n`;
+    const realUnlink = fs.unlinkSync;
+    let landed = false;
+    mock.method(fs, 'unlinkSync', function (file, ...rest) {
+      const out = realUnlink.call(this, file, ...rest);
+      if (!landed && String(file) === `${state}.lock` && fs.readFileSync(state, 'utf8') === original) {
+        landed = true;
+        fs.writeFileSync(`${state}.lock`, String(process.ppid));
+        fs.writeFileSync(state, later);
+        realUnlink.call(fs, `${state}.lock`);
+      }
+      return out;
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR)',
+    );
+    mock.restoreAll();
+    assert.equal(landed, true, 'precondition: the queued writer landed after the restore released the lock');
+    assert.equal(fs.readFileSync(state, 'utf8'), later, 'the queued writer\'s line is kept');
+  });
+
+  // #5120 review (M4): the rollback restores STATE.md only while it still holds what
+  // this migration wrote. A writer that landed between the forward write and the
+  // failing step keeps its content, and the error says so.
+  test('a STATE.md another writer changed after the migration wrote it is left as found by the rollback', (t) => {
+    const dir = setup('m13-state-other-writer-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    // The other writer lands while the migration is at its next step (the config.json
+    // read that fails), after the forward STATE.md write and its read-back: the first
+    // config.json access made once STATE.md no longer holds its original content
+    // (config.json is also consulted before step 3, which must not trigger it).
+    const configPath = path.join(dir, '.planning', 'config.json');
+    const original = fs.readFileSync(state, 'utf8');
+    const otherWriter = '# Project State\n\n**Current Phase:** Phase 9: Other writer\n';
+    let injected = false;
+    const realWrite = fs.writeFileSync;
+    const realOpen = fs.openSync;
+    const realRead = fs.readFileSync;
+    const realStat = fs.statSync;
+    const inject = (file) => {
+      if (!injected && String(file) === configPath && realRead.call(fs, state, 'utf8') !== original) {
+        injected = true;
+        realWrite.call(fs, state, otherWriter);
+      }
+    };
+    mock.method(fs, 'openSync', function (file, ...rest) { inject(file); return realOpen.call(this, file, ...rest); });
+    mock.method(fs, 'readFileSync', function (file, ...rest) { inject(file); return realRead.call(this, file, ...rest); });
+    mock.method(fs, 'statSync', function (file, ...rest) { inject(file); return realStat.call(this, file, ...rest); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified)',
+    );
+    mock.restoreAll();
+    assert.equal(injected, true, 'precondition: the other writer ran');
+    assert.equal(fs.readFileSync(state, 'utf8'), otherWriter, 'the other writer\'s STATE.md is not overwritten by the rollback');
+    assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released');
+  });
+
+  // #5120 review Minor 1: the bytes the migration wrote are read back under the STATE.md lock.
+  test('a writer landing as the forward STATE.md write releases its lock keeps its content through the rollback (#5120 review Minor 1)', (t) => {
+    const dir = setup('m13-state-gap-writer-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    const otherWriter = '# Project State\n\n**Current Phase:** Phase 9: Gap writer\n';
+    let releases = 0;
+    const realUnlink = fs.unlinkSync;
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'unlinkSync', function (file, ...rest) {
+      const out = realUnlink.call(this, file, ...rest);
+      if (String(file) === `${state}.lock` && ++releases === 1) realWrite.call(fs, state, otherWriter);
+      return out;
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified)',
+    );
+    mock.restoreAll();
+    assert.ok(releases >= 1, 'precondition: the forward write released the lock');
+    assert.equal(fs.readFileSync(state, 'utf8'), otherWriter, 'the gap writer\'s STATE.md is not overwritten by the rollback');
+  });
+
+  test('a failed read-back of the forward STATE.md write leaves STATE.md as found and named (#5120 review Minor 1)', (t) => {
+    const dir = setup('m13-state-readback-fail-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    let published = false;
+    let failedReads = 0;
+    const realRename = fs.renameSync;
+    const realOpen = fs.openSync;
+    mock.method(fs, 'renameSync', function (from, to) {
+      const out = realRename.call(this, from, to);
+      if (String(to) === state) published = true;
+      return out;
+    });
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (published && failedReads === 0 && String(file) === state) {
+        failedReads++;
+        throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO' });
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (unverified)',
+    );
+    mock.restoreAll();
+    assert.equal(failedReads, 1, 'precondition: the read-back failed');
+    assert.ok(fs.readFileSync(state, 'utf8').includes('Phase 1-02: Bar'), 'STATE.md keeps the migrated text, as the error says');
+  });
+
+  test('a failed restore of a file other than STATE.md is named as NOT restored (#5120 review Minor 7)', (t) => {
+    const dir = setup('m13-roadmap-restore-fail-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const roadmap = path.join(dir, '.planning', 'ROADMAP.md');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    // The rollback restores a snapshot as a Buffer; the forward rewrite writes a string.
+    let refused = 0;
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'writeFileSync', function (file, data, ...rest) {
+      if (String(file) === roadmap && Buffer.isBuffer(data)) {
+        refused++;
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+      }
+      return realWrite.call(this, file, data, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored: ROADMAP.md (the restore failed)',
+    );
+    mock.restoreAll();
+    assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');
+  });
+
+  test('a file whose forward write failed and that still holds its prior bytes is not restored and not named (#5120 pre-push review Mi3)', (t) => {
+    const dir = setup('m13-roadmap-unchanged-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const roadmap = path.join(dir, '.planning', 'ROADMAP.md');
+    const before = fs.readFileSync(roadmap);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.roadmapEdits.length > 0, 'precondition: the migration rewrites ROADMAP.md');
+
+    const failed = { forward: 0, restore: 0 };
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'writeFileSync', function (file, data, ...rest) {
+      if (String(file) === roadmap) {
+        failed[Buffer.isBuffer(data) ? 'restore' : 'forward']++;
+        throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+      }
+      return realWrite.call(this, file, data, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: EIO: i/o error, write',
+    );
+    mock.restoreAll();
+    assert.deepEqual(failed, { forward: 1, restore: 0 }, 'precondition: the forward write failed and no restore was attempted');
+    assert.ok(fs.readFileSync(roadmap).equals(before), 'ROADMAP.md still holds its prior bytes');
+  });
+
+  // Arms `onConfigAccess` once, at the first config.json access made after STATE.md changed: that
+  // access is the failing step 4, after the forward STATE.md write and its read-back.
+  function armAfterStateWrite(dir, original, onConfigAccess) {
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const configPath = path.join(dir, '.planning', 'config.json');
+    let armed = false;
+    const realOpen = fs.openSync;
+    const realRead = fs.readFileSync;
+    const realStat = fs.statSync;
+    const inject = (file) => {
+      if (!armed && String(file) === configPath && realRead.call(fs, state, 'utf8') !== original) {
+        armed = true;
+        onConfigAccess();
+      }
+    };
+    mock.method(fs, 'openSync', function (file, ...rest) { inject(file); return realOpen.call(this, file, ...rest); });
+    mock.method(fs, 'statSync', function (file, ...rest) { inject(file); return realStat.call(this, file, ...rest); });
+    return { realRead, inject, isArmed: () => armed };
+  }
+
+  // #5120 pre-push review R4-m2.
+  test('the rollback opens STATE.md non-blocking while it holds the STATE.md lock', (t) => {
+    if (fs.constants.O_NONBLOCK === undefined) { assert.equal(fs.constants.O_NONBLOCK, undefined); t.skip('no O_NONBLOCK on this platform'); return; }
+    const dir = setup('m13-state-nonblocking-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+    const original = fs.readFileSync(state, 'utf8');
+
+    const opens = [];
+    // Opens after the failing step is armed: the arming helper's own reads of STATE.md come before it.
+    const { isArmed } = armAfterStateWrite(dir, original, () => {});
+    const armedOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, flags, ...rest) {
+      if (isArmed() && String(file) === state) {
+        opens.push({ lockHeld: fs.existsSync(`${state}.lock`), nonBlocking: typeof flags === 'number' && (flags & (fs.constants.O_NONBLOCK ?? 0)) !== 0 });
+      }
+      return armedOpen.call(this, file, flags, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: config\.json cannot be updated/);
+    mock.restoreAll();
+    const underLock = opens.filter((o) => o.lockHeld);
+    assert.ok(underLock.length >= 1, 'precondition: the rollback opened STATE.md under its lock');
+    assert.deepEqual(underLock.filter((o) => !o.nonBlocking), [], 'every open of STATE.md under the lock is non-blocking');
+  });
+
+  test('a STATE.md another writer removed after the migration wrote it is named as removed (#5120 pre-push review R5-n6)', (t) => {
+    const dir = setup('m13-state-removed-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+    const original = fs.readFileSync(state, 'utf8');
+    armAfterStateWrite(dir, original, () => { fs.unlinkSync(state); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), (err) =>
+      err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (removed)');
+    mock.restoreAll();
+    assert.equal(fs.existsSync(state), false, 'STATE.md is left as found (removed)');
+  });
+
+  test('a STATE.md the rollback cannot read is left as found and named (#5120 pre-push review Mi3)', (t) => {
+    const dir = setup('m13-state-unreadable-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+    const original = fs.readFileSync(state, 'utf8');
+
+    let readsToFail = 0;
+    let failedReads = 0;
+    armAfterStateWrite(dir, original, () => { readsToFail = 1; });
+    // The first open of STATE.md after config.json failed is the rollback's own read, made under the
+    // lock through the non-blocking seam (pre-push review R4-m2).
+    const armedOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (readsToFail > 0 && String(file) === state) {
+        readsToFail--;
+        failedReads++;
+        throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO' });
+      }
+      return armedOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (unreadable (EIO))',
+    );
+    mock.restoreAll();
+    assert.equal(failedReads, 1, 'precondition: the rollback read of STATE.md failed');
+    assert.ok(fs.readFileSync(state, 'utf8').includes('Phase 1-02: Bar'), 'STATE.md keeps the migrated text, as the error says');
+    assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released');
+  });
+
+  test('a failed non-STATE.md restore and a STATE.md left as found are both named (#5120 pre-push review Mi2)', (t) => {
+    const dir = setup('m13-roadmap-and-state-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const roadmap = path.join(dir, '.planning', 'ROADMAP.md');
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+    const original = fs.readFileSync(state, 'utf8');
+    const otherWriter = '# Project State\n\n**Current Phase:** Phase 9: Other writer\n';
+
+    const realWrite = fs.writeFileSync;
+    const { realRead, inject } = armAfterStateWrite(dir, original, () => { realWrite.call(fs, state, otherWriter); });
+    mock.method(fs, 'readFileSync', function (file, ...rest) { inject(file); return realRead.call(this, file, ...rest); });
+    // The rollback restores ROADMAP.md as a Buffer; the forward rewrite writes a string.
+    let refused = 0;
+    mock.method(fs, 'writeFileSync', function (file, data, ...rest) {
+      if (String(file) === roadmap && Buffer.isBuffer(data)) {
+        refused++;
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+      }
+      return realWrite.call(this, file, data, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified). NOT restored: ROADMAP.md (the restore failed)',
+    );
+    mock.restoreAll();
+    assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');
+    assert.equal(fs.readFileSync(state, 'utf8'), otherWriter, 'the other writer\'s STATE.md is not overwritten by the rollback');
+  });
+
+  test('a STATE.md the migration never wrote is left alone by the rollback (#5120 review)', (t) => {
+    const dir = setup('m13-state-untouched-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+
+    // The forward STATE.md write cannot take the lock, so it changes nothing and
+    // fails the migration; a restore here could only overwrite another writer.
+    let lockOpens = 0;
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (String(file) === `${state}.lock`) {
+        lockOpens++;
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: /);
+    mock.restoreAll();
+    assert.equal(lockOpens, 1, 'only the forward write asked for the lock; the rollback did not restore STATE.md');
+    assert.equal(fs.readFileSync(state, 'utf8'), original);
+  });
+
+  // #5120 review (m1): the forward STATE.md write is the seam's atomic mode
+  // (atomicWrite, the prune precedent #5831), so a write that fails leaves
+  // STATE.md's previous bytes in place and dropping its snapshot is safe. Without
+  // it, a temp file that cannot be written or renamed falls back to an in-place
+  // write that truncates first; a failure there (ENOSPC) whose own restore also
+  // fails left STATE.md truncated while the migration reported "rolled back".
+  test('a forward STATE.md write that fails mid-write leaves STATE.md as it was, and the rollback says so truthfully (#5120 review)', (t) => {
+    const dir = setup('m13-state-enospc-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+
+    // Every descriptor opened on STATE.md or a STATE.md temp file fails its writes
+    // with ENOSPC, and a rename onto STATE.md fails with EXDEV.
+    const stateFds = new Set();
+    const isStatePath = (p) => String(p) === state || String(p).startsWith(`${state}.tmp.`);
+    const enospc = () => Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeFileSync;
+    const realWriteSync = fs.writeSync;
+    const realRename = fs.renameSync;
+    const realClose = fs.closeSync;
+    let failedWrites = 0;
+    let tempOpens = 0;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      const fd = realOpen.call(this, file, ...rest);
+      if (isStatePath(file)) stateFds.add(fd);
+      if (String(file).startsWith(`${state}.tmp.`)) tempOpens++;
+      return fd;
+    });
+    // #5120 re-review: a closed descriptor number is reused by the next open (the
+    // lock file's, for one), so it leaves the set when it is closed; without this the
+    // row failed the wrong writes and passed even without atomicWrite.
+    mock.method(fs, 'closeSync', function (fd, ...rest) {
+      stateFds.delete(fd);
+      return realClose.call(this, fd, ...rest);
+    });
+    mock.method(fs, 'writeFileSync', function (target, ...rest) {
+      if (typeof target === 'number' && stateFds.has(target)) { failedWrites++; throw enospc(); }
+      return realWrite.call(this, target, ...rest);
+    });
+    mock.method(fs, 'writeSync', function (fd, ...rest) {
+      if (stateFds.has(fd)) { failedWrites++; throw enospc(); }
+      return realWriteSync.call(this, fd, ...rest);
+    });
+    mock.method(fs, 'renameSync', function (from, to) {
+      if (String(to) === state) throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+      return realRename.call(this, from, to);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: ENOSPC/);
+    mock.restoreAll();
+    assert.ok(tempOpens >= 1, 'precondition: the write went through a STATE.md temp file');
+    assert.ok(failedWrites >= 1, 'precondition: the injected ENOSPC was hit');
+    assert.equal(fs.readFileSync(state, 'utf8'), original, 'STATE.md holds its previous bytes, as "rolled back" claims');
+    assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released');
+  });
+
+  // #5120 review (m2): the STATE.md snapshot is held as bytes, not decoded text,
+  // so a byte sequence that is not valid UTF-8 comes back unchanged.
+  test('the rollback restores a STATE.md holding invalid UTF-8 byte for byte (#5120 review)', (t) => {
+    const dir = setup('m13-state-bytes-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = Buffer.concat([
+      Buffer.from('# Project State\n\n**Current Phase:** Phase 2: Bar\n\nLegacy note: '),
+      Buffer.from([0xff, 0xfe, 0x80]),
+      Buffer.from('\n'),
+    ]);
+    fs.writeFileSync(state, original);
+    assert.notDeepEqual(Buffer.from(original.toString('utf8'), 'utf8'), original, 'precondition: the bytes do not survive a UTF-8 round-trip');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: config\.json cannot be updated/);
+    assert.ok(fs.readFileSync(state).equals(original), 'STATE.md restored to the snapshot bytes exactly');
+  });
+
+  // #5120 review (N3): STATE.md is reported as edited only when this migration
+  // wrote it. A writer that applied the same edit first makes the transform a
+  // no-op under the lock, so nothing is written and STATE.md is not listed.
+  test('editedFiles names STATE.md only when the migration wrote it (#5120 review)', (t) => {
+    // The other writer's STATE.md: what this migration itself would leave behind.
+    const twin = setup('m13-state-twin-', ROADMAP);
+    t.after(() => cleanup(twin));
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(path.join(twin, '.planning', 'STATE.md'), original);
+    const twinResult = applyMigration(twin, computeMigrationPlan(twin), { dryRun: false });
+    assert.ok(twinResult.editedFiles.includes('STATE.md'), 'precondition: a migration that writes STATE.md lists it');
+    const migrated = fs.readFileSync(path.join(twin, '.planning', 'STATE.md'), 'utf8');
+
+    const dir = setup('m13-state-noop-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    // The other writer lands just before this migration takes the STATE.md lock.
+    let injected = false;
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (!injected && String(file) === `${state}.lock`) {
+        injected = true;
+        realWrite.call(fs, state, migrated);
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    const result = applyMigration(dir, plan, { dryRun: false });
+    mock.restoreAll();
+    assert.equal(injected, true, 'precondition: the other writer ran');
+    assert.equal(result.applied, true);
+    assert.equal(result.editedFiles.includes('STATE.md'), false, 'STATE.md is not reported as edited by this migration');
+    assert.equal(fs.readFileSync(state, 'utf8'), migrated, 'the other writer\'s STATE.md is untouched');
+  });
+
+  // #5120 re-review (Major-1): the STATE.md snapshot is taken under the STATE.md
+  // lock, from the file the migration actually rewrites. Taken before the lock, a
+  // writer that landed while the migration waited for the lock was missing from the
+  // snapshot, so the rollback put the older bytes back over that writer's content
+  // and still reported "rolled back".
+  test('a writer that lands while the migration waits for the STATE.md lock survives the rollback (#5120 re-review)', (t) => {
+    const dir = setup('m13-state-wait-writer-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json')); // a later step fails, so the rollback runs
+
+    // The other writer appends its note just before this migration's first lock
+    // open: it held the lock and released it while the migration was waiting.
+    const withNote = `${original}\nOther writer note: keep me\n`;
+    let injected = false;
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (!injected && String(file) === `${state}.lock`) {
+        injected = true;
+        realWrite.call(fs, state, withNote);
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: config\.json cannot be updated/);
+    mock.restoreAll();
+    assert.equal(injected, true, 'precondition: the other writer ran');
+    assert.equal(fs.readFileSync(state, 'utf8'), withNote, 'the rollback restores the STATE.md the migration rewrote, the other writer\'s note included');
+  });
 
   test('rewriteRoadmapLines: identical headings in two milestones stay distinct by line index; heading, checklist and fenced edits', () => {
     const lines = [

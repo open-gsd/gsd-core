@@ -421,11 +421,31 @@ const HARNESS_SOURCE = 'local harness through the process seam, 50 spawns per en
 const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.2; win32 not measured';
 
 /**
+ * One `scripts/run-tests.cjs` invocation over a one-file GSD_TEST_DIR fixture, spawned
+ * through the process seam: the runner's incremental tsc build, one node --test chunk and
+ * the post-run reports, heavier than `PROBE_TIMEOUT_MS` and unlike `INSTALL_TIMEOUT_MS`.
+ * tests/run-tests-harness.test.cjs and tests/raw-state-write-guard.process.test.cjs time
+ * their runner spawns with it.
+ *
+ * The harness test's own value before it moved here (#5120 review Minor 3); it stays above
+ * that file's longest chunk-timeout override (30000ms) so the runner's timeout diagnostic fires
+ * first, and wide because CI's win32 lane runs the build and chunk several times slower.
+ *
+ * Evidence (TIMEOUT_EVIDENCE.RUN_TESTS_HARNESS_TIMEOUT_MS): worst observed 1510ms on linux (p50 1283ms, p99 1510ms of 15 harness spawns),
+ * margin 79.47x; local harness on linux (WSL2, node v24), 15 spawns; win32 and darwin not measured.
+ */
+const RUN_TESTS_HARNESS_TIMEOUT_MS = 120000;
+
+const RUN_TESTS_HARNESS_SOURCE = 'local harness through the process seam: tests/raw-state-write-guard.process.test.cjs, the three runner rows (a one-file GSD_TEST_DIR fixture each), node --test durations; tests/run-tests-harness.test.cjs times the same runner spawn with this constant and is not in these samples';
+const RUN_TESTS_HARNESS_WINDOW = 'run 2026-11-09: linux (WSL2) node v24; win32 and darwin not measured';
+
+/**
  * Evidence for every numeric constant in this module, checked by
  * tests/timeout-evidence.test.cjs against tests/helpers/timeout-evidence.cjs.
  * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
  */
 const TIMEOUT_EVIDENCE = Object.freeze({
+  RUN_TESTS_HARNESS_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 1510, worstPlatform: 'linux', p50Ms: 1283, p99Ms: 1510, samples: { linux: 15 }, unmeasuredPlatforms: ['win32', 'darwin'], unseenSites: 0, source: RUN_TESTS_HARNESS_SOURCE, window: RUN_TESTS_HARNESS_WINDOW },
   PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 12, darwin: 516, linux: 407 }, lanes: { win32: 585, darwin: 195, linux: 567 }, unmeasuredPlatforms: [], unseenSites: 62, unseenSitesTrackedBy: '#6059', source: CI_SOURCE, window: PROBE_CI_WINDOW },
   HOOK_FANOUT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 23514, worstPlatform: 'win32', p50Ms: 2326, p99Ms: 7563, samples: { win32: 266, darwin: 978, linux: 173 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 4669, worstPlatform: 'win32', p50Ms: 2344, p99Ms: 4669, samples: { win32: 12 }, lanes: { win32: 551, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 58, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
@@ -449,6 +469,7 @@ const TIMEOUT_EVIDENCE = Object.freeze({
 
 module.exports = {
   PROBE_TIMEOUT_MS,
+  RUN_TESTS_HARNESS_TIMEOUT_MS,
   HOOK_FANOUT_TIMEOUT_MS,
   GIT_TIMEOUT_MS,
   GIT_FIXTURE_TIMEOUT_MS,

@@ -428,6 +428,69 @@ Reported paths are labelled `CREATED`, `MODIFIED`, `DELETED`, or `UNVERIFIED`.
 `UNVERIFIED` means a scan bound was hit and the path could not be attested
 either way — it is never the same as clean.
 
+## The raw STATE.md write check
+
+`run-tests.cjs` also loads `scripts/raw-state-write-guard.cjs` into its chunks,
+and into subprocesses a test spawns that inherit `NODE_OPTIONS`, through a
+per-run preload shim in `NODE_OPTIONS --require` (the shim carries the ledger
+path). It records a write whose destination is a file named `STATE.md` when
+the caller is product code (a `.cjs` file under a `gsd-core/bin/` directory:
+the compiled `gsd-core/bin/lib`, `gsd-tools.cjs`, or an installed copy), in
+the shapes listed under Limits below. A recorded write is one of three kinds:
+
+- a **seam write**: `platformWriteSync`, or the byte-exact restore
+  `platformRestoreFileSync`, is on the stack;
+- a **relocation**: a rename or copy whose source is itself a file named
+  `STATE.md` (a workstream migration, an archive);
+- a **raw write**: anything else.
+
+A raw write is a violation. A seam write or a relocation is a violation unless
+the process holds the STATE.md lock (`withStateLock`, or
+`readModifyWriteStateMd`) on the destination and, for a relocation, on the
+source too. **One violation fails the run.** There is no allowlist (ADR-4629
+Decision 5).
+
+The check exists because the Axis-2 lint guard
+(`scripts/lint-state-write-path-drift.cjs`) matches variable names, not
+values: a path held in a `Map` key filled in another function is invisible to
+it (#5104 miss 3, #5120). ADR-4629's guard roster lists the two guards as a
+pair.
+
+After the last chunk the runner prints one line:
+
+```text
+run-tests: raw STATE.md writes in product code: 0; seam writes and relocations onto STATE.md: N (R relocations), of which without the STATE.md lock: 0; unreadable ledger lines: 0; the check loaded in P processes
+```
+
+(`1 relocation` and `P process` when the count is 1.)
+
+A violation is printed under that line with its kind, the fs function, the
+destination, the product file and line, and the test file whose run produced
+it (`unknown` for a child built with `isolated-env.cjs`).
+
+Limits:
+
+- It sees only code paths the suite executes.
+- What it records: a call to one of the wrapped `fs` functions, made in a
+  process where the check installed, at the outermost wrapped call, whose
+  destination argument is a string, a Buffer or a `URL` instance with the
+  basename `STATE.md`, and whose caller is product code.
+- Under the runner, node exits at start with `ERR_INVALID_PACKAGE_CONFIG` in a
+  directory whose nearest `package.json` it rejects as a package config, and
+  starts there without the preload (node v24.22.1: 10 of 12 malformed
+  `package.json` files tried, for example `{` or a trailing comma). On a
+  machine whose git config runs node hooks, a test that runs git in such a
+  directory fails that way
+  (`tests/gate-ui-safety-frontend-evidence-5646.test.cjs`).
+- The lock counts as held when the destination's `STATE.md.lock` file names
+  this process's pid, which is what `withStateLock` writes.
+- The basename match is case-sensitive.
+- Truncation (`fs.truncateSync`, `fs.ftruncateSync`, `fs.truncate`,
+  `fs.promises.truncate`, a file handle's `truncate`) is not recorded.
+- The lock is checked when a callback or promise rename, copy or write is
+  called, not when it lands: one called under the lock that lands after the
+  lock is released reads as locked.
+
 ## The mergeability preflight
 
 Before any of the matrix below is provisioned, every `pull_request` compute lane

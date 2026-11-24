@@ -26,6 +26,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup, CONFIG_LOCATION_ENV_KEYS } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { RUN_TESTS_HARNESS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HARNESS = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 
@@ -34,8 +35,9 @@ const HARNESS = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 // override below is 30000ms). This outer bound must stay comfortably above
 // whatever the harness itself is configured to wait for a hung chunk, plus
 // `node --test` child-process startup overhead — otherwise this seam would
-// kill the harness before its own timeout diagnostic fires.
-const HARNESS_TIMEOUT_MS = 120000;
+// kill the harness before its own timeout diagnostic fires. The shared constant's
+// docblock in tests/helpers/timeouts.cjs states its evidence (#5120 review Minor 3).
+const HARNESS_TIMEOUT_MS = RUN_TESTS_HARNESS_TIMEOUT_MS;
 
 // Minimal valid node:test file. Each fixture file passes when executed.
 const PASS_BODY = `'use strict';

@@ -344,6 +344,13 @@ interface ReadModifyWriteOptions {
    * in no file; other callers keep the default write.
    */
   atomicWrite?: boolean;
+  /**
+   * #5120 review Minor 1: called after a successful write, while the STATE.md lock is still held,
+   * with the bytes STATE.md holds then (read back, so they are the seam's bytes, not the string
+   * handed to it), or `null` when that read fails. Not called for a no-op
+   * transform (#948) or a write that threw.
+   */
+  onWritten?: (written: Buffer | null) => void;
 }
 
 /**
@@ -359,7 +366,7 @@ interface ReadModifyWriteOptions {
  * value) deliberately: converting it ripples into every caller's control
  * flow for no behavior change.
  */
-type StatePreservationOptions = Omit<ReadModifyWriteOptions, 'resync' | 'onWriteFailure' | 'atomicWrite'> & { resync: boolean };
+type StatePreservationOptions = Omit<ReadModifyWriteOptions, 'resync' | 'onWriteFailure' | 'atomicWrite' | 'onWritten'> & { resync: boolean };
 
 interface StateRecordMetricOptions {
   phase: string;
@@ -5071,6 +5078,12 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     } catch (err) {
       if (options?.onWriteFailure) options.onWriteFailure(err);
       throw err;
+    }
+    // #5120 review Minor 1: outside the try above; still under the lock.
+    if (options?.onWritten) {
+      let written: Buffer | null = null;
+      try { written = platformReadBytesSync(statePath); } catch { written = null; }
+      options.onWritten(written);
     }
     return true;
   } finally {

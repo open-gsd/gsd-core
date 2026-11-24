@@ -21,7 +21,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { platformWriteSync } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: an export= CommonJS module (withStateLock)
+import stateMod = require('./state.cjs');
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
@@ -517,12 +519,18 @@ function buildPreview(gsd2Data: Gsd2Data, artifacts: Map<string, string>, projec
 // ─── Writer ───────────────────────────────────────────────────────────────────
 
 /**
- * Write all artifacts to the .planning/ directory.
+ * Write all artifacts to the .planning/ directory. STATE.md is written under the STATE.md lock
+ * (#5120 review Major 1). Its directory is made first, because the lock file sits beside it.
  */
 function writePlanningDir(artifacts: Map<string, string>, planningRoot: string): void {
   for (const [rel, content] of artifacts) {
     const absPath = path.join(planningRoot, rel);
-    platformWriteSync(absPath, content);
+    if (path.basename(absPath) === 'STATE.md') {
+      platformEnsureDir(path.dirname(absPath));
+      stateMod.withStateLock(absPath, () => platformWriteSync(absPath, content));
+    } else {
+      platformWriteSync(absPath, content);
+    }
   }
 }
 

@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, retryRenameSync, toPosixPath } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync, platformReadBytesSync, platformRestoreFileSync, toPosixPath } from './shell-command-projection.cjs';
 import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
@@ -81,7 +81,7 @@ const { scanFencedBlocks, updateBullet, updateHeading } = markdownSectionizerMod
 // ADR-5057 §6 (Phase 13, #5217): every mutation of a planning artifact goes
 // through its seam — headings/bullets through the sectionizer, PROJECT.md
 // prose through PlanningDoc, STATE.md through its own write seam.
-const { readModifyWriteStateMd } = stateMod;
+const { readModifyWriteStateMd, withStateLock } = stateMod;
 // #4144 round 5 follow-up (lint-plan-count-drift): the plan-scan owner's own
 // root-plan-file predicate (src/plan-scan.cts) — reused in
 // computeDependsOnRewrites instead of a private `/-PLAN\.md$/i` filename
@@ -2332,19 +2332,29 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // rewriting it, then undo precisely those on failure — correct whether
   // `.planning/` is git-tracked or ignored.
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
-  const fileBackups = new Map<string, { existed: boolean; content: string }>();
+  // #5120 review: a snapshot of a file read with readFileSync(path) (STATE.md and the
+  // other files snapshotted that way) is held as bytes, so a restore puts back the
+  // bytes the file had, including a sequence that is not valid UTF-8. The snapshot
+  // of a depends_on phase file is the decoded text, re-encoded as UTF-8.
+  const fileBackups = new Map<string, { existed: boolean; content: Buffer }>();
   // #6351: what the migration itself wrote to each snapshotted file (keyed like `fileBackups`). Rollback restores a
   // file only while it still holds that; a file another writer changed since is left as found and reported.
-  const migrationWrote = new Map<string, string>();
+  const migrationWrote = new Map<string, Buffer>();
   // The files whose migration write has begun and not yet completed. A write that fails partway leaves a torn file
   // that is the migration's own doing, not another writer's, so rollback restores such a path unconditionally.
   const writeInFlight = new Set<string>();
+  const stateMdPath = path.join(pDir, 'STATE.md');
+  // #5120: the bytes STATE.md held right after this migration wrote it, read back
+  // under the STATE.md lock (readModifyWriteStateMd's onWritten, #5120 review
+  // Minor 1), so the rollback restores STATE.md only while it still holds them.
+  // null: not written, or the read-back failed; ownership is then not proven.
+  let stateMdWrittenBytes: Buffer | null = null;
   const snapshotFile = (filePath: string): void => {
     if (fileBackups.has(filePath)) return;
     try {
-      fileBackups.set(filePath, { existed: true, content: fs.readFileSync(filePath, 'utf8') });
+      fileBackups.set(filePath, { existed: true, content: fs.readFileSync(filePath) });
     } catch {
-      fileBackups.set(filePath, { existed: false, content: '' });
+      fileBackups.set(filePath, { existed: false, content: Buffer.alloc(0) });
     }
   };
 
@@ -2405,12 +2415,12 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
               );
             }
             if (!fileBackups.has(originalPath)) {
-              fileBackups.set(originalPath, { existed: true, content: rewrite.from });
+              fileBackups.set(originalPath, { existed: true, content: Buffer.from(rewrite.from, 'utf8') });
             }
             writeInFlight.add(originalPath);
             fs.writeFileSync(currentPath, rewrite.to, 'utf8');
             writeInFlight.delete(originalPath);
-            migrationWrote.set(originalPath, rewrite.to);
+            migrationWrote.set(originalPath, Buffer.from(rewrite.to, 'utf8'));
             editedFiles.push(path.join('phases', phaseEntry.newDir, rewrite.finalName));
           }
         }
@@ -2426,7 +2436,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       writeInFlight.add(roadmapPath);
       fs.writeFileSync(roadmapPath, newRoadmapContent, 'utf8');
       writeInFlight.delete(roadmapPath);
-      migrationWrote.set(roadmapPath, newRoadmapContent);
+      migrationWrote.set(roadmapPath, Buffer.from(newRoadmapContent, 'utf8'));
       editedFiles.push('ROADMAP.md');
     }
 
@@ -2447,28 +2457,43 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         writeInFlight.add(projectPath);
         fs.writeFileSync(projectPath, rewritten, 'utf8');
         writeInFlight.delete(projectPath);
-        migrationWrote.set(projectPath, rewritten);
+        migrationWrote.set(projectPath, Buffer.from(rewritten, 'utf8'));
         editedFiles.push('PROJECT.md');
       }
     }
 
     const stateEdits = crossRefsFor('STATE.md');
-    const stateMdPath = path.join(pDir, 'STATE.md');
     if (stateEdits.length > 0 && fs.existsSync(stateMdPath)) {
       const original = fs.readFileSync(stateMdPath, 'utf8');
       if (substituteCrossRefs(original, 'STATE.md', stateEdits) !== original) {
-        snapshotFile(stateMdPath);
-        writeInFlight.add(stateMdPath);
-        readModifyWriteStateMd(
-          stateMdPath,
-          (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
-          cwd,
-          { resync: false },
-        );
-        writeInFlight.delete(stateMdPath);
-        // The seam normalises what it writes, so the file is read back to learn what the migration left there.
-        migrationWrote.set(stateMdPath, fs.readFileSync(stateMdPath, 'utf8'));
-        editedFiles.push('STATE.md');
+        let stateWritten = false;
+        try {
+          stateWritten = readModifyWriteStateMd(
+            stateMdPath,
+            (current) => {
+              // #5120 re-review: snapshotted under the STATE.md lock, from the file
+              // this transform rewrites. A snapshot taken before the lock missed a
+              // writer that landed during the lock wait, and the rollback then put
+              // the older bytes back over that writer's content.
+              snapshotFile(stateMdPath);
+              return substituteCrossRefs(current, 'STATE.md', stateEdits);
+            },
+            cwd,
+            // #5120 review: the seam's atomic mode (temp file + rename; the prune
+            // precedent, #5831).
+            { resync: false, atomicWrite: true, onWritten: (written) => { stateMdWrittenBytes = written; } },
+          );
+        } finally {
+          // #5120: the snapshot is kept only for a STATE.md this step wrote. A step
+          // that wrote nothing (a no-op under the lock, a lock it never acquired, or
+          // a write that failed: atomicWrite publishes by temp file and rename only,
+          // never by an in-place write, so a failed write leaves the target's prior
+          // bytes) has nothing to roll back, and the rollback must never put the
+          // snapshot over another writer's content.
+          if (!stateWritten) fileBackups.delete(stateMdPath);
+        }
+        // #5120 review: listed only when this migration wrote it.
+        if (stateWritten) editedFiles.push('STATE.md');
       }
     }
 
@@ -2510,7 +2535,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       try {
         fs.writeFileSync(configPath, configText, 'utf8');
         writeInFlight.delete(configPath);
-        migrationWrote.set(configPath, configText);
+        migrationWrote.set(configPath, Buffer.from(configText, 'utf8'));
       } catch (err) {
         throw new Error(`config.json write phase failed: ${(err as Error).message}`);
       }
@@ -2522,46 +2547,115 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // file we snapshotted (deleting files that did not previously exist). This
     // actually restores `.planning/` regardless of git tracking — so the
     // "rolled back" claim is truthful — and never touches anything else.
-    const notReversed: string[] = [];
+    // What is named comes from the state each step leaves, checked right after the step, not from which calls
+    // threw (#5120 pre-push review). Names are relative to .planning/ (#5120 review Nit 4).
+    const planningName = (filePath: string): string => toPosixPath(path.relative(pDir, filePath));
+    // An entry gone from both paths is named at its old path, marked missing (#5120 pre-push review R3-m4).
+    const reversed: Array<{ oldPath: string; newPath: string }> = [];
+    const leftBehind: Array<{ at: string; missing: boolean; oldPath: string; newPath: string }> = [];
     for (let i = performedRenames.length - 1; i >= 0; i--) {
       const { oldPath, newPath } = performedRenames[i];
       try {
         if (fs.existsSync(newPath)) retryRenameSync(newPath, oldPath);
-      } catch {
-        /* best-effort */
-        notReversed.push(toPosixPath(path.relative(pDir, newPath)));
-      }
+      } catch { /* checked below */ }
+      if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) reversed.push({ oldPath, newPath });
+      else leftBehind.push({ at: fs.existsSync(newPath) ? newPath : oldPath, missing: !fs.existsSync(newPath), oldPath, newPath });
     }
+    const whereNow = (p: string): string => {
+      for (const r of reversed) {
+        if (p.startsWith(r.newPath + path.sep)) p = r.oldPath + p.slice(r.newPath.length); // allow-handrolled-containment: maps a path under a renamed directory back to the directory's old name for the error message; not a containment decision
+      }
+      return p;
+    };
+    const notReversed = leftBehind.map(({ at, missing }) => `${planningName(whereNow(at))}${missing ? ' (missing)' : ''}`);
     // #6351: a file is restored only while it still holds what the migration wrote, was torn by the migration's own
     // failed write, or is already back at its snapshot (which needs no write). Anything else was changed by another
     // writer after the migration touched it: overwriting it with the snapshot would silently destroy that edit, so it
-    // is left as found and named below.
+    // is left as found and named below. A file another writer saved with bytes identical to what the migration
+    // wrote is restored over (#5120 pre-push review R3-n4).
     const notRestored: string[] = [];
-    for (const [filePath, backup] of fileBackups) {
+    // #5120 review Minor 7: a restore that was due and failed is named with its reason (#1542).
+    const restoreFailed: string[] = [];
+    // Pre-push review R4-m5, R5-m2, R5-m3: a snapshotted file that a rename left behind is named where it is, not
+    // reported as removed by another writer. Snapshot keys are pre-migration paths, so a file rename's old path is
+    // mapped back through the directory renames before it is compared.
+    const preMigration = (p: string): string => {
+      for (const d of performedRenames) {
+        if (p.startsWith(d.newPath + path.sep)) p = d.oldPath + p.slice(d.newPath.length); // allow-handrolled-containment: maps a path under a renamed directory back to its pre-migration name; not a containment decision
+      }
+      return p;
+    };
+    const stillMoved = (filePath: string): { where: string; reason: string } | null => {
+      for (const r of leftBehind) {
+        if (!r.missing && preMigration(r.oldPath) === filePath) return { where: whereNow(r.at), reason: 'its rename was not reversed' };
+      }
+      for (const r of leftBehind) {
+        if (!r.missing && filePath.startsWith(r.oldPath + path.sep)) return { where: r.newPath + filePath.slice(r.oldPath.length), reason: 'its directory was not moved back' }; // allow-handrolled-containment: maps a snapshot key under a renamed directory to where that directory is; not a containment decision
+      }
+      return null;
+    };
+    const readNow = (filePath: string): { current: Buffer | null; readFailure: string | null } => {
       try {
-        let current: string | null = null;
-        let readFailure: string | null = null;
+        if (filePath === stateMdPath) {
+          const bytes = platformReadBytesSync(filePath);
+          return bytes === null ? { current: null, readFailure: 'removed' } : { current: bytes, readFailure: null };
+        }
+        return { current: fs.readFileSync(filePath), readFailure: null };
+      } catch (readErr) {
+        const code = (readErr as NodeJS.ErrnoException).code;
+        return { current: null, readFailure: code === 'ENOENT' ? 'removed' : `unreadable (${code ?? 'unknown'})` };
+      }
+    };
+    const holdsBackup = (filePath: string, backup: { existed: boolean; content: Buffer }): boolean => {
+      const { current, readFailure } = readNow(filePath);
+      return backup.existed ? current !== null && current.equals(backup.content) : readFailure === 'removed';
+    };
+    for (const [filePath, backup] of fileBackups) {
+      if (backup.existed && filePath === stateMdPath) {
+        // #5120: STATE.md is checked and restored under the STATE.md lock through the seam's byte-exact restore
+        // primitive (platformRestoreFileSync, #5831; ADR-3408 Amendment 4). It is restored only while it holds the
+        // bytes this migration wrote, read back under the lock when it wrote them (onWritten); the outcome is decided
+        // inside the lock (#5120 pre-push review R3-m3).
+        let outcome: 'restored' | 'asFound' | 'failed' = 'failed';
         try {
-          current = fs.readFileSync(filePath, 'utf8');
-        } catch (readErr) {
-          const code = (readErr as NodeJS.ErrnoException).code;
-          readFailure = code === 'ENOENT' ? 'removed' : `unreadable (${code ?? 'unknown'})`;
-        }
-        if (backup.existed ? current === backup.content : readFailure === 'removed') continue;
-        const wrote = migrationWrote.get(filePath);
-        const torn = writeInFlight.has(filePath);
-        if (!torn && (current === null || wrote === undefined || current !== wrote)) {
-          notRestored.push(`${toPosixPath(path.relative(pDir, filePath))} (${readFailure ?? 'modified'})`);
-          continue;
-        }
-        if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
+          withStateLock(stateMdPath, () => {
+            const { current, readFailure } = readNow(stateMdPath);
+            if (current !== null && current.equals(backup.content)) { outcome = 'restored'; return; }
+            const written = stateMdWrittenBytes;
+            if (current === null || written === null || !current.equals(written)) {
+              outcome = 'asFound';
+              notRestored.push(`STATE.md (${readFailure ?? (written === null ? 'unverified' : 'modified')})`);
+              return;
+            }
+            platformRestoreFileSync(stateMdPath, backup.content);
+            outcome = 'restored';
+          });
+        } catch { /* outcome stays failed */ }
+        if (outcome === 'failed') restoreFailed.push('STATE.md (the restore failed)');
+        continue;
+      }
+      const movedTo = stillMoved(filePath);
+      if (movedTo !== null) { restoreFailed.push(`${planningName(movedTo.where)} (${movedTo.reason})`); continue; }
+      const { current, readFailure } = readNow(filePath);
+      if (backup.existed ? current !== null && current.equals(backup.content) : readFailure === 'removed') continue;
+      const wrote = migrationWrote.get(filePath);
+      const torn = writeInFlight.has(filePath);
+      if (!torn && (current === null || wrote === undefined || !current.equals(wrote))) {
+        notRestored.push(`${planningName(filePath)} (${readFailure ?? 'modified'})`);
+        continue;
+      }
+      try {
+        if (backup.existed) fs.writeFileSync(filePath, backup.content);
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      } catch { /* best-effort */ }
+      } catch { /* checked below */ }
+      if (!holdsBackup(filePath, backup)) restoreFailed.push(`${planningName(filePath)} (the restore failed)`);
     }
     const conflicts = (notRestored.length > 0
       ? `. NOT restored (changed by another writer after the migration wrote them, left as found): ${notRestored.join(', ')}`
+      : '') + (restoreFailed.length > 0
+      ? `. NOT restored: ${restoreFailed.join(', ')}`
       : '') + (notReversed.length > 0
-      ? `. Directory renames NOT reversed: ${notReversed.join(', ')}`
+      ? `. Renames NOT reversed: ${notReversed.join(', ')}`
       : '');
     throw new Error(`Migration failed and rolled back: ${(err as Error).message}${conflicts}`);
   }
