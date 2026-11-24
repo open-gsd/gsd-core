@@ -124,33 +124,19 @@ If your prompt contains a `<worktree_branch_check>` embed instruction rather tha
 
 ---
 
-## cwd-drift sentinel — step 0a (#3097)
+## cwd-drift check — step 0a (#3097, #6216)
 
-A prior Bash call may have `cd`'d out of the worktree into the main repo. When
-that happens `[ -f .git ]` is false (main repo's `.git` is a directory), silently
-skipping all worktree guards. The sentinel captures the spawn-time toplevel and
-detects drift before every commit.
+A prior Bash call may have `cd`'d out of the worktree into the main repo, where
+`[ -f .git ]` is false and the worktree guards would be skipped. Keep the
+`worktree_root` that the executor's first `executor.guard` run printed as a literal
+path, and pass it on every later run, before every commit:
 
 ```bash
-if [ -f .git ]; then  # we are in a worktree
-  WT_GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
-  case "$WT_GIT_DIR" in
-    *.git/worktrees/*)
-      SENTINEL="$WT_GIT_DIR/gsd-spawn-toplevel"
-      [ ! -f "$SENTINEL" ] && git rev-parse --show-toplevel > "$SENTINEL" 2>/dev/null
-      EXPECTED_TL=$(cat "$SENTINEL" 2>/dev/null)
-      ACTUAL_TL=$(git rev-parse --show-toplevel 2>/dev/null)
-      if [ -n "$EXPECTED_TL" ] && [ "$ACTUAL_TL" != "$EXPECTED_TL" ]; then
-        echo "FATAL: cwd drifted from spawn-time worktree root (#3097)" >&2
-        echo "  Spawn-time: $EXPECTED_TL" >&2
-        echo "  Current:    $ACTUAL_TL" >&2
-        echo "RECOVERY: cd \"$EXPECTED_TL\" before staging, then re-run this commit." >&2
-        exit 1
-      fi
-      ;;
-  esac
-fi
+gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
 ```
+
+The guard exits 42 when the current directory's worktree root is anywhere else;
+`cd` back to that root and re-run the commit.
 
 ---
 
@@ -164,13 +150,11 @@ is silently lost.
 Before any Edit or Write using an absolute path:
 
 ```bash
-WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-# Fail fast if ABS_PATH resolves outside the worktree
-if [[ "$ABS_PATH" != "$WT_ROOT"* ]]; then
-  echo "WARNING: $ABS_PATH is outside the worktree ($WT_ROOT)" >&2
-  echo "Use a relative path or recompute the absolute path from WT_ROOT." >&2
-fi
+gsd_run query executor.guard --path "<absolute path>"
 ```
+
+It exits 42 when the path lands outside the worktree root, judging a file not yet
+created by where it would land.
 
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the

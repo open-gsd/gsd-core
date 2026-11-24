@@ -178,9 +178,17 @@ describe('canonical worktree-branch-check fragment is the single source of truth
     assert.ok(/\brelease\b/.test(block), 'fragment protected-ref alternation must include release');
   });
 
-  test('fragment block positive allow-list matches ^((worktree-)?agent-|worktree-wf_) pattern', () => {
-    const allowListRe = /grep\s+-Eq?\s+'\^\(\(worktree-\)\?agent-\|worktree-wf_/;
-    assert.ok(allowListRe.test(block), 'fragment block must enforce a positive allow-list matching ^((worktree-)?agent-|worktree-wf_) (#3021)');
+  test('fragment block runs the executor.guard verb, which holds the positive ^((worktree-)?agent-|worktree-wf_) allow-list (#3021, #6216)', () => {
+    // #6216: the allow-list regex lives in the verb (AGENT_BRANCH_RE); its boundary cases are
+    // tested against the real verb in tests/executor-guard.test.cjs. The block must run that verb
+    // in its spawn-time form and name the namespaces it holds.
+    assert.match(block, /```bash\r?\ngsd_run query executor\.guard --expected-base "\{EXPECTED_BASE\}" --expected-base-alternate "\{EXPECTED_BASE_ALTERNATE\}"\r?\n```/,
+      'fragment block must run `gsd_run query executor.guard --expected-base "{EXPECTED_BASE}" --expected-base-alternate "{EXPECTED_BASE_ALTERNATE}"` as one command');
+    assert.match(block, /`agent-\*` \/ `worktree-agent-\*` \/ `worktree-wf_\*` namespace/,
+      'fragment block must name the agent-* / worktree-agent-* / worktree-wf_* namespace (#3021)');
+    const { AGENT_BRANCH_RE } = require('../gsd-core/bin/lib/executor-guard.cjs');
+    assert.strictEqual(AGENT_BRANCH_RE.source, '^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$',
+      'the verb must hold the documented allow-list pattern');
   });
 
   test('fragment block contains update-ref prohibition text', () => {

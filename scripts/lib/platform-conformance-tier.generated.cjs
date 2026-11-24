@@ -97,7 +97,6 @@ module.exports = {
   "tests/executed-plan.test.cjs",
   "tests/executor-mvp-tdd-section.test.cjs",
   "tests/executor-policy-new-project-6211.test.cjs",
-  "tests/executor-sequential-linked-worktree.test.cjs",
   "tests/external-descriptor-confinement.test.cjs",
   "tests/fallow-runner.test.cjs",
   "tests/faulty-deps.test.cjs",
