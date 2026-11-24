@@ -251,6 +251,14 @@ node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <versio
 
 ### Bracket phase ids (`phase remove`, `phase next-decimal`)
 
+With custom naming, `phase add "Auth" --id CK.02-05` or
+`--id "[CK.02] 05"` accepts a canonical active-milestone identity, preserving
+its number even when higher IDs exist. Invalid, foreign, unpadded, plan or
+slug-suffixed IDs fail with reason `usage` and zero writes. Output matches a
+generated bracket add; inferred dependencies are omitted. Custom bracket add
+without an ID and custom add-batch refuse; use `phase add --id`.
+
+
 When `phase_id_convention` is `"bracket"` (see [CONFIGURATION.md](CONFIGURATION.md)),
 these commands work on the active milestone's `[CODE.MM] NN` identities:
 
@@ -738,6 +746,13 @@ prints its items joined by commas and an object prints `[object Object]`, so rea
 values without `--raw`. Under `--raw`, a `--default` value prints exactly as typed (`007` stays
 `007`). Secret keys (`brave_search`, `firecrawl`, `exa_search`) print masked in both modes, and an
 unset one prints `(unset)`.
+
+New projects default to bracket IDs and generated naming, deriving a project code
+from the scoped PROJECT.md title or directory basename. Explicit valid codes win;
+explicit convention `sequential` opts out (null does not). See
+[identity defaults](CONFIGURATION.md#new-project-identity-defaults) for derivation
+and alias semantics. `--dry-run` previews without writing; config repair and
+existing projects retain legacy convention behavior.
 
 `config-new-project` takes the chosen settings as one JSON object, nested by section
 (`'{"mode":"yolo","workflow":{"research":false}}'`), and layers them over the built-in and
