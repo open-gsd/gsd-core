@@ -208,7 +208,6 @@ module.exports = {
   "tests/nsegment-phase-grammar.test.cjs",
   "tests/opencode-advisory-stderr.test.cjs",
   "tests/opencode-command-dir-plural.test.cjs",
-  "tests/opencode-config-jsonc.test.cjs",
   "tests/opencode-generations.smoke.test.cjs",
   "tests/opencode-install-notices.test.cjs",
   "tests/opencode-parity-hooks.test.cjs",
