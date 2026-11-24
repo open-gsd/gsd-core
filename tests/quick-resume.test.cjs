@@ -15,6 +15,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
+const { resolveQuickResume, splitQuickResumeArgs } = require('../gsd-core/bin/lib/quick-resume.cjs');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PINNED_MS = 1_700_000_000_000; // 2023-11-14T22:13:20Z
@@ -315,5 +317,47 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
     assert.equal(out.slug, 'add-a-dry-run-option');
     assert.equal('legacy' in out, false, 'a first run carries no resume fields');
     assert.equal('resume' in out, false);
+  });
+});
+
+describe('#6530 quick-resume properties', () => {
+  const slugArb = fc.stringMatching(/^[a-z0-9-]{1,20}$/);
+  const tokenArb = fc.string({ maxLength: 12 }).filter((t) => t !== '--resume' && !t.startsWith('--resume='));
+
+  test('removing one --resume occurrence (either form) gives back exactly the other tokens', () => {
+    fc.assert(
+      // A value that starts with `--` is flag-shaped and is not consumed (the parser seam's rule), so keep it out here.
+      fc.property(fc.array(tokenArb, { maxLength: 8 }), fc.stringMatching(/^[a-z0-9][a-z0-9-]{0,19}$/), fc.nat(), fc.boolean(), (tokens, slug, at, eqForm) => {
+        const pos = at % (tokens.length + 1);
+        const inserted = eqForm ? [`--resume=${slug}`] : ['--resume', slug];
+        const argv = [...tokens.slice(0, pos), ...inserted, ...tokens.slice(pos)];
+        const split = splitQuickResumeArgs(argv);
+        assert.equal(split.resumeCount, 1);
+        assert.deepEqual(split.descriptionTokens, tokens);
+        assert.deepEqual(splitQuickResumeArgs(tokens), { resumeCount: 0, descriptionTokens: tokens });
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  test('a lookup finds a task exactly when its whole slug is a task directory\'s slug', (t) => {
+    const root = fs.realpathSync.native(createTempProject('gsd-quick-resume-prop-'));
+    t.after(() => cleanup(root));
+    fc.assert(
+      fc.property(fc.uniqueArray(slugArb, { minLength: 1, maxLength: 5 }), slugArb, (slugs, query) => {
+        const dir = fs.mkdtempSync(path.join(root, 'run-'));
+        slugs.forEach((slug, i) => makeTask(dir, `260101-a${String(i).padStart(2, '0')}-${slug}`));
+        const r = resolveQuickResume(dir, query);
+        const index = slugs.indexOf(query);
+        if (index === -1) {
+          assert.deepEqual(r, { ok: false, reason: 'not_found' });
+        } else {
+          assert.equal(r.ok, true);
+          assert.equal(r.quick_id, `260101-a${String(index).padStart(2, '0')}`);
+          assert.equal(r.slug, query);
+        }
+      }),
+      { numRuns: 40 },
+    );
   });
 });
