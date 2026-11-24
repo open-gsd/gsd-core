@@ -258,6 +258,67 @@ describe('research-provider: terminal fallback to websearch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #6563: Keenable is an opt-in web-discovery provider
+// ---------------------------------------------------------------------------
+
+describe('research-provider: keenable is opt-in (#6563)', () => {
+  const NO_PREMIUM = {
+    exa_search: false,
+    tavily_search: false,
+    brave_search: false,
+    firecrawl: false,
+    ref_search: false,
+    perplexity: false,
+  };
+
+  test('keenable sits after brave and before the websearch terminal', () => {
+    const web = PROVIDER_WATERFALL.web;
+    assert.ok(web.includes('keenable'));
+    assert.ok(web.indexOf('brave') < web.indexOf('keenable'));
+    assert.ok(web.indexOf('keenable') < web.indexOf('websearch'));
+  });
+
+  test('keenable is unavailable unless keenable_search is set', () => {
+    assert.equal(providerAvailability(NO_PREMIUM).keenable, false);
+    assert.equal(providerAvailability({}).keenable, false);
+    assert.equal(providerAvailability({ keenable_search: true }).keenable, true);
+  });
+
+  test('unset keenable_search falls through to websearch (nothing sent to Keenable)', async () => {
+    const result = await planResearch({
+      questions: [{ text: 'current js bundler comparison', kind: 'web' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: NO_PREMIUM,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+    assert.equal(result.items[0].fetch.provider, 'websearch');
+  });
+
+  test('only keenable_search enabled picks keenable for web questions', async () => {
+    const result = await planResearch({
+      questions: [{ text: 'current js bundler comparison', kind: 'web' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: { ...NO_PREMIUM, keenable_search: true },
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+    assert.equal(result.items[0].fetch.provider, 'keenable');
+  });
+
+  test('brave still wins over keenable when both are enabled', async () => {
+    const result = await planResearch({
+      questions: [{ text: 'current js bundler comparison', kind: 'web' }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config: { ...NO_PREMIUM, brave_search: true, keenable_search: true },
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+    assert.equal(result.items[0].fetch.provider, 'brave');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // FINDING 5 REGRESSION: planResearch skips questions with missing/non-string text
 // ---------------------------------------------------------------------------
 

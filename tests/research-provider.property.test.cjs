@@ -64,7 +64,7 @@ describe('research-provider property: classifyConfidence never throws', () => {
 //   3. authority === 'official' (context7, ref) → MEDIUM  (no legitimacyVerdict)
 //   4. authority === 'scrape'   (jina, firecrawl) → MEDIUM (no legitimacyVerdict)
 //   5. legitimacyVerdict 'OK' + unknown provider  → MEDIUM (groundTruth but no authority)
-//   6. authority === 'web' (exa/tavily/brave/perplexity/websearch)
+//   6. authority === 'web' (exa/tavily/brave/perplexity/keenable/websearch)
 //        + verifiedAgainstOfficial === true  → MEDIUM
 //   7. everything else (web without verification, unknown provider)  → LOW
 // ---------------------------------------------------------------------------
@@ -232,6 +232,13 @@ describe('research-provider boundary: LOW classification', () => {
   test('brave, no verdict → LOW', () => {
     assert.equal(
       classifyConfidence({ provider: 'brave' }),
+      'LOW'
+    );
+  });
+
+  test('keenable, no verdict → LOW', () => {
+    assert.equal(
+      classifyConfidence({ provider: 'keenable' }),
       'LOW'
     );
   });

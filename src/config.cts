@@ -328,6 +328,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   const hasPerplexity = !!(process.env['PERPLEXITY_API_KEY'] || fs.existsSync(perplexityKeyFile));
   const jinaKeyFile = path.join(gsdHome, '.gsd', 'jina_api_key');
   const hasJina = !!(process.env['JINA_API_KEY'] || fs.existsSync(jinaKeyFile));
+  const keenableKeyFile = path.join(gsdHome, '.gsd', 'keenable_api_key');
+  const hasKeenableSearch = !!(process.env['KEENABLE_API_KEY'] || fs.existsSync(keenableKeyFile));
 
   // Load user-level defaults from $GSD_HOME/.gsd/defaults.json if available
   const globalDefaultsPath = configLoader.globalDefaultsPath(gsdHome);
@@ -361,6 +363,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     ref_search: hasRefSearch,
     perplexity: hasPerplexity,
     jina: hasJina,
+    keenable_search: hasKeenableSearch,
     git: {
       branching_strategy: CONFIG_DEFAULTS.branching_strategy,
       create_tag: true,
