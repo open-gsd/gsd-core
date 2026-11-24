@@ -57,6 +57,8 @@ Parse `$QB_PARSE_JSON` for `jobs` (`"auto"` or an integer), `validate` (bool), `
 
 Extract the raw task-list text / `--file <path>` from the `<arguments>` block (everything that is not `--jobs <v>`, `--validate`, `--research`, `--resume <id>`, or `--file <path>`'s own flag pair).
 
+Init loads the batch first on a resume (#6532): its section manifest and `modes` come from the modes `quick-batch create` stored in `BATCH.json`, and a resume whose mode flags differ from them is refused. A batch created before #6532 has no stored modes and keeps the flags. The block sets `$VALIDATE_MODE` and `$RESEARCH_MODE` from init's `modes`, never from the flags:
+
 ```bash
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
@@ -65,17 +67,7 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
 VALIDATE_PARAM=""; if [ "$VALIDATE_MODE" = true ]; then VALIDATE_PARAM="--validate"; fi
 RESEARCH_PARAM=""; if [ "$RESEARCH_MODE" = true ]; then RESEARCH_PARAM="--research"; fi
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
-AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
-AGENT_SKILLS_EXECUTOR=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
-AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
-AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
-AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
-```
-
-Init loads the batch first on a resume (#6532): its section manifest and `modes` come from the modes `quick-batch create` stored in `BATCH.json`, and a resume whose mode flags differ from them is refused. A batch created before #6532 has no stored modes and keeps the flags. Set `$VALIDATE_MODE` and `$RESEARCH_MODE` from init's `modes`, never from the flags:
-
-```bash
-INIT=$(gsd_run query init.quick-batch ${GSD_WS:+--ws=${GSD_WS##* }} ${RESUME_BATCH_ID:+--resume "$RESUME_BATCH_ID"} $VALIDATE_PARAM $RESEARCH_PARAM)
+INIT=$(gsd_run query init.quick-batch ${GSD_WS:+--ws=${GSD_WS##* }} ${RESUME_BATCH_ID:+--resume} ${RESUME_BATCH_ID:+"$RESUME_BATCH_ID"} $VALIDATE_PARAM $RESEARCH_PARAM)
 QB_INIT_RC=$?
 if [ $QB_INIT_RC -ne 0 ]; then exit 1; fi
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
@@ -84,6 +76,11 @@ VALIDATE_MODE=false; RESEARCH_MODE=false
 for QB_MODE in $QB_MODES; do
   case "$QB_MODE" in validate) VALIDATE_MODE=true ;; research) RESEARCH_MODE=true ;; esac
 done
+AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_EXECUTOR=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 **If `$QB_INIT_RC` is non-zero:** print the CLI's error verbatim and STOP — the resume named an unknown or corrupt batch, or its mode flags differ from the modes the batch was created with (the error names them). Do not dispatch anything.
