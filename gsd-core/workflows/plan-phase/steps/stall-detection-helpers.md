@@ -54,12 +54,17 @@ consumes the real returned result and removes the receipt the same way.
 not replace the runtime's own completion. If the spawned agent's real completion
 result reaches the orchestrator between cycles, stop the watch and route that
 result's recognized marker exactly as the `false` path does. Precedence: whichever
-of the two ends the wait routes it. **A fresh receipt is waited out, not reported:** the agent writes it as its last tool
+of the two ends the wait routes it.
+
+**A fresh receipt is waited out, not reported:** the agent writes it as its last tool
 action, before its final message, so when the watch finds one younger than
-`RECEIPT_SETTLE_SECONDS` (120) it sleeps out the rest of that window in the same call
-and then reports `marker_received` (an unreadable or future modification time counts at
-once). Every route below therefore sees a receipt only after its body had that long to
-arrive; a settled receipt with no body is a real gap, not a race. The receipt carries only the marker; the full
+`RECEIPT_SETTLE_SECONDS` (120; one poll interval when that is shorter) it sleeps out the
+rest of that window in the same call and then reports `marker_received` (an unreadable
+or future modification time counts at once). Every route below therefore sees a receipt
+only after its body had that long to arrive; a settled receipt with no body is a real
+gap, not a race.
+
+The receipt carries only the marker; the full
 return (the checker's issue list, the planner's plan count or checkpoint) always
 comes from the completion result. If both are present and name different markers,
 treat the return as unrecognized (9a/11a). A route that needs the body when it never
@@ -105,7 +110,8 @@ before its first `PLAN.md`, so its watch can only end on the completion result o
 as `stalled` at the threshold. There is no heartbeat protocol.
 
 **Single-cycle by design, not one long-lived loop:** `gsd_stall_watch` sleeps
-for exactly one `PLANNER_STALL_INTERVAL_MINUTES` and returns — it does NOT
+for one `PLANNER_STALL_INTERVAL_MINUTES` (plus, only for a receipt it finds younger than
+the settle window, the rest of that window, never more than one more interval) and returns — it does NOT
 loop internally for the full `PLANNER_STALL_THRESHOLD_MINUTES`. A single Bash
 tool call blocking for `threshold + interval` minutes (up to 15 min at
 defaults) risks the *host tool's own* timeout killing the call before it ever
@@ -352,9 +358,9 @@ gsd_return_marker() {
 # result, when it lands, still ends the wait first. This is the ONE place that rule
 # lives: every route that says "when the watch ends" sees a receipt only after it
 # settled, so "receipt, no body" there is a real gap (9a/11a), not a race. The extra
-# wait is at most RECEIPT_SETTLE_SECONDS after the receipt was written, so a finished
-# agent is still reported within one poll interval whenever the interval is at least
-# that long (the default is 5 minutes). A constant, not a config key.
+# wait ends at most RECEIPT_SETTLE_SECONDS after the receipt was written, or at the next
+# poll interval when that is shorter, so a finished agent is still reported within one
+# poll interval. A constant, not a config key.
 RECEIPT_SETTLE_SECONDS=120
 
 # _gsd_mtime FILE — print FILE's mtime as epoch seconds: GNU `stat -c %Y` (Linux, Git
@@ -367,22 +373,25 @@ _gsd_mtime() {
   printf '%s\n' "${t:-0}"
 }
 
-# _gsd_receipt_settle_wait FILE NOW — print the seconds left until FILE is
-# RECEIPT_SETTLE_SECONDS old (1..RECEIPT_SETTLE_SECONDS), or 0 when it already is. An
-# unreadable mtime or one in the future (clock skew) prints 0: the receipt then counts
-# at once, as before, so a bogus timestamp can never stretch the wait.
+# _gsd_receipt_settle_wait FILE NOW — print the seconds left until FILE is as old as the
+# settle window (1..window), or 0 when it already is. The window is
+# RECEIPT_SETTLE_SECONDS, or one poll interval when that is shorter, so the wait never
+# stretches a report past the interval it was due in. An unreadable mtime or one in the
+# future (clock skew) prints 0: the receipt then counts at once, as before, so a bogus
+# timestamp can never stretch the wait.
 _gsd_receipt_settle_wait() {
-  local m age
+  local m age win="$RECEIPT_SETTLE_SECONDS"
+  [ "$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))" -lt "$win" ] && win=$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))
   m=$(_gsd_mtime "$1"); [ -n "$m" ] || { echo 0; return 0; }
   age=$(( $2 - m ))
-  if [ "$age" -ge 0 ] && [ "$age" -lt "$RECEIPT_SETTLE_SECONDS" ]; then echo $(( RECEIPT_SETTLE_SECONDS - age )); else echo 0; fi
+  if [ "$age" -ge 0 ] && [ "$age" -lt "$win" ]; then echo $(( win - age )); else echo 0; fi
 }
 
 # gsd_stall_watch — ONE bounded, real (non-LLM-side) sleep-and-check cycle, not
 # a long-lived loop (see "Single-cycle by design" above — a single Bash tool
 # call spanning the full threshold risks the host tool's own timeout killing
 # it first). Sleeps one PLANNER_STALL_INTERVAL_MINUTES (plus the rest of
-# RECEIPT_SETTLE_SECONDS when the receipt it finds is younger than that), then checks for
+# the settle window when the receipt it finds is younger than that), then checks for
 # a completion marker in $2 (the spawn's {receipt}, via gsd_return_marker) or
 # fresh mtime activity under $3 (an artifact glob), against
 # elapsed time since $1 (an epoch-seconds dispatch_ts the CALLER records once,
