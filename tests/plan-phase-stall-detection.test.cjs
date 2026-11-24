@@ -1206,10 +1206,10 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   // Run the shipped helpers with `sleep` stubbed (no real interval wait), `date +%s`
   // pinned to NOW and the interval/threshold pinned, then run `call`. Returns
   // trimmed stdout.
-  function runHelpers(call, { interval = 5, threshold = 10 } = {}) {
+  function runHelpers(call, { interval = 5, threshold = 10, prelude = '' } = {}) {
     const helpersBash = extractStallFunctionsBash();
     const clock = `date() { if [ "$1" = "+%s" ]; then echo ${NOW}; else command date "$@"; fi; }`;
-    const script = `${helpersBash}\nsleep() { :; }\n${clock}\nPLANNER_STALL_INTERVAL_MINUTES=${interval}\nPLANNER_STALL_THRESHOLD_MINUTES=${threshold}\n${call}\n`;
+    const script = `${helpersBash}\nsleep() { :; }\n${clock}\n${prelude}\nPLANNER_STALL_INTERVAL_MINUTES=${interval}\nPLANNER_STALL_THRESHOLD_MINUTES=${threshold}\n${call}\n`;
     const result = runBashScript(script, []);
     assert.equal(result.status, 0, result.stderr);
     return result.stdout.trim();
@@ -1243,6 +1243,73 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       'a file whose only marker text is the prompt/definition must not count as the agent returning');
     const planner = watchCallOf(sectionOf(readPlanPhase(), PLANNER_SECTION));
     assert.equal(watch(NOW, f.transcript, f.noPlans, planner.markers), 'waiting');
+  });
+
+  // #5182 hand-back (2026-11-22): the agent writes its receipt as its LAST tool action, before
+  // its final message, so a receipt that exists is not yet a return that arrived. The watch reads
+  // a receipt younger than the settle window as `active`; the window is stated once, in the helper
+  // doc, and every route that reads "when the watch ends" inherits it. Ages are set on the
+  // receipt's mtime against the injected NOW; no wall clock is read.
+  const SETTLE_SECONDS = 120;
+  const CHECKER_MARKERS = ['## VERIFICATION PASSED', '## ISSUES FOUND'];
+
+  function receiptAged(f, age, marker = '## VERIFICATION PASSED') {
+    fs.writeFileSync(f.receipt, `${marker}\n`);
+    fs.utimesSync(f.receipt, NOW - age, NOW - age);
+  }
+
+  test('a receipt younger than the settle window reads active, not marker_received; at the window it counts (#5182)', (t) => {
+    const f = fixture(t);
+    // limit-1 / limit / limit+1, and the instant after the write.
+    for (const [age, want] of [[0, 'active'], [1, 'active'], [SETTLE_SECONDS - 1, 'active'], [SETTLE_SECONDS, 'marker_received'], [SETTLE_SECONDS + 1, 'marker_received']]) {
+      receiptAged(f, age);
+      assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), want, `receipt age ${age}s`);
+    }
+  });
+
+  test('a settling receipt past the stall threshold still reads active, never stalled (#5182)', (t) => {
+    const f = fixture(t);
+    receiptAged(f, 5);
+    // dispatched 11 minutes ago against a 10-minute threshold: with no receipt this is `stalled`.
+    assert.equal(watch(NOW - 11 * 60, f.receipt, f.noPlans, CHECKER_MARKERS), 'active');
+    fs.rmSync(f.receipt);
+    assert.equal(watch(NOW - 11 * 60, f.receipt, f.noPlans, CHECKER_MARKERS), 'stalled', 'control: no receipt, same clock');
+  });
+
+  test('a receipt dated in the future, or with an unreadable mtime, counts at once (#5182)', (t) => {
+    const f = fixture(t);
+    for (const age of [-1, -86400]) {
+      receiptAged(f, age);
+      assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'marker_received', `receipt age ${age}s (future mtime)`);
+    }
+    receiptAged(f, 0);
+    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS, { prelude: 'stat() { return 1; }' }), 'marker_received', 'no stat form works');
+    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS, { prelude: 'stat() { echo not-a-number; }' }), 'marker_received', 'stat prints a non-number');
+  });
+
+  test('a fresh receipt without a watched marker is not activity (#5182)', (t) => {
+    const f = fixture(t);
+    receiptAged(f, 0, '## PLANNING COMPLETE');
+    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'waiting');
+  });
+
+  test('the settle verdict matches its oracle for any receipt age (#5182)', (t) => {
+    const f = fixture(t);
+    fc.assert(fc.property(fc.integer({ min: -5, max: 400 }), (age) => {
+      receiptAged(f, age);
+      const want = age >= 0 && age < SETTLE_SECONDS ? 'active' : 'marker_received';
+      return watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS) === want;
+    }), { numRuns: 10, examples: [[-1], [0], [SETTLE_SECONDS - 1], [SETTLE_SECONDS], [SETTLE_SECONDS + 1]] });
+  });
+
+  test('the settle window in the helper constant, the prose and this suite agree (#5182)', () => {
+    const doc = readStallHelpersDoc();
+    const constant = doc.match(/^RECEIPT_SETTLE_SECONDS=(\d+)$/m);
+    assert.ok(constant, 'the helper fence defines RECEIPT_SETTLE_SECONDS=<n>');
+    const prose = doc.match(/`RECEIPT_SETTLE_SECONDS` \((\d+)\)/);
+    assert.ok(prose, 'the prose states the window as `RECEIPT_SETTLE_SECONDS` (<n>)');
+    assert.equal(Number(constant[1]), Number(prose[1]), 'constant and prose name the same number');
+    assert.equal(Number(constant[1]), SETTLE_SECONDS, 'this suite pins the same number');
   });
 
   test('AC1 wiring: all five watch sites bind {receipt}; none binds the host {outputFile}', () => {
@@ -2191,6 +2258,31 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // A normal phase dir under the same root is still accepted.
     const ok = receiptPathFrom(f, proj, `${fwd(proj)}/sub/ph`, proj);
     assert.equal(ok.status, 0, ok.stderr);
+  });
+
+  // Review 2026-11-20 Minor 1: Windows reads `GIT~1` (the 8.3 name) as `.git`. The generated
+  // segment property draws that name only by chance (8 unseeded runs), so removing the
+  // `*/git~1/*` arm left every row green; this row pins it, with the reason named.
+  test('gsd_receipt_path refuses a phase dir under GIT~1, in any case, with the inside-.git reason, and creates nothing (#5182)', (t) => {
+    const f = fixture(t);
+    const proj = path.join(f.dir, 'proj');
+    fs.mkdirSync(path.join(proj, 'sub', 'ph'), { recursive: true });
+    for (const name of ['GIT~1', 'git~1', 'Git~1']) {
+      for (const tail of ['', '/new-dir', '/a/b']) {
+        const r = receiptPathFrom(f, proj, `${fwd(proj)}/${name}${tail}`, proj);
+        assert.equal(r.status, 1, `${name}${tail}: refused with exit 1`);
+        assert.equal(r.stdout, '', `${name}${tail}: no path printed`);
+        assert.ok(r.stderr.includes('the phase dir is inside .git'), `${name}${tail}: names the inside-.git reason, got ${JSON.stringify(r.stderr)}`);
+      }
+    }
+    for (const name of ['GIT~1', 'git~1', 'Git~1']) {
+      assert.ok(!fs.existsSync(path.join(proj, name)), `nothing is created under ${name}`);
+    }
+    // Only the exact 8.3 name: `GIT~12` and `xGIT~1` are ordinary names.
+    for (const okName of ['GIT~12', 'xGIT~1']) {
+      const ok = receiptPathFrom(f, proj, `${fwd(proj)}/${okName}`, proj);
+      assert.equal(ok.status, 0, `${okName}: accepted, ${ok.stderr}`);
+    }
   });
 
   // Pre-push review r1 NI-1, NI-2, Q-3 and r2 MI-A.
