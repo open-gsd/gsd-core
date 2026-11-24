@@ -60,11 +60,8 @@ function loadYaml(loader = () => require('js-yaml')) {
   }
 }
 
-module.exports = {
-  id: 'mempalace-capture-headless-invocation',
-  issue: '#2220',
-  walkers: { isMineCommand, isBareEntry, roomsBlock, loadYaml },
-  check(ctx) {
+function buildCheck(loadYamlFn = loadYaml) {
+  return (ctx) => {
     for (const rel of SURFACES) {
       ctx.doc(rel)
         .satisfies((text) => {
@@ -77,7 +74,9 @@ module.exports = {
         .satisfies((text) => {
           const block = roomsBlock(text);
           if (block === null) return 'could not locate a rooms: YAML block';
-          const loaded = loadYaml();
+          // The words of the raw bare-entry lines: the bare-entry assertion below reports those, this one the other non-dict entries.
+          const bareWords = new Set(block.split('\n').filter(isBareEntry).map((line) => line.trim().slice(1).trim()));
+          const loaded = loadYamlFn();
           if (loaded.error) return loaded.error;
           let parsed;
           try {
@@ -88,7 +87,7 @@ module.exports = {
           if (!(parsed && Array.isArray(parsed.rooms))) return 'rooms: must parse to an array';
           if (parsed.rooms.length < 5) return `expected the GSD room taxonomy (at least 5 rooms), got ${parsed.rooms.length}`;
           for (const [at, entry] of parsed.rooms.entries()) {
-            if (typeof entry === 'string' && /^[A-Za-z][A-Za-z0-9_-]*$/.test(entry)) continue; // a bare-string entry is reported once, below
+            if (typeof entry === 'string' && bareWords.has(entry)) continue; // a bare-string entry is reported once, below
             if (!(entry !== null && typeof entry === 'object' && !Array.isArray(entry))) return `rooms:[${at}] must be a dict, got ${JSON.stringify(entry)}`;
             if (!(typeof entry.name === 'string' && entry.name.length > 0)) return `rooms:[${at}] must have a non-empty name string`;
           }
@@ -123,5 +122,12 @@ module.exports = {
       .lacks('mempalace mine --daemon --background', 'the unconditional daemon invocation must not return');
 
     ctx.doc('.gitignore').has('.mempalace-stage/', '.gitignore must exclude .planning/.mempalace-stage/');
-  },
+  };
+}
+
+module.exports = {
+  id: 'mempalace-capture-headless-invocation',
+  issue: '#2220',
+  walkers: { isMineCommand, isBareEntry, roomsBlock, loadYaml, buildCheck },
+  check: buildCheck(),
 };

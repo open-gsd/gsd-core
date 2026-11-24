@@ -131,14 +131,15 @@ module.exports = {
       docOf(referenceFile)
         .satisfies((text) => {
           const line = lineOf(text, (candidate) => candidate.includes('tdd.md') && candidate.includes('TDD_APPLICABLE ?'));
-          if (line === undefined) return 'it lists no tdd.md conditional embed entry';
+          // An entry that is not conditional is reported by the assertion below, a missing one only once.
+          if (line === undefined) return lineOf(text, (candidate) => candidate.includes('tdd.md') && candidate.includes('TDD_APPLICABLE')) !== undefined ? true : once(`no-embed:${referenceFile}`, 'it lists no tdd.md conditional embed entry');
           if (!line.includes('type: tdd')) return `the comment lacks plan type: tdd: ${line.trim()}`;
           if (!line.includes('tdd="true"')) return `the comment lacks the tdd="true" task attribute: ${line.trim()}`;
           return line.includes('workflow.tdd_mode') || line.includes('config') || `the comment lacks the workflow.tdd_mode config default: ${line.trim()}`;
         }, `${name}: the tdd.md embed-line comment must describe the same three sources (#4265)`)
         .satisfies((text) => {
           const line = lineOf(text, (candidate) => candidate.includes('tdd.md') && candidate.includes('TDD_APPLICABLE'));
-          if (line === undefined) return 'it lists no tdd.md conditional embed entry';
+          if (line === undefined) return once(`no-embed:${referenceFile}`, 'it lists no tdd.md conditional embed entry');
           return line.includes('TDD_APPLICABLE ?') || `the entry is not conditional: ${line.trim()}`;
         }, `${name}: the tdd.md entry must stay conditional on TDD_APPLICABLE (#3990)`);
     }

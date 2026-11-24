@@ -120,7 +120,8 @@ module.exports = {
   loadLib,
   connectivesBefore,
   hasUnlessGate,
-  check(ctx) {
+  // `loadRegistry` is a seam: a test hands in a registry that has no mempalace schema or that cannot be loaded.
+  check(ctx, loadRegistry = () => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'))) {
     const doc = new Map([CAPTURE_SKILL, CAPTURE_COMMAND, RECALL_SKILL, RECALL_COMMAND, CURATOR, CURATOR_COMPACT].map((rel) => [rel, ctx.doc(rel)]));
     // The positive-presence needles asserted absent per file; the registry loop below skips what these already cover.
     const explicit = new Map([[CAPTURE_SKILL, []], [CAPTURE_COMMAND, []], [RECALL_SKILL, []], [RECALL_COMMAND, []], [CURATOR, []]]);
@@ -172,7 +173,7 @@ module.exports = {
 
     // The registry defaults the corrected gates depend on (the shipped module): when it cannot be loaded that is one
     // finding and the text checks still run over the keys the test named.
-    const loaded = loadLib(() => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'capability-registry.cjs')), REGISTRY_FILE);
+    const loaded = loadLib(loadRegistry, REGISTRY_FILE);
     let defaultTrue = DEFAULT_TRUE_KEYS;
     if (loaded.error) {
       ctx.fail(REGISTRY_FILE, loaded.error);

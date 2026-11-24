@@ -78,17 +78,15 @@ function inRequiredReading(text, ref) {
   return false;
 }
 
-module.exports = {
-  id: 'thinking-model-guidance',
-  walkers: { loadFenceScanner },
-  check(ctx) {
+function buildCheck(loadFences = () => loadFenceScanner()) {
+  return (ctx) => {
     // One document per path: a file that is gone, or empty, is one finding however many assertions read it.
     const docs = new Map();
     const docOf = (rel) => {
       if (!docs.has(rel)) docs.set(rel, ctx.doc(rel));
       return docs.get(rel);
     };
-    const fences = loadFenceScanner();
+    const fences = loadFences();
     if (fences.error) ctx.fail(REFERENCES, fences.error);
     for (const context of CONTEXTS) {
       const rel = `${REFERENCES}/thinking-models-${context}.md`;
@@ -146,5 +144,11 @@ module.exports = {
         }, `${agent}.md must place the decision-point annotation after the block ${wiring.block}`)
         .satisfies((text) => !inRequiredReading(text, wiring.ref), `${agent}.md must not put ${wiring.ref} inside a <required_reading> block (inline @-reference wiring at decision points only)`);
     }
-  },
+  };
+}
+
+module.exports = {
+  id: 'thinking-model-guidance',
+  walkers: { loadFenceScanner, buildCheck },
+  check: buildCheck(),
 };

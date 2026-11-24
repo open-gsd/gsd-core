@@ -9,6 +9,7 @@
 // The template section ends at `## Error Panel`: the old test ended it at `## Error Box`, a heading renamed long ago,
 // so it read to the end of the file. Was tests/next-up-clear-order.test.cjs (its bug-3083 block was folded in).
 
+const { asciiLower } = require('./lib/ascii-lower.cjs');
 const { hasSequence } = require('./lib/has-sequence.cjs');
 
 const UI_BRAND = 'gsd-core/references/ui-brand.md';
@@ -21,7 +22,7 @@ const EXEC_FLAG_SET = 'GAPS_EXEC_FLAG="--gaps-only"';
 
 // `<sub>`, a run with no `<` that holds `/clear`, then `</sub>`, in any letter case.
 function hasSubClear(text) {
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   let at = lower.indexOf('<sub>');
   while (at !== -1) {
     const from = at + '<sub>'.length;
@@ -92,7 +93,7 @@ function offerNextOf(text) {
 // without overlapping (`resumexception` shares its `e`: the old /resume.*exception/ could not match it), in either order.
 function explainsResumeException(text) {
   return text.split(/[\n\r\u2028\u2029]/).some((line) => {
-    const lower = line.toLowerCase();
+    const lower = asciiLower(line);
     const resume = lower.indexOf('resume');
     const exception = lower.indexOf('exception');
     return (resume !== -1 && lower.includes('exception', resume + 'resume'.length))
@@ -136,7 +137,7 @@ module.exports = {
         const block = derivationBlock(text);
         if (block === null) return 'expected a GAPS_EXEC_FLAG derivation block';
         if (!block.includes('GAPS_MODE')) return 'the derivation does not mention GAPS_MODE';
-        return !block.toLowerCase().includes('reviews') || 'the derivation references reviews';
+        return !asciiLower(block).includes('reviews') || 'the derivation references reviews';
       }, 'the --gaps-only derivation must be gated on GAPS_MODE alone: reviews-mode Next Up stays unchanged')
       .satisfies((text) => offerNextOf(text).error || true, 'plan-phase.md must have a closed <offer_next> block')
       .satisfies(onBlock((block) => hasSequence(block, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}'])),

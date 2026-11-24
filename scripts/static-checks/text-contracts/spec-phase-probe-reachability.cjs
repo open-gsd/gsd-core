@@ -145,7 +145,7 @@ module.exports = {
       .satisfies((text) => {
         const { jumps, probes } = analyse(text);
         // No probe step at all is already reported by the minimum above.
-        if (probes.length === 0) return true;
+        if (probes.length === 0 || jumps.length === 0) return true; // no jump line at all is reported by the assertion above
         const first = probes[0];
         return jumps.some((jump) => jump.target === first.id)
           || `Step ${first.id} (${first.title}) is defined but no jump reaches it; targets found: ${[...new Set(jumps.map((jump) => jump.target))].join(', ')}`;

@@ -11,6 +11,7 @@
 // tests/release-backmerge-invariants.test.cjs. Was the YAML half of that test.
 
 const { hasSequence } = require('./lib/has-sequence.cjs');
+const { loadLib } = require('./lib/load-lib.cjs');
 
 const BACKMERGE = '.github/workflows/auto-backmerge.yml';
 const RELEASE = '.github/workflows/release.yml';
@@ -24,11 +25,12 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const isWordChar = (ch) => ch !== undefined && /\w/.test(ch);
 
 // The parsed workflow, or the reason it cannot be read.
-function parse(text, label) {
-  const yaml = require('js-yaml');
+function parse(text, label, load = () => require('js-yaml')) {
+  const loaded = loadLib(load, 'js-yaml');
+  if (loaded.error) return { error: loaded.error };
   let workflow;
   try {
-    workflow = yaml.load(text);
+    workflow = loaded.lib.load(text);
   } catch (err) {
     return { error: `${label} is not valid YAML: ${err.message}` };
   }
@@ -68,7 +70,7 @@ const when = (present, fn) => () => (present ? fn() : true);
 
 module.exports = {
   // The linear walkers, exported for the differential properties of tests/text-contracts.batch10.test.cjs.
-  gatesOnOutcome, hasSequence,
+  gatesOnOutcome, hasSequence, parse,
   id: 'release-backmerge-invariants',
   issue: '#2504',
   check(ctx) {

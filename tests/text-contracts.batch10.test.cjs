@@ -1244,15 +1244,15 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         ['RESEARCH.md gone from the executor required_reading (#4996)', 'gsd-core/workflows/quick.md',
           within('<required_reading>\n- ${QUICK_DIR}/${quick_id}-PLAN.md (Plan)', '</required_reading>', eraseAll('RESEARCH.md')), 'quick-commit-boundary-context-research', /must list RESEARCH\.md conditionally on \$RESEARCH_MODE/],
         ['CONTEXT.md gone from the executor prompt (#4996)', 'gsd-core/workflows/quick.md',
-          within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('CONTEXT.md')), 'quick-commit-boundary-context-research', /names no QUICK_PLAN_COMMIT or no CONTEXT\.md/],
+          within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('CONTEXT.md')), 'quick-commit-boundary-context-research', /it names no CONTEXT\.md/],
         ['QUICK_PLAN_COMMIT gone from the executor prompt (#4996)', 'gsd-core/workflows/quick.md',
-          within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('QUICK_PLAN_COMMIT')), 'quick-commit-boundary-context-research', /names no QUICK_PLAN_COMMIT or no CONTEXT\.md/],
+          within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('QUICK_PLAN_COMMIT')), 'quick-commit-boundary-context-research', /it names no QUICK_PLAN_COMMIT/],
         ['git show after the required_reading in the executor prompt (#4996)', 'gsd-core/workflows/quick.md',
           within('Execute quick task', 'subagent_type="gsd-executor"', (section) => `${section.split('git show').join('git sh0w')}\ngit show\n`), 'quick-commit-boundary-context-research', /git show does not come before the required_reading block/],
         ['git show gone from the executor prompt (#4996)', 'gsd-core/workflows/quick.md',
           within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('git show')), 'quick-commit-boundary-context-research', /the PLAN\.md materialization via git show of the plan commit must remain/],
         ['RESEARCH.md gone from the executor prompt (#4996)', 'gsd-core/workflows/quick.md',
-          within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('RESEARCH.md')), 'quick-commit-boundary-context-research', /names no QUICK_PLAN_COMMIT or no RESEARCH\.md/],
+          within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('RESEARCH.md')), 'quick-commit-boundary-context-research', /it names no RESEARCH\.md/],
         ['the planner block start marker gone from quick.md (#4996)', 'gsd-core/workflows/quick.md',
           swap('<required_reading>\n- ${STATE_PATH} (Project State)', '<required_reading>\n- ${STATE_PATH} (State)'), 'quick-commit-boundary-context-research', /the planner required_reading block is missing/],
         ['the executor block start marker gone from quick.md (#4996)', 'gsd-core/workflows/quick.md',
@@ -2145,20 +2145,50 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     findsOne('the route exception note with overlapping words does not count', 'gsd-core/workflows/resume-project.md', within('<step name="route_to_workflow">', '</step>', (step) => step.split('Resume-specific exception:').join('resumexception:').split('Resume is already').join('It is already').split('resume').join('xx').split('Resume').join('Xx')), 'next-up-clear-order', 'the route_to_workflow block must include an exception note explaining resume behavior');
     passes('resume and exception sharing no letters on one line count', 'gsd-core/workflows/resume-project.md', swap('Resume-specific exception:', 'Resume-specific exception: resume exception'), 'next-up-clear-order');
 
+    g1One('a derivation block that names no GAPS_MODE is one finding even when a later GAPS_MODE derives the flag', 'next-up-clear-order', false,
+      g1Put('gsd-core/workflows/plan-phase.md', `GAPS_MODE=false\n$GSD_ARGS --gaps GAPS_MODE=true\nGAPS_EXEC_FLAG=""\nGAPS_EXEC_FLAG="--gaps-only"\n${'x'.repeat(300)}\nGAPS_MODE GAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`), /the derivation does not mention GAPS_MODE/);
+    g1None('the same document with GAPS_MODE inside the first derivation block has no finding', 'next-up-clear-order', false,
+      g1Put('gsd-core/workflows/plan-phase.md', `GAPS_MODE=false\n$GSD_ARGS --gaps GAPS_MODE=true\nGAPS_EXEC_FLAG=""\nif GAPS_MODE; then GAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`));
+
     // Differential properties (CLAUDE.md: parsers get a fast-check property): each linear walker of the group's contracts is compared
-    // with the regex or algorithm of the deleted test, copied here as the oracle, over random strings of the characters the walker
-    // treats specially. The one deliberate difference, the heading scan of contributor-standards reading a heading within its own
-    // line, is outside the domain of its property (strings where a heading marker is followed by blanks and a line end are skipped).
+    // with the regex or algorithm of the deleted test, copied here as the oracle. Every property draws two kinds of input, random
+    // strings of the characters the walker reads and a chain of its parts with random fillers (some parts broken), and records the
+    // outcomes it saw: it fails when the generator reached only a positive or only a negative result. The one deliberate difference,
+    // the heading scan of contributor-standards reading a heading within its own line, is outside the domain of its property
+    // (strings where a heading marker is followed by blanks and a line end are discarded).
     {
       const fc = require(path.join(REPO_ROOT, 'tests', 'helpers', 'fast-check-setup.cjs'));
       const CONTRACTS = path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts');
       const load = (name) => require(path.join(CONTRACTS, `${name}.cjs`));
-      const soup = (tokens, maxLength = 24) => fc.array(fc.constantFrom(...tokens), { maxLength }).map((parts) => parts.join(''));
+      const nextUp = load('next-up-clear-order');
+      const release = load('release-backmerge-invariants');
+      const ask = load('ask-user-questions-fallback');
+      const standards = load('contributor-standards');
+      const cursor = load('cursor-reviewer');
+      const RUNS = { numRuns: 1000 };
+      const tokens = (list, max = 24) => fc.array(fc.constantFrom(...list), { maxLength: max }).map((parts) => parts.join(''));
+      // check(value) asserts the walker against its oracle and returns whether the oracle's result was positive.
       const property = (title, arbitrary, check) => test(`property: ${title}`, () => {
-        fc.assert(fc.property(arbitrary, (text) => { check(text); }));
+        const seen = new Set();
+        fc.assert(fc.property(arbitrary, (value) => { seen.add(Boolean(check(value))); }), RUNS);
+        assert.deepEqual([...seen].sort(), [false, true], `${title}: the generator reached only ${[...seen].join(', ')}`);
       });
+      const FILLER = ['x', '\n', '\u2028', ' '];
+      // The parts in order, each after a filler of 0 to maxPad characters, one part possibly cut short.
+      const chain = (parts, maxPad) => fc.tuple(
+        fc.array(fc.integer({ min: 0, max: maxPad }), { minLength: parts.length, maxLength: parts.length }),
+        fc.array(fc.constantFrom(...FILLER), { minLength: parts.length, maxLength: parts.length }),
+        fc.option(fc.integer({ min: 0, max: parts.length - 1 }), { nil: -1, freq: 2 }),
+      ).map(([pads, chars, broken]) => parts.map((part, i) => `${chars[i].repeat(pads[i])}${i === broken ? part.slice(0, -1) : part}`).join(''));
+      // The words in order, each pair separated by blanks of every kind or by none, one word possibly cut short.
+      const BLANKS = [' ', '  ', '\t', '\n', '\u00a0', '\u2028', '', 'x'];
+      const sequence = (words) => fc.tuple(
+        fc.array(fc.constantFrom(...BLANKS), { minLength: words.length - 1, maxLength: words.length - 1 }),
+        fc.option(fc.integer({ min: 0, max: words.length - 1 }), { nil: -1, freq: 2 }),
+        tokens(['x', ' ', '\n'], 3),
+      ).map(([seps, broken, prefix]) => `${prefix}${words.map((word, i) => `${i === broken ? word.slice(0, -1) : word}${i < seps.length ? seps[i] : ''}`).join('')}`);
 
-      // contributor-standards: the old extractContextHeadingRefs and actualHeadings.
+      // contributor-standards.
       const oldRefs = (scope) => {
         const refs = new Set();
         for (const m of scope.matchAll(/`(#{2,6}\s+[^`]+)`/g)) {
@@ -2168,16 +2198,24 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         }
         return [...refs];
       };
-      property('backtickedHeadings equals the old backtick heading regex', soup(['`', '#', '##', '###', '#######', ' ', '\n', '\u2028', 'x', '<', '\t', 'ab'], 28),
-        (text) => assert.deepEqual(load('contributor-standards').backtickedHeadings(text), oldRefs(text), JSON.stringify(text)));
+      const headingSpans = fc.array(fc.tuple(fc.integer({ min: 0, max: 8 }), fc.constantFrom(' ', '\t', '\n', ''), fc.constantFrom('x', '<x', 'ab', ' ', ''), fc.boolean(), tokens(['x', ' ', '\n', '`'], 2)), { minLength: 1, maxLength: 3 })
+        .map((items) => items.map(([hashes, blank, title, closed, junk]) => `${junk}\`${'#'.repeat(hashes)}${blank}${title}${closed ? '`' : ''}`).join(''));
+      property('backtickedHeadings equals the old backtick heading regex', fc.oneof(tokens(['`', '#', '##', '###', '#######', ' ', '\n', '\u2028', 'x', '<', '\t', 'ab'], 28), headingSpans), (text) => {
+        const refs = standards.backtickedHeadings(text);
+        assert.deepEqual(refs, oldRefs(text), JSON.stringify(text));
+        return refs.length > 0;
+      });
       const oldHeadings = (text) => new Set([...text.matchAll(/^#{2,6}\s+.*$/gm)].map((m) => m[0].trim()));
-      property('actualHeadings equals the old heading regex outside heading markers followed by a line end', soup(['#', '##', '###', '#######', ' ', '\n', '\r', '\u2028', '\u2029', 'x', '\t', 'ab'], 28),
-        (text) => {
-          if (/^#{2,6}[^\S\n\r\u2028\u2029]*[\n\r\u2028\u2029]/m.test(text)) return;
-          assert.deepEqual([...load('contributor-standards').actualHeadings(text)].sort(), [...oldHeadings(text)].sort(), JSON.stringify(text));
-        });
+      const headingLines = fc.array(fc.tuple(fc.integer({ min: 0, max: 8 }), fc.constantFrom(' ', '\t', '  ', ''), fc.constantFrom('x', 'ab', ' ', ''), fc.constantFrom('\n', '\r', '\u2028', '\u2029')), { minLength: 1, maxLength: 4 })
+        .map((lines) => lines.map(([hashes, blank, title, end]) => `${'#'.repeat(hashes)}${blank}${title}${end}`).join(''));
+      property('actualHeadings equals the old heading regex outside heading markers followed by a line end', fc.oneof(tokens(['#', '##', '###', '#######', ' ', '\n', '\r', '\u2028', '\u2029', 'x', '\t', 'ab'], 28), headingLines), (text) => {
+        fc.pre(!/^#{2,6}[^\S\n\r\u2028\u2029]*[\n\r\u2028\u2029]/m.test(text));
+        const found = [...standards.actualHeadings(text)].sort();
+        assert.deepEqual(found, [...oldHeadings(text)].sort(), JSON.stringify(text));
+        return found.length > 0;
+      });
 
-      // ask-user-questions-fallback: the old bracket, label and options-array scans of the deleted test.
+      // ask-user-questions-fallback.
       const oldClose = (text, openIndex, openCh, closeCh) => {
         let depth = 0;
         for (let i = openIndex; i < text.length; i += 1) {
@@ -2211,93 +2249,149 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         }
         return violations;
       };
-      const askTokens = ['AskUserQuestion', '([', ' (', 'options', ':', ' : ', '[', ']', 'label', '"', '"a"', 'x', '\n', '{', '}', 'xAskUserQuestion', 'labels', ' '];
-      property('bracketPartners pairs each opening bracket with the old balanced close', soup(askTokens, 30), (text) => {
-        const partner = load('ask-user-questions-fallback').bracketPartners(text);
+      const askTokens = ['AskUserQuestion', '([', ' (', 'options', ':', ' : ', '[', ']', 'label', '"', '"a"', 'x', '\n', '{', '}', 'xAskUserQuestion', 'labels', ' ', '{ label: "a" }', '{ label: "b" }', '{ label: "c" }', '{ label: "d" }', '{ label: "e" }'];
+      // A call of 0 to 8 labelled options with the spacing and one flaw varied: a longer word, a missing colon, another key, an unclosed array.
+      const askCall = fc.tuple(
+        fc.integer({ min: 0, max: 8 }),
+        fc.array(fc.constantFrom('', ' ', '\n'), { minLength: 5, maxLength: 5 }),
+        fc.integer({ min: 0, max: 6 }),
+        tokens(['x', '\n', ' '], 2),
+      ).map(([count, seps, variant, prefix]) => {
+        const label = variant === 5 ? '{ labels: "a" }' : variant === 6 ? '{ label: "" }' : '{ label: "a" }';
+        const labels = Array.from({ length: count }, () => label).join(', ');
+        const name = variant === 1 ? 'xAskUserQuestion' : 'AskUserQuestion';
+        const key = variant === 2 ? 'myoptions' : 'options';
+        return `${prefix}${name}${seps[0]}(${seps[1]}[ { ${key}${seps[2]}${variant === 3 ? '' : ':'}${seps[3]}[${seps[4]}${labels} ${variant === 4 ? '' : ']'} } ])`;
+      });
+      property('bracketPartners pairs each opening bracket with the old balanced close', tokens(['[', ']', 'x', '[', ']', '\n'], 20), (text) => {
+        const partner = ask.bracketPartners(text);
         for (let i = 0; i < text.length; i += 1) {
           if (text[i] === '[') assert.equal(partner.has(i) ? partner.get(i) : -1, oldClose(text, i, '[', ']'), `${JSON.stringify(text)} at ${i}`);
         }
+        return partner.size > 0;
       });
-      property('labelCount equals the old labelled-option regex', soup(['label', ':', ' ', '"', 'a', '"a"', '""', 'x', '\n', 'labels', 'xlabel'], 24),
-        (text) => assert.equal(load('ask-user-questions-fallback').labelCount(text), (text.match(/\blabel\s*:\s*"[^"]+"/g) || []).length, JSON.stringify(text)));
-      property('optionCapViolations equals the old AskUserQuestion options scan', soup([...askTokens, '{ label: "a" }', '{ label: "b" }', '{ label: "c" }', '{ label: "d" }', '{ label: "e" }'], 30),
-        (text) => assert.deepEqual(load('ask-user-questions-fallback').optionCapViolations(text), oldViolations(text), JSON.stringify(text)));
-      property('sectionAfter equals the old section extraction', soup(['ZZ', '\n# ', '\n## ', '\n#', '#', ' ', 'x', '\n'], 20), (text) => {
+      const labelParts = fc.array(fc.tuple(fc.constantFrom('label', 'xlabel', 'labels'), fc.constantFrom('', ' ', '\n'), fc.constantFrom(':', ''), fc.constantFrom('', ' '), fc.constantFrom('', 'a', 'ab', ' '), fc.boolean()), { minLength: 1, maxLength: 5 })
+        .map((parts) => parts.map(([name, before, colon, after, body, closed]) => `${name}${before}${colon}${after}"${body}${closed ? '"' : ''}`).join(' '));
+      property('labelCount equals the old labelled-option regex', fc.oneof(tokens(['label', ':', ' ', '"', 'a', '"a"', '""', 'x', '\n', 'labels', 'xlabel'], 24), labelParts), (text) => {
+        const count = ask.labelCount(text);
+        assert.equal(count, (text.match(/\blabel\s*:\s*"[^"]+"/g) || []).length, JSON.stringify(text));
+        return count > 0;
+      });
+      property('optionCapViolations equals the old AskUserQuestion options scan', fc.oneof(tokens(askTokens, 30), askCall), (text) => {
+        const found = ask.optionCapViolations(text);
+        assert.deepEqual(found, oldViolations(text), JSON.stringify(text));
+        return found.length > 0;
+      });
+      property('sectionAfter equals the old section extraction', tokens(['ZZ', '\n# ', '\n## ', '\n#', '#', ' ', 'x', '\n', 'ZZ', 'x'], 20), (text) => {
         const start = text.indexOf('ZZ');
         const expected = start === -1 ? null : (() => {
           const rest = text.slice(start + 2);
           const end = rest.search(/\n##? /);
           return rest.slice(0, end === -1 ? rest.length : end);
         })();
-        assert.equal(load('ask-user-questions-fallback').sectionAfter(text, 'ZZ'), expected, JSON.stringify(text));
+        const found = ask.sectionAfter(text, 'ZZ');
+        assert.equal(found, expected, JSON.stringify(text));
+        return found !== null && found.length > 0;
       });
 
-      // next-up-clear-order: the old footnote regex, plumbing regexes and resume regex.
-      const nextUp = load('next-up-clear-order');
-      property('hasSubClear equals the old footnote regex', soup(['<sub>', '</sub>', '<SUB>', '</Sub>', '/clear', '/CLEAR', '<', 'x', ' ', '\n', '/clea'], 18),
-        (text) => assert.equal(nextUp.hasSubClear(text), /<sub>[^<]*\/clear[^<]*<\/sub>/gi.test(text), JSON.stringify(text)));
-      property('hasSequence equals the old execute-phase command regexes', soup(['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', '${GSD_WS}', ' ', '\t', '\n', 'x', '\u00a0'], 14), (text) => {
-        assert.equal(nextUp.hasSequence(text, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}']), /\/gsd:execute-phase\s+\{X\}\s+\$\{GAPS_EXEC_FLAG\}/.test(text), JSON.stringify(text));
-        assert.equal(nextUp.hasSequence(text, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', '${GSD_WS}']), /\/gsd:execute-phase\s+\{X\}\s+\$\{GAPS_EXEC_FLAG\}\s+\$\{GSD_WS\}/.test(text), JSON.stringify(text));
+      // next-up-clear-order.
+      const KELVIN = 'K';
+      const LONG_S = 'ſ';
+      const DOTLESS_I = 'ı';
+      const DOTTED_I = 'İ';
+      const NON_ASCII = [KELVIN, LONG_S, DOTLESS_I, DOTTED_I, '\u00a0'];
+      const subTags = fc.tuple(
+        fc.constantFrom('<sub>', '<SUB>', '<sub', '<su>'),
+        fc.integer({ min: 0, max: 60 }), fc.constantFrom('x', ' ', ...NON_ASCII),
+        fc.constantFrom('/clear', '/CLEAR', '/clea', '/ clear'),
+        fc.integer({ min: 0, max: 60 }), fc.constantFrom('x', ' ', ...NON_ASCII),
+        fc.constantFrom('</sub>', '</SUB>', '</su', '<b></sub>'),
+      ).map(([open, a, aChar, mid, b, bChar, close]) => `${open}${aChar.repeat(a)}${mid}${bChar.repeat(b)}${close}`);
+      property('hasSubClear equals the old footnote regex', fc.oneof(tokens(['<sub>', '</sub>', '<SUB>', '</Sub>', '/clear', '/CLEAR', '<', 'x', ' ', '\n', '/clea', KELVIN, DOTLESS_I], 18), subTags),
+        (text) => {
+          const found = nextUp.hasSubClear(text);
+          assert.equal(found, /<sub>[^<]*\/clear[^<]*<\/sub>/gi.test(text), JSON.stringify(text));
+          return found;
+        });
+      property('hasSequence equals the old three-word execute-phase regex', fc.oneof(tokens(['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', ' ', '\t', '\n', 'x', '\u00a0'], 14), sequence(['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}'])), (text) => {
+        const found = nextUp.hasSequence(text, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}']);
+        assert.equal(found, /\/gsd:execute-phase\s+\{X\}\s+\$\{GAPS_EXEC_FLAG\}/.test(text), JSON.stringify(text));
+        return found;
       });
-      const gapsTokens = ['GAPS_MODE=false', '$GSD_ARGS', '--gaps', 'GAPS_MODE=true', 'GAPS_EXEC_FLAG=""', 'GAPS_MODE', 'GAPS_EXEC_FLAG="--gaps-only"', 'x', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', '\n', ' '];
-      property('capturesGapsMode, derivesExecFlag and derivationBlock equal the old plumbing regexes', soup(gapsTokens, 16), (text) => {
-        assert.equal(nextUp.capturesGapsMode(text), /GAPS_MODE=false[\s\S]*\$GSD_ARGS[\s\S]{0,80}?--gaps[\s\S]{0,40}?GAPS_MODE=true/.test(text), JSON.stringify(text));
-        assert.equal(nextUp.derivesExecFlag(text), /GAPS_EXEC_FLAG=""[\s\S]*GAPS_MODE[\s\S]{0,60}?GAPS_EXEC_FLAG="--gaps-only"/.test(text), JSON.stringify(text));
-        const block = text.match(/GAPS_EXEC_FLAG=""[\s\S]{0,200}?GAPS_EXEC_FLAG="--gaps-only"/);
-        assert.equal(nextUp.derivationBlock(text), block ? block[0] : null, JSON.stringify(text));
+      property('hasSequence equals the old four-word execute-phase regex', fc.oneof(tokens(['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', '${GSD_WS}', ' ', '\t', '\n', 'x', '\u00a0'], 14), sequence(['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', '${GSD_WS}'])), (text) => {
+        const found = nextUp.hasSequence(text, ['/gsd:execute-phase', '{X}', '${GAPS_EXEC_FLAG}', '${GSD_WS}']);
+        assert.equal(found, /\/gsd:execute-phase\s+\{X\}\s+\$\{GAPS_EXEC_FLAG\}\s+\$\{GSD_WS\}/.test(text), JSON.stringify(text));
+        return found;
       });
-      property('explainsResumeException equals the old resume and exception regex', soup(['resume', 'Resume', 'exception', 'EXCEPTION', 'e', 'x', ' ', '\n', '\r', '\u2028', '\u2029', 'resumexception'], 10),
-        (text) => assert.equal(nextUp.explainsResumeException(text), /resume.*exception|exception.*resume/i.test(text), JSON.stringify(text)));
-
-      // cursor-reviewer: the old pipe and reviewers regexes.
-      property('pipesIntoCursor equals the old pipe regex', soup(['|', ' ', 'cursor', '-agent', 'cursor-agent', 'x', '\n', '\t'], 12),
-        (text) => assert.equal(load('cursor-reviewer').pipesIntoCursor(text), /\| *cursor(?!-agent)/.test(text), JSON.stringify(text)));
-      property('listsCursorAmongReviewers equals the old reviewers regex', soup(['reviewers:', 'cursor', ' ', 'x', '\n', '\r', '\u2028', '\u2029', '[', ','], 12),
-        (text) => assert.equal(load('cursor-reviewer').listsCursorAmongReviewers(text), /reviewers:.*cursor/.test(text), JSON.stringify(text)));
-
-      // release-backmerge-invariants: the old outcome and merge regexes.
-      const release = load('release-backmerge-invariants');
-      property('gatesOnOutcome equals the old outcome regex', soup(['.outcome', '.conclusion', '.outcomes', '.conclusion_x', 'x', ' ', '.', '_', '1'], 10),
-        (text) => assert.equal(release.gatesOnOutcome(text), /\.(outcome|conclusion)\b/.test(text), JSON.stringify(text)));
-      property('hasSequence equals the old merge -s ours regex', soup(['merge', '-s', 'ours', ' ', '\t', '\n', 'x', 'xmerge', 'oursx'], 10),
-        (text) => assert.equal(release.hasSequence(text, ['merge', '-s', 'ours']), /merge\s+-s\s+ours/.test(text), JSON.stringify(text)));
-    }
-    g1One('a derivation block that names no GAPS_MODE is one finding even when a later GAPS_MODE derives the flag', 'next-up-clear-order', false,
-      g1Put('gsd-core/workflows/plan-phase.md', `GAPS_MODE=false\n$GSD_ARGS --gaps GAPS_MODE=true\nGAPS_EXEC_FLAG=""\nGAPS_EXEC_FLAG="--gaps-only"\n${'x'.repeat(300)}\nGAPS_MODE GAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`), /the derivation does not mention GAPS_MODE/);
-    g1None('the same document with GAPS_MODE inside the first derivation block has no finding', 'next-up-clear-order', false,
-      g1Put('gsd-core/workflows/plan-phase.md', `GAPS_MODE=false\n$GSD_ARGS --gaps GAPS_MODE=true\nGAPS_EXEC_FLAG=""\nif GAPS_MODE; then GAPS_EXEC_FLAG="--gaps-only"\n\n<offer_next>\n/gsd:execute-phase {X} \${GAPS_EXEC_FLAG} \${GSD_WS}\n--gaps-only\n</offer_next>\n`));
-
-    // Structured differential properties: an anchor token, an integer padding that crosses the old regex window, a closing token.
-    // The random-soup properties above rarely build a 40 to 200 character gap, so each bounded window is drawn directly.
-    {
-      const fc = require(path.join(REPO_ROOT, 'tests', 'helpers', 'fast-check-setup.cjs'));
-      const nextUp = require(path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', 'next-up-clear-order.cjs'));
-      const pad = (n) => 'x'.repeat(n);
       const SET = 'GAPS_EXEC_FLAG="--gaps-only"';
-      test('property: capturesGapsMode crosses its 80 and 40 character windows like the old regex', () => {
-        fc.assert(fc.property(fc.integer({ min: 0, max: 100 }), fc.integer({ min: 0, max: 60 }), (a, b) => {
-          const text = `GAPS_MODE=false\n$GSD_ARGS${pad(a)}--gaps${pad(b)}GAPS_MODE=true`;
-          assert.equal(nextUp.capturesGapsMode(text), /GAPS_MODE=false[\s\S]*\$GSD_ARGS[\s\S]{0,80}?--gaps[\s\S]{0,40}?GAPS_MODE=true/.test(text), `${a} ${b}`);
-        }));
+      const EMPTY = 'GAPS_EXEC_FLAG=""';
+      const gapsTokens = ['GAPS_MODE=false', '$GSD_ARGS', '--gaps', 'GAPS_MODE=true', EMPTY, 'GAPS_MODE', SET, 'x', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', '\n', ' '];
+      property('capturesGapsMode equals the old preamble regex across its 80 and 40 character windows', fc.oneof(tokens(gapsTokens, 16), chain(['GAPS_MODE=false', '$GSD_ARGS', '--gaps', 'GAPS_MODE=true'], 100)), (text) => {
+        const found = nextUp.capturesGapsMode(text);
+        assert.equal(found, /GAPS_MODE=false[\s\S]*\$GSD_ARGS[\s\S]{0,80}?--gaps[\s\S]{0,40}?GAPS_MODE=true/.test(text), JSON.stringify(text));
+        return found;
       });
-      test('property: derivesExecFlag and derivationBlock cross their 60 and 200 character windows like the old regexes', () => {
-        fc.assert(fc.property(fc.integer({ min: 0, max: 260 }), fc.integer({ min: 0, max: 90 }), fc.boolean(), (a, b, withMode) => {
-          const text = `GAPS_EXEC_FLAG=""${pad(a)}${withMode ? 'GAPS_MODE' : 'MODE'}${pad(b)}${SET}`;
-          assert.equal(nextUp.derivesExecFlag(text), /GAPS_EXEC_FLAG=""[\s\S]*GAPS_MODE[\s\S]{0,60}?GAPS_EXEC_FLAG="--gaps-only"/.test(text), `${a} ${b} ${withMode}`);
-          const block = text.match(/GAPS_EXEC_FLAG=""[\s\S]{0,200}?GAPS_EXEC_FLAG="--gaps-only"/);
-          assert.equal(nextUp.derivationBlock(text), block ? block[0] : null, `${a} ${b} ${withMode}`);
-        }));
+      property('derivesExecFlag equals the old derivation regex across its 60 character window', fc.oneof(tokens(gapsTokens, 16), chain([EMPTY, 'GAPS_MODE', SET], 100)), (text) => {
+        const found = nextUp.derivesExecFlag(text);
+        assert.equal(found, /GAPS_EXEC_FLAG=""[\s\S]*GAPS_MODE[\s\S]{0,60}?GAPS_EXEC_FLAG="--gaps-only"/.test(text), JSON.stringify(text));
+        return found;
       });
-      test('property: hasSubClear and explainsResumeException hold at any padding like the old regexes', () => {
-        fc.assert(fc.property(fc.integer({ min: 0, max: 120 }), fc.integer({ min: 0, max: 120 }), (a, b) => {
-          const sub = `<sub>${pad(a)}/clear${pad(b)}</sub>`;
-          assert.equal(nextUp.hasSubClear(sub), /<sub>[^<]*\/clear[^<]*<\/sub>/gi.test(sub));
-          const line = `resume${pad(a)}exception${pad(b)}`;
-          assert.equal(nextUp.explainsResumeException(line), /resume.*exception|exception.*resume/i.test(line));
-        }));
+      property('derivationBlock equals the old derivation block regex across its 200 character window', fc.oneof(tokens(gapsTokens, 16), chain([EMPTY, SET], 260), chain([EMPTY, 'GAPS_MODE', SET], 260)), (text) => {
+        const block = text.match(/GAPS_EXEC_FLAG=""[\s\S]{0,200}?GAPS_EXEC_FLAG="--gaps-only"/);
+        const found = nextUp.derivationBlock(text);
+        assert.equal(found, block ? block[0] : null, JSON.stringify(text));
+        return found !== null;
+      });
+      const resumeFirst = ['resume', 'Resume', 'RESUME', 'resum', 'exception', 'EXCEPTION', 'resumexception'];
+      const resumeSecond = ['exception', 'EXCEPTION', 'exceptio', 'resume', 'xception', 'e'];
+      const resumeLine = fc.tuple(fc.constantFrom(...resumeFirst), tokens([' ', 'x', '\n', '\r', '\u2028', '\u2029', ''], 3), fc.constantFrom(...resumeSecond))
+        .map(([first, gap, second]) => `${first}${gap}${second}`);
+      property('explainsResumeException equals the old resume and exception regex', fc.oneof(tokens(['resume', 'Resume', 'exception', 'EXCEPTION', 'e', 'x', ' ', '\n', '\r', '\u2028', '\u2029', 'resumexception', KELVIN, DOTTED_I], 10), resumeLine), (text) => {
+        const found = nextUp.explainsResumeException(text);
+        assert.equal(found, /resume.*exception|exception.*resume/i.test(text), JSON.stringify(text));
+        return found;
+      });
+
+      // cursor-reviewer.
+      const pipes = fc.tuple(tokens(['x', ' ', '\n'], 3), fc.integer({ min: 0, max: 4 }), fc.constantFrom('cursor', 'cursor-agent', 'cursor-agen', 'cursorx', 'curso', ' cursor'), tokens(['x', ' ', '|'], 2))
+        .map(([prefix, blanks, tail, suffix]) => `${prefix}|${' '.repeat(blanks)}${tail}${suffix}`);
+      property('pipesIntoCursor equals the old pipe regex', fc.oneof(tokens(['|', ' ', 'cursor', '-agent', 'cursor-agent', 'x', '\n', '\t'], 12), pipes), (text) => {
+        const found = cursor.pipesIntoCursor(text);
+        assert.equal(found, /\| *cursor(?!-agent)/.test(text), JSON.stringify(text));
+        return found;
+      });
+      const reviewers = fc.tuple(fc.constantFrom('reviewers:', 'reviewers', 'reviewer:'), fc.integer({ min: 0, max: 30 }), fc.constantFrom('', ' ', '\n', '\r', '\u2028', '\u2029'), fc.constantFrom('cursor', 'curso', 'claude, cursor'))
+        .map(([key, pad, end, word]) => `${key}${'x'.repeat(pad)}${end}${word}`);
+      property('listsCursorAmongReviewers equals the old reviewers regex', fc.oneof(tokens(['reviewers:', 'cursor', ' ', 'x', '\n', '\r', '\u2028', '\u2029', '[', ','], 12), reviewers), (text) => {
+        const found = cursor.listsCursorAmongReviewers(text);
+        assert.equal(found, /reviewers:.*cursor/.test(text), JSON.stringify(text));
+        return found;
+      });
+
+      // release-backmerge-invariants.
+      const gates = fc.tuple(tokens(['x', ' ', '.outcome'], 2), fc.constantFrom('.', 'x'), fc.constantFrom('outcome', 'conclusion', 'outcomes', 'conclusion_x', 'outcom', 'conclusio'), fc.constantFrom('', ' ', '_', 'x', '.', '1', '\n'), tokens(['.outcome', 'x'], 2))
+        .map(([prefix, dot, name, next, suffix]) => `${prefix}${dot}${name}${next}${suffix}`);
+      property('gatesOnOutcome equals the old outcome regex', fc.oneof(tokens(['.outcome', '.conclusion', '.outcomes', '.conclusion_x', 'x', ' ', '.', '_', '1'], 10), gates), (text) => {
+        const found = release.gatesOnOutcome(text);
+        assert.equal(found, /\.(outcome|conclusion)\b/.test(text), JSON.stringify(text));
+        return found;
+      });
+      property('hasSequence equals the old merge -s ours regex', fc.oneof(tokens(['merge', '-s', 'ours', ' ', '\t', '\n', 'x', 'xmerge', 'oursx'], 10), sequence(['merge', '-s', 'ours'])), (text) => {
+        const found = release.hasSequence(text, ['merge', '-s', 'ours']);
+        assert.equal(found, /merge\s+-s\s+ours/.test(text), JSON.stringify(text));
+        return found;
+      });
+      test('the shared hasSequence is the one both contracts export', () => {
+        assert.equal(release.hasSequence, nextUp.hasSequence);
       });
     }
+
+    test('a js-yaml that cannot be loaded is its own finding and a parse error is another', () => {
+      const { parse } = require(path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', 'release-backmerge-invariants.cjs'));
+      assert.deepEqual(parse('jobs: {}', 'x.yml', () => { throw new Error('boom'); }), { error: 'js-yaml cannot be loaded: boom' });
+      assert.match(parse('a: [\n', 'x.yml').error, /^x\.yml is not valid YAML: /);
+      assert.deepEqual(parse('jobs: { a: {} }', 'x.yml').workflow, { jobs: { a: {} } });
+    });
   }
 
   {
@@ -3152,8 +3246,8 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         seenName.assertBoth('hasWhitespaceGap (name value)');
       });
 
-      test('property: hasSequence reads what the spike patterns read', () => {
-        const { hasSequence, WS, SPIKES_TABLE_HEADER } = contractModule('spike-manifest-scoping');
+      test('property: hasPatternWalk reads what the spike patterns read', () => {
+        const { hasPatternWalk, WS, SPIKES_TABLE_HEADER } = contractModule('spike-manifest-scoping');
         const cases = [
           ['## Ideas', ['##', WS, 'Ideas'], true, (text) => /##\s*Ideas\b/.test(text)],
           ['### {idea-key}', ['###', WS, '{idea-key}'], false, (text) => /###\s*\{idea-key\}/.test(text)],
@@ -3166,12 +3260,12 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
           fc.assert(fc.property(sequenceOf(items, WS), (text) => {
             const expected = oracle(text);
             seen.note(expected);
-            assert.equal(hasSequence(text, items, wordEnd), expected);
+            assert.equal(hasPatternWalk(text, items, wordEnd), expected);
           }), RUNS);
-          seen.assertBoth(`hasSequence (${label})`);
+          seen.assertBoth(`hasPatternWalk (${label})`);
         }
         const free = tokens(['##', '#', 'Ideas', 'Idea', 's', 'x', ...BLANKS], 8);
-        fc.assert(fc.property(free, (text) => assert.equal(hasSequence(text, ['##', WS, 'Ideas'], true), /##\s*Ideas\b/.test(text))), RUNS);
+        fc.assert(fc.property(free, (text) => assert.equal(hasPatternWalk(text, ['##', WS, 'Ideas'], true), /##\s*Ideas\b/.test(text))), RUNS);
       });
 
       test('property: lineHasInOrder and stepNames read what the seed patterns and the step extraction read', () => {
@@ -3220,29 +3314,52 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         assert.equal(hasWhitespaceGap(nameLine, 'the `name:` value in', 'your frontmatter'), false);
       });
 
-      // The old test's bijection property, over rosters the contract is fed: stripping the pointer from consumers and adding
-      // it to other canonical agents is a finding exactly when the roster changed, and names every changed file.
-      test('property: the bootstrap pointer is carried exactly by the consumer agents', (t) => {
+      // The old test's bijection property and its compact-sibling rule, over rosters the contract is fed: stripping the pointer
+      // from consumers and from carrying compact siblings, and adding it to other canonical agents and to compact siblings
+      // (with the right type or a wrong one), is a finding for exactly the files the rules name: a consumer without it, a
+      // canonical non-consumer with it, a compact sibling with a wrong type, and the floor when fewer than 36 files carry it.
+      test('property: the bootstrap pointer follows the roster rules of the old test, compact siblings included', (t) => {
         const root = copyOfRepoFiles(t);
         const POINTER = 'agent-skills-bootstrap.md';
         const agentsDir = path.join(root, 'agents');
-        const canonical = fs.readdirSync(agentsDir).filter((name) => name.startsWith('gsd-') && name.endsWith('.md') && !name.endsWith('.compact.md'));
-        const original = new Map(canonical.map((name) => [name, fs.readFileSync(path.join(agentsDir, name), 'utf8')]));
-        const consumers = canonical.filter((name) => original.get(name).includes(POINTER));
-        const others = canonical.filter((name) => !original.get(name).includes(POINTER));
+        const names = fs.readdirSync(agentsDir).filter((name) => name.endsWith('.md'));
+        const original = new Map(names.map((name) => [name, fs.readFileSync(path.join(agentsDir, name), 'utf8')]));
+        const carries = (name) => original.get(name).includes(POINTER);
+        const canonical = names.filter((name) => !name.endsWith('.compact.md'));
+        const compact = names.filter((name) => name.endsWith('.compact.md'));
+        const consumers = canonical.filter(carries);
+        const others = canonical.filter((name) => !carries(name));
+        const carryingCompact = compact.filter(carries);
+        const bareCompact = compact.filter((name) => !carries(name));
         assert.equal(consumers.length, 22);
-        fc.assert(fc.property(fc.subarray(consumers), fc.subarray(others), (strip, add) => {
+        assert.equal(carryingCompact.length, 16);
+        assert.ok(bareCompact.length > 0);
+        const typeOf = (name) => name.replace(/\.compact\.md$/, '').replace(/\.md$/, '');
+        const pointerLine = (type) => `**agent_skills:** self-load per @~/.claude/gsd-core/references/${POINTER} (agent type: \`${type}\`)`;
+        const write = (name, text) => fs.writeFileSync(path.join(agentsDir, name), text);
+        fc.assert(fc.property(fc.subarray(consumers), fc.subarray(others), fc.subarray(carryingCompact), fc.subarray(bareCompact), fc.subarray(bareCompact), (strip, add, stripCompact, addRight, addWrong) => {
+          const wrong = new Set(addWrong);
+          const right = addRight.filter((name) => !wrong.has(name));
+          const touched = [...strip, ...add, ...stripCompact, ...right, ...addWrong];
           try {
-            for (const name of strip) fs.writeFileSync(path.join(agentsDir, name), original.get(name).split(POINTER).join('x-bootstrap.md'));
-            for (const name of add) fs.writeFileSync(path.join(agentsDir, name), `${original.get(name)}\nSee ${POINTER}.\n`);
+            for (const name of [...strip, ...stripCompact]) write(name, original.get(name).split(POINTER).join('x-bootstrap.md'));
+            for (const name of add) write(name, `${original.get(name)}\nSee ${POINTER}.\n`);
+            for (const name of right) write(name, `${original.get(name)}\n${pointerLine(typeOf(name))}\n`);
+            for (const name of addWrong) write(name, `${original.get(name)}\n${pointerLine('gsd-other')}\n`);
             const messages = runShipped(root, ['agent-skills-bootstrap']).map((f) => f.message);
-            assert.equal(messages.length > 0, strip.length + add.length > 0, JSON.stringify(messages));
-            for (const name of strip) assert.ok(messages.some((m) => m.includes(`${name.replace(/\.md$/, '')} must @-include`)), `${name} not reported`);
-            for (const name of add) assert.ok(messages.some((m) => m.includes(`agents/${name} carries the bootstrap pointer but is not a consumer agent`)), `${name} not reported`);
+            const expected = [
+              ...strip.map((name) => `${typeOf(name)} must @-include`),
+              ...add.map((name) => `agents/${name} carries the bootstrap pointer but is not a consumer agent`),
+              ...addWrong.map((name) => `agents/${name} pointer must state "(agent type: \`${typeOf(name)}\`)"`),
+            ];
+            const carrying = consumers.length + carryingCompact.length - strip.length - stripCompact.length + add.length + right.length + addWrong.length;
+            if (carrying < 36) expected.push(`only ${carrying} agent files carry the bootstrap pointer`);
+            assert.equal(messages.length, expected.length, JSON.stringify(messages));
+            for (const piece of expected) assert.ok(messages.some((message) => message.includes(piece)), `${piece} not reported: ${JSON.stringify(messages)}`);
           } finally {
-            for (const name of [...strip, ...add]) fs.writeFileSync(path.join(agentsDir, name), original.get(name));
+            for (const name of touched) write(name, original.get(name));
           }
-        }), { numRuns: 25 });
+        }), { numRuns: 30 });
       });
 
       // verifier-coincidental-reliance: the bound of the clause that forbids a human-verification item (the other clauses of the
@@ -3256,6 +3373,51 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         for (const registry of [undefined, null, {}, { capabilities: null }, { capabilities: {} }, { capabilities: { mempalace: null } }, { capabilities: { mempalace: { other: 1 } } }]) {
           assert.deepEqual([...mempalace.registryProblems(registry).defaultTrue].sort(), ['mempalace.capture_artifacts', 'mempalace.diary_journal', 'mempalace.mirror_kg']);
         }
+      });
+
+      // execute-phase-step-5-5-deviation-doc: the markers in the wrong order are one finding.
+      test('the gaps_found marker before the human_needed marker is exactly one finding', (t) => {
+        const root = copyOfRepoFiles(t, HEAVY);
+        editFile(root, EXECUTE_PHASE_MD, (text) => `**If gaps_found:**\n${text}`);
+        const own = runShipped(root, ['execute-phase-step-5-5-deviation-doc']).filter((f) => f.file === EXECUTE_PHASE_MD);
+        assert.equal(own.length, 1, JSON.stringify(own));
+        assert.match(own[0].message, /the human_needed section must appear before the gaps_found section/);
+      });
+
+      // mempalace-capture-gate-default through the contract's own check with a registry that has no schema or cannot be loaded:
+      // the registry is one finding and the positive-presence checks still run over the three keys the test named.
+      const runWithRegistry = (t, loaderSource, edits) => {
+        const root = copyOfRepoFiles(t);
+        for (const [rel, edit] of edits) editFile(root, rel, edit);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-text-contracts-wrap-'));
+        t.after(() => cleanup(dir));
+        const real = path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', 'mempalace-capture-gate-default.cjs');
+        fs.writeFileSync(path.join(dir, 'wrapper.cjs'), `'use strict';\nconst real = require(${JSON.stringify(real)});\nmodule.exports = { id: real.id, check: (ctx) => real.check(ctx, ${loaderSource}) };\n`);
+        return textContracts.run({ root, dir, minContracts: 1, only: ['mempalace-capture-gate-default'] }).map((f) => f.message);
+      };
+      const SCHEMA_LESS = '() => ({ capabilities: { mempalace: { other: 1 } } })';
+      const THROWING = "() => { throw new Error('boom'); }";
+      const CAPTURE_SKILL_FILE = 'skills/gsd-mempalace-capture/SKILL.md';
+      test('a registry with no mempalace schema is one finding over the untouched files', (t) => {
+        const messages = runWithRegistry(t, SCHEMA_LESS, []);
+        assert.equal(messages.length, 1, JSON.stringify(messages));
+        assert.match(messages[0], /the capability registry must expose a mempalace settings schema/);
+      });
+      test('a registry with no mempalace schema still runs the positive-presence check over the three named keys', (t) => {
+        const messages = runWithRegistry(t, SCHEMA_LESS, [[CAPTURE_SKILL_FILE, (text) => `${text}\nRun when \`config.mempalace.diary_journal\` is true.\n`]]);
+        assert.equal(messages.length, 2, JSON.stringify(messages));
+        assert.ok(messages.some((m) => /the capability registry must expose a mempalace settings schema/.test(m)), JSON.stringify(messages));
+        assert.ok(messages.some((m) => /gates `mempalace\.diary_journal` on positive presence, but the registry declares default: true/.test(m)), JSON.stringify(messages));
+      });
+      test('a registry with no mempalace schema checks only the three named keys', (t) => {
+        const messages = runWithRegistry(t, SCHEMA_LESS, [[CAPTURE_SKILL_FILE, (text) => `${text}\nRun when \`config.mempalace.recall_on_plan\` is true.\n`]]);
+        assert.equal(messages.length, 1, JSON.stringify(messages));
+      });
+      test('a registry that cannot be loaded is one finding and the positive-presence check still runs', (t) => {
+        const messages = runWithRegistry(t, THROWING, [[CAPTURE_SKILL_FILE, (text) => `${text}\nRun when \`config.mempalace.diary_journal\` is true.\n`]]);
+        assert.equal(messages.length, 2, JSON.stringify(messages));
+        assert.ok(messages.some((m) => /gsd-core\/bin\/lib\/capability-registry\.cjs cannot be loaded: boom/.test(m)), JSON.stringify(messages));
+        assert.ok(messages.some((m) => /gates `mempalace\.diary_journal` on positive presence/.test(m)), JSON.stringify(messages));
       });
     }
   }
@@ -3637,13 +3799,13 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       const mempalace = require('../scripts/static-checks/text-contracts/mempalace-capture-headless-invocation.cjs').walkers;
       const overrides = require('../scripts/static-checks/text-contracts/verification-overrides.cjs').walkers;
       const strings = (tokens, maxLength = 10) => fc.array(fc.constantFrom(...tokens), { maxLength }).map((parts) => parts.join(''));
-      const agrees = (name, arbitrary, pair) => {
+      const agrees = (name, arbitrary, pair, isAccepted = (expected) => (Array.isArray(expected) ? expected.length > 0 : Boolean(expected))) => {
         let accepted = 0;
         let rejected = 0;
         fc.assert(fc.property(arbitrary, (s) => {
           const [actual, expected] = pair(s);
           assert.deepEqual(actual, expected, JSON.stringify(s));
-          if (Array.isArray(expected) ? expected.length > 0 : expected) accepted += 1;
+          if (isAccepted(expected)) accepted += 1;
           else rejected += 1;
         }));
         assert.ok(accepted > 0 && rejected > 0, `${name}: the property saw ${accepted} accepted and ${rejected} rejected strings`);
@@ -3718,17 +3880,59 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
           return lines.slice(start, end).join('\n');
         };
         const roomsLines = fc.array(fc.constantFrom('rooms:', '  rooms:', ' rooms: ', 'YAML', '  YAML ', '- name: a', '  - name: b', 'x', ''), { maxLength: 8 }).map((parts) => parts.join('\n'));
-        agrees('rooms block', roomsLines, (s) => [mempalace.roomsBlock(s), oldRoomsYaml(s)]);
+        agrees('rooms block', roomsLines, (s) => [mempalace.roomsBlock(s), oldRoomsYaml(s)], (expected) => expected !== null);
       });
 
       test('property: the required_reading and criterion walks agree with the patterns they replaced', () => {
         agrees('required_reading', strings(['<required_reading>', '\n', '\r', '\u2028', '\u2029', ' ', 'x', '`<required_reading>`'], 6), (s) => {
           const match = s.match(/^<required_reading>/m);
           return [overrides.requiredReadingAt(s), match ? match.index : -1];
-        });
+        }, (expected) => expected > 0); // an index: -1 is no match and 0 is the trivial one, so a match after a line break is what must occur
         agrees('criterion field', strings(['criterion:', ' ', '\t', '\u00a0', 'x', '\n', 'the criterion: x'], 6), (s) => [overrides.hasCriterionField(s), s.split('\n').filter((l) => /^\s+criterion:/.test(l)).length > 0]);
       });
     }
+
+    // ---- review round 4: quoted, commented and flow-list rooms entries, contract-level loader seams, an unclosed fence, two causes.
+    for (const [title, edit] of [
+      ['a double-quoted rooms entry', swap('- name: decisions', '- "decisions"')],
+      ['a single-quoted rooms entry', swap('- name: decisions', "- 'decisions'")],
+      ['a rooms entry with a trailing comment', swap('- name: decisions', '- decisions # note')],
+      ['a flow list of bare rooms', swap('     - name: decisions\n     - name: planning\n     - name: milestones\n     - name: problems\n     - name: general\n', '     [decisions, planning, milestones, problems, general]\n')],
+    ]) {
+      for (const rel of ['skills/gsd-mempalace-capture/SKILL.md', 'commands/gsd/mempalace-capture.md']) {
+        findsOne(`${title} in ${rel} is one finding`, rel, edit, 'mempalace-capture-headless-invocation', 'every rooms: entry must be a dict with a name key');
+      }
+    }
+    // A contract whose loader fails is a finding of its own; the seam builds the contract with a loader that throws.
+    const seamRun3 = (t, id, factory) => {
+      const root = copyOfRepoFiles(t);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-seam-'));
+      t.after(() => cleanup(dir));
+      const real = path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', `${id}.cjs`);
+      fs.writeFileSync(path.join(dir, `${id}.cjs`), `const real = require(${JSON.stringify(real)});\nmodule.exports = { id: real.id, check: ${factory} };\n`);
+      return textContracts.run({ root, dir, only: [id], minContracts: 1 });
+    };
+    test('a markdown sectionizer that cannot be loaded is one finding of the thinking-model contract', (t) => {
+      const findings = seamRun3(t, 'thinking-model-guidance', "real.walkers.buildCheck(() => real.walkers.loadFenceScanner(() => { throw new Error('no build'); }))");
+      assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+      assert.match(findings[0].message, /the markdown sectionizer cannot be loaded: no build/);
+    });
+    test('a js-yaml that cannot be loaded is one finding for each surface of the mempalace contract', (t) => {
+      const findings = seamRun3(t, 'mempalace-capture-headless-invocation', "real.walkers.buildCheck(() => real.walkers.loadYaml(() => { throw new Error('no module'); }))");
+      assert.equal(findings.length, 2, JSON.stringify(findings.map((f) => f.message)));
+      assert.ok(findings.every((f) => /js-yaml cannot be loaded: no module/.test(f.message) && !/not valid YAML/.test(f.message)), JSON.stringify(findings.map((f) => f.message)));
+    });
+    // A model heading inside an unclosed fence is example text, so the model has no heading.
+    findsOne('a model heading inside an unclosed fence is not a heading', 'gsd-core/references/thinking-models-debug.md', swap('## 4. Counterfactual Thinking', '```\n## 4. Counterfactual Thinking'), 'thinking-model-guidance', 'must name the model "Counterfactual Thinking" in a heading');
+    // Two distinct pipes to jq in one file are two findings (the family probe and the general guard each report their own).
+    editFiles3('a no-boundary family pipe and a family probe pipe are two causes', [['gsd-core/workflows/review.md', append('gsd_run query config-getx k | jq .x\nMODEL=$(gsd_run query resolve-model planner | jq -r .model)')]], 'workflow-jq-dependency', /no gsd_run query \(config-get\|resolve-model\|resolve-execution\|verification\.status\) may pipe to jq/);
+    test('the two pipes of one file are exactly two findings', (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'review.md');
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\ngsd_run query config-getx k | jq .x\nMODEL=$(gsd_run query resolve-model planner | jq -r .model)\n`);
+      const findings = runShipped(root, ['workflow-jq-dependency']);
+      assert.equal(findings.length, 2, JSON.stringify(findings.map((f) => f.message)));
+    });
   }
 
   {
@@ -3983,8 +4187,8 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
 
     // Differential properties: each linear walker of a group 4 contract against the old regex or algorithm of the deleted test,
     // copied here as the oracle, over random strings built from the pieces the walker treats specially (whole phrases, so a
-    // positive input is common). Each property counts the inputs on which the oracle finds something and fails when none
-    // did, so it cannot pass by comparing nothing with nothing. The domains leave out the deliberate differences stated in
+    // positive input is common). Each property counts the inputs the oracle accepts and the ones it rejects and fails unless
+    // both were seen, so it cannot pass by comparing nothing with nothing or by never meeting a negative. The domains leave out the deliberate differences stated in
     // the ADR: a four-space `fi` line followed by a word character (the skip arm walker), a spawn with no prompt= before it
     // (the executor prompt walker), and a line that does not hold the query string (the query call walker).
     {
@@ -3996,14 +4200,18 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       const found = (value) => value !== null && value !== false && value !== undefined
         && !(Array.isArray(value) && value.length === 0)
         && !(typeof value === 'object' && !Array.isArray(value) && 'error' in value);
-      const agree = (title, arbitrary, walker, oracle) => test(title, () => {
-        let positives = 0;
+      // `onlyAccepted` is for a domain in which the oracle cannot reject (a line that holds the query string).
+      const agree = (title, arbitrary, walker, oracle, { onlyAccepted = false } = {}) => test(title, () => {
+        let accepted = 0;
+        let rejected = 0;
         fc.assert(fc.property(arbitrary, (input) => {
           const expected = oracle(input);
-          if (found(expected)) positives += 1;
+          if (found(expected)) accepted += 1;
+          else rejected += 1;
           assert.deepStrictEqual(walker(input), expected);
         }));
-        assert.ok(positives > 0, 'the oracle found something on no generated input: the property compares nothing');
+        assert.ok(accepted > 0, 'the oracle found something on no generated input: the property compares nothing');
+        assert.ok(onlyAccepted || rejected > 0, 'the oracle rejected every generated input: a walker that accepts too much would pass');
       });
 
       // spec-phase-probe-reachability: the step heading and the transition instruction.
@@ -4045,7 +4253,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
           w.useLines, (lines) => { const hits = []; lines.forEach((l, i) => { if (/\$\{TDD_APPLICABLE\b/.test(l)) hits.push(i); }); return hits; });
         const QUERY = 'gsd_run query phase.tdd-applicable';
         agree('the query call walker agrees with the old extraction on a line that holds the query string', joined([QUERY, ' --pick applicable', ' 2>/dev/null', ')', '(', 'X=$(', ' ', 'x'], 8).filter((line) => line.includes(QUERY)),
-          w.queryCall, (line) => { const start = line.indexOf(QUERY); let call = line.slice(start); if (call.endsWith(')')) call = call.slice(0, -1); return call; });
+          w.queryCall, (line) => { const start = line.indexOf(QUERY); let call = line.slice(start); if (call.endsWith(')')) call = call.slice(0, -1); return call; }, { onlyAccepted: true });
       }
 
       // quick-commit-boundary-context-research: the guard tests and the executor blocks.
@@ -4176,6 +4384,11 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       findsCount('a missing prune_local_branches block is one finding', 'gsd-core/workflows/cleanup.md', swap('<step name="prune_local_branches">', '<step name="prune_branches">'), 'cleanup-branch-pruning', 1, 'the <prune_local_branches> block is missing');
       findsCount('a missing show_dry_run block is one finding', 'gsd-core/workflows/cleanup.md', swap('<step name="show_dry_run">', '<step name="dry_run">'), 'cleanup-branch-pruning', 1, 'the <show_dry_run> block is missing');
       findsCount('a gate that never names the normalizer helper is one finding', `${STEPS_DIR}regression-gate-run.md`, eraseAll('normalize-test-command'), 'post-merge-gate-watch-mode', 1, 'must call the shared normalize-test-command helper');
+      findsCount('dropping QUICK_PLAN_COMMIT from the executor prompt is one finding', 'gsd-core/workflows/quick.md', within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('QUICK_PLAN_COMMIT')), 'quick-commit-boundary-context-research', 1, 'it names no QUICK_PLAN_COMMIT');
+      findsCount('dropping git show from the executor prompt is one finding', 'gsd-core/workflows/quick.md', within('Execute quick task', 'subagent_type="gsd-executor"', eraseAll('git show')), 'quick-commit-boundary-context-research', 1, 'it has no git show of the plan commit');
+      findsCount('a tdd.md line holding TDD_APPLICABLE without the conditional is one finding for the backend', 'gsd-core/workflows/execute-phase.md', swap("${TDD_APPLICABLE ? '- `~/.claude/gsd-core/references/tdd.md`'", "${TDD_APPLICABLE  ? '- `~/.claude/gsd-core/references/tdd.md`'"), 'tdd-backend-wiring', 1, 'the entry is not conditional');
+      findsCount('no tdd.md entry in a backend is one finding for the backend', 'gsd-core/workflows/execute-phase.md', eraseAll('tdd.md'), 'tdd-backend-wiring', 1, 'it lists no tdd.md conditional embed entry');
+      findsCount('a spec-phase.md with no transition at all is two findings: no jump, and no probe exit', 'gsd-core/workflows/spec-phase.md', erase(/\b(?:jump|proceed|continue|go|return|skip) to Step/gi), 'spec-phase-probe-reachability', 2, 'it contains no jump instructions to assert on');
       findsCount('an initialize step with no closing tag is one finding', 'gsd-core/workflows/code-review.md', eraseAll('</step>'), 'code-review-flags', 1, 'the initialize step is not closed');
     }
   }

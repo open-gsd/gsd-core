@@ -51,9 +51,15 @@ module.exports = {
         const updateRoadmap = text.indexOf('update_roadmap', humanNeeded);
         return updateRoadmap === -1 || updateRoadmap >= gapsFound;
       }, 'update_roadmap must not be reachable directly from the human_needed branch: phase completion must go through verify-work (issue #38)');
-    workflow.slice('**If human_needed:**', '**If gaps_found:**')
-      .has('verify-work', 'the human_needed branch must direct the user to /gsd:verify-work to complete verification')
-      .has('-UAT.md', 'the human_needed branch must create a {phase_num}-UAT.md file for verify-work to resume')
-      .lacks('HUMAN-UAT.md', 'the human_needed branch must not create HUMAN-UAT.md: use {phase_num}-UAT.md to align with verify-work\'s resume path (issue #38 edge case 3)');
+    // With the markers in the wrong order the section is empty: the order finding above is the one cause, so the section
+    // is not read then (the old test sliced to an empty string).
+    const humanNeededAt = workflow.text.indexOf('**If human_needed:**');
+    const gapsFoundAt = workflow.text.indexOf('**If gaps_found:**');
+    if (!(humanNeededAt !== -1 && gapsFoundAt !== -1 && gapsFoundAt < humanNeededAt)) {
+      workflow.slice('**If human_needed:**', '**If gaps_found:**')
+        .has('verify-work', 'the human_needed branch must direct the user to /gsd:verify-work to complete verification')
+        .has('-UAT.md', 'the human_needed branch must create a {phase_num}-UAT.md file for verify-work to resume')
+        .lacks('HUMAN-UAT.md', 'the human_needed branch must not create HUMAN-UAT.md: use {phase_num}-UAT.md to align with verify-work\'s resume path (issue #38 edge case 3)');
+    }
   },
 };

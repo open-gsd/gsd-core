@@ -18,7 +18,7 @@ const WS = Symbol('whitespace run');
 
 // The literal parts in order, with any run of whitespace (WS) between them where the old pattern had `\s*`; `wordEnd`
 // asks for a non-word character (or the end) after the last part, the old `\b`.
-function hasSequence(text, parts, wordEnd = false) {
+function hasPatternWalk(text, parts, wordEnd = false) {
   let start = text.indexOf(parts[0]);
   while (start !== -1) {
     let at = start;
@@ -44,19 +44,19 @@ const SPIKES_TABLE_HEADER = ['|', WS, '#', WS, '|', WS, 'Idea', WS, '|', WS, 'Na
 module.exports = {
   id: 'spike-manifest-scoping',
   issue: '#1700',
-  hasSequence,
+  hasPatternWalk,
   WS,
   SPIKES_TABLE_HEADER,
   check(ctx) {
     ctx.doc(SPIKE)
       .has(/idea key/i, 'create_manifest must introduce an explicit "idea key" concept: without one the write side cannot tell a continuation of the current idea from an unrelated new idea')
-      .satisfies((text) => hasSequence(text, ['##', WS, 'Ideas'], true), 'the MANIFEST.md template must have a `## Ideas` section (plural) that can hold more than one idea')
-      .satisfies((text) => hasSequence(text, ['###', WS, '{idea-key}']), 'the MANIFEST.md template must scope each idea under its own `### {idea-key}` subsection')
+      .satisfies((text) => hasPatternWalk(text, ['##', WS, 'Ideas'], true), 'the MANIFEST.md template must have a `## Ideas` section (plural) that can hold more than one idea')
+      .satisfies((text) => hasPatternWalk(text, ['###', WS, '{idea-key}']), 'the MANIFEST.md template must scope each idea under its own `### {idea-key}` subsection')
       .has(/new idea key[\s\S]{0,200}?append/i, 'a new idea must append a new idea section rather than overwrite or merge into an existing one')
       .has(/[Nn]ever touch[\s\S]{0,80}?(?:another|other) idea/i, 'the workflow must forbid touching another idea\'s section when adding to the current one')
       .has(/old flat[\s\S]{0,40}?shape/i, 'create_manifest must migrate a pre-#1700 flat-shape MANIFEST.md in place instead of discarding it')
-      .satisfies((text) => hasSequence(text, SPIKES_TABLE_HEADER), 'the `## Spikes` table header must include an Idea column between # and Name')
-      .satisfies((text) => hasSequence(text, ['spike:', WS, 'NNN', '\nidea:', WS, '{idea-key}']), 'the build_spikes README frontmatter template must record the owning idea key on the spike')
+      .satisfies((text) => hasPatternWalk(text, SPIKES_TABLE_HEADER), 'the `## Spikes` table header must include an Idea column between # and Name')
+      .satisfies((text) => hasPatternWalk(text, ['spike:', WS, 'NNN', '\nidea:', WS, '{idea-key}']), 'the build_spikes README frontmatter template must record the owning idea key on the spike')
       .has(/current idea's[\s\S]{0,80}?Requirements/i, 'reground must scope its established-requirements check to the idea being spiked')
       .has(/every idea section/i, 'frontier mode\'s MANIFEST.md load step must read every idea\'s scoped section')
       .has(/scoped to the idea key/, 'the spike.md success criteria must call out that Requirements are tracked per idea key');

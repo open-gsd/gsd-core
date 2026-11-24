@@ -46,8 +46,10 @@ function wordPipedToJq(text, word) {
 }
 
 // True when `gsd_run query <family> ... | jq` appears: whitespace between the words, then one of the query families.
-function queryPipedToJq(text) {
-  const families = ['config-get', 'resolve-model', 'resolve-execution', 'verification.status'];
+// With `onlyUncovered` a hit counts only when the family is not followed by a word boundary: the family probes already
+// see the others, so the general guard reports the one pipe no family probe sees.
+function queryPipedToJq(text, onlyUncovered = false) {
+  const families = FAMILIES;
   for (let at = text.indexOf('gsd_run'); at !== -1; at = text.indexOf('gsd_run', at + 1)) {
     let next = at + 'gsd_run'.length;
     const blanks = (from) => {
@@ -65,6 +67,7 @@ function queryPipedToJq(text) {
       if (!text.startsWith(family, next)) continue;
       const end = next + family.length;
       if (family === 'verification.status' && isWord(text[end])) continue;
+      if (onlyUncovered && !isWord(text[end])) continue;
       if (pipesToJq(text, end)) return true;
     }
   }
@@ -108,9 +111,9 @@ module.exports = {
       ['config-get lookups must use --raw, not a jq pipe', (text) => wordPipedToJq(text, 'config-get')],
       ['resolve-model lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'resolve-model')],
       ['verification.status lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'verification.status')],
-      // The general guard adds only a query family written with no word boundary; a pipe a family probe sees is reported once.
+      // The general guard reports only a query family written with no word boundary: a pipe a family probe sees is reported once.
       ['no gsd_run query (config-get|resolve-model|resolve-execution|verification.status) may pipe to jq',
-        (text) => queryPipedToJq(text) && !FAMILIES.some((family) => wordPipedToJq(text, family))],
+        (text) => queryPipedToJq(text, true)],
       ['update-context lookups must not pipe to jq (#1854)', (text) => wordPipedToJq(text, 'update-context')],
       ['resolve-execution lookups must use --pick, not a jq pipe (sibling of resolve-model)', (text) => wordPipedToJq(text, 'resolve-execution')],
     ];

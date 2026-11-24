@@ -111,18 +111,23 @@ module.exports = {
         const { prompt } = found;
         const show = prompt.indexOf('git show');
         const reading = prompt.indexOf(OPEN_TAG);
-        if (!prompt.includes('QUICK_PLAN_COMMIT') || !prompt.includes('CONTEXT.md')) return 'it names no QUICK_PLAN_COMMIT or no CONTEXT.md';
-        return (show !== -1 && reading !== -1 && show < reading) || 'git show does not come before the required_reading block';
+        if (!prompt.includes('QUICK_PLAN_COMMIT')) return once('it names no QUICK_PLAN_COMMIT');
+        if (!prompt.includes('CONTEXT.md')) return 'it names no CONTEXT.md';
+        // A prompt with no git show at all is reported by the PLAN.md materialization assertion below.
+        if (show === -1) return true;
+        return (reading !== -1 && show < reading) || 'git show does not come before the required_reading block';
       }, 'the executor prompt must materialize CONTEXT.md from QUICK_PLAN_COMMIT before required_reading can prime paths, as it does for PLAN.md')
       .satisfies((text) => {
         const found = executorPrompt(text);
         if (found.error) return once(found.error);
-        return (found.prompt.includes('QUICK_PLAN_COMMIT') && found.prompt.includes('RESEARCH.md')) || 'it names no QUICK_PLAN_COMMIT or no RESEARCH.md';
+        if (!found.prompt.includes('QUICK_PLAN_COMMIT')) return once('it names no QUICK_PLAN_COMMIT');
+        return found.prompt.includes('RESEARCH.md') || 'it names no RESEARCH.md';
       }, 'the executor prompt must materialize RESEARCH.md from QUICK_PLAN_COMMIT the same way it does for PLAN.md')
       .satisfies((text) => {
         const found = executorPrompt(text);
         if (found.error) return once(found.error);
-        return (found.prompt.includes('git show') && found.prompt.includes('QUICK_PLAN_COMMIT')) || 'it has no git show of the plan commit';
+        if (!found.prompt.includes('QUICK_PLAN_COMMIT')) return once('it names no QUICK_PLAN_COMMIT');
+        return found.prompt.includes('git show') || 'it has no git show of the plan commit';
       }, 'the PLAN.md materialization via git show of the plan commit must remain')
       .satisfies((text) => {
         const planner = blockAt(text, PLANNER_BLOCK, 'planner');
