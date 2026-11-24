@@ -468,6 +468,10 @@ const ERROR_REASON = Object.freeze({
   // state begin-phase --plans (#6399): STATE.md carries no `Total Plans in Phase` field and no `Plan:` line to hold the
   // count, so the command refuses before any write instead of exiting 0 without recording it.
   STATE_PLANS_NO_LINE: 'plans_no_line',
+  // init.quick --resume (#6530): no quick task directory is named `<quick_id>-<slug>` (or legacy
+  // `YYYYMMDD-<slug>`), or more than one is; the ambiguity carries the candidates in `matches`.
+  QUICK_RESUME_NOT_FOUND: 'quick_resume_not_found',
+  QUICK_RESUME_AMBIGUOUS: 'quick_resume_ambiguous',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',
@@ -578,10 +582,14 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.PHASE_ID_COLLISION]: 'USAGE',
   [ERROR_REASON.AMBIGUOUS_PHASE_OWNER]: 'USAGE',
   [ERROR_REASON.PHASE_NAMING_NOT_CUSTOM]: 'USAGE',
+  // #6530: the slug names two task directories; the caller must disambiguate, like AMBIGUOUS_PHASE_OWNER.
+  [ERROR_REASON.QUICK_RESUME_AMBIGUOUS]: 'USAGE',
 
   // A specific, named thing does not exist / nothing was there to find —
   // genuine, known emptiness rather than a broken prerequisite.
   [ERROR_REASON.CONFIG_KEY_NOT_FOUND]: 'NO_INPUT',
+  // #6530: no quick task has that slug — a named thing that does not exist.
+  [ERROR_REASON.QUICK_RESUME_NOT_FOUND]: 'NO_INPUT',
   [ERROR_REASON.SUMMARY_NO_PLANNING]: 'NO_INPUT',
   [ERROR_REASON.WORKSTREAM_MODE_NONE_ACTIVE]: 'NO_INPUT',
 

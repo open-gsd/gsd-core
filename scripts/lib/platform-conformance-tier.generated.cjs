@@ -256,6 +256,7 @@ module.exports = {
   "tests/quick-batch.test.cjs",
   "tests/quick-branching.test.cjs",
   "tests/quick-commit-boundary.test.cjs",
+  "tests/quick-resume.test.cjs",
   "tests/quick-review-scope-tip-bound.test.cjs",
   "tests/read-guard.test.cjs",
   "tests/reapply-verify-hunks.test.cjs",

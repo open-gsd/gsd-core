@@ -164,9 +164,15 @@ const CORE_UTILS_EXEMPT_FUNCTIONS = new Set([
 //     re-derive "is this a plan" — it answers a different, narrower question
 //     (does the canonical 2-digit numbering sequence have a gap) that the
 //     owner's boolean plan/summary classification cannot answer.
+//   - quick-resume.cts hasPlanFile (#6530): the plan-side twin of
+//     audit.cts resolveQuickTaskSummaryFile — "does this one QUICK task
+//     directory hold a plan" for `init.quick --resume`, using that function's
+//     own `X.md` / `*-X.md` rule. Not a phase directory, no plan/summary
+//     pairing, no count.
 const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [CORE_UTILS_FILE, CORE_UTILS_EXEMPT_FUNCTIONS],
   [path.join('src', 'audit.cts'), new Set(['resolveQuickTaskSummaryFile'])],
+  [path.join('src', 'quick-resume.cts'), new Set(['hasPlanFile'])],
   [path.join('src', 'gsd2-import.cts'), new Set(['readTasksDir'])],
   [path.join('src', 'estimate-cli.cts'), new Set(['collectCalibrationSamples'])],
   [path.join('src', 'roadmap.cts'), new Set(['cmdRoadmapAnnotateDependencies'])],

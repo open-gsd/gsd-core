@@ -226,6 +226,8 @@ module.exports = {
   "tests/quick-branching.test.cjs",
   "tests/quick-commit-boundary.test.cjs",
   "tests/quick-research.test.cjs",
+  "tests/quick-resume.process.test.cjs",
+  "tests/quick-resume.test.cjs",
   "tests/quick-review-scope-tip-bound.test.cjs",
   "tests/reapply-verify-hunks.test.cjs",
   "tests/refactor-1390-t3-characterization.test.cjs",

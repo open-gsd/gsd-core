@@ -20,6 +20,9 @@ import { INIT_SUBCOMMANDS } from './command-aliases.cjs';
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
 import { parseNamedArgsOrExit, isFlagToken } from './command-arg-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6530 CJS interop import, as in the sibling modules
+import quickResume = require('./quick-resume.cjs');
+const { splitQuickResumeArgs, assertQuickResumeArgs } = quickResume;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -188,7 +191,20 @@ function routeInitCommand({ init, args, cwd, raw, error }: RouteInitCommandOptio
         // everything after `init quick` is a free-text description — strict
         // undeclared-flag rejection would break
         // `/gsd-quick add a --dry-run option`, which works today.
-        const namedArgs = parseNamedArgsOrExit(args, { booleanFlags: ['discuss', 'research', 'validate', 'full'], positionals: 'rest' }, error);
+        // #6530: `--resume <slug>` / `--resume=<slug>` names an existing task (src/quick-resume.cts).
+        const namedArgs = parseNamedArgsOrExit(
+          args,
+          {
+            valueFlags: ['resume'],
+            eqFlags: ['resume'],
+            nonEmptyFlags: ['resume'],
+            blankIsMissingFlags: ['resume'],
+            booleanFlags: ['discuss', 'research', 'validate', 'full'],
+            positionals: 'rest',
+          },
+          error,
+        );
+        const split = splitQuickResumeArgs(args.slice(2));
         // #2994: `args.slice(2)` is the free-text description, but section-manifest
         // gating (buildSectionManifestField, src/init.cts) now requires forwarding
         // --discuss/--research/--validate/--full alongside it — a plain `.join(' ')`
@@ -196,11 +212,12 @@ function routeInitCommand({ init, args, cwd, raw, error }: RouteInitCommandOptio
         // description text. Strip them before joining so the description stays
         // exactly what it was before this workflow started forwarding flags.
         const quickFlagTokens = new Set(['--discuss', '--research', '--validate', '--full']);
-        const description = args
-          .slice(2)
+        const description = split.descriptionTokens
           .filter((token) => !quickFlagTokens.has(token))
           .join(' ');
+        assertQuickResumeArgs(split.resumeCount, description);
         init.cmdInitQuick(cwd, description, raw, {
+          resume: namedArgs['resume'],
           discuss: namedArgs['discuss'],
           research: namedArgs['research'],
           validate: namedArgs['validate'],
