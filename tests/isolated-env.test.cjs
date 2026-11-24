@@ -102,7 +102,7 @@ describe('homePair (#6639)', () => {
       'process.stdout.write(JSON.stringify({',
       '  pair: iso.homePair("/x"),',
       '  sandbox: hel.homeSandboxEnv("/y"),',
-      '  built: Object.keys(iso.isolatedEnv({ home: process.cwd(), base: {} })).includes("HOME"),',
+      '  built: iso.isolatedEnv({ home: process.cwd(), base: {} }).HOME === process.cwd(),',
       '}));',
     ].join('\n');
     const home = tmp(t, 'gsd-6639-order-');

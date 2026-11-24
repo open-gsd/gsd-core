@@ -1201,8 +1201,9 @@ function runNpm(args, options = {}) {
  * never reads from or writes to the caller's $HOME — the same guarantee
  * runNpm() already provides. (#131)
  *
- * @returns {object} env dict with HOME, npm_config_cache, npm_config_userconfig
- *   pointing into a process-scoped temp directory.
+ * @returns {object} env dict with HOME and USERPROFILE (npm resolves its home from
+ *   USERPROFILE on Windows), npm_config_cache and npm_config_userconfig pointing
+ *   into a process-scoped temp directory.
  */
 function isolatedNpmEnv() {
   return {
