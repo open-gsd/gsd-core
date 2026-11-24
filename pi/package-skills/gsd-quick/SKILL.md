@@ -139,7 +139,8 @@ No agent spawn. STOP after printing.
 
 When SUBCMD=resume and SLUG is set (already sanitized):
 
-1. Look the task up by its exact slug. `init.quick --resume` matches only a directory named
+1. If RESUME_FLAGS holds `--ws <name>`, set `GSD_WS="--ws <name>"` first (name: `[A-Za-z0-9._-]` only), so the
+   lookup searches that workstream. Look the task up by its exact slug. `init.quick --resume` matches only a directory named
    `{quick_id}-{SLUG}` (or a legacy `YYYYMMDD-{SLUG}`), returns that task's own `quick_id`, `slug`,
    `task_dir` and `branch_name`, and never allocates a new id:
    ```bash
@@ -150,7 +151,7 @@ When SUBCMD=resume and SLUG is set (already sanitized):
    (the message lists them); it never picks one.
 
 3. If `resume.has_plan` is false, print `Quick task {SLUG} has no plan yet; start it again with /skill:gsd-quick` and stop.
-   Otherwise read the plan (`{task_dir}/{quick_id}-PLAN.md`, or `{task_dir}/PLAN.md`) to extract the description,
+   Otherwise read the plan in `task_dir` (`PLAN.md`, or its one `*-PLAN.md` file) to extract the description,
    and the summary (if `resume.has_summary`) to extract the status.
 
 4. Print before spawning:
