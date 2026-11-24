@@ -1255,10 +1255,10 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   }
 
   // Run the watch with `sleep` recording every argument; returns the verdict and the sleeps.
-  function watchSleeps(f, dispatchTs, markers, prelude = '') {
+  function watchSleeps(f, dispatchTs, markers, prelude = '', interval = 5) {
     const log = `${f.fwd}/sleeps.log`;
     fs.writeFileSync(log, '');
-    const out = watch(dispatchTs, f.receipt, f.noPlans, markers, { prelude: `${prelude}\nsleep() { printf '%s\\n' "$1" >> ${q(log)}; }` });
+    const out = watch(dispatchTs, f.receipt, f.noPlans, markers, { interval, prelude: `${prelude}\nsleep() { printf '%s\\n' "$1" >> ${q(log)}; }` });
     return { out, sleeps: splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean).map(Number) };
   }
 
@@ -1272,6 +1272,29 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     for (const age of [SETTLE_SECONDS, SETTLE_SECONDS + 1]) {
       receiptAged(f, age);
       assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `receipt age ${age}s: settled, no extra sleep`);
+    }
+  });
+
+  // AC3 ("a finished revision yields a success result within one poll interval"): the window
+  // is capped at one interval, so a short interval never stretches a report past it.
+  test('the settle window never exceeds one poll interval (#5182 AC3)', (t) => {
+    const f = fixture(t);
+    // interval 1 minute: window = 60 s. limit-1 / limit / limit+1 around it.
+    for (const [age, extra] of [[0, 60], [59, 1], [60, null], [61, null]]) {
+      receiptAged(f, age);
+      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, '', 1), { out: 'marker_received', sleeps: extra === null ? [60] : [60, extra] }, `interval 1 min, receipt age ${age}s`);
+    }
+    // interval 2 minutes equals the window: the full 120 s applies.
+    receiptAged(f, 0);
+    assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, '', 2), { out: 'marker_received', sleeps: [120, 120] }, 'interval 2 min');
+    // The reported delay after the write is max(age at the check, window), never more than one interval.
+    for (const interval of [1, 2, 5]) {
+      for (const age of [0, 30, 59, 60, 119, 120, 121, 299]) {
+        if (age > interval * 60) continue;
+        receiptAged(f, age);
+        const { sleeps } = watchSleeps(f, NOW, CHECKER_MARKERS, '', interval);
+        assert.ok(sleeps.slice(1).reduce((a, b) => a + b, 0) + age <= Math.max(age, interval * 60), `interval ${interval} min, age ${age}s: reported by ${age + sleeps.slice(1).reduce((a, b) => a + b, 0)}s`);
+      }
     }
   });
 
