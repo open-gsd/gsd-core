@@ -22,8 +22,8 @@ guessing one.
 
 Write each `<automated>` step as **one command** (#6216). Never a `for`/`while` loop, a heredoc, or
 two git commands chained with `;`, `&&` or a pipe: a worktree-isolated executor may be refused the
-compound form and then has to improvise the check. One `git diff --name-only <base> -- <paths…>`
-replaces a loop of `git diff --quiet -- <path>`.
+compound form and then has to improvise the check. One `git diff --quiet -- <paths…>`, which exits
+non-zero when any of the paths changed, replaces a loop of `git diff --quiet -- <path>`.
 
 **Run a count/match gate before it ships (#4927).** A gate you author — or one a `RESEARCH.md`
 hands you — that counts or matches text (`grep -c`, `grep -q`, `rg`, `test -n "$(grep …)"`) is a

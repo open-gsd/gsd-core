@@ -3,7 +3,7 @@
 - **Status:** Proposed. Implemented in `src/executor-guard.cts` and routed as `query executor.guard` and `query executor.ledger`; the maintainer's approval of #6216 made the ledger's storage location a condition, recorded here.
 - **Date:** 2026-11-24
 - **Issue:** [#6216](https://github.com/open-gsd/gsd-core/issues/6216). Approved as a feature with three conditions: the guards stay verify-only and fail closed (#48); the ledger's storage outside the shared `.git/worktrees/` path is specified in an ADR; the reporter supplies the refused commands.
-- **Relationship to prior work:** [ADR-4908](4908-project-context.md) gives every router the resolved `ProjectContext`; these verbs read its `worktreeRoot`. [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md) moved the dispatch-side isolation decision into `query dispatch-isolation`; this ADR does the same for the executor side and changes neither.
+- **Relationship to prior work:** [ADR-4908](4908-project-context.md) gives every router the resolved `ProjectContext`; these verbs take its `projectRoot` for configuration and read the worktree from the directory the command ran in. [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md) moved the dispatch-side isolation decision into `query dispatch-isolation`; this ADR does the same for the executor side and changes neither.
 - **Scope:** the executor's spawn-time `worktree_branch_check`, its pre-commit checks (steps 0a, 0b and 0) and its plan commit ledger (step 0c and the SUMMARY's `commits:` measurement). Multi-repo `commit-to-subrepo` hashes are unchanged.
 
 ## Context
@@ -22,10 +22,10 @@ When those blocks are refused, an executor splits them up by hand or skips them.
 |---|---|---|
 | `head-attached` | HEAD is detached or does not resolve | `worktree_branch_check`, step 0 |
 | `not-protected` | with `--expected-base`: the branch is `main`, `master`, `develop`, `trunk` or `release/*`, as in the spawn-time block. Otherwise: the branch is protected or the default branch, or the base branch cannot be verified (`resolveProtectedBranchStatus`, the `git.base-branch --is-protected` rule) | `worktree_branch_check`, step 0 |
-| `agent-namespace` | the branch is outside `agent-*` / `worktree-agent-*` / `worktree-wf_*`; checked whenever `--expected-base` is given, and otherwise unless `--sequential` in a worktree whose `.git` is a file or whose git dir is not the common dir (a linked worktree, a submodule, a separate git dir), or whose layout cannot be read | `worktree_branch_check`, step 0 |
-| `base` | HEAD is neither `--expected-base` nor a non-empty `--expected-base-alternate` | `worktree_branch_check` |
+| `agent-namespace` | the branch is outside `agent-*` / `worktree-agent-*` / `worktree-wf_*`; checked whenever `--expected-base` is given, and otherwise unless `--sequential` in a worktree whose `.git` is a file or whose git dir is not the common dir (a linked worktree, a submodule, a separate git dir; `.git` is followed when it is a link), or whose layout cannot be read | `worktree_branch_check`, step 0 |
+| `base` | HEAD is neither `--expected-base` nor a non-empty `--expected-base-alternate`, or `--expected-base-alternate` is given without `--expected-base` | `worktree_branch_check` |
 | `toplevel` | the worktree root of the current directory is not `--toplevel`, both resolved | step 0a |
-| `path` | `--path` (absolute, or relative to the current directory), resolved one segment at a time with each link followed, lands outside the worktree root; or it cannot be resolved (a link that does not resolve, a segment below a file, `..` below a missing segment) | step 0b |
+| `path` | `--path` (absolute, or relative to the current directory), resolved one segment at a time with each link followed, lands outside the worktree root; or it cannot be resolved (a link that does not resolve, a segment, `.` or trailing separator below a file, `..` below a missing segment). On POSIX only `/` separates segments | step 0b |
 
 The verb reads the worktree of the directory it runs in, its HEAD and branch, and writes nothing. It prints its checks as JSON, prints a `FATAL:` line on stderr for each failed check, and exits 42, the `worktree_branch_check` contract's code. Recovery stays with the orchestrator that owns the worktree (#48).
 
@@ -41,7 +41,7 @@ The verb reads the worktree of the directory it runs in, its HEAD and branch, an
 - **Directory.** `.gsd/` and `.gsd/executor-ledger/` must be real directories at exactly those paths, not links. `executor-ledger/` carries its own `.gitignore` (`*`), so its files stay out of `git status` whatever `.gsd/.gitignore` says, and `.gsd/.gitignore` is never edited. The record itself must be a regular file.
 - **Once.** The record is written whole to a temporary name and hard-linked into place, which fails when it already exists; a later `record` for the same plan keeps the first base. The executor may run `record` before every commit.
 - **Names.** `--phase` and `--plan` must be plain ids (a letter or digit, then letters, digits, `.`, `_`, `-`). `+` joins them in the file name and is outside that alphabet, so two pairs never share a record, and the record's own `phase` and `plan` must match.
-- **Lifetime.** The record is removed with the worktree.
+- **Lifetime.** In a linked worktree, the record is removed with the worktree.
 
 `gsd_run query executor.ledger read --phase <phase> --plan <plan>` prints `plan_head_before`, `plan_head_after` and `commits` (`git rev-list --count <base>..HEAD`). It exits 1 when the record is missing, unreadable or not this plan's, or its base is not a commit or not an ancestor of HEAD.
 
@@ -51,7 +51,7 @@ When `gsd_run` cannot run, the executor checks the root and the branch with sing
 
 ### 4. One git command per Bash call
 
-The executor runs each git command it composes on its own, and the planner writes `<automated>` verify steps as single commands: one `git diff --name-only <base> -- <paths…>` in place of a loop over paths.
+The executor runs each git command it composes on its own, and the planner writes `<automated>` verify steps as single commands: one `git diff --quiet -- <paths…>` in place of a loop of `git diff --quiet -- <path>`.
 
 ## Alternatives considered
 

@@ -1034,7 +1034,7 @@ The isolation guards treat a dispatch as an executor when (a) it is `gsd-executo
 
 ## Executor Guards and Plan Ledger
 
-Used by `gsd-executor` and the `worktree_branch_check` block (#6216, [ADR-6216](adr/6216-executor-guard-verbs.md)). Each is one plain command, so a runtime that refuses compound shell still runs it.
+Used by `gsd-executor` and the `worktree_branch_check` block (#6216, [ADR-6216](adr/6216-executor-guard-verbs.md)). Each is one plain command.
 
 ```bash
 # Spawn-time check: the orchestrator's captured base (and an optional docs-only alternate)
@@ -1053,7 +1053,7 @@ node gsd-tools.cjs query executor.ledger read --phase <phase> --plan <plan> [--p
 
 | Verb | Behavior |
 |---|---|
-| `executor.guard` | Verify-only, on the worktree of the directory it runs in. Checks that HEAD is attached; that the branch is not protected (with `--expected-base`: not `main`, `master`, `develop`, `trunk` or `release/*`; otherwise the resolved protected/default branch, an unverifiable base branch counting as protected); and the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace whenever `--expected-base` is given, and otherwise unless `--sequential` in a worktree whose `.git` is a file or whose git dir is not the common dir. `--expected-base` (with an optional non-empty `--expected-base-alternate`), `--toplevel` and `--path` each add their check. Prints `{ok, branch, head, worktree_root, checks}`; on any failed check it prints a `FATAL:` line per check on stderr and exits 42. |
+| `executor.guard` | Verify-only, on the worktree of the directory it runs in. Checks that HEAD is attached; that the branch is not protected (with `--expected-base`: not `main`, `master`, `develop`, `trunk` or `release/*`; otherwise the resolved protected/default branch, an unverifiable base branch counting as protected); and the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace whenever `--expected-base` is given, and otherwise unless `--sequential` in a worktree whose `.git` is a file or whose git dir is not the common dir, or whose layout cannot be read. `--expected-base` (with an optional non-empty `--expected-base-alternate`), `--toplevel` and `--path` each add their check. Prints `{ok, branch, head, worktree_root, checks}`; on any failed check it prints a `FATAL:` line per check on stderr and exits 42. |
 | `executor.ledger record` | Writes `<worktree root>/.gsd/executor-ledger/<phase>+<plan>.json` with HEAD as `plan_head_before`, once: a later call keeps the first record. The directory carries its own `.gitignore`; a linked `.gsd` or `executor-ledger` is refused. Prints `{recorded, path, plan_head_before}`. `--phase` and `--plan` must be plain ids (a letter or digit, then letters, digits, `.`, `_`, `-`). |
 | `executor.ledger read` | Prints `{plan_head_before, plan_head_after, commits, path}`, where `commits` is `git rev-list --count` from the recorded base to HEAD. Exits 1 when the record is missing, unreadable or not this plan's, or its base is not a commit or not an ancestor of HEAD. |
 

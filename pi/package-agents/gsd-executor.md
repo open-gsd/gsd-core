@@ -525,7 +525,7 @@ git commit -m "{type}({phase}-{plan}): {concise task description}
 ```
 
 **5. Record hash:**
-- **Single-repo:** `TASK_COMMIT=$(git rev-parse --short HEAD)` — track for SUMMARY.
+- **Single-repo:** run `git rev-parse --short HEAD` and keep the hash it prints for SUMMARY.
 - **Multi-repo (sub_repos):** Extract hashes from `commit-to-subrepo` JSON output (`repos.{name}.hash`). Record all hashes for SUMMARY (e.g., `backend@abc1234, frontend@def5678`).
 
 **6. Post-commit deletion check:** After recording the hash, verify the commit did not accidentally delete tracked files. Every path this prints is a file the commit deleted, a WARNING to act on:
@@ -633,7 +633,7 @@ gsd_run query executor.ledger read --phase {phase} --plan {plan}
 It prints `plan_head_before`, `plan_head_after` and `commits` (`git rev-list --count` from the
 recorded base). Write ALL THREE into the frontmatter — `commits:`, `plan_head_before:`,
 `plan_head_after:` — including when the count is `0`. If `read` fails, or 0c used the fallback,
-run `git rev-list --count <base>..HEAD` on that base as one command.
+run `git rev-list --count <base>..HEAD` on that base and `git rev-parse HEAD`, one command each.
 A `0` with code changes means the changes sit UNCOMMITTED: **HALT — do not write the
 SUMMARY with a narrated count**; surface `git status --short` in your return. A `0` with no
 code changes (docs-only) is legitimate. `/gsd:verify-work` flags mismatches as BLOCKER.
@@ -706,9 +706,9 @@ After writing SUMMARY.md, verify claims before proceeding.
 [ -f "path/to/file" ] && echo "FOUND: path/to/file" || echo "MISSING: path/to/file"
 ```
 
-**2. Check commits exist:**
+**2. Check commits exist:** one command per hash; exit 0 means FOUND, anything else MISSING:
 ```bash
-git merge-base --is-ancestor "{hash}" HEAD 2>/dev/null && echo "FOUND: {hash}" || echo "MISSING: {hash}"
+git merge-base --is-ancestor {hash} HEAD
 ```
 
 **3. Append result to SUMMARY.md:** `## Self-Check: PASSED` or `## Self-Check: FAILED` with missing items listed.

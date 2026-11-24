@@ -38,6 +38,8 @@ const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 export const LEDGER_DIR = 'executor-ledger';
 
+const RECORD_MAX_BYTES = 4096;
+
 type GitResult = { exitCode: number; stdout: string; stderr?: string };
 type ExecGitFn = (args: string[], opts?: { cwd?: string; timeout?: number }) => GitResult;
 
@@ -122,14 +124,29 @@ export function resolveLanding(
   const parsed = path.parse(target);
   const root = realpathOr(deps, parsed.root);
   if (root === null) return { reason: `cannot resolve ${parsed.root}` };
-  const segments = target.slice(parsed.root.length).split(/[\\/]+/).filter((s) => s !== '' && s !== '.');
+  const sep = process.platform === 'win32' ? /[\\/]+/ : /\/+/;
+  const rest = target.slice(parsed.root.length);
+  // A trailing separator, like a `.` segment, says the entry before it is a directory.
+  const segments = rest.split(sep).filter((s) => s !== '');
+  if (segments.length > 0 && sep.test(rest.slice(-1))) segments.push('.');
   let cur = root;
   const tail: string[] = [];
+  const isDir = (p: string): boolean => {
+    try {
+      return fs.statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     if (tail.length > 0) {
       if (seg === '..') return { reason: `'..' follows a segment that does not exist (${tail.join('/')})` };
-      tail.push(seg);
+      if (seg !== '.') tail.push(seg);
+      continue;
+    }
+    if (seg === '.') {
+      if (!isDir(cur)) return { reason: `${cur} is not a directory` };
       continue;
     }
     if (seg === '..') {
@@ -154,13 +171,7 @@ export function resolveLanding(
     } else {
       cur = next;
     }
-    if (i < segments.length - 1) {
-      let isDir = false;
-      try {
-        isDir = fs.statSync(cur).isDirectory();
-      } catch { /* not a directory */ }
-      if (!isDir) return { reason: `${cur} is not a directory` };
-    }
+    if (i < segments.length - 1 && !isDir(cur)) return { reason: `${cur} is not a directory` };
   }
   return { landing: tail.length > 0 ? path.join(cur, ...tail) : cur };
 }
@@ -180,13 +191,15 @@ function readWorktree(deps: ExecutorGuardDeps | undefined, from: string): Worktr
   const root = top.stdout;
   let dotGitFile = false;
   try {
-    dotGitFile = fs.lstatSync(path.join(root, '.git')).isFile();
-  } catch { /* no .git entry at the top level */ }
-  const dirs = git(deps, root, ['rev-parse', '--absolute-git-dir', '--git-common-dir']);
+    // Followed, as the shell's `[ -f .git ]` follows a link.
+    dotGitFile = fs.statSync(path.join(root, '.git')).isFile();
+  } catch { /* no .git file at the top level */ }
+  const dirs = git(deps, from, ['rev-parse', '--absolute-git-dir', '--git-common-dir']);
   const lines = dirs.stdout.split(/\r?\n/).filter((l) => l !== '');
   if (dirs.exitCode !== 0 || lines.length !== 2) return { root, layoutKnown: false, isolatedLayout: dotGitFile };
-  const gitDir = realpathOr(deps, lines[0]) ?? lines[0];
-  const commonDir = realpathOr(deps, path.resolve(root, lines[1])) ?? path.resolve(root, lines[1]);
+  const gitDir = realpathOr(deps, lines[0]);
+  const commonDir = realpathOr(deps, path.resolve(from, lines[1]));
+  if (gitDir === null || commonDir === null) return { root, layoutKnown: false, isolatedLayout: dotGitFile };
   return { root, layoutKnown: true, isolatedLayout: dotGitFile || gitDir !== commonDir };
 }
 
@@ -201,7 +214,8 @@ export function evaluateGuard(
 ): GuardResult {
   const checks: GuardCheck[] = [];
   const facts = readWorktree(deps, opts.invokedFrom);
-  const cwd = facts.root ?? opts.invokedFrom;
+  // Every git call runs where the command ran, so git reads the repository it discovered there.
+  const cwd = opts.invokedFrom;
 
   const symbolic = facts.root === null ? null : git(deps, cwd, ['symbolic-ref', '--quiet', 'HEAD']);
   const attached = symbolic !== null && symbolic.exitCode === 0 && symbolic.stdout.startsWith('refs/heads/');
@@ -259,6 +273,9 @@ export function evaluateGuard(
     });
   }
 
+  if (expectedBase === null && opts.expectedBaseAlternate) {
+    checks.push({ name: 'base', ok: false, detail: '--expected-base-alternate needs --expected-base' });
+  }
   if (expectedBase !== null) {
     const alternate = opts.expectedBaseAlternate ?? '';
     const accepted = [expectedBase, alternate].filter((s) => s !== '');
@@ -317,8 +334,15 @@ export function cmdExecutorGuard(
   raw: boolean,
   deps?: ExecutorGuardDeps,
 ): GuardResult {
-  const result = evaluateGuard(ctx, opts, deps);
   const writeDiagnostic = deps?.writeDiagnostic ?? ((s: string) => process.stderr.write(s));
+  let result: GuardResult;
+  try {
+    result = evaluateGuard(ctx, opts, deps);
+  } catch (err) {
+    writeDiagnostic(`FATAL: executor.guard: the checks could not run: ${(err as Error).message}\n`);
+    writeDiagnostic('Refusing to continue: halt, do not self-recover, do not commit (#48).\n');
+    throw new ExitError(GUARD_EXIT_CODE);
+  }
   for (const check of result.checks) {
     if (!check.ok) writeDiagnostic(`FATAL: executor.guard ${check.name}: ${check.detail}\n`);
   }
@@ -413,7 +437,11 @@ function ledgerDir(root: string, create: boolean): string {
       fs.writeFileSync(ignore, '*\n', { flag: 'wx' });
     } catch (err) {
       if (errCode(err) !== 'EEXIST') fail(`cannot write ${ignore}: ${(err as Error).message}`);
-      if (!fs.lstatSync(ignore).isFile()) fail(`${ignore} must be a regular file`);
+      let content: string | null = null;
+      try {
+        if (fs.lstatSync(ignore).isFile()) content = fs.readFileSync(ignore, 'utf8');
+      } catch { /* checked below */ }
+      if (content === null || !/^\*\r?$/m.test(content)) fail(`${ignore} must be a regular file that ignores '*'`);
     }
   }
   return dir;
@@ -429,10 +457,17 @@ function readRecord(file: string, phase: string, plan: string): LedgerRecord | n
   }
   if (!st.isFile()) fail(`${file} must be a regular file, not a link`);
   let text: string;
+  let fd: number | undefined;
   try {
-    text = fs.readFileSync(file, 'utf8');
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const fst = fs.fstatSync(fd);
+    if (!fst.isFile() || fst.size > RECORD_MAX_BYTES) return fail(`${file} is not a ledger record`);
+    text = fs.readFileSync(fd, 'utf8');
   } catch (err) {
+    if (err instanceof ExitError) throw err;
     return fail(`cannot read ${file}: ${(err as Error).message}`);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
   try {
     const parsed = JSON.parse(text) as LedgerRecord;
@@ -469,9 +504,9 @@ export function cmdExecutorLedgerRecord(
   const existing = readRecord(file, phase, plan);
   if (existing) return keep(existing);
 
-  const head = git(deps, root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  const head = git(deps, invokedFrom, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   if (head.exitCode !== 0 || !SHA_RE.test(head.stdout)) fail('HEAD does not resolve to a commit; nothing to record');
-  const symbolic = git(deps, root, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const symbolic = git(deps, invokedFrom, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   const record: LedgerRecord = {
     schema: 1,
     phase,
@@ -518,15 +553,15 @@ export function cmdExecutorLedgerRead(
     return fail(`no ledger record for ${phase} ${plan} at ${file}; it is written by 'executor.ledger record' before the plan's first commit`);
   }
   const base = record.plan_head_before;
-  const commit = git(deps, root, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]);
+  const commit = git(deps, invokedFrom, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]);
   if (commit.exitCode !== 0 || commit.stdout !== base) fail(`recorded base ${base} is not a commit in this repository`);
-  const head = git(deps, root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+  const head = git(deps, invokedFrom, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   if (head.exitCode !== 0 || head.stdout === '') fail('HEAD does not resolve');
-  const ancestor = git(deps, root, ['merge-base', '--is-ancestor', base, head.stdout]);
+  const ancestor = git(deps, invokedFrom, ['merge-base', '--is-ancestor', base, head.stdout]);
   if (ancestor.exitCode !== 0) {
     fail(`recorded base ${base} is not an ancestor of HEAD ${head.stdout}; the count cannot be measured from it`);
   }
-  const count = git(deps, root, ['rev-list', '--count', `${base}..${head.stdout}`]);
+  const count = git(deps, invokedFrom, ['rev-list', '--count', `${base}..${head.stdout}`]);
   const commits = Number.parseInt(count.stdout, 10);
   if (count.exitCode !== 0 || !Number.isInteger(commits)) fail('git rev-list --count failed');
   const result = { plan_head_before: base, plan_head_after: head.stdout, commits, path: file };
