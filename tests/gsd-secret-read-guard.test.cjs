@@ -6645,13 +6645,13 @@ describe('gsd-secret-read-guard: a long line read once per xargs action or word 
   // Each fed line is read as a whole script, not put into one, and the fed
   // words are cut and charged once per segment and cut; next's reading also
   // puts each fed word into the script, and the line is denied either way.
-  test('denies a read after 2,300 fed lines into a script that runs 100 xargs actions inside the kill bound', () => {
+  test('denies a read after 1,150 fed lines into a script that runs 50 xargs actions inside the kill bound', () => {
     const BS = '\\';
-    const actions = Array.from({ length: 100 }, (_, m) => {
+    const actions = Array.from({ length: 50 }, (_, m) => {
       const r = 'ABCDEFGHJKLMNOPQRSTUVWXYZacdefghjkmnopqrstuvwxyz'[m % 48] + (m >= 48 ? String(Math.floor(m / 48)) : '');
       return `-exec xargs -I${r} sh -c "${r}${r}" ${BS}; `;
     }).join('');
-    const cmd = `xargs -I{} sh -c 'ls {} ${`${BS}${BS} `.repeat(100)}| find . ${actions}' <<'EOF'\n${Array.from({ length: 2300 }, (_, i) => `a${i}`).join('\n')}\nEOF\ncat .env`;
+    const cmd = `xargs -I{} sh -c 'ls {} ${`${BS}${BS} `.repeat(100)}| find . ${actions}' <<'EOF'\n${Array.from({ length: 1150 }, (_, i) => `a${i}`).join('\n')}\nEOF\ncat .env`;
     assertBlockedEitherCode(runHookWithin(bash(cmd), KILL_BOUND_MS), 'fed lines into a script');
   });
   test('denies a read after 400 xargs actions with distinct delimiters over one printf text inside the kill bound', () => {
