@@ -15,6 +15,7 @@
  *   - #1974 — one-time critical-session breadcrumb
  *   - #3709 — PreCompact clears the warn sentinel AND the metrics bridge
  *   - #4285 — WARNING/CRITICAL fire-points resolve from .planning/config.json
+ *   - #6360 — a subagent's input (agent_id) is silent and touches no session file
  * Extend this list when folding in the next one.
  */
 
@@ -428,7 +429,7 @@ function runHook(sessionId, remainingPct, cwd) {
   const result = runHookSeam(HOOK_PATH, [], {
     input,
     timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS,
-    env: { ...process.env, HOME: process.env.HOME },
+    env: { ...process.env },
   });
 
   return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
@@ -1406,6 +1407,12 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
       // `runMonitor` helper in this file has taken an explicit env for exactly
       // this reason all along. A key set to `undefined` is UNSET in the child,
       // which is what pinning an ambient variable requires.
+      //
+      // `fields` adds keys to the hook input (the #6360 rows send `agent_id`).
+      // `timeoutMs` is for a call that reaches the detached record-session
+      // writer: those take CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS.
+      // `spawnLog` names a file the preload appends each child_process.spawn
+      // argv to (one JSON line per spawn), so a row can assert the spawn itself.
       call(event, remaining, {
         metrics = true,
         failUnlinkMatching = null,
@@ -1415,6 +1422,9 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
         nowMs = null,
         bridgeTimestamp = null,
         env: envOverrides = null,
+        fields = null,
+        timeoutMs = CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
+        spawnLog = null,
       } = {}) {
         if (metrics === 'keep') {
           // leave the bridge exactly as the previous call left it
@@ -1447,7 +1457,7 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
         }
         let stdout = '';
         let exitCode = 0;
-        const usePreload = failUnlinkMatching || lstatClaimsFileMatching || shrinkAfterLstatMatching || shortWriteMarker;
+        const usePreload = failUnlinkMatching || lstatClaimsFileMatching || shrinkAfterLstatMatching || shortWriteMarker || spawnLog;
         const preloads = [];
         if (usePreload) preloads.push('--require', UNLINK_EPERM_PRELOAD);
         if (nowMs != null) preloads.push('--require', NOW_PRELOAD);
@@ -1459,14 +1469,15 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
           ...(shrinkAfterLstatMatching ? { GSD_TEST_SHRINK_AFTER_LSTAT_MATCH: shrinkAfterLstatMatching } : {}),
           ...(shortWriteMarker ? { GSD_TEST_SHORT_WRITE_MATCH: shortWriteMarker } : {}),
           ...(nowMs != null ? { GSD_TEST_NOW_MS: String(nowMs) } : {}),
+          ...(spawnLog ? { GSD_TEST_SPAWN_LOG: spawnLog } : {}),
           ...(envOverrides || {}),
         };
         for (const k of Object.keys(env)) { if (env[k] === undefined) delete env[k]; }
         try {
           stdout = execFileSync(process.execPath, argv, {
-            input: JSON.stringify({ session_id: id, cwd, hook_event_name: event }),
+            input: JSON.stringify({ session_id: id, cwd, hook_event_name: event, ...(fields || {}) }),
             encoding: 'utf8',
-            timeout: CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
+            timeout: timeoutMs,
             env,
           });
         } catch (e) { stdout = e.stdout || ''; exitCode = e.status ?? 1; }
@@ -2371,6 +2382,137 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
     }
   });
 
+  /**
+   * #6360 — a subagent's hook input is silent and leaves the parent's files alone.
+   *
+   * Inside a subagent (or in-process teammate) Claude Code sends the PARENT's
+   * session_id plus agent_id / agent_type. The hook built every path from
+   * session_id alone, so it read the parent's bridge and reported the parent's
+   * usage as the subagent's own, advanced the parent's debounce sentinel, at
+   * CRITICAL in a GSD project started the parent's record-session write, and
+   * on PreCompact cleared the parent's bridge. A top-level `claude --agent`
+   * session sets agent_type WITHOUT agent_id, so agent_type alone is still
+   * monitored. These rows reuse this block's driver because they too assert on
+   * the files one session id carries across calls.
+   */
+  describe('#6360 context-monitor: subagent inputs (agent_id) are silent and touch no session file', () => {
+    const SUBAGENT = { agent_id: 'a4653ce68d3a4418c', agent_type: 'general-purpose' };
+    const WARNING_70 = /^CONTEXT WARNING: Usage at 70%/;
+
+    test('a subagent input at CRITICAL in a GSD project emits nothing and never reaches the record-session spawn', (t) => {
+      const s = makeSession(t, { gsdActive: true });
+      const spawnDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fix-6360-spawns-'));
+      const spawnLog = path.join(spawnDir, 'spawns.log');
+      t.after(() => cleanup(spawnDir));
+      const recordSessionSpawns = () => {
+        let raw = '';
+        try { raw = fs.readFileSync(spawnLog, 'utf8'); } catch { /* no spawn recorded */ }
+        return raw.split('\n').filter(Boolean).map((l) => JSON.parse(l))
+          .filter((argv) => argv.includes('state') && argv.includes('record-session'));
+      };
+      const sub = s.call('PostToolUse', 20, { fields: SUBAGENT, spawnLog, timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS });
+      assert.strictEqual(sub.exitCode, 0);
+      assert.strictEqual(sub.stdout, '', 'the parent\'s usage must not be reported to a subagent');
+      assert.deepStrictEqual(recordSessionSpawns(), [], 'a subagent must not spawn the parent\'s record-session write');
+      assert.strictEqual(s.warnRaw(), null, 'a subagent must not create the parent\'s debounce sentinel');
+      // Control on the same fixture and the same recorder: the top-level call
+      // spawns exactly one record-session writer and stamps criticalRecorded.
+      // So the fixture and the recorder are live, and the subagent's empty
+      // log above is the guard, not a missing precondition.
+      const top = s.call('PostToolUse', 20, { spawnLog, timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS });
+      assert.strictEqual(top.exitCode, 0);
+      assert.strictEqual(recordSessionSpawns().length, 1,
+        'the top-level control must spawn the record-session writer once on this fixture');
+      assert.strictEqual(s.warn() && s.warn().criticalRecorded, true,
+        'the top-level control must reach the record-session spawn on this fixture');
+    });
+
+    test('a subagent input leaves the parent\'s debounce sentinel byte-identical (no escalation spent)', (t) => {
+      const s = makeSession(t);
+      s.seed({ callsSinceWarn: 2, lastLevel: 'warning' });
+      const before = s.warnRaw();
+      const { exitCode, stdout } = s.call('PostToolUse', 20, { fields: SUBAGENT });
+      assert.strictEqual(exitCode, 0);
+      assert.strictEqual(stdout, '');
+      assert.strictEqual(s.warnRaw(), before,
+        'the WARNING->CRITICAL escalation must stay for the parent\'s own next tool call');
+    });
+
+    test('a subagent PreCompact leaves the parent\'s bridge and sentinel in place and writes no watermark', (t) => {
+      const s = makeSession(t);
+      s.writeBridge({ remaining_percentage: 30, used_pct: 70, timestamp: Math.floor(Date.now() / 1000) });
+      s.seed({ callsSinceWarn: 1, lastLevel: 'warning' });
+      const bridge = s.metricsRaw();
+      const sentinel = s.warnRaw();
+      const { exitCode, stdout } = s.call('PreCompact', 30, { metrics: 'keep', fields: SUBAGENT });
+      assert.strictEqual(exitCode, 0);
+      assert.strictEqual(stdout, '');
+      assert.strictEqual(s.metricsRaw(), bridge, 'parent bridge kept');
+      assert.strictEqual(s.warnRaw(), sentinel, 'parent sentinel kept');
+      assert.strictEqual(s.watermark(), null, 'no compaction watermark for the parent');
+    });
+
+    // On every event: before #6360 the silent events still wrote the sentinel
+    // for a subagent input (the #2289 bookkeeping) and AfterTool (Antigravity's
+    // tool-completion event) warned; now they touch nothing. PostToolUse and
+    // PreCompact have their own rows above.
+    for (const event of ['AfterTool', 'Stop', 'SubagentStop', 'SubagentStart', undefined]) {
+      test(`a subagent input on ${event ?? 'an event-less input'} writes no sentinel`, (t) => {
+        const s = makeSession(t);
+        const { exitCode, stdout } = s.call(event, 30, { fields: SUBAGENT });
+        assert.strictEqual(exitCode, 0);
+        assert.strictEqual(stdout, '');
+        assert.strictEqual(s.warnRaw(), null);
+      });
+    }
+
+    // The rule is "agent_id is a non-empty string", taken as the host sends
+    // it: Claude Code's ids are opaque strings, so "0" and whitespace are not
+    // parsed or trimmed into "no subagent" -- any non-empty string is one.
+    for (const agentId of ['a4653ce68d3a4418c', '0', ' ']) {
+      test(`agent_id ${JSON.stringify(agentId)} (a non-empty string) is a subagent: silent, no sentinel`, (t) => {
+        const s = makeSession(t);
+        const { exitCode, stdout } = s.call('PostToolUse', 30, { fields: { agent_id: agentId, agent_type: 'general-purpose' } });
+        assert.strictEqual(exitCode, 0);
+        assert.strictEqual(stdout, '');
+        assert.strictEqual(s.warnRaw(), null);
+      });
+    }
+
+    // agent_id alone decides: a subagent input without agent_type is still one.
+    test('agent_id without agent_type is a subagent: silent, no sentinel', (t) => {
+      const s = makeSession(t);
+      const { exitCode, stdout } = s.call('PostToolUse', 30, { fields: { agent_id: 'a4653ce68d3a4418c' } });
+      assert.strictEqual(exitCode, 0);
+      assert.strictEqual(stdout, '');
+      assert.strictEqual(s.warnRaw(), null);
+    });
+
+    // Anything else is not the host's subagent marker and is monitored as a
+    // top-level session. Pins both halves of the guard: a truthiness test
+    // fails the truthy non-strings, a bare typeof-string test fails ''.
+    const NOT_A_SUBAGENT = [
+      ['absent', {}],
+      ['absent, agent_type only (top-level --agent)', { agent_type: 'general-purpose' }],
+      ['""', { agent_id: '', agent_type: 'general-purpose' }],
+      ['null', { agent_id: null }],
+      ['0', { agent_id: 0 }],
+      ['123', { agent_id: 123 }],
+      ['true', { agent_id: true }],
+      ['[]', { agent_id: [] }],
+      ['["x"]', { agent_id: ['x'] }],
+      ['{}', { agent_id: {} }],
+    ];
+    for (const [label, fields] of NOT_A_SUBAGENT) {
+      test(`agent_id ${label} is not a subagent: still warns and writes the sentinel`, (t) => {
+        const s = makeSession(t);
+        const { exitCode, stdout } = s.call('PostToolUse', 30, { fields });
+        assert.strictEqual(exitCode, 0);
+        assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, WARNING_70);
+        assert.ok(s.warnRaw() !== null, 'top-level debounce bookkeeping still runs');
+      });
+    }
+  });
 });
 
 // ─── #3709 round 3 (Major 2): the thresholds this fix turns on, at their limits ───

@@ -92,7 +92,7 @@ If CONTEXT.md exists, add verification dimension: **Context Compliance**
 
 REVIEWS.md is audit trail and feedback input, not a hidden execution contract. /gsd:execute-phase primarily consumes PLAN.md plus normal phase context. Add verification dimension: **Review Incorporation**.
 
-- Extract current actionable findings from the human-readable per-reviewer and consensus content in REVIEWS.md. Do NOT look for a `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` line or `## Current HIGH Concerns` / `## Current Actionable Non-HIGH Concerns` section headers — those machine-readable fields exist only in the convergence orchestrator's return message, never in REVIEWS.md (which contains only human-readable review content).
+- Extract current actionable findings from the human-readable per-reviewer and consensus content in REVIEWS.md. Do NOT look for a `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` line or `## Current HIGH Concerns` / `## Current Actionable Non-HIGH Concerns` section headers — those machine-readable fields exist only in the return message of the convergence orchestrator or of `/gsd:review --cycle-summary`, never in REVIEWS.md (which contains only human-readable review content).
 - Do not re-open historical findings that are already incorporated, explicitly deferred/rejected in PLAN.md, or marked fully resolved.
 - Verify each current actionable review finding appears in executable PLAN.md content: a task, `<action>`, `<acceptance_criteria>`, `<verify>`, `must_haves`, threat model, artifact list, stale-path correction, or explicit deferral/rejection rationale using the Review Dispositions Ledger in `gsd-core/references/planner-reviews.md`.
 - If a current actionable finding remains only in REVIEWS.md and would be invisible to /gsd:execute-phase, return `## ISSUES FOUND`. Use WARNING by default; use BLOCKER when the missing incorporation can prevent the phase goal, create unsafe execution, or invalidate verification.
@@ -533,6 +533,11 @@ skip condition and Dimension 8 output table: @~/.claude/gsd-core/references/nyqu
 Each runnable `<automated>` command needs a `<fails_when>` sibling naming what output constitutes
 failure. Consume the `{FAILING_DIRECTIONS}` probe, never re-derive it:
 @~/.claude/gsd-core/references/failing-direction.md
+
+### Check 8g - Validate-Only Record (#4586)
+
+Each runnable `<automated>` command needs a `[VALIDATED: …]` or `[UNVALIDATABLE: …]` line in its `<verify>`.
+Severities, the read-only re-runs and the exemptions: @~/.claude/gsd-core/references/planner-verify-command-validation.md
 
 ## Dimension 9: Cross-Plan Data Contracts
 

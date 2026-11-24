@@ -460,7 +460,37 @@ const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdT
 | `createTempGitProject(prefix?)` | Same + git init + initial commit | Testing git-dependent features |
 | `createTempDir(prefix?)` | Bare temp directory | Testing features that don't need `.planning/` |
 | `cleanup(tmpDir)` | Removes directory recursively | Always use in `afterEach` |
-| `runGsdTools(args, cwd, env?)` | Executes gsd-tools.cjs | Testing CLI commands |
+| `runGsdTools(args, cwd, env?)` | Runs a gsd-tools command in the test process (no child process) | Testing CLI commands |
+| `await runGsdToolsAsync(args, cwd, env?)` | The same, for any command including the asynchronous ones | Testing `capability`, `review-lane`, `websearch` and the other commands `runGsdTools` refuses |
+| `runGsdToolsProcess(args, cwd, env?)` | Runs the same command in a spawned `node gsd-tools.cjs` | Testing the process boundary itself, from a `*.process.test.cjs` file |
+
+`runGsdTools` calls the CLI's own `main` through `runCliSync` (ADR-6315 item 15) and returns the
+same `{ success, output, error, exitCode }` a spawned call returns. `tests/cli-parity.process.test.cjs`
+proves command by command that both give the same exit code, stdout and stderr. What follows from that:
+
+- The command runs in your test's process, so `mock.method` on a module the command uses takes effect. To
+  inject a failure, mock the function; do not preload a patch into a child.
+- Neither in-process helper ever spawns. Each refuses what it cannot do and names the helper that can:
+  - a command that finishes asynchronously (`asyncHostCommandNames()` in `gsd-tools.cjs`, the capability
+    routers named in a module's `asyncRouters`, and `run-with-timeout`): `runGsdTools` throws before the
+    command runs; use `await runGsdToolsAsync(...)`;
+  - an `env` argument that sets a `NODE_*` variable, and a working directory that does not exist: both
+    are questions about a real process; use `runGsdToolsProcess`.
+- A router that returns a promise without being declared asynchronous fails a synchronous call with
+  `in_process_async_started`, because its work has already begun. Declare it: make the router an
+  `async function`, or list it in its module's `asyncRouters` (capability routers) or in
+  `MAYBE_ASYNC_HOST_COMMANDS` (`gsd-tools.cjs`).
+- Nothing bounds an in-process call. A command that never returns holds the whole test file until the lane's
+  cap ends it, where a spawned child was killed after its own timeout.
+- `GSD_TEST_CLI_MODE=process` makes both helpers spawn, to check a suspected in-process difference against
+  the real binary.
+
+### In-process CLI tests: the rules
+
+The rules that in-process CLI tests put on tests and on product code are in
+[`TESTING-STANDARDS.md` — "In-process CLI tests: the rules"](TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
+The helper table above says which helper to call; that section says what a test and the code under
+test must and must not do, and what enforces each rule.
 
 ### Spawning a subprocess: use the process seam
 
@@ -694,6 +724,62 @@ on purpose. Without the fixture, the result depends on which runtimes the develo
 If the code under test also searches upward for `.planning/config.json`, start it inside a
 `createHermeticRoot()` directory as well (#4613).
 
+#### The lint rule that enforces child-env isolation
+
+`local/no-adhoc-env-isolation` (`eslint-rules/no-adhoc-env-isolation.cjs`) fails two hand-written
+copies under `tests/`:
+
+- a split of `process.env.PATH`, or any `X.split(path.delimiter).filter(...)`, which is the copy
+  `isolatedPath()` replaces;
+- an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` or
+  `env.USERPROFILE` on any object other than `process.env`, which is the copy `isolatedEnv()`
+  replaces.
+
+A value that cannot be a per-test sandbox is not a copy, so the rule skips it: a string literal
+(`{ HOME: '/h' }`, a fixture handed to a pure function or compared against), a read of the same key
+off `process.env` (`{ HOME: process.env.HOME }`, saving the ambient value; `HOME:
+process.env.USERPROFILE` is another key and is flagged), and a PATH split read only for `.length`.
+A fixed string is skipped even in an env handed to a child, but it is not hermetic: use
+`isolatedEnv()` whenever the test writes under its home.
+
+The rule and the count below read `tests/**/*.cjs` files only. A copy in a `.mjs`, `.js` or
+`.cts` test file, or in a file outside `tests/`, is neither flagged nor counted.
+
+An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
+`sandboxHome()`, above. Three other spellings of it are flagged:
+`globalThis.process.env.HOME = …`, `const env = process.env; env.HOME = …` and
+`Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt
+file. [docs/contributing/no-adhoc-env-isolation.md](docs/contributing/no-adhoc-env-isolation.md)
+states the forms each arm recognises. Every other spelling, such as a `HOME=` inside a shell
+script string, is out of scope; the page gives examples.
+
+`eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
+and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
+A count falls as copies migrate. A new copy in a file the list does not name fails lint, and
+`tests/no-adhoc-env-isolation.rule.test.cjs` counts every `tests/**/*.cjs` file: it fails when a
+listed file holds more copies than its count, or fewer. The count reads the files ESLint lints, and
+it also fails when ESLint skips a `.cjs` file under `tests/`, so an ESLint ignore over a `tests/`
+subtree cannot hide that subtree's copies. When you migrate copies, lower the count, and delete
+the entry when it reaches zero (until you do, lint reports the entry as stale). An
+`eslint-disable` comment for this rule does not exempt a copy: the count runs with inline config
+off and still sees it. Entries are repository-relative, so run lint from the repository root, as
+`npm run lint` does.
+
+The count is per file. A PR that adds a copy fails it, as `grown` in a listed file and as `added`
+in any other; a PR that removes one copy and adds another in the same file leaves the count
+unchanged, so review sees that swap only in the diff. Build a child env with `isolatedEnv()`
+instead of a copy: `home` sets `HOME` and `USERPROFILE` (`userProfile` sets `USERPROFILE` to another
+directory, only for a test whose subject is the two diverging), `claudeConfigDir` sets
+`CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries every other key the test needs the
+helper to set or keep. A `HOME` or `USERPROFILE` key in `override` is an object-literal copy, so
+the rule flags it. Build a filtered PATH with `isolatedPath()`. If the helpers cannot build it, for
+example because the test's subject is an env object handed to code in-process and its exact keys
+are the fixture, add or raise that file's entry in the same PR and say in the PR description which
+site needs it and why. That is the only way an entry grows, and review decides it. When two open
+PRs change a listed file and one adds copies, whichever lands second rebases onto `next`: the PR
+that adds copies moves them to the helpers or takes this route for each, and the other sets the
+file's entry to the count the test measures on the rebased tree.
+
 ### Test Structure
 
 ```javascript
@@ -886,6 +972,12 @@ Required cases where relevant:
 - Runtime `.cjs` and SDK `.ts` generated surfaces disagree
 
 Generator tests should run in temp fixtures and assert atomic output behavior. Do not mutate production generated files except in explicit freshness checks.
+
+### A parser or reader that must agree with an external tool
+
+Code that gives the answer another program gives, without running it, is tested against that
+program. The rules are in
+[`TESTING-STANDARDS.md` — "A parser or reader that must agree with an external tool"](TESTING-STANDARDS.md#a-parser-or-reader-that-must-agree-with-an-external-tool).
 
 ### Prohibited: Source-Grep Tests
 

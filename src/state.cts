@@ -47,7 +47,7 @@ const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
-const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar } = roadmapParserMod;
+const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar, describeUnscopedMilestone } = roadmapParserMod;
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent, platformRestoreFileSync, platformReadBytesSync, type FileIdentity } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -133,7 +133,7 @@ import { findProjectRoot } from './project-root.cjs';
 // it introduces no cycle on this path.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import milestoneLockMod = require('./milestone-lock.cjs');
-const { transitionCore, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
+const { transitionCore, StatePlansNoLineError, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
 
 function replaceStateBodyField(
   content: string,
@@ -472,6 +472,12 @@ const _diskScanCache = new Map<string, {
   totalPlans: number | null;
   completedPlans: number | null;
   milestoneBounded: boolean;
+  // #6279: false only when the milestone-scoped walk found no phase dir AND
+  // `.planning/milestones/<asserted milestone>-phases/` exists (the shape
+  // `milestone complete` leaves: an empty `.planning/phases/`). The plans
+  // were moved, not measured, so the caller keeps stored total_plans /
+  // completed_plans when it has them, as an absent phases directory does.
+  plansMeasured: boolean;
   // #3217 (ADR-3180 §7.6 rule 4, finding 1): the real `listMilestonePhaseDirs`
   // scope for `allMatchingDirs` below, threaded through the cache so the
   // percent computation at the bottom of buildStateFrontmatter can gate on it
@@ -479,6 +485,12 @@ const _diskScanCache = new Map<string, {
   // (a heading-existence guard, #1761) — this one is disk-readability.
   phaseDirScope: Scope;
 }>();
+
+// #6332: the cache is per invocation. The binary gets that for free from its
+// one-call process; an in-process caller gets it from this reset.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('state.diskScanCache', () => { _diskScanCache.clear(); });
 
 // Track all lock files held by this process so they can be removed on exit.
 // process.on('exit') fires even on process.exit(1), unlike try/finally which is
@@ -1701,11 +1713,17 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
     // (stateReplaceFieldWithFallback above) for a comparable silent no-op —
     // now routed through the shared `declineNoOp` helper (#3957) so the
     // pairing is structural rather than hand-written per arm.
+    // #6271: UNSCOPED is the one non-COMPLETE scope an operator can fix by hand, and the bare message named neither
+    // cause nor fix, so every call declined and the counters drifted for the life of the project. The
+    // classification itself (ADR-3180 rows 4/5) is unchanged: it keeps a destructive consumer from acting on a
+    // window it could not find. One describer owns the wording (roadmap-parser.cts), shared with `state sync`.
+    const unscopedHint = phaseScope === SCOPE.UNSCOPED && cwd ? describeUnscopedMilestone(cwd) : '';
     declineNoOp(
       raw,
       'updated',
       `phase scope is ${phaseScope}, not complete`,
-      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.`,
+      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.${unscopedHint ? ` ${unscopedHint}` : ''}`,
+      unscopedHint ? { hint: unscopedHint } : {},
     );
     return;
   }
@@ -3584,6 +3602,16 @@ function buildStateFrontmatter(
             const flooredCompletedPhases = roadmapCompletedPhases !== null
               ? Math.max(diskCompletedPhases, roadmapCompletedPhases)
               : diskCompletedPhases;
+            // #6279: the walk found no phase dir AND the asserted milestone's
+            // phases sit in its `milestone complete` archive, so its plans
+            // were moved, not deleted. Gated on that archive so a milestone
+            // that has no archive (a later one, or never closed) still takes
+            // the disk count, zero included.
+            const archiveVersion = String(assertedMilestoneVersion ?? (milestoneExplicitlyNull ? '' : storedMilestone ?? '')).trim();
+            const archivedPhasesExist = phaseDirs.length === 0
+              && archiveVersion !== ''
+              && path.basename(archiveVersion) === archiveVersion
+              && fs.existsSync(path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`));
             return {
               // The two WITHHOLD shapes (#3354 milestoned-but-unbounded, #3573
               // roadmap-absent-with-asserted-milestone) must be evaluated BEFORE
@@ -3597,6 +3625,7 @@ function buildStateFrontmatter(
               completedPhases: diskCountsWithheld ? null : flooredCompletedPhases,
               totalPlans: diskCountsWithheld ? null : diskTotalPlans,
               completedPlans: diskCountsWithheld ? null : diskTotalSummaries,
+              plansMeasured: phaseDirs.length > 0 || !archivedPhasesExist,
               phaseDirScope,
             };
           })();
@@ -3625,14 +3654,20 @@ function buildStateFrontmatter(
         } else if (storedCompletedPhases !== null && storedCompletedPhases !== undefined) {
           completedPhases = storedCompletedPhases;
         }
-        if (cached.totalPlans !== null) {
+        // #6279: when the asserted milestone's phases were archived and the
+        // walk found none (plansMeasured false), a stored plan counter wins
+        // over the disk 0. Without a stored value the disk 0 stands.
+        // total_phases is unaffected: it comes from the ROADMAP headings.
+        const hasStoredTotalPlans = storedTotalPlans !== null && storedTotalPlans !== undefined;
+        const hasStoredCompletedPlans = storedCompletedPlans !== null && storedCompletedPlans !== undefined;
+        if (cached.totalPlans !== null && (cached.plansMeasured || !hasStoredTotalPlans)) {
           totalPlans = cached.totalPlans;
-        } else if (storedTotalPlans !== null && storedTotalPlans !== undefined) {
+        } else if (hasStoredTotalPlans) {
           totalPlans = storedTotalPlans;
         }
-        if (cached.completedPlans !== null) {
+        if (cached.completedPlans !== null && (cached.plansMeasured || !hasStoredCompletedPlans)) {
           completedPlans = cached.completedPlans;
-        } else if (storedCompletedPlans !== null && storedCompletedPlans !== undefined) {
+        } else if (hasStoredCompletedPlans) {
           completedPlans = storedCompletedPlans;
         }
         milestoneUnbounded = cached.milestoneBounded === false;
@@ -6150,6 +6185,14 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
     sourcePath: statePath,
   };
 
+  // #6399: `--plans N` with nowhere in STATE.md to record the count refuses before any write, with the typed reason
+  // `plans_no_line`. The core runs first inside the lock, ahead of the milestone claim, so a refusal leaves no claim
+  // file behind and the file is only ever read under the lock, through the same bounded reader as every other write.
+  const refusePlansNoLine = (err: unknown): never => {
+    if (err instanceof StatePlansNoLineError) error(err.message, ERROR_REASON.STATE_PLANS_NO_LINE);
+    throw err;
+  };
+
   // #2736: the transition holds the exact display name; without this the
   // post-transform sync re-derives current_phase_name from the freshly
   // written `Phase: N (Name) — EXECUTING` line, which truncates any name
@@ -6173,11 +6216,16 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
   // calls cannot both read "no claim" and both write.
   let milestoneConflict: milestoneLockMod.MilestoneConflict | null = null;
   const wrote = readModifyWriteStateMd(statePath, (content) => {
+    let result: ReturnType<typeof transitionCore>;
+    try {
+      result = transitionCore(content, intent, deps);
+    } catch (err) {
+      return refusePlansNoLine(err);
+    }
     milestoneConflict = milestoneLockMod.claimMilestonePhase(cwd, String(phaseNumber));
     if (milestoneConflict) {
       milestoneLockMod.warnMilestoneConflict(milestoneConflict, `state.begin-phase ${phaseNumber}`);
     }
-    const result = transitionCore(content, intent, deps);
     precomputedUpdated = result.updated;
     // #3127 resume: the core preserved the mid-flight Current Phase Name, so
     // the intent-first override must not fire — it would drift frontmatter
@@ -7261,7 +7309,9 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     // consume `.value`.
     const syncScope: Scope = listMilestonePhaseDirs(phasesDir, { cwd, versionOverride: versionStr }).scope;
     if (syncScope !== SCOPE.COMPLETE) {
-      changes.push(`Progress: skipped — milestone phase scope is "${syncScope}", not COMPLETE (#3217)`);
+      // #6271: the same cause-and-fix as `update-progress`, from the one describer.
+      const syncHint = syncScope === SCOPE.UNSCOPED ? describeUnscopedMilestone(cwd) : '';
+      changes.push(`Progress: skipped — milestone phase scope is "${syncScope}", not COMPLETE (#3217)${syncHint ? `. ${syncHint}` : ''}`);
     } else {
       const p = computeProgressPercent(totalDiskSummaries, totalDiskPlans, diskCompletedPhases, syncTotalPhases, syncScope);
       percent = p !== null ? p : 0;

@@ -50,6 +50,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { RUNTIME_META, installerEnv, walk } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -128,7 +129,7 @@ function spawnInstall(repoRoot, runtime, scope) {
   else args.push('--local');
   const seamResult = runNode(args, {
     cwd,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   const result = { status: seamResult.exitCode, stdout: seamResult.stdout, stderr: seamResult.stderr };
@@ -157,8 +158,11 @@ function filesContaining(root, token, derivedOnly = true) {
   return hits;
 }
 
-/** Run the whole matrix against one repo root. */
-function collectLeaks(repoRoot, t) {
+/** Run the whole matrix against one repo root. `stopAtFirstLeak` ends the
+ *  sweep at the first install whose output holds a marker: the negative
+ *  control only needs ONE leak to show the positive sweep is not vacuous, so
+ *  it does not install the other runtimes (#6335). */
+function collectLeaks(repoRoot, t, { stopAtFirstLeak = false } = {}) {
   const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
   const leaks = [];
   const retained = [];
@@ -174,6 +178,7 @@ function collectLeaks(repoRoot, t) {
       const markerHits = filesContaining(root, MARKER_TOKEN);
       if (markerHits.length > 0) leaks.push(`${runtime}/${scope} -> ${markerHits.join(', ')}`);
       if (filesContaining(root, BODY_SENTINEL).length > 0) retained.push(`${runtime}/${scope}`);
+      if (stopAtFirstLeak && leaks.length > 0) return { leaks, retained, failures };
     }
   }
   return { leaks, retained, failures };
@@ -217,12 +222,12 @@ test('rows 21/22 — an identity composer makes agent markers leak', (t) => {
   });
   t.after(() => cleanup(overlay));
 
-  const { leaks, failures } = collectLeaks(overlay, t);
+  const { leaks, failures } = collectLeaks(overlay, t, { stopAtFirstLeak: true });
 
   assert.deepStrictEqual(
     failures,
     [],
-    `identity-stub installs must still succeed:\n${failures.join('\n')}`,
+    `identity-stub installs up to the first leak must succeed (row 5 sweeps every runtime):\n${failures.join('\n')}`,
   );
   assert.ok(
     leaks.length > 0,

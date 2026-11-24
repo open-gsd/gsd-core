@@ -135,9 +135,9 @@ describe('#4482: OpenCode conversion strips Copilot-only runtime notes', () => {
   });
 
   test('a real OpenCode install filters mvp-phase workflow assets too', (t) => {
-    const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+    const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
     const { cleanup } = require('./helpers.cjs');
-    const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
     const installed = fs.readFileSync(path.join(configDir, 'gsd-core', 'workflows', 'mvp-phase.md'), 'utf8');
     assert.ok(!installed.includes('vscode_askquestions'));
@@ -1331,6 +1331,7 @@ test('regression #2652: _negotiatedDispatchIsolation fails closed on an undeclar
 
 test('regression #2652: _negotiatedDispatchIsolation agrees with the routeDispatchIsolation CLI for every registered runtime', () => {
   const { runGsdTools, createTempProject, cleanup: cleanupDir } = require('./helpers.cjs');
+  const { isolatedEnv } = require('./helpers/isolated-env.cjs');
   const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
   const RUNTIME_IDS = Object.keys(registry.runtimes).sort();
 
@@ -1359,7 +1360,7 @@ test('regression #2652: _negotiatedDispatchIsolation agrees with the routeDispat
       const res = runGsdTools(
         ['query', 'dispatch-isolation', '--json', '--cwd-target', PROBE_TARGET],
         dir,
-        { GSD_RUNTIME: rt, HOME: dir },
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: rt } }),
       );
       assert.equal(res.success, true, `${rt}: dispatch-isolation query failed: ${res.error}`);
       const parsed = JSON.parse(res.output);
@@ -1375,7 +1376,7 @@ test('regression #2652: _negotiatedDispatchIsolation agrees with the routeDispat
       const gateRes = runGsdTools(
         ['query', 'dispatch-isolation', '--raw'],
         dir,
-        { GSD_RUNTIME: rt, HOME: dir },
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: rt } }),
       );
       assert.equal(gateRes.success, true, `${rt}: no-target dispatch-isolation query failed: ${gateRes.error}`);
       const gateIsolation = gateRes.output.trim();

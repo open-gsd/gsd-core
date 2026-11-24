@@ -40,8 +40,10 @@ const assert = require('node:assert/strict');
 // can observe what runBashScript actually passes to the seam. tests/helpers.cjs:221-224
 // documents this same pattern for runNode.
 const processSeam = require('./helpers/process-seam.cjs');
+const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
 const { runNode, OUTCOME } = processSeam;
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -488,7 +490,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
 
   test('config-get defaults absent values to true; config-set false round-trips as boolean false', (t) => {
     const tmp = makeProject(t);
-    const env = { HOME: tmp, USERPROFILE: tmp };
+    const env = isolatedEnv({ home: tmp });
 
     const absent = runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, env);
     assert.equal(absent.success, true, absent.error);
@@ -499,7 +501,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     const absentFile = runGsdTools(
       ['config-get', 'planner.stall_detection_enabled', '--raw'],
       noConfig,
-      { HOME: noConfig, USERPROFILE: noConfig },
+      isolatedEnv({ home: noConfig }),
     );
     assert.equal(absentFile.success, true, absentFile.error);
     assert.equal(absentFile.output, 'true');
@@ -532,7 +534,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       const result = runGsdTools(
         ['config-set', 'planner.stall_detection_enabled', value],
         tmp,
-        { HOME: tmp, USERPROFILE: tmp },
+        isolatedEnv({ home: tmp }),
       );
       return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
     });
@@ -554,7 +556,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       const result = runGsdTools(
         ['config-set', 'planner.stall_detection_enabled', token],
         tmp,
-        { HOME: tmp, USERPROFILE: tmp },
+        isolatedEnv({ home: tmp }),
       );
       assert.equal(result.success, true, `${token} is a help request, not a config write: ${result.error}`);
       assert.match(result.output, /^Usage: gsd-tools/m, 'prints the dispatcher usage');
@@ -570,7 +572,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       const result = runGsdTools(
         ['config-set', 'planner.stall_detection_enabled', value],
         tmp,
-        { HOME: tmp, USERPROFILE: tmp },
+        isolatedEnv({ home: tmp }),
       );
       assert.equal(result.success, false, `${JSON.stringify(value)} must be rejected`);
       assert.equal(fs.readFileSync(configPath, 'utf8'), before, 'config.json stays byte-identical');
@@ -582,7 +584,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     const result = runGsdTools(
       ['config-get', 'planner.stall_detection_enabled', '--raw'],
       tmp,
-      { HOME: tmp, USERPROFILE: tmp },
+      isolatedEnv({ home: tmp }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output, 'true', 'a string "false" must not disable the watchdog');
@@ -606,7 +608,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     fs.mkdirSync(workstreamDir, { recursive: true });
     fs.writeFileSync(path.join(projectDir, 'config.json'), '{"planner":{"stall_detection_enabled":true}}\n');
     fs.writeFileSync(path.join(workstreamDir, 'config.json'), '{"planner":{"stall_detection_enabled":true}}\n');
-    const home = { HOME: tmp, USERPROFILE: tmp };
+    const home = isolatedEnv({ home: tmp });
 
     assert.equal(runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, home).output, 'false');
     assert.equal(runGsdTools(
@@ -682,7 +684,7 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' } }),
         },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -720,7 +722,7 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' } }),
         },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -944,11 +946,13 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
    */
   const RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS = 1234;
   /**
-   * Deliberately tiny (not generous headroom) to force a real `sleep 5`
+   * Deliberately tiny (not generous headroom) to force a real `sleep 5.0861`
    * command past the bound within this test's own lifetime, proving an
    * exceeded bound reports TIMED_OUT, not a bare null status.
    */
   const RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS = 250;
+  /** The forced stall; a duration no other fixture uses, so a leftover is attributable (#6086). */
+  const FORCED_STALL_COMMAND = 'sleep 5.0861';
   /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: a negative bound must be rejected. */
   const RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_NEGATIVE_MS = -1;
   /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: zero must be rejected, never read as unbounded. Used at both occurrences in this test (the throw assertion and the later leak-check re-throw). */
@@ -978,10 +982,13 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
   test('an exceeded bound reports TIMED_OUT, not a bare null status', () => {
     // A real sleep against a deliberately tiny bound. The assertion is on the
     // CLASSIFICATION, never on elapsed time.
-    const result = runBashScript('sleep 5\n', [], { timeoutMs: RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS });
+    // `exec` so the process the bound kills IS the stall: under a plain `sleep` the bound kills bash and the
+    // sleep is reparented and outlives the test (#6086).
+    const result = runBashScript(`exec ${FORCED_STALL_COMMAND}\n`, [], { timeoutMs: RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT,
       `an exceeded bound must name itself; got outcome=${result.outcome} status=${result.status}`);
     assert.equal(result.timedOut, true, 'timedOut must be true when the bound is exceeded');
+    assertNoLeftoverStall(assert, FORCED_STALL_COMMAND, 'runBashScript forced-timeout stall');
   });
 
   test('a genuine non-zero exit is EXITED, never confused with a timeout', () => {

@@ -35,7 +35,7 @@
  * workflow file against real temp-directory filesystem states — not a mock,
  * not a source-text grep of the fix. Extracting the fence line-by-line (not
  * a single fence-spanning regex — matches this repo's established
- * extraction idiom, e.g. tests/no-hardcoded-home-gsd-tools.test.cjs) reads
+ * extraction idiom, e.g. the no-hardcoded-home-gsd-tools text contract) reads
  * workflow markdown, not source code; `local/no-source-grep` targets
  * readFileSync of .cjs/.cts/.js/.mjs/.mts/.ts SOURCE files, which this is
  * not. All subprocess calls route through tests/helpers/process-seam.cjs
@@ -77,6 +77,21 @@ function extractBashBlockAfterHeading(markdown, heading) {
   }
   assert.ok(blockLines.length > 0, `no \`\`\`bash fence found after heading "${heading}"`);
   return `${blockLines.join('\n')}\n`;
+}
+
+/**
+ * The shipped fence opens with the canonical launcher preamble (defines `gsd_run`
+ * from a located gsd-tools shim) and then resolves the scoped planning root via
+ * `gsd_run query planning.inspect --pick generated_from.planning_root` (#5861).
+ * The fixtures here are bare temp dirs with no installed shim, so the preamble
+ * line is dropped and `gsd_run` is stubbed to return what the real verb returns
+ * for a flat fixture: the absolute `.planning` directory under the cwd.
+ */
+const GSD_RUN_STUB = 'gsd_run() { printf \'%s\' "$PWD/.planning"; }\n';
+
+function stubLauncher(block) {
+  const kept = splitLines(block).filter((line) => !line.startsWith('_GSD_SHIM_NAME='));
+  return `${GSD_RUN_STUB}${kept.join('\n')}`;
 }
 
 const KNOWN_AMBIGUOUS_ARITHMETIC_SNIPPET =
@@ -121,7 +136,7 @@ let posixShell;
 
 before(() => {
   const markdown = fs.readFileSync(WORKFLOW_PATH, 'utf8');
-  contextDetectionBlock = extractBashBlockAfterHeading(markdown, '## Context Detection');
+  contextDetectionBlock = stubLauncher(extractBashBlockAfterHeading(markdown, '## Context Detection'));
   posixShell = resolvePosixShell();
 });
 

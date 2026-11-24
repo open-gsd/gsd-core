@@ -19,8 +19,9 @@ const os = require('node:os');
 const fc = require('fast-check');
 
 const { runNode } = require('./helpers/process-seam.cjs');
-const { runMinimalInstall, INSTALL_SCRIPT, MANIFEST_NAME } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture, INSTALL_SCRIPT, MANIFEST_NAME } = require('./helpers/install-shared.cjs');
 const { cleanup, installSpawnEnv } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const COMMANDS_CJS = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'commands.cjs');
@@ -99,7 +100,7 @@ function runEffortSync({ cwd, home, configDir, runtime, dryRun, preload = '' }) 
   ].join('\n');
   const spawned = runNode(['-e', script], {
     cwd,
-    env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+    env: isolatedEnv({ home, override: { GSD_HOME: home } }),
   });
   assert.strictEqual(
     spawned.exitCode, 0,
@@ -112,7 +113,7 @@ function runEffortSync({ cwd, home, configDir, runtime, dryRun, preload = '' }) 
 
 /** Re-runs the real installer over an existing config dir; returns its combined output. */
 function reinstall({ runtime, configDir, root }) {
-  const env = installSpawnEnv({ HOME: root, USERPROFILE: root });
+  const env = installSpawnEnv(isolatedEnv({ home: root, base: {} }));
   delete env.GSD_TEST_MODE;
   const result = runNode(
     [INSTALL_SCRIPT, `--${runtime}`, '--global', '--config-dir', configDir],
@@ -157,7 +158,7 @@ function claudeFixture({ onDisk, overrides }) {
 describe('#5683: effort sync keeps the install manifest in step with rewritten agents', () => {
   describe('regression: sync then install reports no local patches', () => {
     test('#5683: sync then install reports no local patches (claude)', { timeout: E2E_TIMEOUT_MS }, () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
       try {
         writeProjectConfig(root, { 'gsd-ai-researcher': 'low', 'gsd-advisor-researcher': 'medium' });
         const result = runEffortSync({ cwd: root, home: root, configDir, runtime: 'claude', dryRun: false });
@@ -170,7 +171,7 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
     });
 
     test('#5683: sync inherit-strip then install reports no local patches', { timeout: E2E_TIMEOUT_MS }, () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
       try {
         writeProjectConfig(root, { 'gsd-ai-researcher': 'inherit', 'gsd-advisor-researcher': 'inherit' });
         const result = runEffortSync({ cwd: root, home: root, configDir, runtime: 'claude', dryRun: false });
@@ -187,7 +188,7 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
     });
 
     test('#5683: sync then install reports no local patches (codex)', { timeout: E2E_TIMEOUT_MS }, () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'codex', scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'codex', scope: 'global' });
       try {
         // Reproduce an agent set installed by an older GSD that baked a stale
         // Anthropic model pin + effort: tamper the .toml and re-record its
@@ -213,7 +214,7 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
     });
 
     test('#5683: sync then install reports no local patches (opencode)', { timeout: E2E_TIMEOUT_MS }, () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
       try {
         writeProjectConfig(root, { 'gsd-ai-researcher': 'low', 'gsd-advisor-researcher': 'xhigh' });
         const result = runEffortSync({ cwd: root, home: root, configDir, runtime: 'opencode', dryRun: false });
@@ -350,7 +351,7 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
     });
 
     test('#5683: sync then install still reports a pre-sync user edit as locally modified', { timeout: E2E_TIMEOUT_MS }, () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
       try {
         writeProjectConfig(root, { 'gsd-ai-researcher': 'low', 'gsd-advisor-researcher': 'medium' });
         const edited = path.join(configDir, 'agents', 'gsd-ai-researcher.md');
@@ -444,7 +445,7 @@ describe('#5683: effort sync keeps the install manifest in step with rewritten a
 
   describe('detection of genuine edits is preserved', () => {
     test('#5683: post-sync user edit still detected', { timeout: E2E_TIMEOUT_MS }, () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
       try {
         writeProjectConfig(root, { 'gsd-ai-researcher': 'low', 'gsd-advisor-researcher': 'medium' });
         const result = runEffortSync({ cwd: root, home: root, configDir, runtime: 'claude', dryRun: false });

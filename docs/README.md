@@ -24,6 +24,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
+- [Run a plan on another runtime](how-to/run-a-plan-on-another-runtime.md) — declare `executor_runtime` on a plan so a different runtime's CLI executes it, with the gate, the model source and every fallback reason
 - [Enable the Claude orchestration Workflow backend (BETA)](how-to/enable-claude-orchestration-workflow-backend.md) — turn the capability on, check whether workflows are available in your Claude Code setup, and emit a Workflow script for a phase
 - [Review reapplied patches hunk by hunk](how-to/review-reapplied-patches.md) — after `/gsd-update`, keep, retire, or rewrite each of your edits that upstream adopted, reworded around, or orphaned
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
@@ -33,6 +34,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve baseline-notation findings](how-to/resolve-baseline-notation-findings.md) — fix plan criteria that `verify plan-structure` flags as already true at HEAD (B1), legacy `# baseline at HEAD:` comments (B2), and unreadable notations
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
+- [Guide external reviewers with a capability](how-to/guide-external-reviewers-with-a-capability.md) — add `review:pre` reviewer guidance so `/gsd-review` and convergence cycles judge plans under your capability's constraints
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
 - [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
 - [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
@@ -41,6 +43,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Change the STATE.md schema](how-to/change-the-state-md-schema.md) — add, change or remove a STATE.md frontmatter key and keep the template and all five reference documents in step
 - [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md) — fix an `<automated>` verify command whose target directory does not resolve from the executor's cwd
 - [State a failing direction](how-to/state-a-failing-direction.md) — say what output constitutes failure for an `<automated>` verify command, and migrate a phase planned before the rule
+- [Validate an automated command](how-to/validate-an-automated-command.md) — run a validate-only mode against an `<automated>` verify command at plan time, record the result, and read check 8g's verdicts
 - [Resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md) — bring an agent's completion contract, read-tag gate, or deleted-file test reference back into agreement with the registry
 - [Resolve unreachable-guard findings](how-to/resolve-unreachable-guard-findings.md) — fix shell guards whose fallback arm cannot run, and tell "nothing to report" apart from "could not look"
 - [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md) — terminate a GSD hook with `allow`/`deny`/`crash`, declare its `ON_CRASH` policy, and tell a hook's own crash apart from a check that could not run at all
@@ -75,6 +78,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md) — send one plan to your own executor agent with `agent_hint:`, pick its model, and read the routing output
 - [Control which host runtime GSD reports](how-to/control-the-reported-host-runtime.md) — read the `agent_runtime` ladder, understand what host detection looks at, and pin the runtime when detection is not what you want
 - [Set up cross-AI review](how-to/set-up-cross-ai-review.md) — configure a second AI to review code produced by the primary agent
+- [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md) — end a non-converged loop with a status instead of a question, and read the CYCLE_SUMMARY counters from `/gsd-review`
 - [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) — escalate `/gsd-code-review` to `deep` for sensitive directories while the rest of the repo stays at the default depth
 - [Work in parallel with workstreams](how-to/work-in-parallel-with-workstreams.md) — run independent lines of work simultaneously using workstreams
 - [Isolate work with workspaces](how-to/isolate-work-with-workspaces.md) — use workspaces to sandbox experimental or risky changes
@@ -86,6 +90,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
 - [Enable live-DOM verification](how-to/enable-live-dom-verification.md) — opt a project into browser-backed UI acceptance checks during execution, handle the browser-profile lock, and tell "nothing to report" apart from "could not look"
+- [Enable deep verification](how-to/enable-deep-verification.md) — opt a project into agent-driven behavior enumeration and browser execution before UAT, widen it beyond UI phases, and read what is left for you to confirm
 - [Enable UI interaction capture](how-to/enable-ui-interaction-capture.md) — let `/gsd-ui-review`'s auditor capture hover, focus, open-menu and filled-form states through the `chrome-devtools` CLI from Bash, with no MCP server
 - [Develop a Capability for GSD 1.5+](how-to/develop-a-capability.md) — add feature Capabilities, hook fragments, and registry entries
 - [Develop a task-content resolver capability](how-to/develop-a-task-content-resolver-capability.md) — declare a `taskContentResolver` so `execute-plan.md` resolves per-task content from your external issue tracker instead of `PLAN.md`

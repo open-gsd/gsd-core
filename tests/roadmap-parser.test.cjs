@@ -1341,6 +1341,103 @@ describe('roadmap-parser: getMilestoneInfo #2135 — milestone_name clobber', ()
   });
 });
 
+// ─── #6149 — a heading that only MENTIONS the milestone's version is not its heading ──────────────────────────────
+// The version token must LEAD the heading text (only ✅ 📋 🚧, bold markers and the word `Milestone` may precede it); the
+// one rule is read by selection and by section detection, so the two cannot disagree.
+
+describe('roadmap-parser: #6149 — a mention heading is not the milestone heading', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const STATE = { gsd_state_version: '1.0', milestone: 'v0.5.0', milestone_name: 'Search Revamp' };
+
+  test('a "Carried forward to v0.5.0 (…)" heading selects nothing: the name resolves to none, never the heading tail', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Carried forward to v0.5.0 (inputs, not phases)', '', '### Phase 1: Something'].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.value.version, 'v0.5.0');
+    assert.strictEqual(info.value.name, null, 'the tail "(inputs, not phases)" is not a name');
+  });
+
+  test('"Deferred to v0.5.0 pending review" selects nothing either', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Deferred to v0.5.0 pending review', '', '### Phase 1: Something'].join('\n'));
+    assert.strictEqual(getMilestoneInfo(tmpDir).value.name, null);
+  });
+
+  test('a mention heading ABOVE the real heading does not win; the real heading names the milestone', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Carried forward to v0.5.0 (inputs, not phases)', '', '## v0.5.0 Search Revamp', '', '### Phase 1: Something'].join('\n'));
+    assert.strictEqual(getMilestoneInfo(tmpDir).value.name, 'Search Revamp');
+    const selected = roadmapParser.selectMilestoneHeading(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8'), 'v0.5.0');
+    assert.match(selected[1], /^## v0\.5\.0 Search Revamp$/);
+  });
+
+  test('the real heading before a mention heading, and a roadmap with no version at all, keep their names', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['## v0.5.0 Search Revamp', '', '## Carried forward to v0.5.0 (inputs, not phases)'].join('\n'));
+    assert.strictEqual(getMilestoneInfo(tmpDir).value.name, 'Search Revamp');
+  });
+
+  test('the allowed leading shapes still select, and a sub-milestone still selects for its state version', () => {
+    for (const heading of ['## v0.5.0 Name', '## ✅ v0.5.0 Name', '### 🚧 v0.5.0 Name (In Progress)', '## **v0.5.0** Name', '## Milestone v0.5.0: Name']) {
+      assert.ok(roadmapParser.selectMilestoneHeading(`${heading}\n`, 'v0.5.0'), `selects ${heading}`);
+    }
+    assert.ok(roadmapParser.selectMilestoneHeading('## v8.0-B Part\n', 'v8.0'), 'v8.0 still selects its sub-milestone heading');
+    assert.strictEqual(roadmapParser.selectMilestoneHeading('## v0.4.0 Old notes about v0.5.0\n', 'v0.5.0'), null, 'another version leading the heading is not this milestone');
+  });
+
+  test('selection and section detection agree on the same heading table', () => {
+    const table = [
+      ['## v0.5.0 Name', true], ['## ✅ v0.5.0 Name', true], ['### 🚧 v0.5.0 Name (In Progress)', true], ['## **v0.5.0** Name', true],
+      ['## Milestone v0.5.0: Name', true], ['## Current Milestone: v0.5.0', true], ['## Milestone 1: First Milestone v0.5.0', true], ['## Roadmap v0.5.0: Name', true],
+      ['## [GSD.02] v0.5.0: Name', true], ['## Carried forward to v0.5.0 (inputs, not phases)', false],
+      ['## Deferred to v0.5.0 pending review', false], ['# Roadmap: Name (v0.5.0)', false],
+      // a status marker or the word Milestone elsewhere in a mention heading signals a section but carries no version
+      ['## Deferred to v0.5.0 🚧', false], ['## Carried forward to the next Milestone (v0.5.0)', false],
+    ];
+    for (const [heading, expected] of table) {
+      const content = `${heading}\n\nbody\n`;
+      const selected = roadmapParser.selectMilestoneHeading(content, 'v0.5.0') !== null;
+      const sectioned = roadmapParser.milestoneSections(content).some((section) => section.version === 'v0.5.0');
+      assert.strictEqual(selected, expected, `selection: ${heading}`);
+      assert.strictEqual(sectioned, expected, `section detection: ${heading}`);
+      const listed = roadmapParser.listMilestoneHeadings(content).some((entry) => entry.version === 'v0.5.0');
+      assert.strictEqual(listed, expected, `enumeration: ${heading}`);
+    }
+  });
+
+  test('the window classifiers read the same rule: a mention heading is neither a versioned roadmap nor a cutoff', () => {
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('## Carried forward to v0.5.0 (inputs)\n'), false);
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('## v0.5.0 Name\n'), true);
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('## [GSD.02] v2.0: Name\n'), true);
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('### Phase 1: Migrate to v2.0 API\n'), true, 'a Phase title mentioning a version keeps this predicate\'s pinned behaviour');
+  });
+
+  test('a mention heading does not end the preceding milestone window', () => {
+    const content = ['## v0.4.0 Old', '', 'old body', '', '## Carried forward to v0.5.0 (inputs)', '', 'carried body', '', '## v0.5.0 New', ''].join('\n');
+    const sections = roadmapParser.milestoneSections(content);
+    const old = sections.find((section) => section.version === 'v0.4.0');
+    assert.ok(content.slice(old.start, old.end).includes('carried body'), 'the v0.4.0 window runs through the mention heading to the real v0.5.0 heading');
+    assert.ok(!content.slice(old.start, old.end).includes('## v0.5.0 New'));
+  });
+
+  test('CLI: quick-tasks-append keeps the curated milestone_name when only a mention heading exists', () => {
+    const { runGsdTools } = require('./helpers.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v0.5.0', 'milestone_name: Search Revamp', '---', '',
+      '### Quick Tasks Completed', '', '| # | Description | Date | Commit | Directory |', '|---|-------------|------|--------|-----------|', '',
+    ].join('\n'));
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Carried forward to v0.5.0 (inputs, not phases)', '', '### Phase 1: Something'].join('\n'));
+    const r = runGsdTools(['quick-tasks-append', '--task', 'Fix thing'], tmpDir);
+    assert.ok(r.success, r.error);
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+    assert.match(state, /milestone_name: Search Revamp/, 'the curated name survives');
+    assert.doesNotMatch(state, /inputs, not phases/);
+  });
+});
+
 // ─── getMilestoneInfo — #4134 punctuation-fragment name refusal ───────────────
 // The §7.2 pinned rule takes everything AFTER the heading's own version token
 // as the name. For a name-then-version heading (`# Roadmap: Project — Name

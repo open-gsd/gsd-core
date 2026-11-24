@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { resolveKimiHooksTomlDir, getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 
@@ -37,7 +38,7 @@ for (const runtime of ['kimi', 'kimi-code']) {
     let beginMarker;
 
     function run(args, { optIn = false } = {}) {
-      const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
+      const env = isolatedEnv({ home, override: { GSD_HOME: home } });
       for (const key of ISOLATED_ENV) delete env[key];
       if (optIn) env.GSD_ALLOW_SYMLINKED_DEST = '1';
       const result = runNode([INSTALL, `--${runtime}`, '--global', ...args], { cwd: home, env });

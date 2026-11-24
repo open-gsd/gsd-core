@@ -262,13 +262,14 @@ describe('#5519: Tier 1 --files containment guard', () => {
   const tier1 = extractFirstBashBlockAfter(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), '**Tier 1 — --files override', '**Tier 2');
   const OUTSIDE = 'Error: File path outside repository, skipping: ';
 
-  // Git for Windows reports the repository root in the mixed form (C:/R) while its GNU realpath reports
-  // an MSYS POSIX path (/c/R/...); `cygpath -m` maps the second to the first. Simulated with bash
-  // functions so the real fence runs against both forms on any host.
+  // Git for Windows reports the repository root in the mixed form (C:/R) while the resolver reports an MSYS POSIX
+  // path (/c/R/...); `cygpath -m` maps the second to the first. Simulated with bash functions so the real fence runs
+  // against both forms on any host: `node` is stubbed for the fence's resolver call (the path arrives in
+  // GSD_RESOLVE_PATH) and answers the way the MSYS resolver does.
   const GIT_BASH_FORMS = String.raw`
 git() { if [ "$1" = rev-parse ] && [ "$2" = --show-toplevel ]; then echo "C:/R"; else command git "$@"; fi; }
-realpath() {
-  node -e 'const path=require("path");let p=process.argv[1];if(p.length>2&&p[1]===":"&&p[2]==="/"){p="/"+p[0].toLowerCase()+p.slice(2);}else if(p[0]!=="/"){p="/c/R/"+p;}process.stdout.write(path.posix.normalize(p)+"\n");' "$2"
+node() {
+  command node -e 'const path=require("path");let p=process.env.GSD_RESOLVE_PATH;if(p.length>2&&p[1]===":"&&p[2]==="/"){p="/"+p[0].toLowerCase()+p.slice(2);}else if(p[0]!=="/"){p="/c/R/"+p;}process.stdout.write(path.posix.normalize(p));'
 }
 cygpath() {
   case "$2" in
@@ -284,7 +285,6 @@ cygpath() {
       'set -uo pipefail',
       prelude,
       `FILES_OVERRIDE='${files.join(',')}'`,
-      'IFS="," read -ra FILES_ARRAY <<< "$FILES_OVERRIDE"',
       tier1,
       'printf "SCOPE:%s\\n" ${REVIEW_FILES[@]+"${REVIEW_FILES[@]}"}',
     ].join('\n');
@@ -292,9 +292,10 @@ cygpath() {
     fs.writeFileSync(scriptPath, script);
     const r = spawnSync('bash', [scriptPath], { cwd, encoding: 'utf8', timeout: GIT_FIXTURE_TIMEOUT_MS });
     if (r.error) throw new Error(`bash spawn failed: ${r.error.message}`);
-    assert.equal(r.status, 0, `Tier 1 exited ${r.status}: ${r.stderr}`);
+    // #6152: a list that resolves to no reviewable file exits non-zero (fail closed), so the status is reported, not asserted.
     const lines = r.stdout.split('\n').map((l) => l.replace(/\r$/, ''));
     return {
+      status: r.status,
       outside: lines.filter((l) => l.startsWith(OUTSIDE)).map((l) => l.slice(OUTSIDE.length)),
       // printf with an empty array still emits one bare `SCOPE:` line, which is not a file.
       kept: lines.filter((l) => l.startsWith('SCOPE:') && l !== 'SCOPE:').map((l) => l.slice('SCOPE:'.length)),
@@ -324,9 +325,7 @@ cygpath() {
     assert.deepEqual(r.kept, []);
   }));
 
-  test('real bash: in-repository files are kept; ../ escapes and a sibling sharing the repo-name prefix are rejected', (t) => {
-    const probe = spawnSync('realpath', ['-m', '.'], { encoding: 'utf8', timeout: GIT_FIXTURE_TIMEOUT_MS });
-    if (probe.error || probe.status !== 0) { t.skip('GNU realpath -m is not available (macOS without coreutils): the fail-closed test covers that shape'); return; }
+  test('real bash: in-repository files are kept; ../ escapes and a sibling sharing the repo-name prefix are rejected', () => {
     withTmp((rawParent) => {
     // Windows hands out 8.3 short temp paths (C:\Users\RUNNER~1\...) that git reports in long form; an
     // 8.3-vs-long mismatch is a separate path-form concern from the one under test, so build the fixture
@@ -340,24 +339,23 @@ cygpath() {
     fs.writeFileSync(path.join(parent, 'repo-other', 'f.js'), 'x\n');
     fs.writeFileSync(path.join(parent, 'outside.js'), 'x\n');
     const r = runTier1(repo, ['src/a.js', '../repo-other/f.js', '../outside.js', '../../etc/passwd']);
-    // Raw forms the fence compared, so a path-form regression is diagnosable from the failure alone.
-    const forms = spawnSync('bash', ['-c', 'echo "toplevel=$(git rev-parse --show-toplevel)"; echo "realpath=$(realpath -m src/a.js)"; command -v cygpath >/dev/null && echo "cygpath-root=$(cygpath -m "$(git rev-parse --show-toplevel)")"; echo "cygpath-file=$(command -v cygpath >/dev/null && cygpath -m "$(realpath -m src/a.js)")"'], { cwd: repo, encoding: 'utf8', timeout: GIT_FIXTURE_TIMEOUT_MS }).stdout;
-    assert.deepEqual(r.kept, ['src/a.js'], `only the in-repository file is reviewed:\n${r.stdout}\npath forms:\n${forms}`);
+    assert.deepEqual(r.kept, ['src/a.js'], `only the in-repository file is reviewed:\n${r.stdout}`);
     assert.deepEqual(r.outside, ['../repo-other/f.js', '../outside.js', '../../etc/passwd']);
     })();
   });
 
-  test('without realpath the guard still fails closed (the macOS shape)', withTmp((parent) => {
+  test('without a GNU realpath the guard still verifies containment (the macOS shape, #6152)', withTmp((parent) => {
     const repo = path.join(parent, 'repo');
     fs.mkdirSync(repo);
     seedFixtureRepo(repo);
     writeAndCommit(repo, 'src/a.js', 'a\n', 'chore: init');
-    const r = runTier1(repo, ['src/a.js'], 'realpath() { return 127; }');
-    assert.deepEqual(r.kept, [], 'a path that cannot be verified is not reviewed');
-    assert.deepEqual(r.outside, ['src/a.js']);
+    // The resolver is node, so no realpath is needed: an in-repository file is kept, an escape is still rejected.
+    const r = runTier1(repo, ['src/a.js', '../../etc/hosts'], 'realpath() { return 127; }');
+    assert.deepEqual(r.kept, ['src/a.js']);
+    assert.deepEqual(r.outside, ['../../etc/hosts']);
   }));
 
-  test('an absolute path that still holds .. segments (no GNU realpath to resolve it) is rejected, not trusted', withTmp((parent) => {
+  test('an absolute path that holds .. segments is resolved and rejected, not trusted', withTmp((parent) => {
     const repo = path.join(parent, 'repo');
     fs.mkdirSync(repo);
     seedFixtureRepo(repo);
@@ -365,13 +363,14 @@ cygpath() {
     const escape = `${repo.replace(/\\/g, '/')}/../../etc/hosts`;
     const r = runTier1(repo, [escape], 'realpath() { return 127; }');
     assert.deepEqual(r.kept, []);
-    assert.deepEqual(r.outside, [escape], 'an unresolved ".." path is not inside the repository');
+    assert.deepEqual(r.outside, [escape], 'a ".." path that leaves the repository is not inside it');
   }));
 
   test('an empty repository root (git failed) accepts nothing', withTmp((dir) => {
     const r = runTier1(dir, ['/etc/hosts', 'src/a.js'], 'git() { return 128; }');
     assert.deepEqual(r.kept, []);
     assert.deepEqual(r.outside, ['/etc/hosts', 'src/a.js']);
+    assert.notEqual(r.status, 0, 'nothing resolved, so the override fails closed');
   }));
 
   test('the platform notes document the Windows path-form handling instead of a limitation', () => {

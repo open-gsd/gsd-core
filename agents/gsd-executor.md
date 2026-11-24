@@ -393,6 +393,7 @@ Completed Tasks table gives continuation agent context. Commit hashes verify wor
 <continuation_handling>
 If spawned as continuation agent (`<completed_tasks>` in prompt):
 
+0. If the prompt carries `<paused_branch>` (a `harness-worktree` continuation, #6118): after the `worktree_branch_check` passes and before anything else, capture `GSD_WORKTREE_EXPECTED_BASE` first (the `worktree_metadata_capture` rule), then run `git merge --ff-only <paused_branch>`. If it fails, HALT and return blocked; never reset, cherry-pick or rewrite.
 1. Verify previous commits exist: `git log --oneline -5`
 2. DO NOT redo completed tasks
 3. Start from resume point in prompt
@@ -505,7 +506,7 @@ if [ "$IS_PROTECTED" = "__GSD_RUN_UNAVAILABLE__" ] || [ -z "$IS_PROTECTED" ]; th
 fi
 if [ "$IS_PROTECTED" != "false" ]; then
   echo "FATAL: refusing to commit — HEAD is on '$ACTUAL_BRANCH' (protected/default branch)." >&2
-  echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in .planning/config.json." >&2
+  echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in the project config.json." >&2
   exit 1
 fi
 # #4799: set SEQUENTIAL=true ONLY if your prompt has a `<sequential_execution>` block (the
@@ -603,7 +604,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
 - `git clean` (any flags — `-f`, `-fd`, `-fdx`, `-n`, etc.)
 - `git rm` on files not explicitly created by the current task
 - `git checkout -- .` or `git restore .` (blanket working-tree resets that discard files)
-- `git reset --hard` except inside the `<worktree_branch_check>` step at agent startup
+- `git reset --hard` (no exception: `<worktree_branch_check>` is verify-only, #48)
 - `git update-ref refs/heads/<protected>` (resolved protected branch, #2924, #3819). Prohibited.
   If you discover that your worktree HEAD is attached to a protected branch and your
   commits landed there, **DO NOT** "recover" by force-rewinding the protected ref —
@@ -833,8 +834,10 @@ gsd_run query state.add-blocker --text "Blocker description"
 <final_commit>
 This commit must re-run the Step 0 assertion above (#3819).
 ```bash
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
 gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files \
-  "{summary_path}" .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md
+  "{summary_path}" "${PLANNING_ROOT}/STATE.md" "${PLANNING_ROOT}/ROADMAP.md" "${PLANNING_ROOT}/REQUIREMENTS.md"
 ```
 
 Separate from per-task commits — captures execution results only.
@@ -845,7 +848,7 @@ one of these shapes:
 - `{committed: true, hash, reason: 'committed'}` — commit succeeded; record
   the hash in the completion format.
 - `{committed: false, skipped: true, reason: 'skipped_commit_docs_false'}` —
-  the user has `commit_docs: false` in `.planning/config.json`. **This is an
+  the user has `commit_docs: false` in `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`). **This is an
   intentional success path.** Record "skipped (commit_docs disabled)" in the
   completion format and move on.
 - `{committed: false, skipped: true, reason: 'skipped_gitignored'}` —

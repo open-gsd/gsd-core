@@ -13,7 +13,7 @@ Use CLI display_id when present; otherwise use reference grammar. Before emittin
 
 ## 1. Load ROADMAP.md
 
-Read `.planning/ROADMAP.md`. If it does not exist, error: "No ROADMAP.md found — run `/gsd:new-project` first."
+Read `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`). If it does not exist, error: "No ROADMAP.md found — run `/gsd:new-project` first."
 
 Extract all phases. For each phase capture:
 - Phase number and name

@@ -41,6 +41,10 @@
  * classifier (#4692): `evidence` gains `matched_test`, `format` and
  * `report_errors`, and `record.failing_test` names only the matched target.
  * Verdicts, reasons, stderr and exit codes are unchanged.
+ *
+ * The `tdd-review-checkpoint-red-only` and `tdd-review-checkpoint-mixed-violation`
+ * goldens were re-captured for #5274: the `Expected commit pattern:` hint now ends
+ * `or fix(<plan>): ...`. Verdicts, stderr and exit codes are unchanged.
  */
 
 const { describe, test, after } = require('node:test');

@@ -22,7 +22,10 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { loadConfig, readConfigFileBounded } = configLoaderModule;
+const { loadConfig } = configLoaderModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configValueResolver = require('./config-value-resolver.cjs');
+const { resolveConfigValue } = configValueResolver;
 
 // ─── Configuration Module (for CANONICAL_CONFIG_DEFAULTS used by effort/fast_mode resolvers) ─
 import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cjs';
@@ -33,16 +36,12 @@ const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TI
 
 import { catalog, MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults } from './model-catalog.cjs';
 
-import path from 'node:path';
 import { canonicalizeRuntimeName, hostBehaviorsFor } from './runtime-name-policy.cjs';
 import {
   resolveActiveRuntime,
   _setInstallRuntimeMarkerForTests,
   _resetInstallRuntimeMarkerCacheForTests,
 } from './runtime-slash.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planningWorkspaceMod = require('./planning-workspace.cjs');
-const { planningDir } = planningWorkspaceMod;
 
 // ─── #2297: per-install runtime identity for the resolve_model_ids:"omit" gate ─
 //
@@ -87,28 +86,11 @@ function hasNativeModelAliases(runtime: string): boolean {
 // out-of-scope guard + #2517 finding #4): an explicit project "omit" is honored
 // regardless of runtime, whereas an "omit" that came only from the global
 // defaults is ignored by native-alias runtimes. Workstream/project-scope aware
-// via planningDir (mirrors loadConfig's precedence: workstream value wins over
-// root); a plain read avoids loadConfig's normalization side effects.
+// via the Config Value Resolution Module (#6030): the producing layer says whether the
+// "omit" came from the project (workstream or root) or only from the global defaults.
 function projectExplicitlySetsOmit(cwd: string): boolean {
-  const wsDir = planningDir(cwd);
-  const rootDir = path.join(cwd, '.planning');
-  const layers = wsDir === rootDir ? [rootDir] : [wsDir, rootDir]; // workstream > root
-  for (const dir of layers) {
-    try {
-      // Same bounded regular-file reader as the loader (#5759): a FIFO/device/oversized
-      // layer throws instead of blocking, and an absent layer returns null.
-      const raw = readConfigFileBounded(path.join(dir, 'config.json'));
-      if (raw === null) continue;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const value = parsed?.['resolve_model_ids'];
-      // First layer that sets the key wins (matches loadConfig's deep-merge
-      // precedence). A layer that omits the key falls through to the next.
-      if (value !== undefined) return value === 'omit';
-    } catch {
-      // Absent/unreadable layer — try the next.
-    }
-  }
-  return false;
+  const resolved = resolveConfigValue('resolve_model_ids', { cwd, family: 'A' });
+  return resolved.found && (resolved.layer === 'workstream' || resolved.layer === 'root') && resolved.value === 'omit';
 }
 
 // ─── Model alias resolution ───────────────────────────────────────────────────
@@ -268,6 +250,15 @@ function _resetModelPolicyWarningCacheForTests(): void {
 // resolution; #4192 keeps the warn-once breadcrumb but changes the behavior to
 // a verbatim pass-through, so the text now describes the pass-through.
 const _modelOverrideUnmappableWarned = new Set<string>();
+
+// #6332: per invocation; an in-process caller resets it between calls.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('model-resolver.unmappableWarnings', () => {
+  _modelPolicyUnmappableWarned.clear();
+  _modelOverrideUnmappableWarned.clear();
+});
+
 function warnModelOverrideUnmappable(agentType: string, overrideValue: string): void {
   const key = `${agentType}::${overrideValue}`;
   if (_modelOverrideUnmappableWarned.has(key)) return;

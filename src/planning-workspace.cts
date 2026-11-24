@@ -171,6 +171,22 @@ function planningRoot(cwd: string): string {
   return path.join(cwd, '.planning');
 }
 
+/**
+ * The one place that names a project's own `config.json` (ADR-1411 Decision 5, #6032): the file the
+ * active workstream or project owns. `ws` selects a workstream the way `planningDir` does; omit it
+ * for the environment's. Readers, probes and pre-write checks take the path from here, so
+ * `local/no-adhoc-config-merge` can flag any other construction of it. This module defines it
+ * because it owns the directory half (`planningDir`); `config-loader.cts` re-exports it.
+ */
+function projectConfigPath(cwd: string, ws?: string | null): string {
+  return path.join(planningDir(cwd, ws), 'config.json');
+}
+
+/** The flat root `config.json` a workstream inherits from (the loader's second project layer). */
+function rootConfigPath(cwd: string): string {
+  return path.join(planningRoot(cwd), 'config.json');
+}
+
 type ScopedConfigValue = { present: boolean; value: unknown };
 
 const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, value: undefined });
@@ -202,17 +218,22 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
 
 /**
  * #3972/#4975: the ONE scope-aware config read for surfaces that must answer
- * with the value `config-get <keyPath>` reports but may not call loadConfig
- * (it normalizes and rewrites config.json, spawns git, and prints warnings).
+ * with the value `config-get <keyPath>` reports for a key it walks literally,
+ * but may not call loadConfig (it normalizes and rewrites config.json, spawns
+ * git, and prints warnings). Not for commit_docs or search_gitignored:
+ * config-get resolves those two through loadConfigResolved (#5470), as the
+ * runtime does, so they can differ from this ladder — for example when both
+ * spellings are written, or under a workstream whose root config.json is
+ * unusable. Do not read those two keys through this ladder.
  * Ladder: the scoped config's OWN key wins (planningDir is project- and
  * workstream-aware); otherwise the flat root's key, but only under the
  * GSD_WORKSTREAM env gate — config-get deliberately does NOT inherit root
  * under GSD_PROJECT alone, and no reader of this ladder may diverge (#3963).
  * An unreadable or unparseable file sets nothing, so the ladder moves on:
  * under GSD_WORKSTREAM a broken workstream config inherits the root's key.
- * That is the one place this read and config-get part ways — for a scoped
- * config.json that exists but cannot be read or parsed, config-get fails
- * with CONFIG_PARSE_FAILED instead of reporting a value.
+ * For the literal-walk keys that is one place this read and config-get part
+ * ways — for a scoped config.json that exists but cannot be read or parsed,
+ * config-get fails with CONFIG_PARSE_FAILED instead of reporting a value.
  * The value is returned uncoerced; each caller applies its own strict
  * comparison. Never throws: planningDir/planningRoot reject a
  * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
@@ -220,10 +241,10 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  */
 function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
+    const scoped = ownConfigValue(projectConfigPath(cwd, workstream), keyPath);
     if (scoped.present) return scoped;
     if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
-      return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
+      return ownConfigValue(rootConfigPath(cwd), keyPath);
     }
   } catch {
     // Degrade to "not present" — see the contract above.
@@ -741,6 +762,8 @@ export = {
   createMemoryPointerAdapter,
   planningDir,
   planningRoot,
+  projectConfigPath,
+  rootConfigPath,
   resolveEnvWorkstream,
   resolvePhaseIdConvention,
   listAvailableWorkstreams,

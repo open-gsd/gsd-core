@@ -646,12 +646,42 @@ const SHARD_BALANCE = Object.freeze({
   since: '2026-09-28T14:17:51Z', // #5097 merge
   minRuns: 10,
   windowRuns: 20,
-  maxMedianGapMs: 120000,
-  baselineShardTotal: 3,
+  // #5029 resharded the lane 3 -> 6, so nothing below is scaled from the
+  // 3-shard values. `next` had no 6-shard push runs then, so both values were
+  // measured on PR #5053's runs and on fork push runs of this workflow. Re-derive
+  // both from `next` push runs once `minRuns` of them exist, by the rules
+  // below. The runs, the measured figures and the margin later runs left are
+  // in docs/how-to/read-ci-timeout-signals.md, "Where the two thresholds come
+  // from".
+  //
+  // Gap limit: the measured median gap (slowest minus fastest per-shard
+  // median, as evaluateShardBalance computes it) x 1.5, the headroom factor
+  // tests/ci-test-job-timeout-budget.test.cjs applies to job budgets, rounded
+  // up. #5101 shipped 120000 for ~25-31 min shards. On 11-17 min shards the
+  // gap is set by single 3.5-6.5 min test files that land in different
+  // shards (a chunk cannot finish before its longest file), not by packing
+  // weights, so regenerating the win32 table does not move it; #5807 tracks
+  // the packing fix. The margin under the limit depends on the partition, so
+  // if the check opens a gap breach, read which shard is slow before changing
+  // this number.
+  maxMedianGapMs: 500000,
+  // Baselines: each shard's measured nearest-rank p90 of job wall-clock (the
+  // `percentile` this file uses) x 1.25. Measure across partitions: selectShard
+  // re-packs the light files whenever the tier changes, and the daily check
+  // reads the newest `windowRuns` push runs, which span partitions too. A
+  // baseline equal to one sample's p90 is exceeded by the p90 of a fresh
+  // sample of the same distribution too often, so the check would open p90
+  // breaches on noise. 1.25 rather than the 1.5 used above keeps the rule a
+  // regression detector: x1.5 would let 3/6 reach ~26 min, past the worst run
+  // the test-conformance LANE_COSTS entry records.
+  baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
-    '1/3': 1824000,
-    '2/3': 2046000,
-    '3/3': 2208000,
+    '1/6': 1111250,
+    '2/6': 1196250,
+    '3/6': 1285000,
+    '4/6': 1241250,
+    '5/6': 1130000,
+    '6/6': 1175000,
   }),
   issueTitle: 'CI: Windows conformance shard balance regressed',
 });
@@ -782,8 +812,31 @@ function evaluateShardBalance(samples, config) {
 
   if (newestTotal !== config.baselineShardTotal) {
     const perShard = buildPerShard(keptSamples, newestTotal, config);
+    // #5029: a re-shard PR changes the baseline in the same merge, so until
+    // its first push runs complete on `next`, the newest runs still use the
+    // old layout. A mismatch means the lane moved away from the baseline's
+    // layout, which needs that layout to have run: while it has fewer than
+    // minRuns runs here, report insufficient-data rather than file an issue
+    // against the re-shard that just landed.
+    // #6329: only a complete run counts, one with a sample for every shard of
+    // the baseline layout. A run that lost a shard (cancelled before it got a
+    // runner, say) does not show the layout ran. A sample whose index is
+    // outside 1..total names no shard of the layout, so it cannot stand in for
+    // a missing one, and a shard sampled twice in one run counts once.
+    const baselineShardsByRun = new Map();
+    for (const s of samples) {
+      if (s.total !== config.baselineShardTotal) continue;
+      if (!Number.isInteger(s.index) || s.index < 1 || s.index > s.total) continue;
+      if (!baselineShardsByRun.has(s.runId)) baselineShardsByRun.set(s.runId, new Set());
+      // Keyed on the numeric index, so two spellings of one shard ("1/3" and
+      // "01/3") are one shard.
+      baselineShardsByRun.get(s.runId).add(s.index);
+    }
+    const baselineLayoutRuns = [...baselineShardsByRun.values()]
+      .filter((indexes) => indexes.size === config.baselineShardTotal).length;
+    const status = baselineLayoutRuns < config.minRuns ? 'insufficient-data' : 'baseline-mismatch';
     return {
-      status: 'baseline-mismatch', runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
+      status, runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
     };
   }
 

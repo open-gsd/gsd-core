@@ -18,7 +18,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ---------------------------------------------------------------------------
 // Helper: make a temp dir and return it (caller is responsible for cleanup)
@@ -32,7 +33,7 @@ function makeTempDir() {
 // ---------------------------------------------------------------------------
 
 describe('research-store: put then get round-trip', () => {
-  test('put stores entry; get returns hit:true, stale:false, correct content', () => {
+  test('put stores entry; get returns hit:true, stale:false, correct content', async () => {
     const tmpDir = makeTempDir();
     try {
       // Must be a valid 64-char sha256 hex string (as produced by researchKey).
@@ -40,7 +41,7 @@ describe('research-store: put then get round-trip', () => {
       const key = '4642afa8420709e0902413b46e2f26806499a5df710b602c22a5344f0eb298d0';
 
       // PUT
-      const putResult = runGsdTools(
+      const putResult = await runGsdToolsAsync(
         [
           'research-store', 'put', key,
           '--content', 'hello docs',
@@ -50,7 +51,7 @@ describe('research-store: put then get round-trip', () => {
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(putResult.success, `put failed: ${putResult.error}`);
       const entry = JSON.parse(putResult.output);
@@ -58,10 +59,10 @@ describe('research-store: put then get round-trip', () => {
       assert.equal(entry.kind, 'docs', 'put: entry.kind mismatch');
 
       // GET
-      const getResult = runGsdTools(
+      const getResult = await runGsdToolsAsync(
         ['research-store', 'get', key, '--kind', 'docs'],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(getResult.success, `get failed: ${getResult.error}`);
       const got = JSON.parse(getResult.output);
@@ -80,15 +81,15 @@ describe('research-store: put then get round-trip', () => {
 // ---------------------------------------------------------------------------
 
 describe('research-store: get on unknown key', () => {
-  test('returns hit:false, entry:null with exit 0', () => {
+  test('returns hit:false, entry:null with exit 0', async () => {
     const tmpDir = makeTempDir();
     try {
       // Must be a valid 64-char sha256 hex string — but nothing seeded under this key.
       const noSuchKey = '5620aa17b85cb82f1d82633c8cfb4799d3e947f58a1775248c96bbeeeb8f8537';
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-store', 'get', noSuchKey, '--kind', 'docs'],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `expected exit 0 for unknown key; got: ${result.error}`);
       const got = JSON.parse(result.output);
@@ -105,7 +106,7 @@ describe('research-store: get on unknown key', () => {
 // ---------------------------------------------------------------------------
 
 describe('research-plan: cache hit via pre-seeded store', () => {
-  test('returns cache.hit:true for pre-seeded question; no fetch property', () => {
+  test('returns cache.hit:true for pre-seeded question; no fetch property', async () => {
     const tmpDir = makeTempDir();
     try {
       // Compute the key the CLI will use for this question
@@ -144,10 +145,10 @@ describe('research-plan: cache hit via pre-seeded store', () => {
       );
 
       // Run research-plan with HOME overridden so the CLI reads from the same cache
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `research-plan failed: ${result.error}`);
       const plan = JSON.parse(result.output);
@@ -168,7 +169,7 @@ describe('research-plan: cache hit via pre-seeded store', () => {
 // ---------------------------------------------------------------------------
 
 describe('research-plan: fetch plan for unseeded question', () => {
-  test('returns item with fetch.provider string and no cache hit', () => {
+  test('returns item with fetch.provider string and no cache hit', async () => {
     const tmpDir = makeTempDir();
     try {
       const inputFile = path.join(tmpDir, 'research-plan-input.json');
@@ -181,10 +182,10 @@ describe('research-plan: fetch plan for unseeded question', () => {
         }),
       );
 
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `research-plan failed: ${result.error}`);
       const plan = JSON.parse(result.output);
@@ -209,10 +210,10 @@ describe('research-plan: fetch plan for unseeded question', () => {
 // ---------------------------------------------------------------------------
 
 describe('classify-confidence: context7 without --verified', () => {
-  test('returns confidence MEDIUM and verified false', () => {
+  test('returns confidence MEDIUM and verified false', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['query', 'classify-confidence', '--provider', 'context7'],
         tmpDir,
       );
@@ -232,10 +233,10 @@ describe('classify-confidence: context7 without --verified', () => {
 // ---------------------------------------------------------------------------
 
 describe('classify-confidence: exa without --verified', () => {
-  test('returns confidence LOW', () => {
+  test('returns confidence LOW', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['query', 'classify-confidence', '--provider', 'exa'],
         tmpDir,
       );
@@ -254,10 +255,10 @@ describe('classify-confidence: exa without --verified', () => {
 // ---------------------------------------------------------------------------
 
 describe('classify-confidence: exa with --verified', () => {
-  test('returns confidence MEDIUM and verified true', () => {
+  test('returns confidence MEDIUM and verified true', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['query', 'classify-confidence', '--provider', 'exa', '--verified'],
         tmpDir,
       );
@@ -276,10 +277,10 @@ describe('classify-confidence: exa with --verified', () => {
 // ---------------------------------------------------------------------------
 
 describe('classify-confidence: missing --provider -> usage error', () => {
-  test('exits non-zero and reports usage error when --provider is absent', () => {
+  test('exits non-zero and reports usage error when --provider is absent', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['query', 'classify-confidence'],
         tmpDir,
       );
@@ -296,10 +297,10 @@ describe('classify-confidence: missing --provider -> usage error', () => {
 // ---------------------------------------------------------------------------
 
 describe('package-legitimacy: missing --ecosystem -> usage error', () => {
-  test('exits non-zero and reports usage error when --ecosystem is absent', () => {
+  test('exits non-zero and reports usage error when --ecosystem is absent', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['package-legitimacy', 'check', 'somepackage'],
         tmpDir,
       );
@@ -316,10 +317,10 @@ describe('package-legitimacy: missing --ecosystem -> usage error', () => {
 // ---------------------------------------------------------------------------
 
 describe('research-store CLI: traversal/invalid key rejected with usage error', () => {
-  test('put ../../x --content ... → non-zero exit (usage error)', () => {
+  test('put ../../x --content ... → non-zero exit (usage error)', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         [
           'research-store', 'put', '../../x',
           '--content', 'evil',
@@ -329,7 +330,7 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for traversal key; got: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -338,13 +339,13 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
     }
   });
 
-  test('get ../../etc/passwd → non-zero exit (usage error)', () => {
+  test('get ../../etc/passwd → non-zero exit (usage error)', async () => {
     const tmpDir = makeTempDir();
     try {
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-store', 'get', '../../etc/passwd'],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for traversal key; got: ${result.output}`);
     } finally {
@@ -352,12 +353,12 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
     }
   });
 
-  test('put with valid 64-hex key → success', () => {
+  test('put with valid 64-hex key → success', async () => {
     const tmpDir = makeTempDir();
     try {
       const researchStore = require('../gsd-core/bin/lib/research-store.cjs');
       const validKey = researchStore.researchKey({ ecosystem: 'npm', library: 'lodash', version: '4.0.0', query: 'chunk', kind: 'docs' });
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         [
           'research-store', 'put', validKey,
           '--content', 'test content',
@@ -367,7 +368,7 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `put with valid 64-hex key should succeed; got: ${result.error}`);
     } finally {
@@ -381,11 +382,11 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
 // ---------------------------------------------------------------------------
 
 describe('FINDING-1: package-legitimacy check flag parser correctness', () => {
-  test('unknown flag → usage error (not silently dropped)', () => {
+  test('unknown flag → usage error (not silently dropped)', async () => {
     const tmpDir = makeTempDir();
     try {
       // --unknown-flag is not a valid flag; should produce a usage error, not silently skip
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['package-legitimacy', 'check', '--ecosystem', 'npm', '--unknown-flag', 'somevalue', 'mypkg'],
         tmpDir,
       );
@@ -396,7 +397,7 @@ describe('FINDING-1: package-legitimacy check flag parser correctness', () => {
     }
   });
 
-  test('--bad-flag pkgA pkgB → unknown-flag error on stderr, non-zero exit, pkgA and pkgB not consumed as flag values', () => {
+  test('--bad-flag pkgA pkgB → unknown-flag error on stderr, non-zero exit, pkgA and pkgB not consumed as flag values', async () => {
     const tmpDir = makeTempDir();
     try {
       // The 2-package arg-parse regression:
@@ -413,7 +414,7 @@ describe('FINDING-1: package-legitimacy check flag parser correctness', () => {
       // Green proof: the current parser (gsd-tools.cjs lines 1951-1952) hits
       //   if (a.startsWith('--')) { error(`package-legitimacy: unknown flag ${a}`, ...) }
       // which writes to stderr and exits 1.
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['package-legitimacy', 'check', '--ecosystem', 'npm', '--bad-flag', 'pkgA', 'pkgB'],
         tmpDir,
       );
@@ -444,15 +445,15 @@ describe('FINDING-1: package-legitimacy check flag parser correctness', () => {
 // ---------------------------------------------------------------------------
 
 describe('FINDING-3: research-plan --input null/invalid → clean usage error, no crash', () => {
-  test('input file contains JSON null → clean usage error (non-zero, no stack trace crash)', () => {
+  test('input file contains JSON null → clean usage error (non-zero, no stack trace crash)', async () => {
     const tmpDir = makeTempDir();
     try {
       const inputFile = path.join(tmpDir, 'null-input.json');
       fs.writeFileSync(inputFile, 'null');
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for null JSON input; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -467,15 +468,15 @@ describe('FINDING-3: research-plan --input null/invalid → clean usage error, n
     }
   });
 
-  test('input file contains {"questions": null} → clean usage error', () => {
+  test('input file contains {"questions": null} → clean usage error', async () => {
     const tmpDir = makeTempDir();
     try {
       const inputFile = path.join(tmpDir, 'questions-null.json');
       fs.writeFileSync(inputFile, JSON.stringify({ questions: null }));
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for questions:null; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -484,15 +485,15 @@ describe('FINDING-3: research-plan --input null/invalid → clean usage error, n
     }
   });
 
-  test('input file contains {"questions": "x"} (string, not array) → clean usage error', () => {
+  test('input file contains {"questions": "x"} (string, not array) → clean usage error', async () => {
     const tmpDir = makeTempDir();
     try {
       const inputFile = path.join(tmpDir, 'questions-string.json');
       fs.writeFileSync(inputFile, JSON.stringify({ questions: 'x' }));
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for questions:"x"; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -507,12 +508,12 @@ describe('FINDING-3: research-plan --input null/invalid → clean usage error, n
 // ---------------------------------------------------------------------------
 
 describe('FINDING-4: research-store put rejects flag-as-value', () => {
-  test('--content --source curated → usage error (--source is consumed as content value)', () => {
+  test('--content --source curated → usage error (--source is consumed as content value)', async () => {
     const tmpDir = makeTempDir();
     try {
       const researchStore = require('../gsd-core/bin/lib/research-store.cjs');
       const validKey = researchStore.researchKey({ ecosystem: 'npm', library: 'z', version: '1', query: 'q', kind: 'docs' });
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         [
           'research-store', 'put', validKey,
           '--content', '--source',  // --source starts with --, should be rejected as value for --content
@@ -522,7 +523,7 @@ describe('FINDING-4: research-store put rejects flag-as-value', () => {
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit when --content value is a flag; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -531,12 +532,12 @@ describe('FINDING-4: research-store put rejects flag-as-value', () => {
     }
   });
 
-  test('well-formed put still succeeds (positive regression guard)', () => {
+  test('well-formed put still succeeds (positive regression guard)', async () => {
     const tmpDir = makeTempDir();
     try {
       const researchStore = require('../gsd-core/bin/lib/research-store.cjs');
       const validKey = researchStore.researchKey({ ecosystem: 'npm', library: 'lodash', version: '4', query: 'merge', kind: 'docs' });
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         [
           'research-store', 'put', validKey,
           '--content', 'real content',
@@ -546,7 +547,7 @@ describe('FINDING-4: research-store put rejects flag-as-value', () => {
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `well-formed put should succeed; got: ${result.error}`);
     } finally {

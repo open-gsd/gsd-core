@@ -77,6 +77,9 @@ describe('#5758 readSentinel: regular-file bounds', () => {
       phase: h.PHASE,
       plan: h.PLAN,
       writtenAt: now,
+      decidedBy: 'caller',
+      decidedAt: now,
+      holdExpired: false,
       executorType: null,
       executorTypes: [],
       executorTypesTruncated: false,
@@ -289,4 +292,48 @@ describe('#5758 row 14 property: arbitrary regular-file content never throws and
       { numRuns: 120 },
     );
   });
+});
+
+// #4904 review 2026-11-17, Minor 1: the hold's phase-scope read lists the phase's plan records itself. That
+// listing is bounded like the guards' classification scan: past MAX_SCANNED_DIR_ENTRIES directory entries the
+// hold cannot see every plan record, so the read answers "no hold" instead of reading without a bound.
+describe('#4904 the hold\'s phase-scope listing of plan records is bounded', () => {
+  const { readSentinelAt, MAX_SCANNED_DIR_ENTRIES, KEYED_SENTINEL_DIR } = sentinel;
+  const PHASE = '03';
+  const WRITTEN_AT = 5_000_000;
+  let root;
+  before(() => { root = createTempDir('gsd-4904-plan-list-'); });
+  after(() => cleanup(root));
+  afterEach(() => cleanup(path.join(root, '.gsd')));
+
+  // One fresh caller `none` for plan 03-01, plus enough other entries to make `entries` in the record directory.
+  function plant(entries) {
+    const dir = path.join(root, KEYED_SENTINEL_DIR);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${PHASE}--03-01.json`), JSON.stringify({
+      isolation: 'none', harness_flag: null, phase: PHASE, plan: '03-01', decided_by: 'caller',
+      decided_at: WRITTEN_AT, written_at: WRITTEN_AT,
+    }));
+    for (let i = 1; i < entries; i += 1) fs.writeFileSync(path.join(dir, `filler-${i}.txt`), '');
+    assert.equal(fs.readdirSync(dir).length, entries);
+  }
+  const holdRead = () => readSentinelAt(root, { clock: clockAt(WRITTEN_AT + 1000), dispatchIds: { phase: PHASE, plan: null }, ownScope: true });
+
+  test('is exported as 1024 entries', () => {
+    assert.equal(MAX_SCANNED_DIR_ENTRIES, 1024);
+  });
+
+  for (const [entries, held] of [[MAX_SCANNED_DIR_ENTRIES - 1, true], [MAX_SCANNED_DIR_ENTRIES, true], [MAX_SCANNED_DIR_ENTRIES + 1, false]]) {
+    test(`${entries} entries: the plan record is ${held ? 'read' : 'not read, and nothing is held'}`, () => {
+      plant(entries);
+      const read = holdRead();
+      if (held) {
+        assert.equal(read.present, true);
+        assert.equal(read.plan, '03-01');
+        assert.equal(read.isolation, 'none');
+      } else {
+        assert.deepEqual(read, { present: false });
+      }
+    });
+  }
 });

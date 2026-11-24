@@ -34,6 +34,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 
 const {
@@ -82,7 +83,7 @@ const {
   walk,
   simulateHookCopy,
   installerEnv,
-  runMinimalInstall,
+  runMinimalInstall, copyRuntimeFixture,
   manifestSkillSet,
   manifestAgentCount,
   collectSkillBasenamesOnDisk,
@@ -90,7 +91,8 @@ const {
 
 /**
  * collectSkillBasenamesOnDisk(configDir, runtime, scope) re-resolves the
- * runtime's skills-kind layout via os.homedir(). runMinimalInstall() already
+ * runtime's skills-kind layout via os.homedir(). runMinimalInstall() (and so the
+ * tree a copy is made from) already
  * sandboxes HOME/USERPROFILE to `root` for the spawned install subprocess,
  * but that sandboxing does not persist into this (parent) process — without
  * re-sandboxing here, Codex's skills-kind `home: ".agents"` override
@@ -612,7 +614,7 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
       // config.toml (both under targetDir), so the sandbox has no effect on intent.
       const result = runNode(
         [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', targetDir, '--minimal'],
-        { env: installerEnv({ HOME: targetDir, USERPROFILE: targetDir }), timeoutMs: INSTALL_TIMEOUT_MS },
+        { env: installerEnv(isolatedEnv({ home: targetDir })), timeoutMs: INSTALL_TIMEOUT_MS },
       );
       assert.ok(result.stdout || result.stderr);
 
@@ -3029,7 +3031,7 @@ describe('#4087 regression: Codex install stages the hook helpers its hooks requ
     throwIfFailed(
       runNode([INSTALL_SCRIPT, '--codex', '--global', '--yes', '--no-sdk', '--config-dir', configDir], {
         timeoutMs: INSTALL_TIMEOUT_MS,
-        env: { ...process.env, HOME: configDir, USERPROFILE: configDir, GSD_HOME: configDir },
+        env: isolatedEnv({ home: configDir, override: { GSD_HOME: configDir } }),
       }),
       `node ${INSTALL_SCRIPT} --codex --global --config-dir ${configDir}`,
     );
@@ -3283,7 +3285,7 @@ describe('#4087 review: Windsurf install stages the hook helpers its hooks requi
     throwIfFailed(
       runNode([INSTALL_SCRIPT, '--windsurf', '--global', '--yes', '--config-dir', configDir], {
         timeoutMs: INSTALL_TIMEOUT_MS,
-        env: { ...process.env, HOME: configDir, USERPROFILE: configDir, GSD_HOME: configDir },
+        env: isolatedEnv({ home: configDir, override: { GSD_HOME: configDir } }),
       }),
       `node ${INSTALL_SCRIPT} --windsurf --global --config-dir ${configDir}`,
     );
@@ -3325,7 +3327,7 @@ describe('#3023 pi shared-hooks bundle avoids the host-reserved hooks/ directory
 
   for (const scope of ['local', 'global']) {
     test(`pi ${scope} install: no host-reserved hooks/ dir, bundle staged under ${PI_BUNDLE_DIR}/, manifested`, (t) => {
-      const { manifest, configDir, root } = runMinimalInstall({ runtime: 'pi', scope });
+      const { manifest, configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope });
       t.after(() => cleanup(root));
 
       const reserved = path.join(configDir, PI_RESERVED_DIR);
@@ -3618,5 +3620,102 @@ describe('#5503 core profile stages the agents its skills spawn', () => {
     assert.equal(resolveProfile({ modes: ['core'], manifest: new Map() }).agents.size, 0, 'the empty-manifest default is unchanged');
     assert.ok(resolveProfile({ modes: ['standard'], manifest: REAL_SKILLS_MANIFEST }).agents.size > 0,
       'a tiered profile still derives agents from its own closure');
+  });
+});
+
+// ─── #5954: the manifest an install leaves describes the final bytes it wrote ──
+// The first writeManifest hashes gsd-core/** before the Codex `@~/.claude/gsd-core/` include rewrite
+// (and, for Copilot/Antigravity/Kimi, the include retarget) changes those files. Only the Codex
+// agent-roles branch re-hashed afterwards, so any other install left a stale manifest and the next
+// reinstall reported every rewritten file as a local patch.
+describe('#5954: a reinstall with no edits reports no local patches', () => {
+  const crypto = require('node:crypto');
+  const { writeActiveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
+  const { writeSurface } = require('../gsd-core/bin/lib/surface.cjs');
+
+  function installInto(runtime, configDir, extraArgs = []) {
+    const r = runNode([INSTALL_SCRIPT, `--${runtime}`, '--global', '--config-dir', configDir, ...extraArgs], { env: installerEnv(), timeoutMs: INSTALL_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, `${runtime} install failed: ${r.stderr}${r.stdout}`);
+    return r.stdout + r.stderr;
+  }
+
+  /** Manifest entries whose file exists on disk but whose hash is not the file's current hash. */
+  function staleEntries(configDir) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(configDir, MANIFEST_NAME), 'utf8'));
+    return Object.entries(manifest.files || {}).filter(([rel, hash]) => {
+      const file = path.join(configDir, rel);
+      return fs.existsSync(file) && crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== hash;
+    }).map(([rel]) => rel);
+  }
+
+  function agentFreeSurface(configDir) {
+    const skills = [...REAL_SKILLS_MANIFEST.keys()].filter((k) => !k.startsWith('_calls_agents_'));
+    const keep = skills.filter((s) => !(REAL_SKILLS_MANIFEST.get(`_calls_agents_${s}`) || []).length).slice(0, 1);
+    writeActiveProfile(configDir, 'core');
+    writeSurface(configDir, { baseProfile: 'core', disabledClusters: [], explicitAdds: keep, explicitRemoves: skills.filter((s) => !keep.includes(s)) });
+  }
+
+  for (const scenario of [
+    { runtime: 'codex', label: 'codex, agentless surface (no agent roles registered)', prepare: agentFreeSurface, expectSkipLine: true },
+    { runtime: 'codex', label: 'codex, default profile', prepare: () => {}, expectSkipLine: false },
+    { runtime: 'codex', label: 'codex --minimal', prepare: () => {}, expectSkipLine: false, extraArgs: ['--minimal'] },
+    { runtime: 'kimi', label: 'kimi (include retarget)', prepare: () => {}, expectSkipLine: false },
+    { runtime: 'copilot', label: 'copilot (include retarget)', prepare: () => {}, expectSkipLine: false },
+    { runtime: 'antigravity', label: 'antigravity (include retarget)', prepare: () => {}, expectSkipLine: false },
+    { runtime: 'claude', label: 'claude global (no rewrite: unchanged)', prepare: () => {}, expectSkipLine: false },
+  ]) {
+    test(`${scenario.label}: the manifest matches the disk and reinstalls write no gsd-local-patches/`, () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5954-'));
+      try {
+        const extra = scenario.extraArgs || [];
+        installInto(scenario.runtime, configDir, extra);
+        scenario.prepare(configDir);
+        installInto(scenario.runtime, configDir, extra);
+        const third = installInto(scenario.runtime, configDir, extra);
+        if (scenario.expectSkipLine) assert.match(third, /Skipping Codex agent config generation/, 'the profile registers no agent roles');
+        assert.deepEqual(staleEntries(configDir), [], 'every manifest hash equals the on-disk hash of that file');
+        assert.doesNotMatch(third, /Local patches detected|locally modified/, 'no phantom local patches');
+        assert.equal(fs.existsSync(path.join(configDir, 'gsd-local-patches')), false, 'no gsd-local-patches/ backup');
+      } finally {
+        cleanup(configDir);
+      }
+    });
+  }
+
+  for (const runtime of ['codex', 'kimi', 'copilot']) {
+    test(`${runtime}: an edited file the include rewrite changed keeps its gsd-pristine/ baseline`, () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5954-pristine-'));
+      try {
+        installInto(runtime, configDir);
+        installInto(runtime, configDir);
+        const edited = 'gsd-core/workflows/add-backlog.md';
+        fs.appendFileSync(path.join(configDir, edited), '\nlocal edit by the user\n');
+        const out = installInto(runtime, configDir);
+        assert.match(out, /gsd-pristine\/.{0,12}\(1 file\(s\)\) via hash-validated new-release source/, 'the baseline is regenerated and hash-validated');
+        assert.ok(fs.existsSync(path.join(configDir, 'gsd-pristine', edited)), 'the baseline file exists');
+      } finally {
+        cleanup(configDir);
+      }
+    });
+  }
+
+  test('a real user edit to an installed GSD file is still detected and backed up', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5954-edit-'));
+    try {
+      installInto('codex', configDir);
+      agentFreeSurface(configDir);
+      installInto('codex', configDir);
+      const manifest = JSON.parse(fs.readFileSync(path.join(configDir, MANIFEST_NAME), 'utf8'));
+      const edited = Object.keys(manifest.files).find((rel) => rel.startsWith('gsd-core/workflows/') && rel.endsWith('.md'));
+      assert.ok(edited, 'the install carries a workflow file to edit');
+      fs.appendFileSync(path.join(configDir, edited), '\nlocal edit by the user\n');
+      const out = installInto('codex', configDir);
+      assert.match(out, /Local patches detected|locally modified/, 'the edit is reported');
+      assert.ok(fs.existsSync(path.join(configDir, 'gsd-local-patches')), 'and backed up');
+      const backedUp = JSON.parse(fs.readFileSync(path.join(configDir, 'gsd-local-patches', 'backup-meta.json'), 'utf8'));
+      assert.deepEqual(backedUp.files, [edited], 'only the edited file, not the rewritten include files');
+    } finally {
+      cleanup(configDir);
+    }
   });
 });

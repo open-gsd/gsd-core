@@ -26,7 +26,7 @@ const { cleanup, installSpawnEnv } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { _internals } = require('../pi/gsd.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const installBin = require('../bin/install.js');
 const {
   convertClaudeAgentToPiAgent,
@@ -53,7 +53,7 @@ const piConfig = (roles) =>
 describe('#5569: Pi agents install layout', () => {
   for (const scope of ['global', 'local']) {
     test(`${scope}: installed roles equal the non-compact shipped roles; no compact variant`, (t) => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope });
       t.after(() => cleanup(root));
       const installed = fs.readdirSync(path.join(configDir, 'agents')).sort();
       assert.deepEqual(installed, shippedRoles());
@@ -63,7 +63,7 @@ describe('#5569: Pi agents install layout', () => {
   }
 
   test('an installed role is Pi-shaped: name, quoted description, lowercase tools', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
     t.after(() => cleanup(root));
     const text = fs.readFileSync(path.join(configDir, 'agents', 'gsd-planner.md'), 'utf8');
     assert.match(text, /^---\r?\nname: gsd-planner\r?\n/);
@@ -189,7 +189,7 @@ describe('#5569: Agent(...) projection onto gsd_dispatch', () => {
   });
 
   test('installed workflows dispatch only through gsd_dispatch and name only installed roles', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
     t.after(() => cleanup(root));
     const roles = new Set(shippedRoles().map((f) => f.replace(/\.md$/, '')));
     const dir = path.join(configDir, 'gsd-core', 'workflows');
@@ -207,7 +207,7 @@ describe('#5569: Agent(...) projection onto gsd_dispatch', () => {
     assert.ok(calls > 0, 'vacuous: no gsd_dispatch call found in the installed workflows');
   });
 
-  test('Hermes projection is byte-identical to its pre-#5569 output', () => {
+  test('Hermes projection keeps its #6066 shape (goal / context / role) and is unaffected by the Pi mode', () => {
     const input = [
       'Always spawn gsd-planner as separate Agent() calls.',
       '```',
@@ -215,11 +215,12 @@ describe('#5569: Agent(...) projection onto gsd_dispatch', () => {
       '```',
       'Agent({subagent_type: "gsd-planner", prompt: "x", description: "d"})',
     ].join('\n');
+    const ctx = 'context=<resolve "gsd-planner" against the active install\'s gsd-* role prompts and put its full contents here as the task\'s instructions (never a pointer to the file); the `goal` names the plan and tells the child to read it with read_file as a call of its own, first; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
     const expected =
-      'Always spawn gsd-planner as separate delegate_task() calls.\n```\ndelegate_task(\n  prompt="do it",\n  gsd_role="gsd-planner",\n' +
-      '  gsd_role_prompt=<resolve "gsd-planner" against the active install\'s gsd-* role prompts and load its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>,\n' +
-      '  role="leaf",  # nested delegation is unavailable at this dispatch depth/toolkit\n  description="Plan {phase}"\n)\n```\n' +
-      'delegate_task(gsd_role="gsd-planner", gsd_role_prompt=<resolve "gsd-planner" against the active install\'s gsd-* role prompts and load its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>, role="leaf", prompt: "x", description: "d")';
+      'Always spawn gsd-planner as separate delegate_task() calls.\n```\ndelegate_task(\n  goal="do it",\n' +
+      `  ${ctx},\n` +
+      '  role="leaf",  # nested delegation is unavailable at this dispatch depth/toolkit\n)\n```\n' +
+      `delegate_task(${ctx}, role="leaf", goal: "x")`;
     const cfg = Object.assign({}, installBin.HERMES_DISPATCH_TOOL_CONFIG, { availableRoles: new Set(['gsd-planner']), runtime: 'hermes' });
     assert.equal(installBin.projectNamedDispatchToStructuralDelegate(input, PI_DISPATCH, cfg), expected);
   });
@@ -255,7 +256,7 @@ describe('#5569, #5630, #5638: /gsd-debug on Pi', () => {
   });
 
   test('the installed gsd-debug skill is the loop skill', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
     t.after(() => cleanup(root));
     const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-debug', 'SKILL.md'), 'utf8');
     assert.match(skill, /gsd_dispatch\(role="gsd-debugger"/);

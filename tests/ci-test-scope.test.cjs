@@ -40,6 +40,25 @@ describe('ci-test-scope.cjs', () => {
     );
   });
 
+  test('data-log only (ci-timeout-budget-history.jsonl): matrix skipped like docs-only', () => {
+    const result = scopeFor(['tests/ci-timeout-budget-history.jsonl']);
+    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false);
+    assert.deepStrictEqual(result.targeted_tests, []);
+  });
+
+  test('data-log mixed with product code: product files still decide scope', () => {
+    const result = scopeFor(['tests/ci-timeout-budget-history.jsonl', 'src/init.cts']);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+  });
+
+  test('a different tests/ .jsonl is not exempt', () => {
+    const result = scopeFor(['tests/other-history.jsonl']);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
   test('root markdown only: code_changed is false, product_changed false', () => {
     const result = scopeFor(['README.md']);
     assert.strictEqual(result.code_changed, false,
@@ -73,7 +92,8 @@ describe('ci-test-scope.cjs', () => {
     assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
-    assert.ok(result.targeted_tests.includes('tests/policy-lint-shallow-checkout.test.cjs'), JSON.stringify(result));
+    // #6566: the shallow-checkout lint is the policy-lint-shallow-checkout text contract; its cases live in the batch 8 test.
+    assert.ok(result.targeted_tests.includes('tests/text-contracts.batch8.test.cjs'), JSON.stringify(result));
   });
 
   test('TS runtime sources (src/semver-compare.cts) — code_changed true, product_changed true, full_matrix false, semver tests targeted', () => {
@@ -199,12 +219,12 @@ describe('ci-test-scope.cjs', () => {
       assert.ok(result.targeted_tests.includes(t), `expected ${t} in targeted_tests`);
     }
     // No DEFAULT_SMOKE_TESTS files should be injected beyond what the rule selects.
-    // The former smoke list contained package-manifest.test.cjs and core.test.cjs —
-    // neither is in the "command definitions" rule, so they must not appear.
+    // The former smoke list contained package-manifest (now a text contract, whose cases are in the batch 8 test)
+    // and core.test.cjs — neither is in the "command definitions" rule, so they must not appear.
     assert.ok(!result.targeted_tests.includes('tests/core.test.cjs'),
       'tests/core.test.cjs must NOT be unconditionally injected for command changes');
-    assert.ok(!result.targeted_tests.includes('tests/package-manifest.test.cjs'),
-      'tests/package-manifest.test.cjs must NOT be unconditionally injected for command changes');
+    assert.ok(!result.targeted_tests.includes('tests/text-contracts.batch8.test.cjs'),
+      'tests/text-contracts.batch8.test.cjs must NOT be unconditionally injected for command changes');
   });
 
   test('bug-408: code change with no rule match falls back to unit suite token', () => {
@@ -271,6 +291,48 @@ describe('ci-test-scope.cjs', () => {
         false,
         `docs-only PR must not set full_matrix even on a stale base, got: ${JSON.stringify(result)}`,
       );
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('a src/ file listed as deleted by a rename escalates to full_matrix (fail-safe, --no-renames side effect)', () => {
+    // reachesConformanceTierOrSeam cannot read a path that no longer exists and
+    // fails safe to true, so every src/ move runs the conformance matrix.
+    const result = scopeFor(['src/does-not-exist-after-rename.cts']);
+    assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
+  test('rename of product code onto the data-log path still reports the deleted source', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-norename-'));
+    try {
+      const git = (...a) => gitOrThrow(a, { cwd: tmp }).trim();
+      git('init', '-q');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      git('config', 'commit.gpgsign', 'false');
+      fs.mkdirSync(path.join(tmp, 'tests'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+      const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n') + '\n';
+      fs.writeFileSync(path.join(tmp, 'src', 'x.cts'), body);
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('checkout', '-q', '-b', 'feature');
+      // Modified rename (~90% similar): git would report it as a rename, not add+delete.
+      fs.renameSync(path.join(tmp, 'src', 'x.cts'), path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'));
+      fs.appendFileSync(path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'), 'extra line\n');
+      git('add', '-A');
+      git('commit', '-qm', 'rename');
+      const head = git('rev-parse', 'HEAD');
+
+      const r = runNode([SCRIPT, '--base', base, '--head', head], { cwd: tmp, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(r.exitCode, 0, `script failed: stderr=${r.stderr}\nstdout=${r.stdout}`);
+      const result = JSON.parse(r.stdout);
+      assert.ok(result.changed_files.includes('src/x.cts'), JSON.stringify(result.changed_files));
+      assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+      assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     } finally {
       cleanup(tmp);
     }
@@ -403,9 +465,14 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
     const required = [
       'tests/ci-pr-mergeability.test.cjs',
       'tests/ci-test-scope.test.cjs',
-      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/text-contracts.batch9.test.cjs', // #6573: release-tarball-smoke-workflow and ci-merge-group-wiring are text contracts
       'tests/ci-conformance-pr-gating.test.cjs',
-      'tests/workflow-token-permissions.test.cjs',
+      'tests/text-contracts.batch8.test.cjs', // #6566: workflow-token-permissions and the other workflow contracts
+      // #5029: holds the SHARD_BALANCE <-> test.yml layout-parity test, which
+      // must fail in the re-shard PR (a test.yml-only diff), not on `next`.
+      'tests/ci-timeout-report.test.cjs',
+      // #5299: reads APPROVAL_LABELS from auto-close-unsolicited-prs.yml
+      'tests/registry-docs-approved-issue-parity.test.cjs',
     ];
     for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml', '.github/actions/x/action.yml']) {
       const result = assertInert([file]);

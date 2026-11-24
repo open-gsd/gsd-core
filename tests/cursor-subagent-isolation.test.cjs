@@ -29,8 +29,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS } = require('../hooks/lib/isolation-sentinel.js');
-const { REASON_CODE } = require('../hooks/lib/isolation-deny-reason.js');
+const { REASON_CODE, REMEDY } = require('../hooks/lib/isolation-deny-reason.js');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { gitOrThrow, toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -52,17 +53,10 @@ function runHook(payload, extraEnv = {}) {
   delete env.GSD_RUNTIME;
   delete env.CURSOR_CONFIG_DIR;
   Object.assign(env, extraEnv);
-  // Production code resolves the home directory via `os.homedir()` (correct,
-  // cross-platform), which on Windows reads `USERPROFILE`, not `HOME` —
-  // `os.homedir()` never honors `HOME` there. Tests below override `HOME` to
-  // redirect `os.homedir()` hermetically; mirror the override onto
-  // `USERPROFILE` too so that redirection actually takes effect on Windows
-  // instead of silently leaking the real CI runner's profile directory.
-  if ('HOME' in extraEnv) env.USERPROFILE = extraEnv.HOME;
-  // #5017: the defaults store root is GSD_HOME when set, and the test runner exports a sandbox
-  // GSD_HOME to every test — so redirecting only HOME no longer redirects the store. A test that
-  // redirects HOME redirects the store with it, unless it names GSD_HOME itself.
-  if ('HOME' in extraEnv && !('GSD_HOME' in extraEnv)) env.GSD_HOME = extraEnv.HOME;
+  // A home override comes from isolatedEnv(): it sets HOME and USERPROFILE together (os.homedir() reads USERPROFILE on
+  // Windows) and blanks GSD_HOME, which the defaults store reads as "use HOME" (#5017). Keep the two keys deleted above unset.
+  // The wrapper starts from process.env, so ambient GSD_* still reaches the hook: isolatedEnv's stripping does not apply here.
+  for (const key of ['GSD_RUNTIME', 'CURSOR_CONFIG_DIR']) if (env[key] === '') delete env[key];
   return toLegacyResult(runNode([HOOK_PATH], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     cwd: require('node:os').tmpdir(),
@@ -499,6 +493,67 @@ describe('gsd-cursor-subagent-start.js: realpath seam — in-process spoof cover
   });
 });
 
+describe('gsd-cursor-subagent-start.js: #6028 — the deny remedy agrees with a recorded degrade (in-process)', () => {
+  let cursorConfigDir;
+  let managedRootPath;
+  let rootPath;
+  let savedCursorConfigDir;
+  const cursorHookModule = require('../hooks/gsd-cursor-subagent-start.js');
+  const WRITTEN_AT = 1_700_000_000_000;
+  const clock = { now: () => WRITTEN_AT + 1 };
+  const dispatchIds = { phase: '665', plan: '665-02', source: 'marker' };
+  const outsideManagedRoot = (p) => (p === rootPath ? path.join(require('node:os').tmpdir(), 'gsd-cs-6028-primary') : p);
+
+  before(() => {
+    cursorConfigDir = createTempDir('gsd-cs-6028-');
+    managedRootPath = path.join(cursorConfigDir, 'worktrees');
+    rootPath = path.join(managedRootPath, 'root');
+    fs.mkdirSync(rootPath, { recursive: true });
+    gitOrThrow(['init'], { cwd: rootPath, timeoutMs: PROBE_TIMEOUT_MS });
+    gitOrThrow(['config', 'user.email', 'test@test.com'], { cwd: rootPath, timeoutMs: PROBE_TIMEOUT_MS });
+    gitOrThrow(['config', 'user.name', 'Test'], { cwd: rootPath, timeoutMs: PROBE_TIMEOUT_MS });
+    fs.mkdirSync(path.join(rootPath, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(rootPath, '.planning', 'config.json'), JSON.stringify({ runtime: 'cursor' }));
+    savedCursorConfigDir = process.env.CURSOR_CONFIG_DIR;
+    process.env.CURSOR_CONFIG_DIR = cursorConfigDir;
+  });
+  after(() => {
+    if (savedCursorConfigDir === undefined) delete process.env.CURSOR_CONFIG_DIR;
+    else process.env.CURSOR_CONFIG_DIR = savedCursorConfigDir;
+    cleanup(cursorConfigDir);
+  });
+
+  function evaluate() {
+    return cursorHookModule.evaluateRootIsolation(rootPath, 'gsd-executor', { clock, dispatchIds, realpath: outsideManagedRoot });
+  }
+
+  test('a fresh recorded none for ANOTHER phase: still denied with the same reason code, remedy is to record an applicable decision', (t) => {
+    writeSentinel(rootPath, { isolation: 'none', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(rootPath, '.gsd')));
+    const v = evaluate();
+    assert.equal(v.action, 'deny', 'the allow/deny decision is unchanged');
+    assert.equal(v.reasonCode, REASON_CODE.NOT_ISOLATED_WORKTREE, 'the stable reason code is unchanged');
+    assert.equal(v.remedy, REMEDY.RECORD_APPLICABLE_DECISION);
+    assert.equal(v.sentinelDiscarded.sentinel.isolation, 'none');
+  });
+
+  test('no sentinel: denied, the start-an-isolated-session remedy stays', () => {
+    const v = evaluate();
+    assert.equal(v.action, 'deny');
+    assert.equal(v.reasonCode, REASON_CODE.NOT_ISOLATED_WORKTREE);
+    assert.equal(v.remedy, REMEDY.ADD_FLAG);
+    assert.equal(v.sentinelDiscarded, null);
+  });
+
+  test('a fresh recorded harness-worktree for another phase: denied, the original remedy stays', (t) => {
+    writeSentinel(rootPath, { isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(rootPath, '.gsd')));
+    const v = evaluate();
+    assert.equal(v.action, 'deny');
+    assert.equal(v.remedy, REMEDY.ADD_FLAG);
+  });
+});
+
 describe('gsd-cursor-subagent-start.js: nonexistent workspace root does not crash or bypass the scan (#3045)', () => {
   let unisolatedProject;
   let nonexistentRoot;
@@ -806,7 +861,7 @@ describe('gsd-cursor-subagent-start.js: #3045 MAJOR "Cursor residual false-deny"
     // because the main checkout is not (yet) an isolated Cursor worktree —
     // a false-deny of an otherwise legitimate dispatch. HOME is pinned to the
     // project dir itself (which has no .gsd/defaults.json) for hermeticity.
-    const r = runHook(subagentPayload([unconfiguredProject]), { HOME: unconfiguredProject });
+    const r = runHook(subagentPayload([unconfiguredProject]), isolatedEnv({ home: unconfiguredProject }));
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     const out = JSON.parse(r.stdout);
     assert.equal(out.permission, undefined, `expected allow (inert), got: ${r.stdout}`);
@@ -818,7 +873,7 @@ describe('gsd-cursor-subagent-start.js: #3045 MAJOR "Cursor residual false-deny"
       fs.mkdirSync(path.join(home, '.gsd'), { recursive: true });
       fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'cursor' }));
 
-      const r = runHook(subagentPayload([unconfiguredProject]), { HOME: home });
+      const r = runHook(subagentPayload([unconfiguredProject]), isolatedEnv({ home }));
       assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
       const out = JSON.parse(r.stdout);
       assert.equal(out.permission, 'deny', `defaults.json runtime must be enforced, got: ${r.stdout}`);
@@ -834,11 +889,11 @@ describe('gsd-cursor-subagent-start.js: #3045 MAJOR "Cursor residual false-deny"
       fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
       fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'cursor' }));
       // The home directory has NO store: only the GSD_HOME one carries the runtime signal.
-      const r = runHook(subagentPayload([unconfiguredProject]), { HOME: home, GSD_HOME: gsdHome });
+      const r = runHook(subagentPayload([unconfiguredProject]), isolatedEnv({ home, override: { GSD_HOME: gsdHome } }));
       assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
       assert.equal(JSON.parse(r.stdout).permission, 'deny', `GSD_HOME defaults runtime must be enforced, got: ${r.stdout}`);
       // A blank GSD_HOME falls back to the home directory (which has no store here) -> inert.
-      const blank = runHook(subagentPayload([unconfiguredProject]), { HOME: home, GSD_HOME: '' });
+      const blank = runHook(subagentPayload([unconfiguredProject]), isolatedEnv({ home, override: { GSD_HOME: '' } }));
       assert.equal(JSON.parse(blank.stdout).permission, undefined, `blank GSD_HOME must fall back to HOME, got: ${blank.stdout}`);
     } finally {
       cleanup(home);

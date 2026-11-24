@@ -17,6 +17,7 @@ const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
 
 interface VerificationModule {
   cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw: boolean): void;
+  cmdVerificationAllSummarized(cwd: string, phaseDirArg: string | undefined, tokens: string[], raw: boolean): void;
   cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined, raw: boolean): void;
   cmdVerificationFingerprint(cwd: string, phaseDirArg: string | undefined, files: string[], raw: boolean): void;
   cmdVerificationAppendAudit(cwd: string, fileArg: string | undefined, argTokens: string[], raw: boolean): void;
@@ -32,7 +33,7 @@ interface RouteVerificationCommandOptions {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-const VERIFICATION_SUBCOMMANDS = ['status', 'resolve-file', 'fingerprint', 'append-audit'];
+const VERIFICATION_SUBCOMMANDS = ['status', 'all-summarized', 'resolve-file', 'fingerprint', 'append-audit'];
 
 function routeVerificationCommand({
   verification,
@@ -50,6 +51,7 @@ function routeVerificationCommand({
       `Unknown verification subcommand. Available: ${available.join(', ')}`,
     handlers: {
       status: () => verification.cmdVerificationStatus(cwd, args[2], raw),
+      'all-summarized': () => verification.cmdVerificationAllSummarized(cwd, args[2], args.slice(3), raw),
       'resolve-file': () => verification.cmdVerificationResolveFile(cwd, args[2], raw),
       fingerprint: () => verification.cmdVerificationFingerprint(cwd, args[2], args.slice(3), raw),
       'append-audit': () => verification.cmdVerificationAppendAudit(cwd, args[2], args.slice(3), raw),

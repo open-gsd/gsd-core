@@ -45,6 +45,7 @@ const {
 } = require(LINT_SCRIPT);
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode, runGit } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -167,6 +168,33 @@ describe('removed-but-needed lint: findSurvivingReferences (pure)', () => {
       [{ file: '.github/workflows/ci.yml', content: 'jobs:\n  test:\n    steps:\n      - run: npm ci\n' }],
     );
     assert.ok(violations.some((v) => v.deletedFile === 'package-lock.json'));
+  });
+
+  // #6375: a workflow's `npm ci` runs at the repository root and reads the root
+  // lockfile. Deleting a fixture's lockfile cannot break it.
+  for (const deleted of ['tests/fixtures/check-env/good/package-lock.json', 'sub/package-lock.json']) {
+    test(`a lockfile that is not the root one (${deleted}) is not tied to a workflow's npm ci`, () => {
+      const violations = findSurvivingReferences(
+        [deleted],
+        [{ file: '.github/workflows/ci.yml', content: 'jobs:\n  test:\n    steps:\n      - run: npm ci\n' }],
+      );
+      assert.deepEqual(violations, []);
+    });
+  }
+
+  test('the root lockfile is tied to every workflow that runs npm ci, once each', () => {
+    const violations = findSurvivingReferences(
+      ['package-lock.json', 'tests/fixtures/x/package-lock.json'],
+      [
+        { file: '.github/workflows/ci.yml', content: '      - run: npm ci\n' },
+        { file: '.github/workflows/release.yml', content: '      - run: npm ci\n' },
+        { file: '.github/workflows/labels.yml', content: '      - run: echo hi\n' },
+      ],
+    );
+    assert.deepEqual(
+      violations.map((v) => [v.deletedFile, v.referencedIn]),
+      [['package-lock.json', '.github/workflows/ci.yml'], ['package-lock.json', '.github/workflows/release.yml']],
+    );
   });
 
   test('a deleted workflow still referenced in docs IS flagged (e3b52c70 shape)', () => {
@@ -1319,7 +1347,7 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     fs.writeFileSync(path.join(home, '.gitconfig'), `[init]\n\ttemplateDir = ${tpl.replace(/\\/g, '/')}\n`);
     // Deliberately NOT isolatedGitEnv(): that env disables global config, which
     // is exactly what would hide the positive control below.
-    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
+    const env = isolatedEnv({ home, override: { XDG_CONFIG_HOME: path.join(home, 'xdg') } });
     for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_TEMPLATE_DIR', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[k];
     // Positive control: a plain `git init` DOES pick the template up here.
     const plain = runGit(['init', '-q', control], { env, timeoutMs: GIT_TIMEOUT_MS });

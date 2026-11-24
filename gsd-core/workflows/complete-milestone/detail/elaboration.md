@@ -62,7 +62,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 
    # quick_tasks (--dir) — the scanner's `slug` strips a leading
    # YYYYMMDD-/YYYY-MM-DD- date prefix for display; `--dir` needs the
-   # ORIGINAL .planning/quick/<dir>/ name, so reconstruct it from `date`+`slug`.
+   # ORIGINAL quick/<dir>/ directory name, so reconstruct it from `date`+`slug`.
    while IFS= read -r dir; do
      [ -z "$dir" ] && continue
      if ! gsd_run query audit-open acknowledge --category quick_tasks --milestone "$MILESTONE_VERSION" --dir "$dir"; then
@@ -155,7 +155,7 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "1")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 INIT_CM=$(gsd_run query init.complete-milestone ${GSD_WS:+--ws=${GSD_WS##* }})

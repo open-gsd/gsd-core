@@ -40,6 +40,7 @@ const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture, installSpawnEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 function useIsolatedHome(t) {
@@ -69,7 +70,7 @@ const {
   MANIFEST_NAME,
   installerEnv,
   stripAnsi,
-  runMinimalInstall,
+  runMinimalInstall, copyRuntimeFixture,
   installRuntimeFixture,
   walk,
 } = require('./helpers/install-shared.cjs');
@@ -6101,7 +6102,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const PROFILE_OUTPUT = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'profile-output.cjs');
@@ -6132,7 +6133,7 @@ describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-prefe
         // it -- and the writer under test resolves them env-FIRST. Sandboxing
         // HOME alone let an ambient CLAUDE_CONFIG_DIR win, and the SKILL.md
         // landed in the developer's live config dir instead of tmpHome.
-        env: Object.assign({}, process.env, TEST_ENV_BASE, { HOME: tmpHome, USERPROFILE: tmpHome, GSD_HOME: tmpHome }),
+        env: isolatedEnv({ home: tmpHome, override: { GSD_HOME: tmpHome } }),
         encoding: 'utf-8',
         // See WRITER_SUBPROCESS_TIMEOUT_MS's own doc comment (top of file)
         // for the full rationale.
@@ -7674,7 +7675,7 @@ describe('#2218 cross-scope shadowing', () => {
     // order matters for this fixture (a separate test covers order-independence).
     globalInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--global'], {
       cwd: root,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(globalInstallResult.exitCode, 0,
@@ -7688,7 +7689,7 @@ describe('#2218 cross-scope shadowing', () => {
     // installer directly instead, with cwd pinned at the project dir.
     localInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--local'], {
       cwd: projectDir,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(localInstallResult.exitCode, 0,
@@ -7806,7 +7807,7 @@ describe('#2873 C1-C6 — install-time shadow report (spawned installer wiring)'
   function spawnInstall(args, cwd, root, nodeFlags = []) {
     return runNode([...nodeFlags, INSTALL_SCRIPT, ...args], {
       cwd,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
   }
@@ -8368,7 +8369,8 @@ describe('installRuntimeArtifacts — G3: adapter calling-convention regression 
 //
 // C7 (anti-inertness): recovery must be reachable from a REAL `bin/install.js`
 // run, not merely callable — the #1879-F15 failure mode this whole phase
-// exists to avoid. This spawns the real installer twice against the SAME
+// exists to avoid. The first install is a copy of a real one (copyRuntimeFixture);
+// the second spawns the real installer against the SAME
 // sandbox HOME, with an orphaned staged artifact manually planted between the
 // two runs (simulating a prior run that died between the wipe and its own
 // restore/discard), and asserts the SECOND real installer invocation recovers
@@ -8378,7 +8380,7 @@ describe('installRuntimeArtifacts — G3: adapter calling-convention regression 
 
 describe('#2875: user-artifact-staging — call-site integration (C7 anti-inertness)', () => {
   test('an orphaned USER-PROFILE.md staged under the real gsd-core destDir is recovered by a subsequent real install() run', (t) => {
-    const first = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const first = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     t.after(() => cleanup(first.root));
 
     const gsdCoreDir = path.join(first.configDir, 'gsd-core');
@@ -8426,8 +8428,8 @@ describe('#2875: user-artifact-staging — call-site integration (C7 anti-inertn
 // silently loads nothing (planner guidance, the untrusted-input boundary,
 // the agent-skills bootstrap, the mandatory initial read).
 //
-// Uses the real spawned installer (runMinimalInstall, `bin/install.js`
-// subprocess) so a green run here proves the fix reaches the actual emit
+// Uses a tree the real spawned installer wrote (a copyRuntimeFixture copy of a
+// `bin/install.js` subprocess's output) so a green run here proves the fix reaches the actual emit
 // path, not just the pure function tested in tests/path-replacement.test.cjs.
 // ---------------------------------------------------------------------------
 describe('#3719: real global Claude install — agents/*.md @-refs must resolve on tilde', () => {
@@ -8436,7 +8438,7 @@ describe('#3719: real global Claude install — agents/*.md @-refs must resolve 
 
   before(() => {
     claudeGlobal = installRuntimeFixture({ runtime: 'claude', scope: 'global' });
-    projectLocal = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+    projectLocal = copyRuntimeFixture({ runtime: 'claude', scope: 'local' });
   });
 
   after(() => {
@@ -8676,16 +8678,16 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
       configDir,
     ], {
       cwd: tmpCodexHome,
-      env: {
-        ...process.env,
-        ...__isolatedNpmEnv4667(),
-        HOME: tmpCodexHome,
-        USERPROFILE: tmpCodexHome,
-        GSD_HOME: tmpCodexHome,
-        GSD_TEST_MODE: '',
-        NO_UPDATE_NOTIFIER: '1',
-        npm_config_update_notifier: 'false',
-      },
+      env: isolatedEnv({
+        home: tmpCodexHome,
+        base: __isolatedNpmEnv4667(),
+        override: {
+          GSD_HOME: tmpCodexHome,
+          GSD_TEST_MODE: '',
+          NO_UPDATE_NOTIFIER: '1',
+          npm_config_update_notifier: 'false',
+        },
+      }),
       encoding: 'utf8',
       timeout: INSTALL_TIMEOUT_MS,
     });
@@ -8786,16 +8788,16 @@ describe('installed @ includes resolve to installed files (#5123)', () => {
     if (configDir) args.push('--config-dir', configDir);
     const result = __spawnSync4667(process.execPath, args, {
       cwd: home,
-      env: {
-        ...process.env,
-        ...__isolatedNpmEnv4667(),
-        HOME: home,
-        USERPROFILE: home,
-        GSD_HOME: home,
-        GSD_TEST_MODE: '',
-        NO_UPDATE_NOTIFIER: '1',
-        npm_config_update_notifier: 'false',
-      },
+      env: isolatedEnv({
+        home,
+        base: __isolatedNpmEnv4667(),
+        override: {
+          GSD_HOME: home,
+          GSD_TEST_MODE: '',
+          NO_UPDATE_NOTIFIER: '1',
+          npm_config_update_notifier: 'false',
+        },
+      }),
       encoding: 'utf8',
       timeout: INSTALL_TIMEOUT_MS,
     });

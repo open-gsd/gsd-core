@@ -56,7 +56,7 @@ Usage: `/gsd:map-codebase`
 Usage: `/gsd:discuss-phase 2`
 Usage: `/gsd:discuss-phase 2 --batch=3`
 
-**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--skip-ui] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--bounce] [--skip-bounce] [--chunked] [--tdd] [--mvp] [--granularity <coarse|standard|fine>] [--no-tracer] [--no-reversibility-gates]`** — Creates `.planning/phases/XX-phase-name/XX-YY-PLAN.md` with concrete tasks, verification criteria, and success measures (multiple plans per phase supported).
+**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--skip-ui] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--bounce] [--skip-bounce] [--chunked] [--tdd] [--mvp] [--granularity <coarse|standard|fine>] [--no-tracer] [--no-reversibility-gates]`** — Creates `{planning_root}/phases/XX-phase-name/XX-YY-PLAN.md` (`{planning_root}`: the active scope's root, from `planning.inspect`) with concrete tasks, verification criteria, and success measures (multiple plans per phase supported).
 
 Key flags: `--research-phase <N>` runs research only and writes `RESEARCH.md` then exits (replaces the deleted `gsd-research-phase`; `--research` forces refresh, `--view` prints existing without spawning). `--gaps` closes gaps from a prior plan-check. `--ingest`/`--ingest-format` pre-ingest external ADRs/PRDs/SPECs (see PRD Express Path). `--bounce`/`--skip-bounce` toggle the optional external refinement pass (`workflow.plan_bounce`). `--chunked` splits planning into short, individually-committed passes for crash resilience (`workflow.plan_chunked`), resumable. `--tdd` tests-before-code order. `--mvp` adds user story + Walking Skeleton (see `/gsd:mvp-phase`). `--granularity` overrides resolved plan granularity. `--no-tracer` opts out of tracer-first ordering. `--no-reversibility-gates` suppresses the one-way-door checkpoint for unattended runs.
 
@@ -202,7 +202,7 @@ Usage: `/gsd:ship 4` or `/gsd:ship 4 --draft`
 
 ---
 
-**`/gsd:review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--all]`** — Detects available external AI CLIs, each independently reviews the phase's plans with the same structured prompt (CodeRabbit reviews the live diff, up to ~5 min), produces REVIEWS.md with consensus. Feed back via `/gsd:plan-phase N --reviews`.
+**`/gsd:review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--all] [--cycle-summary]`** — Detects available external AI CLIs, each independently reviews the phase's plans with the same structured prompt (CodeRabbit reviews the live diff, up to ~5 min), produces REVIEWS.md with consensus. Feed back via `/gsd:plan-phase N --reviews`.
 
 Usage: `/gsd:review --phase 3 --all`
 
@@ -236,7 +236,7 @@ Usage: `/gsd:audit-milestone`
 
 ### Configuration
 
-**`/gsd:settings`** — Interactively toggles researcher/plan-checker/verifier agents and the model profile (quality/balanced/budget/inherit); updates `.planning/config.json`.
+**`/gsd:settings`** — Interactively toggles researcher/plan-checker/verifier agents and the model profile (quality/balanced/budget/inherit); updates `{planning_root}/config.json`.
 
 Usage: `/gsd:settings`
 
@@ -250,7 +250,7 @@ Usage: `/gsd:surface profile standard`
 
 ### Utility Commands
 
-**`/gsd:cleanup`** — Dry-run then moves completed-milestone phase dirs from `.planning/phases/` to `.planning/milestones/v{X.Y}-phases/`.
+**`/gsd:cleanup`** — Dry-run then moves completed-milestone phase dirs from `{planning_root}/phases/` to `.planning/milestones/v{X.Y}-phases/`.
 
 Usage: `/gsd:cleanup`
 
@@ -280,7 +280,7 @@ Every command below is also a live `/gsd-*` slash command, grouped by purpose.
 
 - **`/gsd:mvp-phase <phase-number>`** — Plans a phase as a vertical MVP slice (user story + SPIDR splitting) before handoff to plan-phase; same end-state as `/gsd:plan-phase --mvp` with a guided intro.
 - **`/gsd:ultraplan-phase [phase]`** — [BETA] Offload plan phase to Claude Code's ultraplan cloud; review in browser, import back.
-- **`/gsd:plan-review-convergence <phase> [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy/--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all] [--text] [--ws <name>] [--max-cycles N]`** — Cross-AI convergence loop: replan with review feedback until no HIGH concerns remain (cloud and local-model reviewers).
+- **`/gsd:plan-review-convergence <phase> [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy/--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all] [--text] [--ws <name>] [--max-cycles N] [--on-escalation ask|exit]`** — Cross-AI convergence loop: replan with review feedback until no HIGH concerns remain (cloud and local-model reviewers).
 - **`/gsd:autonomous [--from N] [--to N] [--only N] [--interactive] [--converge]`** — Runs all remaining phases unattended: discuss → plan → execute per phase; `--converge`/`--cross-ai` routes planning through convergence.
 
 ### Quality, Review & Verification
@@ -354,14 +354,14 @@ Six skills for two-stage hierarchical routing across 60+ skills; invoke directly
 
 ## Workflow Modes
 
-Set during `/gsd:new-project`, changeable anytime in `.planning/config.json`:
+Set during `/gsd:new-project`, changeable anytime in `{planning_root}/config.json`:
 
 - **Interactive** — confirms each major decision, pauses at checkpoints, more guidance.
 - **YOLO** — auto-approves most decisions, executes without confirmation, stops only for critical checkpoints.
 
 ## Planning Configuration
 
-`.planning/config.json`:
+`{planning_root}/config.json`:
 
 - **`planning.commit_docs`** (default `true`) — `false` keeps planning artifacts local-only (add `.planning/` to `.gitignore`); useful for OSS/client projects wanting private planning.
 - **`planning.search_gitignored`** (default `false`) — `true` adds `--no-ignore` to broad ripgrep searches when `.planning/` is gitignored.
@@ -392,7 +392,7 @@ Set during `/gsd:new-project`, changeable anytime in `.planning/config.json`:
 ## Getting Help
 
 - Read `.planning/PROJECT.md` for project vision
-- Read `.planning/STATE.md` for current context
-- Check `.planning/ROADMAP.md` for phase status
+- Read `{planning_root}/STATE.md` for current context
+- Check `{planning_root}/ROADMAP.md` for phase status
 - Run `/gsd:progress` to check where you're up to
 </reference>

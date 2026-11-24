@@ -23,6 +23,7 @@ const os = require('os');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fc = require('fast-check');
 const { CLAUDE_AGENT_ALIASES: _CLAUDE_AGENT_ALIASES } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { escapeRegex: _escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
@@ -2995,7 +2996,7 @@ describe('validate agents against a real fresh Codex install (#5496)', () => {
       cwd: codexHome,
       // One gsd-tools.cjs subcommand via runNode (GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS), not a light probe.
       timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
-      env: { ...process.env, GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, HOME: codexHome, USERPROFILE: codexHome, GSD_HOME: codexHome },
+      env: isolatedEnv({ home: codexHome, override: { GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, GSD_HOME: codexHome } }),
     });
     // The exit code is not asserted (violations may exit non-zero); a timeout or spawn failure must name itself.
     assert.strictEqual(r.outcome, OUTCOME.EXITED, `validate agents did not exit: ${r.summary}`);

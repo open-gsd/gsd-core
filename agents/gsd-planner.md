@@ -348,9 +348,9 @@ Output: [Artifacts created]
 </execution_context>
 
 <context>
-@.planning/PROJECT.md
-@.planning/ROADMAP.md
-@.planning/STATE.md
+@{project_path}
+@{roadmap_path}
+@{state_path}
 
 # Only reference prior plan SUMMARYs if genuinely needed
 @path/to/relevant/source.ts
@@ -541,7 +541,7 @@ Output: [Working, tested feature]
 
 **RED:** Create test file → write test describing expected behavior → run test (MUST fail) → commit: `test({phase}-{plan}): add failing test for [feature]`
 
-**GREEN:** Write minimal code to pass → run test (MUST pass) → commit: `feat({phase}-{plan}): implement [feature]`
+**GREEN:** Write minimal code to pass → run test (MUST pass) → commit: `feat({phase}-{plan}): implement [feature]` (new behavior) or `fix({phase}-{plan}): correct [defect]` (plan corrects a defect)
 
 **REFACTOR (if needed):** Clean up → run tests (MUST pass) → commit: `refactor({phase}-{plan}): clean up [feature]`
 
@@ -633,8 +633,10 @@ without graph context.
 
 <step name="identify_phase">
 ```bash
-cat .planning/ROADMAP.md
-ls .planning/phases/
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+cat "${PLANNING_ROOT}/ROADMAP.md"
+ls "${PLANNING_ROOT}/phases/"
 ```
 
 If multiple phases available, ask which to plan. If obvious (first incomplete), proceed.
@@ -668,7 +670,9 @@ Select top 2-4 phases. Skip phases with no relevance signal.
 
 **Step 3 — Read full SUMMARYs for selected phases:**
 ```bash
-_SUMMARIES=( .planning/phases/{selected-phase}/*-SUMMARY.md )
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+_SUMMARIES=( "${PLANNING_ROOT}"/phases/{selected-phase}/*-SUMMARY.md )
 if [ -e "${_SUMMARIES[0]}" ]; then cat "${_SUMMARIES[@]}"; fi
 ```
 
@@ -879,7 +883,7 @@ Update ROADMAP.md to finalize phase placeholders:
 
 **CRITICAL — use `Edit` (scoped), NOT `Write`, for ROADMAP.md.** A whole-file `Write` destroys all phase entries outside your diff window. Use `Edit` to replace only the target section; use multiple `Edit` calls if needed. NEVER pass the entire ROADMAP.md content to `Write`.
 
-1. Read `.planning/ROADMAP.md`
+1. Read `{roadmap_path}`
 2. Find phase entry (`### {phase_display}:`)
 3. Update placeholders using `Edit` (scoped replacement only):
 
@@ -902,8 +906,10 @@ Plans:
 
 <step name="git_commit">
 ```bash
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
 gsd_run query commit "docs($PHASE): create phase plan" --files \
-  .planning/phases/$PHASE-*/$PHASE-*-PLAN.md .planning/ROADMAP.md
+  "${PLANNING_ROOT}"/phases/$PHASE-*/$PHASE-*-PLAN.md "${PLANNING_ROOT}/ROADMAP.md"
 ```
 </step>
 

@@ -5,7 +5,7 @@ Smart discuss is the autonomous-optimized variant of `gsd-discuss-phase`. It cla
 **Inputs:** `PHASE_NUM` from execute_phase. Run init to get phase paths:
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 PHASE_STATE=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} ${PHASE_NUM})
 ```
 
@@ -20,9 +20,13 @@ Read project-level and prior phase context to avoid re-asking decided questions.
 **Read project files:**
 
 ```bash
-cat .planning/PROJECT.md 2>/dev/null || true
-cat .planning/REQUIREMENTS.md 2>/dev/null || true
-cat .planning/STATE.md 2>/dev/null || true
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+GSD_WS="${GSD_WS:-}"
+PROJECT_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)
+cat "${PROJECT_PATH}" 2>/dev/null || true
+cat "${PLANNING_ROOT}/REQUIREMENTS.md" 2>/dev/null || true
+cat "${PLANNING_ROOT}/STATE.md" 2>/dev/null || true
 ```
 
 Extract from these:
@@ -33,7 +37,9 @@ Extract from these:
 **Read all prior CONTEXT.md files:**
 
 ```bash
-(find .planning/phases -name "*-CONTEXT.md" 2>/dev/null || true) | sort
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+(find "${PLANNING_ROOT}/phases" -name "*-CONTEXT.md" 2>/dev/null || true) | sort
 ```
 
 For each CONTEXT.md where phase number < current phase:
@@ -95,7 +101,7 @@ Read the 3-5 most relevant files to understand existing patterns.
 **Get phase details:**
 
 ```bash
-DETAIL=$(gsd_run query roadmap.get-phase ${PHASE_NUM})
+DETAIL=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} ${PHASE_NUM})
 ```
 
 Extract `goal`, `requirements`, `success_criteria` from the JSON response.
