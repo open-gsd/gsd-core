@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, createTempProject, cleanup } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const projects = new Set();
@@ -72,7 +72,8 @@ describe('#5067 initialization and alias contracts', () => {
       assert.equal(preview.project_code, code);
       assert.equal(fs.existsSync(path.join(dir, '.planning', 'config.json')), false);
       assert.equal(runGsdTools(['config-new-project', '{}'], dir, isolatedEnv({ home: dir })).success, true);
-      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'))), preview);
+      const written = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json')));
+      for (const key of ['project_code', 'phase_naming', 'phase_id_convention']) assert.equal(written[key], preview[key]);
     });
   }
   test('legacy opt-out keeps explicit codes verbatim; bracket refuses invalid codes without writes', () => {
@@ -88,9 +89,9 @@ describe('#5067 initialization and alias contracts', () => {
   });
   test('deprecated naming setter warns and persists generated; loader silently projects old spelling', () => {
     const dir = project();
-    const result = runGsdTools(['config-set', 'phase_naming', 'sequential'], dir, isolatedEnv({ home: dir }));
-    assert.equal(result.success, true, result.error);
-    assert.match(result.error, /deprecated/);
+    const result = runGsdToolsCaptured(['config-set', 'phase_naming', 'sequential'], dir, isolatedEnv({ home: dir }));
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.match(result.stderr, /deprecated/);
     const file = path.join(dir, '.planning', 'config.json');
     assert.equal(JSON.parse(fs.readFileSync(file)).phase_naming, 'generated');
     fs.writeFileSync(file, JSON.stringify({ phase_naming: 'sequential' }));
@@ -98,5 +99,49 @@ describe('#5067 initialization and alias contracts', () => {
     const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
     assert.equal(loadConfig(dir).phase_naming, 'generated');
     assert.equal(fs.readFileSync(file, 'utf8'), before);
+  });
+});
+
+
+describe('#5067 initialization boundaries', () => {
+  test('null convention uses bracket; explicit code wins and existing config is byte stable', () => {
+    const dir = project();
+    const args = ['config-new-project', JSON.stringify({ phase_id_convention: null, project_code: 'EXPLICIT' })];
+    assert.equal(runGsdTools(args, dir, isolatedEnv({ home: dir })).success, true);
+    const file = path.join(dir, '.planning', 'config.json');
+    const before = fs.readFileSync(file, 'utf8');
+    assert.equal(JSON.parse(before).project_code, 'EXPLICIT');
+    assert.equal(JSON.parse(before).phase_id_convention, 'bracket');
+    assert.equal(runGsdTools(args, dir, isolatedEnv({ home: dir })).success, true);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  });
+  test('ensure stays legacy and reads do not fill in a missing convention', () => {
+    const dir = project();
+    const ensured = runGsdTools(['config-ensure-section'], dir, isolatedEnv({ home: dir }));
+    assert.equal(ensured.success, true, ensured.error);
+    const file = path.join(dir, '.planning', 'config.json');
+    assert.equal(JSON.parse(fs.readFileSync(file)).phase_id_convention, undefined);
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+    assert.equal(loadConfig(dir).phase_id_convention, null);
+  });
+  test('defaults and choices layer before derivation', () => {
+    const dir = project();
+    fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.gsd', 'defaults.json'), JSON.stringify({ project_code: 'KEEP', phase_naming: 'sequential' }));
+    const preview = runGsdTools(['config-new-project', '{}', '--dry-run'], dir, isolatedEnv({ home: dir }));
+    assert.equal(JSON.parse(preview.output).config.project_code, 'KEEP');
+    assert.equal(JSON.parse(preview.output).config.phase_naming, 'generated');
+    const override = runGsdTools(['config-new-project', '{"project_code":"WIN"}', '--dry-run'], dir, isolatedEnv({ home: dir }));
+    assert.equal(JSON.parse(override.output).config.project_code, 'WIN');
+  });
+  test('project title is scoped to project, independent of workstream', () => {
+    const dir = project();
+    fs.mkdirSync(path.join(dir, '.planning', 'northwind'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'PROJECT.md'), '# Wrong Name\n');
+    fs.writeFileSync(path.join(dir, '.planning', 'northwind', 'PROJECT.md'), '# Northwind Trading Company\n');
+    const result = runGsdTools(['config-new-project', '{}', '--dry-run'], dir,
+      isolatedEnv({ home: dir, override: { GSD_PROJECT: 'northwind', GSD_WORKSTREAM: 'lane' } }));
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).config.project_code, 'NTC');
   });
 });

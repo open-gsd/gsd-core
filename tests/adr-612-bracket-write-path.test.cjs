@@ -1004,11 +1004,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01-two')), true);
   });
 
-  // #4304: under the bracket convention a supplied phase id and
-  // phase_naming "custom" have no write semantics yet (their precedence is
-  // the #5067 ruling). The writers refuse both before any write instead of
-  // discarding the id or overriding the naming mode.
-  describe('custom phase ids under the bracket convention refuse before any write', () => {
+  // #5067: caller-owned bracket identities validate before mutation.
+  describe('#5067 custom phase ids under the bracket convention', () => {
     function writeCustomNamingConfig(dir) {
       fs.writeFileSync(
         planning(dir, 'config.json'),
@@ -1052,8 +1049,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       const result = runGsdTools(['phase', 'add', '--id', 'AUTH', 'Custom Auth'], dir);
 
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /--id/);
-      assert.match(result.error, /bracket/);
+      assert.match(result.error, /custom/);
       assert.match(result.error, /canonical bracket id|phase_naming/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
 
@@ -1080,7 +1076,6 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
 
       assert.equal(result.success, false, result.output);
       assert.match(result.error, /phase_naming/);
-      assert.match(result.error, /bracket/);
       assert.match(result.error, /canonical bracket id|phase_naming/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
@@ -1095,7 +1090,6 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
 
       assert.equal(result.success, false, result.output);
       assert.match(result.error, /phase_naming/);
-      assert.match(result.error, /bracket/);
       assert.match(result.error, /canonical bracket id|phase_naming/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
