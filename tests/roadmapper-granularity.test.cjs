@@ -178,6 +178,7 @@ const {
 const { isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 const { createTempDir, runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const makeTmp = (prefix) => createTempDir(`gsd-68-${prefix}-`);
 
 function writeConfig(projectDir, config) {
@@ -450,7 +451,7 @@ describe('#68 resolve-granularity command: CLI behavior', () => {
         granularities: { planning: 'fine' },
       })
     );
-    const result = runGsdTools('resolve-granularity planning', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('resolve-granularity planning', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.granularity, 'fine', 'granularities.planning override should win');
@@ -535,7 +536,7 @@ describe('#703 cmdResolveGranularity: --granularity CLI flag', () => {
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ granularity: 'coarse' })
     );
-    const result = runGsdTools('resolve-granularity planning --granularity fine', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('resolve-granularity planning --granularity fine', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.granularity, 'fine', '--granularity fine must override config coarse');
@@ -549,7 +550,7 @@ describe('#703 cmdResolveGranularity: --granularity CLI flag', () => {
         granularities: { planning: 'fine' },
       })
     );
-    const result = runGsdTools('resolve-granularity planning --granularity coarse', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('resolve-granularity planning --granularity coarse', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.granularity, 'coarse', '--granularity coarse must beat per-phase fine');
@@ -608,7 +609,7 @@ describe('#703 init.plan-phase end-to-end: granularity resolution via CLI', () =
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ granularity: 'standard', granularities: { planning: 'coarse' } })
     );
-    const result = runGsdTools('init plan-phase 1 --granularity fine', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1 --granularity fine', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
     const data = JSON.parse(result.output);
     assert.strictEqual(data.granularity, 'fine',
@@ -620,7 +621,7 @@ describe('#703 init.plan-phase end-to-end: granularity resolution via CLI', () =
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ granularity: 'coarse', granularities: { planning: 'fine' } })
     );
-    const result = runGsdTools('init plan-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
     const data = JSON.parse(result.output);
     assert.strictEqual(data.granularity, 'fine',
@@ -632,7 +633,7 @@ describe('#703 init.plan-phase end-to-end: granularity resolution via CLI', () =
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ granularity: 'coarse' })
     );
-    const result = runGsdTools('init plan-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
     const data = JSON.parse(result.output);
     assert.strictEqual(data.granularity, 'coarse',
@@ -640,7 +641,7 @@ describe('#703 init.plan-phase end-to-end: granularity resolution via CLI', () =
   });
 
   test('(4) --granularity ultra → command errors (invalid value rejected on plan-phase path)', () => {
-    const result = runGsdTools('init plan-phase 1 --granularity ultra', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1 --granularity ultra', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(!result.success, 'should fail with invalid granularity ultra');
     assert.ok(
       result.error.includes('ultra') || result.error.includes('invalid'),
