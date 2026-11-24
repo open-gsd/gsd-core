@@ -8,7 +8,7 @@
 
 GSD uses a multi-agent architecture where thin orchestrators (workflow files) spawn specialized agents with fresh context windows. Each agent has a focused role, limited tool access, and produces specific artifacts.
 
-**Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by `tests/agent-required-reading-consistency.test.cjs`, because a mismatched pair silently disarms the enforcement clause.
+**Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by the `agent-required-reading-consistency` text contract (`scripts/static-checks/text-contracts/agent-required-reading-consistency.cjs`), because a mismatched pair silently disarms the enforcement clause.
 
 ### Agent Categories
 

@@ -218,6 +218,13 @@ function resolveConfigValue(
     /** Family B only: a layer whose value is not of this type is skipped as a type mismatch (#6031). */
     valueType?: 'string';
     io?: RuntimeIo;
+    /**
+     * A key no family declares still resolves over the family-A FILE layers (workstream, root and,
+     * when `honorGlobal` allows, global defaults) with no schema or built-in default and no
+     * federated type check (#6032). The activation gate reads switches a capability registry may
+     * not declare; this keeps that read inside the one precedence implementation.
+     */
+    allowUndeclared?: boolean;
   },
 ): ConfigValueResolution {
   // `configSchema` lets a caller that already holds a capability registry snapshot resolve
@@ -229,13 +236,14 @@ function resolveConfigValue(
   let cachedSchema: Record<string, unknown> | undefined;
   const capabilitySchema = (): Record<string, unknown> =>
     cachedSchema ??= opts.configSchema ?? getCapabilityConfigSchema(opts.cwd);
-  const family = keyFamily(key, capabilitySchema);
+  const declaredFamily = keyFamily(key, capabilitySchema);
+  const family = declaredFamily ?? (opts.allowUndeclared === true ? 'A' : null);
   const missing = (reason: ConfigReason): ConfigValueResolution => ({
     found: false, value: undefined, layer: null, reason,
   });
   if (family === null) return missing(CONFIG_REASON.NOT_CONFIGURED);
   if (opts.family && opts.family !== family) throw new RangeError(`Config key ${key} belongs to family ${family}`);
-  const federatedSlice = family === 'A' && !isCentralConfigKey(key)
+  const federatedSlice = declaredFamily === 'A' && !isCentralConfigKey(key)
     ? capabilitySchema()[key] : null;
   const entries: Array<{ layer: ConfigLayer; value: unknown; rank: number }> = [];
   const faults: Array<{ rank: number; fault: ConfigFault }> = [];

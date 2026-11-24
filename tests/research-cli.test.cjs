@@ -19,6 +19,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ---------------------------------------------------------------------------
 // Helper: make a temp dir and return it (caller is responsible for cleanup)
@@ -50,7 +51,7 @@ describe('research-store: put then get round-trip', () => {
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(putResult.success, `put failed: ${putResult.error}`);
       const entry = JSON.parse(putResult.output);
@@ -61,7 +62,7 @@ describe('research-store: put then get round-trip', () => {
       const getResult = await runGsdToolsAsync(
         ['research-store', 'get', key, '--kind', 'docs'],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(getResult.success, `get failed: ${getResult.error}`);
       const got = JSON.parse(getResult.output);
@@ -88,7 +89,7 @@ describe('research-store: get on unknown key', () => {
       const result = await runGsdToolsAsync(
         ['research-store', 'get', noSuchKey, '--kind', 'docs'],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `expected exit 0 for unknown key; got: ${result.error}`);
       const got = JSON.parse(result.output);
@@ -147,7 +148,7 @@ describe('research-plan: cache hit via pre-seeded store', () => {
       const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `research-plan failed: ${result.error}`);
       const plan = JSON.parse(result.output);
@@ -184,7 +185,7 @@ describe('research-plan: fetch plan for unseeded question', () => {
       const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `research-plan failed: ${result.error}`);
       const plan = JSON.parse(result.output);
@@ -329,7 +330,7 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for traversal key; got: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -344,7 +345,7 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
       const result = await runGsdToolsAsync(
         ['research-store', 'get', '../../etc/passwd'],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for traversal key; got: ${result.output}`);
     } finally {
@@ -367,7 +368,7 @@ describe('research-store CLI: traversal/invalid key rejected with usage error', 
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `put with valid 64-hex key should succeed; got: ${result.error}`);
     } finally {
@@ -452,7 +453,7 @@ describe('FINDING-3: research-plan --input null/invalid → clean usage error, n
       const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for null JSON input; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -475,7 +476,7 @@ describe('FINDING-3: research-plan --input null/invalid → clean usage error, n
       const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for questions:null; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -492,7 +493,7 @@ describe('FINDING-3: research-plan --input null/invalid → clean usage error, n
       const result = await runGsdToolsAsync(
         ['research-plan', '--input', inputFile],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit for questions:"x"; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -522,7 +523,7 @@ describe('FINDING-4: research-store put rejects flag-as-value', () => {
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(!result.success, `expected non-zero exit when --content value is a flag; got success: ${result.output}`);
       assert.ok(result.exitCode !== 0, `expected non-zero exit code, got ${result.exitCode}`);
@@ -546,7 +547,7 @@ describe('FINDING-4: research-store put rejects flag-as-value', () => {
           '--kind', 'docs',
         ],
         tmpDir,
-        { HOME: tmpDir },
+        isolatedEnv({ home: tmpDir }),
       );
       assert.ok(result.success, `well-formed put should succeed; got: ${result.error}`);
     } finally {

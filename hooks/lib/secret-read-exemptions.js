@@ -23,6 +23,7 @@
 const fs = require('fs');
 const path = require('path');
 const { headTreeEntry } = require('./git-head-tree.js');
+const { projectConfigPath } = require('./config-read.js');
 
 const REGULAR_BLOB_MODES = new Set(['100644', '100755']);
 
@@ -56,7 +57,7 @@ function normalizeExemptEntry(entry) {
 function readExemptEntries(root, { readFile = fs.readFileSync } = {}) {
   let config;
   try {
-    config = JSON.parse(readFile(path.join(root, '.planning', 'config.json'), 'utf8'));
+    config = JSON.parse(readFile(projectConfigPath(root), 'utf8'));
   } catch {
     return [];
   }
