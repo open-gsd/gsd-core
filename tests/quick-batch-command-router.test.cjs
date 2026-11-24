@@ -640,3 +640,84 @@ describe('quick-batch-command-router: end-to-end via gsd-tools (rows 46-47)', ()
     }
   });
 });
+
+// ─── #6655: the writer accepts exactly the `options` shape the loader accepts ──
+
+describe('#6655: quick-batch create --options must be a JSON object', () => {
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+
+  /** A project holding a two-task list; returns the project dir and the list path. */
+  function projectWithTasks(t) {
+    const dir = mkTmpProject();
+    t.after(() => cleanup(dir));
+    const tasksFile = path.join(dir, '.planning', 'tasks.md');
+    fs.writeFileSync(tasksFile, '- first task\n- second task\n');
+    return { dir, tasksFile };
+  }
+
+  /** `quick-batch create` through the real CLI; a failure comes back as the `--json-errors` object. */
+  function create(dir, tasksFile, optionsJson) {
+    const result = runGsdTools(['quick-batch', 'create', '--file', tasksFile, '--options', optionsJson, '--raw', '--json-errors'], dir);
+    return result.success
+      ? { ok: true, value: JSON.parse(result.output) }
+      : { ok: false, error: JSON.parse(result.error) };
+  }
+
+  for (const [label, optionsJson] of [['an array', '[1,2]'], ['a bare string', '"str"'], ['a number', '42'], ['a boolean', 'true']]) {
+    test(`${label} is a usage error that writes no batch and allocates no quick ids`, (t) => {
+      const { dir, tasksFile } = projectWithTasks(t);
+      const created = create(dir, tasksFile, optionsJson);
+      assert.equal(created.ok, false, `create accepted --options ${optionsJson}`);
+      assert.equal(created.error.reason, ERROR_REASON.USAGE);
+      assert.equal(fs.existsSync(path.join(dir, '.planning', 'quick-batches')), false,
+        'a refused --options must leave no batch directory, manifest or allocated quick ids behind');
+    });
+  }
+
+  test('the router refuses a non-object --options before createBatch runs', () => {
+    let reason = null;
+    let called = false;
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'create', '--file', 'tasks.md', '--options', '[1,2]'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (_msg, r) => { reason = r; },
+      _quickBatch: {
+        parseTaskListFromFile: () => ({ ok: true, value: [{ description: 'a' }, { description: 'b' }] }),
+        createBatch: () => { called = true; return { ok: true, value: { batchId: 'x' } }; },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.equal(reason, ERROR_REASON.USAGE);
+    assert.equal(called, false, 'createBatch must never see a non-object --options');
+  });
+
+  test('an object --options creates a batch that resumes and updates', (t) => {
+    const { dir, tasksFile } = projectWithTasks(t);
+    const created = create(dir, tasksFile, '{"x":1}');
+    assert.equal(created.ok, true, JSON.stringify(created.error));
+    assert.deepEqual(created.value.manifest.options, { x: 1 });
+    const resumed = runGsdTools(['quick-batch', 'resume', '--batch', created.value.batchId, '--raw'], dir);
+    assert.equal(resumed.success, true, `resume failed: ${resumed.error}`);
+    // An array-shaped JSON argument of another verb is unaffected.
+    const updated = runGsdTools(['quick-batch', 'update', '--batch', created.value.batchId, '--updates', '[]', '--raw'], dir);
+    assert.equal(updated.success, true, `update failed: ${updated.error}`);
+  });
+
+  test('a null --options still creates a batch, stored as an empty object', (t) => {
+    const { dir, tasksFile } = projectWithTasks(t);
+    const created = create(dir, tasksFile, 'null');
+    assert.equal(created.ok, true, JSON.stringify(created.error));
+    assert.deepEqual(created.value.manifest.options, {});
+    const resumed = runGsdTools(['quick-batch', 'resume', '--batch', created.value.batchId, '--raw'], dir);
+    assert.equal(resumed.success, true, `resume failed: ${resumed.error}`);
+  });
+
+  test('invalid JSON is still a usage error that writes no batch', (t) => {
+    const { dir, tasksFile } = projectWithTasks(t);
+    const invalid = create(dir, tasksFile, '{bad');
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.error.reason, ERROR_REASON.USAGE);
+    assert.equal(fs.existsSync(path.join(dir, '.planning', 'quick-batches')), false);
+  });
+});
