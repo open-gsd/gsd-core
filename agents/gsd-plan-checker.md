@@ -802,11 +802,11 @@ MUST_HAVES=$(gsd_run query frontmatter.get "$PLAN_PATH" --field must_haves)
 
 Returns JSON: `{ "must_haves": { "truths": [...], "artifacts": [...], "key_links": [...] } }`
 
-Inspect the JSON even on exit `0`. `frontmatter.get` can return these error payloads:
+Exit `0` can still return an error payload:
 
 - `{ "error": "Field not found", "field": "must_haves" }` — report a `must_haves_derivation` issue.
-- `{ "error": "File not found", "path": "..." }` — the file is missing or empty; report that the plan could not be read.
-- `{ "error": "Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block", "path": "..." }` — report the malformed frontmatter for repair.
+- `{ "error": "File not found", "path": "..." }` — missing or empty file; report the plan as unreadable.
+- `{ "error": "Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block", "path": "..." }` — report the malformed frontmatter.
 
 **Expected structure:**
 
@@ -862,7 +862,7 @@ The `tasks` array in the result shows each task's completeness:
 
 **Check:** valid task type (auto, checkpoint:*, tdd), auto tasks have files/action/verify/done, action is specific, verify is runnable, done is measurable.
 
-Read each task's action, verify, and done text in the PLAN file to assess specificity.
+Judge specificity from each task's action, verify and done text.
 
 ## Step 6: Verify Dependency Graph
 
@@ -905,9 +905,7 @@ else
 fi
 ```
 
-Exit `0` / `1` are the verdict (`valid` true / false, read the JSON); any other status means the structure was not evaluated (Step 2).
-
-Use each plan's `task_count` from its structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
+Read `structure_exit` as in Step 5 and take each plan's `task_count` from its structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
 
 ## Step 9: Verify must_haves Derivation
 
