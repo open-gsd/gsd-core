@@ -36,9 +36,7 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-230-pr-target-policy.test.cjs',
   'tests/ci-conformance-pr-gating.test.cjs',
   'tests/ci-docs-guard-registry.test.cjs',
-  'tests/ci-durations-upload-nonfatal.test.cjs',
   'tests/ci-full-lane-sharding.test.cjs',
-  'tests/ci-merge-group-wiring.test.cjs',
   'tests/ci-pr-mergeability.test.cjs',
   'tests/ci-test-job-timeout-budget.test.cjs',
   'tests/ci-test-scope.test.cjs',
@@ -48,22 +46,25 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/merge-commit-pr.test.cjs',
   'tests/mutation-tap-runner-wiring.test.cjs',
   'tests/mutation-workflow-base-ref.test.cjs',
-  // #6481, #6536: policy-release-no-npm-self-upgrade and release-coverage-scope are now text contracts; their release.yml mutation cases live here.
+  // #6481, #6536, #6551: policy-release-no-npm-self-upgrade, release-coverage-scope and ci-durations-upload-nonfatal are now text contracts; their release.yml and test.yml mutation cases live here.
   'tests/text-contracts.test.cjs',
   'tests/policy-shell-pinning.test.cjs',
   'tests/registry-docs-approved-issue-parity.test.cjs',
   'tests/release-backmerge-invariants.test.cjs',
-  'tests/release-finalize-notes-5922.test.cjs',
-  'tests/release-finalize-syncs-next-version.test.cjs',
   'tests/release-hotfix-empty-cherry-pick.test.cjs',
   'tests/release-notes-real-os-5922.test.cjs',
-  'tests/release-shard-lane-sharding.test.cjs',
-  'tests/release-tarball-smoke-workflow.test.cjs',
   'tests/require-issue-link-policy.test.cjs',
-  'tests/reviewed-or-maintainer-workflow.test.cjs',
   'tests/security-scan.security.test.cjs',
   'tests/self-test-report-workflow.test.cjs',
-  'tests/workflow-token-permissions.test.cjs',
+  // #6573: release-shard-lane-sharding's boundary cases moved to shard-spec; ci-merge-group-wiring and
+  // release-tarball-smoke-workflow are text contracts whose workflow mutation cases are in the batch 9 test.
+  'tests/shard-spec.test.cjs',
+  'tests/text-contracts.batch9.test.cjs',
+  // #6577: release-backmerge-invariants' YAML structure is a text contract; its mutation cases are in the batch 10 test.
+  'tests/text-contracts.batch10.test.cjs',
+  // #6566: release-finalize-notes-5922, release-finalize-syncs-next-version, reviewed-or-maintainer-workflow,
+  // workflow-token-permissions and policy-lint-shallow-checkout are text contracts; their workflow mutation cases live here.
+  'tests/text-contracts.batch8.test.cjs',
 ];
 
 // Workflows that gate merges, ship the product, or run security/cross-platform
@@ -98,7 +99,7 @@ const RULES = [
     fullMatrix: true,
     tests: [
       ...WORKFLOW_LINT_TESTS,
-      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/text-contracts.batch9.test.cjs', // #6573: ci-merge-group-wiring (reads the ruleset JSON) is a text contract
     ],
   },
   {
@@ -107,7 +108,6 @@ const RULES = [
     fullMatrix: false,
     tests: [
       ...WORKFLOW_LINT_TESTS,
-      'tests/policy-lint-shallow-checkout.test.cjs',
       ...WORKFLOW_CONTRACT_TESTS,
     ],
   },
@@ -137,7 +137,7 @@ const RULES = [
       'tests/check-env.test.cjs',
       'tests/check-env.process.test.cjs',
       'tests/npm-integrity-gate.test.cjs', // #2758: absorbs the former tests/bug-3588-npm-audit-clean.test.cjs (folded into it by consolidation epic #1969 B6 #1975; the stale filename here was a silent coverage hole this rule never actually re-selected)
-      'tests/package-manifest.test.cjs',
+      'tests/text-contracts.batch8.test.cjs', // #6566: package-manifest is a text contract; its package.json mutation cases live here
     ],
   },
   {
@@ -289,7 +289,8 @@ const RULES = [
       'tests/agent-skills.test.cjs',
       // #6478: agent-skills-awareness is now a text contract; its mutation cases live here.
       'tests/text-contracts.test.cjs',
-      'tests/agent-required-reading-consistency.test.cjs',
+      // #6577: agent-required-reading-consistency is now a text contract; its mutation cases live here.
+      'tests/text-contracts.batch10.test.cjs',
       'tests/docs-parity-live-registry.test.cjs',
     ],
   },

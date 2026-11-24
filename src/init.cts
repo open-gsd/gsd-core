@@ -719,7 +719,7 @@ function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
     // review.reviewer_instances) keeps the single-file read of the workstream-aware directory.
     if (resolved.reason !== configLoader.CONFIG_REASON.NOT_CONFIGURED) return undefined;
     // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    const raw = configLoader.readConfigFileBounded(planningWorkspace.projectConfigPath(cwd));
     if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
@@ -3799,7 +3799,7 @@ function cmdInitDocsUpdate(cwd: string, raw: boolean, options: Record<string, un
  * `state:chunked-mode`/`state:plan-strategy-converge`). This DELIBERATELY
  * does not replace `update.md`'s own `parse_update_channel` case-statement
  * (`TAG="next"`/`TAG="latest"`) — issue #815's regression test
- * (`tests/update-workflow.test.cjs`) asserts that literal
+ * (the `update-workflow` text contract) asserts that literal
  * case-statement text stays in `update.md` verbatim (the npm dist-tag
  * selection has to run in the workflow's own shell before any `gsd_run`
  * round-trip), so `next_channel` exists purely to gate the `channel-banner`

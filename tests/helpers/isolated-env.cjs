@@ -64,6 +64,12 @@ function isStripped(key) {
  * -> overlay home / path / claudeConfigDir -> overlay `override` -> canonicalize
  * key casing.
  *
+ * The stripping holds only when the result reaches the child verbatim (runNode,
+ * runHook, spawn). runGsdTools*, installSpawnEnv and installerEnv start from
+ * `{ ...process.env, ...testEnvBase() }` and spread what they are handed over it,
+ * so a stripped key (ambient GSD_*, BASH_ENV, CLAUDE_ENV_FILE, ...) returns there.
+ * Through them the result still sets home, path, `override` and the blanks.
+ *
  * @param {object} opts
  * @param {string} opts.home Absolute dir written to BOTH `HOME` and `USERPROFILE`.
  *   Missing or relative throws `TypeError`.

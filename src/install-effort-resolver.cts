@@ -183,7 +183,7 @@ function _getGsdEffortCatalog(): EffortCatalog {
 function _findAncestorGsdConfigPath(targetDir: string): string | null {
   let probeDir = path.resolve(targetDir);
   for (let depth = 0; depth < 8; depth += 1) {
-    const candidate = path.join(probeDir, '.planning', 'config.json');
+    const candidate = configLoader.rootConfigPath(probeDir);
     if (installFs().existsSync(candidate)) return candidate;
     const parent = path.dirname(probeDir);
     if (parent === probeDir) break;
