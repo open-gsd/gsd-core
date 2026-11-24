@@ -37,6 +37,7 @@ Sequential template bodies and titles retain their legacy spelling. In display o
 
 ### Placeholder sources
 
+- `{planning_root}` (scoped planning consumers): Use generated_from.planning_root returned by planning.inspect for the active project/workstream scope; never assume the repository-root .planning directory.
 - `{phase_display}` (progress/stats/init manager phase rows; init plan-phase/execute-phase/phase-op; phase add/insert; roadmapper/new-project/new-milestone): Use the selected phase row display_id when present. init plan-phase, execute-phase and phase-op return phase_number, not display_id; phase add/insert return phase_number and roadmap_entry, not display_id. Read the writer-created roadmap heading, or render the resolved phase_number using the reference grammar. Before rows exist (roadmapper, new-project, new-milestone), render the proposed phase number from resolved config and the intended milestone integer. Never assume a missing display_id field exists.
 - `{next_phase_display}`, `{dependency_phase_display}` (roadmap generation; mvp-phase; dependencies): Apply phase_display resolution to the next or dependency phase, using that phase record and its own milestone; before a record exists, render its proposed number with the reference grammar.
 - `{backlog_phase_display}` (add-backlog; next; verify-work): Use Phase plus the exact CLI backlog number under every convention; never project the backlog number into the active milestone.

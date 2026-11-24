@@ -27,7 +27,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const helpers = require('./helpers.cjs');
-const { cleanup, TOOLS_PATH, createTempProject, runGsdTools, TEST_ENV_BASE } = helpers;
+const { cleanup, TOOLS_PATH, createTempProject, runGsdTools } = helpers;
 const { runNode, OUTCOME, runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
@@ -4261,7 +4261,7 @@ describe('#5027 shipped-template round trips', () => {
   }
 
   function query(root, args) {
-    const result = runGsdTools(args, root, { HOME: root });
+    const result = runGsdTools(args, root, isolatedEnv({ home: root }));
     assert.ok(result.success, `${args.join(' ')}: ${result.error}`);
     return JSON.parse(result.output);
   }
@@ -4362,7 +4362,7 @@ describe('#5027 shipped-template round trips', () => {
       const lookup = extractFencedBlock(assumptions.slice(assumptions.indexOf('Validate phase exists in roadmap:')), 'bash');
       assert.ok(lookup);
       const script = `RUNTIME_DIR="${path.resolve(__dirname, '..')}"; gsd_run() { "${process.execPath}" "${TOOLS_PATH}" "$@"; }; PHASE=${fixture.arg};\n${lookup}`;
-      const result = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: { ...process.env, ...TEST_ENV_BASE, HOME: root } });
+      const result = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: isolatedEnv({ home: root }) });
       assert.equal(result.exitCode, 0, result.stderr);
       const selected = JSON.parse(result.stdout);
       assert.equal(selected.found, true);
@@ -4371,7 +4371,7 @@ describe('#5027 shipped-template round trips', () => {
       const mvp = read('gsd-core/workflows/mvp-phase.md').split('## 5. Update ROADMAP.md')[1].split('**Edit 1')[0];
       const command = mvp.match(/`(gsd_run query roadmap\.get-phase [^`]{1,200})`/)?.[1];
       assert.ok(command, 'MVP section selection must query the canonical reader');
-      const mvpResult = runHook('-c', [script.slice(0, script.indexOf('\n')) + '\n' + command], { interpreter: 'bash', cwd: root, env: { ...process.env, ...TEST_ENV_BASE, HOME: root } });
+      const mvpResult = runHook('-c', [script.slice(0, script.indexOf('\n')) + '\n' + command], { interpreter: 'bash', cwd: root, env: isolatedEnv({ home: root }) });
       assert.equal(mvpResult.exitCode, 0, mvpResult.stderr);
       assert.equal(JSON.parse(mvpResult.stdout).section, selected.section);
     });
@@ -4456,7 +4456,7 @@ describe('#5027 shipped-template round trips', () => {
         const recipe = extractFencedBlock(step, 'bash');
         assert.ok(recipe, 'creation recipe must be executable');
         const script = `gsd_run() { "${process.execPath}" "${TOOLS_PATH}" "$@"; }; NEXT=${next};\n${recipe.replace('$ARGUMENTS', 'Future')}`;
-        const result = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: { ...process.env, ...TEST_ENV_BASE, HOME: root } });
+        const result = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: isolatedEnv({ home: root }) });
         assert.equal(result.exitCode, 0, result.stderr);
         const dirs = fs.readdirSync(path.join(root, '.planning/phases'));
         assert.equal(dirs.length, 1);

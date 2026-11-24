@@ -9020,7 +9020,7 @@ for (const runtime of ['claude', 'codex']) {
       const project = path.join(root, 'project');
       fs.mkdirSync(home);
       fs.mkdirSync(project);
-      const env = installSpawnEnv({ HOME: home, USERPROFILE: home, GSD_HOME: path.join(home, '.gsd') });
+      const env = installSpawnEnv(isolatedEnv({ home, override: { GSD_HOME: path.join(home, '.gsd') } }));
       delete env.GSD_TEST_MODE;
       const result = runNode([INSTALL_SCRIPT, `--${runtime}`, `--${scope}`, '--profile=full', '--no-sdk'], {
         cwd: project, env, timeoutMs: INSTALL_TIMEOUT_MS,

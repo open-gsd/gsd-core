@@ -8532,7 +8532,7 @@ describe('#5027: successful installer invocation displays one titled card', () =
     cleanup(root);
   });
   function invocation(args, source = null, envOverrides = {}) {
-    const env = installSpawnEnv({ HOME: root, USERPROFILE: root, GSD_HOME: path.join(root, '.gsd'), ...envOverrides });
+    const env = installSpawnEnv(isolatedEnv({ home: root, override: { GSD_HOME: path.join(root, '.gsd'), ...envOverrides } }));
     delete env.GSD_TEST_MODE;
     return runNode(source ? ['-e', source] : [installPath, ...args, '--profile=core', '--no-sdk'], {
       cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS,

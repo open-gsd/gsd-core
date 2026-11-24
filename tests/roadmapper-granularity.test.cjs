@@ -6,6 +6,7 @@
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { currentMilestoneRawRanges } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -629,10 +630,10 @@ describe('#5027 convention consumer contracts', () => {
     fs.writeFileSync(path.join(planning, 'ROADMAP.md'), convention === 'bracket' ? '# Roadmap\n\n## [GSD.02] Active\n\n### [GSD.02] 01: Foundation\n**Goal:** Setup\n' : '# Roadmap\n\n## v2.0 Active\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
     const dir = path.join(planning, 'phases', convention === 'bracket' ? 'GSD.02-01-foundation' : '01-foundation');
     fs.mkdirSync(dir, { recursive: true });
-    const result = runGsdTools('init plan-phase 1', root, { HOME: root });
+    const result = runGsdTools('init plan-phase 1', root, isolatedEnv({ home: root }));
     assert.ok(result.success, result.error);
     const data = JSON.parse(result.output);
-    const found = runGsdTools(`query find-phase ${path.basename(dir)}`, root, { HOME: root });
+    const found = runGsdTools(`query find-phase ${path.basename(dir)}`, root, isolatedEnv({ home: root }));
     assert.ok(found.success, found.error);
     assert.equal(JSON.parse(found.output).phase_number, data.phase_number);
     assert.ok(path.isAbsolute(data.phase_dir));
