@@ -1,11 +1,11 @@
 'use strict';
 
-const { test } = require('node:test');
+const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsAsync, createTempProject, cleanup } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const runtime = require('../gsd-core/bin/gsd-tools.cjs');
 const commandAliases = require('../gsd-core/bin/lib/command-aliases.cjs');
@@ -19,6 +19,23 @@ const DOCUMENTED_ROOTS = [
   'skills', path.join('pi', 'package-skills'), path.join('pi', 'package-agents'),
 ];
 const { queryNames, frontmatterCalls, shellTokens } = require('./helpers/agent-query-parser.cjs');
+
+// Closed routers only: leaf commands must not execute as classification probes.
+const CLOSED_ROUTER_ROOTS = new Set([
+  'state', 'phase', 'roadmap', 'verify', 'validate', 'init', 'capability', 'git',
+  'research-store', 'agent', 'check', 'commit-docs-guard', 'template', 'task',
+  'frontmatter', 'eval', 'verification', 'quick-batch', 'phases', 'planning',
+  'assumption-delta', 'requirements', 'milestone', 'uat', 'todo', 'scaffold',
+  'loop', 'workstream', 'worktree', 'learnings', 'review-lane', 'package-legitimacy',
+  'effort', 'user-story', 'drift-guard', 'windows', 'skills-root',
+]);
+const BOGUS_SUBCOMMAND = 'zz-agent-query-contract-probe';
+
+// Some closed routers (capability) finish asynchronously, so the probes run once, awaited,
+// before any test reads them through probeHostRouters(). The hook starts at the first test()
+// call, while this file is still loading, so everything it reads is defined above this line
+// or hoisted.
+before(loadHostRouterProbes);
 
 // Shell-quote one word three ways bash accepts; each must read back as exactly that word.
 const SHELL_QUOTERS = {
@@ -386,16 +403,6 @@ test('plan-checker verify.plan-structure fields match the runtime output', (t) =
   }
 });
 
-// Closed routers only: leaf commands must not execute as classification probes.
-const CLOSED_ROUTER_ROOTS = new Set([
-  'state', 'phase', 'roadmap', 'verify', 'validate', 'init', 'capability', 'git',
-  'research-store', 'agent', 'check', 'commit-docs-guard', 'template', 'task',
-  'frontmatter', 'eval', 'verification', 'quick-batch', 'phases', 'planning',
-  'assumption-delta', 'requirements', 'milestone', 'uat', 'todo', 'scaffold',
-  'loop', 'workstream', 'worktree', 'learnings', 'review-lane', 'package-legitimacy',
-  'effort', 'user-story', 'drift-guard', 'windows', 'skills-root',
-]);
-const BOGUS_SUBCOMMAND = 'zz-agent-query-contract-probe';
 /** Every path under dir mapped to its file bytes' sha256, or 'dir'. */
 function treeSnapshot(dir) {
   const snapshot = new Map();
@@ -419,9 +426,14 @@ function snapshotChanges(before, after) {
 }
 
 let hostRouterProbes;
+/** The probes loadHostRouterProbes ran in the file's before hook. */
 function probeHostRouters() {
-  if (hostRouterProbes) return hostRouterProbes;
-  hostRouterProbes = new Map();
+  assert.ok(hostRouterProbes, 'the router probes run in the before hook, ahead of every test');
+  return hostRouterProbes;
+}
+
+async function loadHostRouterProbes() {
+  const probes = new Map();
   const bareRoots = new Set(['state']); // Also exercise state's accepted default operation.
   for (const [name, verb] of documentedQueryNames(DOCUMENTED_ROOTS.flatMap((root) => markdownFiles(path.join(ROOT, root))))) {
     if (!verb && CLOSED_ROUTER_ROOTS.has(name)) bareRoots.add(name);
@@ -437,15 +449,15 @@ function probeHostRouters() {
       Object.assign(env, isolatedEnv({ home: dir, base: {}, path: process.env.PATH, override: {
         TMPDIR: fs.realpathSync(require('node:os').tmpdir()), GIT_CONFIG_NOSYSTEM: '1',
         SystemRoot: process.env.SystemRoot } }));
-      const before = treeSnapshot(dir);
-      const bogus = runGsdTools(['query', root, BOGUS_SUBCOMMAND], dir, env);
-      const bare = bareRoots.has(root) ? runGsdTools(['query', root], dir, env) : null;
-      hostRouterProbes.set(root, { bogus, bare, sideEffects: snapshotChanges(before, treeSnapshot(dir)) });
+      const snapshot = treeSnapshot(dir);
+      const bogus = await runGsdToolsAsync(['query', root, BOGUS_SUBCOMMAND], dir, env);
+      const bare = bareRoots.has(root) ? await runGsdToolsAsync(['query', root], dir, env) : null;
+      probes.set(root, { bogus, bare, sideEffects: snapshotChanges(snapshot, treeSnapshot(dir)) });
     } finally {
       cleanup(dir);
     }
   }
-  return hostRouterProbes;
+  hostRouterProbes = probes;
 }
 
 test('closed-router probes leave their scrubbed project unchanged', () => {
@@ -525,6 +537,9 @@ for (const [label, content, expected] of [
   ['field equals', 'gsd_run query frontmatter.get "$P" --field=must_haves', { planExpression: '$P', args: ['--field=must_haves'], field: 'must_haves' }],
   ['trailing comment', 'gsd_run query frontmatter.get "$P" --field status # note', { planExpression: '$P', args: ['--field', 'status'], field: 'status' }],
   ['single-quoted newline', "gsd_run query frontmatter.get 'file\\\nname' --field status", { planExpression: 'file\\\nname', args: ['--field', 'status'], field: 'status' }],
+  // post-wave-requirements.md (#6102): the #4772 --ws expansion holds a space and is not the plan path.
+  ['workstream forwarding', 'gsd_run query frontmatter.get ${GSD_WS:+--ws=${GSD_WS##* }} "${PLAN_PATH}" requirements', { planExpression: '${PLAN_PATH}', args: ['requirements'], field: 'requirements' }],
+  ['workstream forwarding after the file', 'gsd_run query frontmatter.get "$P" ${GSD_WS:+--ws=${GSD_WS##* }} --field status', { planExpression: '$P', args: ['${GSD_WS:+--ws=${GSD_WS##* }}', '--field', 'status'], field: 'status' }],
 ]) {
   test(`frontmatter parser preserves argv for ${label}`, () => assert.deepEqual(frontmatterCalls(content), [expected]));
 }

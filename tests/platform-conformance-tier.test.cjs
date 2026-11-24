@@ -55,7 +55,7 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 // The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
 // swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
 const WINDOWS_TIER_SIZE_BASELINE = 354; // -2 (#6037): wave 2 moved 5 files off the lane; 3 files wave 1 moved off it (home-resolving tests) are back
-const MACOS_TIER_SIZE_BASELINE = 300; // -1: tests/debugger-semantic-recall.test.cjs became a text contract (#6566)
+const MACOS_TIER_SIZE_BASELINE = 302; // +2 (#5178): tests/agent-query-contract.test.cjs resolves the tmpdir realpath (/var vs /private/var) and tests/plan-checker-artifact-loop.test.cjs runs the plan-checker step under zsh, macOS's default shell
 
 // A tier of `count` files against its committed baseline: nonzero, not above, not below.
 function assertTierAtBaseline(count, baseline, label, constantName) {

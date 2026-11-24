@@ -36,6 +36,22 @@ function shellTokens(source, base = 0) {
     return at;
   }
 
+  // A ${...} expansion is one word even when it holds a space (${GSD_WS##* }).
+  function parameterEnd(start) {
+    let at = start + 2;
+    let depth = 1;
+    while (at < source.length) {
+      const ch = source[at];
+      if (ch === '\\') { at += 2; continue; }
+      if (ch === "'" || ch === '"' || ch === '`') { at = quotedEnd(at, ch); continue; }
+      if (source.startsWith('$(', at)) { at = substitutionEnd(at); continue; }
+      if (source.startsWith('${', at)) { depth++; at += 2; continue; }
+      if (ch === '}' && --depth === 0) return at + 1;
+      at++;
+    }
+    return at;
+  }
+
   function expansion(children) {
     const start = i;
     const end = substitutionEnd(start);
@@ -119,7 +135,11 @@ function shellTokens(source, base = 0) {
         i++;
         while (i < source.length && source[i] !== '"') {
           if (source.startsWith('$(', i)) value += expansion(children);
-          else if (source[i] === '`') {
+          else if (source.startsWith('${', i)) {
+            const end = parameterEnd(i);
+            value += source.slice(i, end);
+            i = end;
+          } else if (source[i] === '`') {
             const end = quotedEnd(i, '`');
             children.push({ source: source.slice(i + 1, end - 1), base: base + i + 1 });
             value += source.slice(i, end);
@@ -134,7 +154,11 @@ function shellTokens(source, base = 0) {
         }
         if (source[i] === '"') i++;
       } else if (source.startsWith('$(', i)) value += expansion(children);
-      else if (source[i] === '`') {
+      else if (source.startsWith('${', i)) {
+        const end = parameterEnd(i);
+        value += source.slice(i, end);
+        i = end;
+      } else if (source[i] === '`') {
         const end = quotedEnd(i, '`');
         children.push({ source: source.slice(i + 1, end - 1), base: base + i + 1 });
         value += source.slice(i, end);
@@ -161,12 +185,16 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', '{', '}', 'time']);
 const GLOBAL_VALUES = new Set(['--cwd', '--project-dir', '--ws', '--pick', '--default']);
 const GLOBAL_FLAGS = new Set(['--raw', '--json-errors']);
+// The workstream-forwarding sweep (#4772) passes --ws as ${GSD_WS:+--ws=${GSD_WS##* }}:
+// the flag when the variable is set, otherwise nothing. Either way it is never an argument.
+const CONDITIONAL_GLOBAL = /^\$\{[A-Za-z_][A-Za-z0-9_]*:\+(?:--cwd|--project-dir|--ws|--pick|--default|--exit-contract)=/;
 
 function withoutGlobals(words, positions = false) {
   const result = [];
   for (let i = 0; i < words.length; i++) {
     if (GLOBAL_VALUES.has(words[i])) { i++; continue; }
-    if (GLOBAL_FLAGS.has(words[i]) || /^(?:--cwd|--project-dir|--ws|--pick|--default|--exit-contract)=/.test(words[i])) continue;
+    if (GLOBAL_FLAGS.has(words[i]) || CONDITIONAL_GLOBAL.test(words[i])
+      || /^(?:--cwd|--project-dir|--ws|--pick|--default|--exit-contract)=/.test(words[i])) continue;
     result.push(positions ? { value: words[i], index: i } : words[i]);
   }
   return result;
