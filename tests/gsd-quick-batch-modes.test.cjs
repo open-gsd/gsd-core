@@ -127,7 +127,7 @@ function runBlocks(t, cwd, blocks, vars, print) {
   const report = print.map((name) => `printf 'VAR:%s=%s\\n' ${name} "\${${name}-}"`);
   const script = ['#!/usr/bin/env bash', ...assignments, ...blocks, ...report].join('\n');
   const scriptPath = path.join(scriptDir, 'run.sh');
-  fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+  fs.writeFileSync(scriptPath, script);
   const r = runHook(scriptPath, [], {
     interpreter: 'bash',
     cwd,
@@ -309,7 +309,7 @@ describe('#6532 items 3-5: init.quick-batch --resume builds the manifest and var
     assert.deepEqual(res.values.SECTIONS.split(','), ['verification-wave']);
   });
 
-  test('the loaded verification-wave step runs on VALIDATE_MODE alone (the gate the variable opens)', () => {
+  test('the loaded verification-wave and research-phase steps gate only on the variables init sets', () => {
     // The step file's gate is the shipped text the model follows.
     const gate = readFileNormalized(VERIFICATION_WAVE_PATH).split('\n').slice(0, 4).join('\n');
     assert.ok(gate.includes('Skip this step entirely if NOT `$VALIDATE_MODE`.'));
@@ -375,7 +375,8 @@ describe('#6532 item 4: a resume whose mode flags differ from the stored set is 
         validate: flags.includes('--validate'),
         research: flags.includes('--research'),
       });
-      assert.notEqual(res.exitCode, 0, 'the workflow block stops on the refusal');
+      assert.equal(res.outcome, OUTCOME.EXITED, res.stderr);
+      assert.equal(res.exitCode, 1, 'the workflow block stops on the refusal');
       assert.equal(res.values.SECTIONS, undefined, 'nothing after the refusal runs');
       assert.deepEqual(fs.readFileSync(manifestPath(dir, batchId)), before);
     });
@@ -478,7 +479,8 @@ describe('#6532: init.quick-batch --resume negative inputs', () => {
     const dir = createTempProject('gsd-6532-hostile-');
     t.after(() => cleanup(dir));
     const res = runInitModes(t, dir, { resumeId: 'x $(touch pwned) ; touch pwned2' });
-    assert.notEqual(res.exitCode, 0);
+    assert.equal(res.outcome, OUTCOME.EXITED, res.stderr);
+    assert.equal(res.exitCode, 1);
     assert.equal(fs.existsSync(path.join(dir, 'pwned')), false);
     assert.equal(fs.existsSync(path.join(dir, 'pwned2')), false);
   });
