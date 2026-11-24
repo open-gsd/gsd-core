@@ -1,18 +1,8 @@
 {
-  "tests/claude-loader-env.test.cjs": 2,
-  "tests/cline-uninstall-symlinked-agents-md.test.cjs": 1,
-  "tests/copilot-install.test.cjs": 1,
-  "tests/git-fixture-template.process.test.cjs": 2,
-  "tests/git-optional-locks-parity.test.cjs": 2,
-  "tests/helpers-process-isolation.test.cjs": 4,
-  "tests/helpers.cjs": 5,
-  "tests/in-tier-sh-pipeline-timing.test.cjs": 1,
-  "tests/install-runtime-artifacts.test.cjs": 1,
-  "tests/install.test.cjs": 2,
+  "tests/helpers-process-isolation.test.cjs": 1,
+  "tests/helpers.cjs": 4,
   "tests/isolated-env.test.cjs": 2,
-  "tests/isolation-sentinel.test.cjs": 1,
   "tests/kimi-agent-converter.test.cjs": 2,
-  "tests/opencode-version.test.cjs": 3,
   "tests/pi-package.test.cjs": 1,
   "tests/runtime-home-hermeticity.test.cjs": 1
 }

@@ -204,15 +204,29 @@ describe('no-adhoc-env-isolation: every documented recognised form is flagged', 
     ], []);
   });
 
-  test('a split of a direct process.env.PATH read is flagged whatever it is for, and any *.delimiter counts', () => {
+  test('a split of a direct process.env.PATH read is flagged unless only its length is read, and any *.delimiter counts', () => {
     run([], [
-      { code: 'const n = process.env.PATH.split(path.delimiter).length;', filename: FILE, errors: [pathFilter] },
+      { code: 'const dirs = process.env.PATH.split(path.delimiter);', filename: FILE, errors: [pathFilter] },
+      { code: 'const n = process.env.PATH.split(path.delimiter).map(norm).length;', filename: FILE, errors: [pathFilter] },
       { code: 'csv.split(csv.delimiter).filter(Boolean);', filename: FILE, errors: [pathFilter] },
     ]);
   });
 
-  test('any object with a HOME key is flagged, whatever it is for', () => {
-    run([], [{ code: 'const fixture = { HOME: "/home/someone" };', filename: FILE, errors: [home] }]);
+  test('an object with a HOME key is flagged unless its value cannot be a sandbox', () => {
+    run([], [
+      { code: 'const fixture = { HOME: someone };', filename: FILE, errors: [home] },
+      { code: 'const fixture = { HOME: `/home/${name}` };', filename: FILE, errors: [home] },
+      { code: 'const fixture = { HOME: process.env.USERPROFILE };', filename: FILE, errors: [home] },
+      { code: 'const fixture = { USERPROFILE: process.env.HOME };', filename: FILE, errors: [home] },
+      { code: 'const fixture = { HOME: "/h", USERPROFILE: dir };', filename: FILE, errors: [{ messageId: 'adhocHomeConstruction', data: { key: 'USERPROFILE' } }] },
+    ]);
+  });
+
+  test('an assignment to HOME is flagged unless its value cannot be a sandbox', () => {
+    run([], [
+      { code: 'env.HOME = process.env.USERPROFILE;', filename: FILE, errors: [home] },
+      { code: 'env.HOME = `/home/${name}`;', filename: FILE, errors: [home] },
+    ]);
   });
 
   test('each spelling of a process PATH read, a delimiter and a HOME key the page names is flagged', () => {
@@ -376,6 +390,28 @@ describe('no-adhoc-env-isolation: the documented out-of-scope examples are not f
       { code: 'const e = { ...process.env, GSD_HOME: x, XDG_CONFIG_HOME: x, CLAUDE_CONFIG_DIR: x };', filename: FILE },
       { code: "const env = { ...process.env, HOMEDRIVE: 'C:', HOMEPATH: tmp };", filename: FILE },
       { code: "process.env.path.split(':');", filename: FILE },
+    ], []);
+  });
+
+  test('a HOME or USERPROFILE value that cannot be a sandbox: a fixed string, or the ambient value of the same key', () => {
+    run([
+      { code: "const fixture = { HOME: '/home/someone' };", filename: FILE },
+      { code: "const fixture = { USERPROFILE: 'C:/Users/someone' };", filename: FILE },
+      { code: 'const fixture = { HOME: `/home/someone` };', filename: FILE },
+      { code: 'const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };', filename: FILE },
+      { code: "const saved = { HOME: process.env['HOME'] };", filename: FILE },
+      { code: 'saved.HOME = process.env.HOME;', filename: FILE },
+      { code: "saved.USERPROFILE = '/h';", filename: FILE },
+      { code: "env.HOME ||= '/h';", filename: FILE },
+    ], []);
+  });
+
+  test('a split of a process PATH read whose result is read only for .length', () => {
+    run([
+      { code: 'const n = process.env.PATH.split(path.delimiter).length;', filename: FILE },
+      { code: "const n = String(process.env.PATH || process.env.Path || '').split(path.delimiter).length;", filename: FILE },
+      { code: 'const n = process.env.PATH?.split(path.delimiter).length;', filename: FILE },
+      { code: 'const n = process.env.PATH.split(path.delimiter).length + 1;', filename: FILE },
     ], []);
   });
 
