@@ -127,7 +127,7 @@ function buildCheck(loadFences = () => loadFenceScanner()) {
     }
     planning
       .satisfies((text) => collapsed(text).includes('the plan checker flags a new abstraction or dependency only when a higher rung is demonstrably sufficient'), 'the planning Occam check must ask the plan checker to flag avoidable new surface only when a higher rung is sufficient (the sentence may wrap across lines)')
-      .has('## Gap Closure Mode', 'thinking-models-planning.md must have a Gap Closure Mode section')
+      .slice('## Gap Closure Mode', '\n## ')
       .has(/gaps_found|gap closure mode/, 'the Gap Closure Mode section must name its trigger condition');
 
     for (const [agent, wiring] of Object.entries(AGENT_WIRING)) {

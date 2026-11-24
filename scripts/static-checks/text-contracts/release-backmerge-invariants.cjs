@@ -25,12 +25,10 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const isWordChar = (ch) => ch !== undefined && /\w/.test(ch);
 
 // The parsed workflow, or the reason it cannot be read.
-function parse(text, label, load = () => require('js-yaml')) {
-  const loaded = loadLib(load, 'js-yaml');
-  if (loaded.error) return { error: loaded.error };
+function parse(text, label, yaml) {
   let workflow;
   try {
-    workflow = loaded.lib.load(text);
+    workflow = yaml.load(text);
   } catch (err) {
     return { error: `${label} is not valid YAML: ${err.message}` };
   }
@@ -53,11 +51,11 @@ function gatesOnOutcome(condition) {
 }
 
 // One workflow document with its parsed form; a workflow that cannot be read is one finding and `check` is not run.
-function withWorkflow(ctx, rel, label, check) {
+function withWorkflow(ctx, rel, label, yaml, check) {
   const doc = ctx.doc(rel);
   let loaded = null;
   doc.satisfies((text) => {
-    const parsed = parse(text, label);
+    const parsed = parse(text, label, yaml);
     if (parsed.error) return parsed.error;
     loaded = parsed.workflow;
     return true;
@@ -73,8 +71,15 @@ module.exports = {
   gatesOnOutcome, hasSequence, parse,
   id: 'release-backmerge-invariants',
   issue: '#2504',
-  check(ctx) {
-    withWorkflow(ctx, BACKMERGE, 'auto-backmerge.yml', (doc, workflow) => {
+  check(ctx, load = () => require('js-yaml')) {
+    // The parser is loaded once: a module that cannot be loaded is one finding for both workflows, and neither is read.
+    const loadedYaml = loadLib(load, 'js-yaml');
+    if (loadedYaml.error) {
+      ctx.fail('.github/workflows', loadedYaml.error);
+      return;
+    }
+    const yaml = loadedYaml.lib;
+    withWorkflow(ctx, BACKMERGE, 'auto-backmerge.yml', yaml, (doc, workflow) => {
       const job = workflow.jobs.backmerge;
       const steps = isObject(job) ? job.steps : undefined;
       doc.satisfies(() => Array.isArray(steps) || 'jobs.backmerge.steps is not an array', 'jobs.backmerge.steps must be an array');
@@ -113,7 +118,7 @@ module.exports = {
           "expected a `git merge -s ours` reconcile step keeping next's tree wholesale");
     });
 
-    withWorkflow(ctx, RELEASE, 'release.yml', (doc, workflow) => {
+    withWorkflow(ctx, RELEASE, 'release.yml', yaml, (doc, workflow) => {
       const jobs = workflow.jobs;
       // A job that is missing or not a mapping, or whose steps are not a list, is one finding that skips every check
       // depending on it.

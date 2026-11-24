@@ -74,10 +74,17 @@ function buildCheck(loadYamlFn = loadYaml) {
         .satisfies((text) => {
           const block = roomsBlock(text);
           if (block === null) return 'could not locate a rooms: YAML block';
-          // The words of the raw bare-entry lines: the bare-entry assertion below reports those, this one the other non-dict entries.
-          const bareWords = new Set(block.split('\n').filter(isBareEntry).map((line) => line.trim().slice(1).trim()));
           const loaded = loadYamlFn();
           if (loaded.error) return loaded.error;
+          // The parsed values of the raw bare-entry lines (a word, null, a boolean): the bare-entry assertion below reports
+          // those, this one the other non-dict entries.
+          const bareValues = block.split('\n').filter(isBareEntry).flatMap((line) => {
+            try {
+              return [loaded.yaml.load(line.trim().slice(1).trim())];
+            } catch {
+              return [];
+            }
+          });
           let parsed;
           try {
             parsed = loaded.yaml.load(block);
@@ -87,7 +94,7 @@ function buildCheck(loadYamlFn = loadYaml) {
           if (!(parsed && Array.isArray(parsed.rooms))) return 'rooms: must parse to an array';
           if (parsed.rooms.length < 5) return `expected the GSD room taxonomy (at least 5 rooms), got ${parsed.rooms.length}`;
           for (const [at, entry] of parsed.rooms.entries()) {
-            if (typeof entry === 'string' && bareWords.has(entry)) continue; // a bare-string entry is reported once, below
+            if (bareValues.some((value) => Object.is(value, entry))) continue; // a bare entry is reported once, below
             if (!(entry !== null && typeof entry === 'object' && !Array.isArray(entry))) return `rooms:[${at}] must be a dict, got ${JSON.stringify(entry)}`;
             if (!(typeof entry.name === 'string' && entry.name.length > 0)) return `rooms:[${at}] must have a non-empty name string`;
           }

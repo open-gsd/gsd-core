@@ -1210,7 +1210,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     ]),
     ['the planning Occam sentence on scope gone', 'gsd-core/references/thinking-models-planning.md', swap('must never reduce requested scope', 'may reduce scope'), 'thinking-model-guidance', /the planning Occam check must say it must never reduce requested scope/],
     ['the plan checker sentence gone', 'gsd-core/references/thinking-models-planning.md', swap('the plan checker flags a new abstraction or dependency only when a higher rung is demonstrably sufficient', 'the plan checker reviews plans'), 'thinking-model-guidance', /the planning Occam check must ask the plan checker to flag avoidable new surface only when a higher rung is sufficient/],
-    ['the Gap Closure Mode heading gone', 'gsd-core/references/thinking-models-planning.md', swap('## Gap Closure Mode', '## Gap Mode'), 'thinking-model-guidance', /thinking-models-planning\.md must have a Gap Closure Mode section/],
+    ['the Gap Closure Mode heading gone', 'gsd-core/references/thinking-models-planning.md', swap('## Gap Closure Mode', '## Gap Mode'), 'thinking-model-guidance', /marker "## Gap Closure Mode" not found/],
     ['the gaps_found trigger gone', 'gsd-core/references/thinking-models-planning.md', (text) => text.split('gaps_found').join('x').split('gap closure mode').join('y'), 'thinking-model-guidance', /the Gap Closure Mode section must name its trigger condition/],
         // quick-commit-boundary-context-research
         ['DISCUSS_MODE gone from the pre-dispatch commit step (#4996)', 'gsd-core/workflows/quick/steps/worktree-pre-dispatch-commit.md',
@@ -2263,7 +2263,10 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         const key = variant === 2 ? 'myoptions' : 'options';
         return `${prefix}${name}${seps[0]}(${seps[1]}[ { ${key}${seps[2]}${variant === 3 ? '' : ':'}${seps[3]}[${seps[4]}${labels} ${variant === 4 ? '' : ']'} } ])`;
       });
-      property('bracketPartners pairs each opening bracket with the old balanced close', tokens(['[', ']', 'x', '[', ']', '\n'], 20), (text) => {
+      // Nests of 0 to 4 opening brackets, a filler (a quote among them) and 0 to 4 closing brackets, one to three times.
+      const bracketNests = fc.array(fc.tuple(fc.integer({ min: 0, max: 4 }), fc.constantFrom('', 'x', '"', ' ', '\n'), fc.integer({ min: 0, max: 4 })), { minLength: 1, maxLength: 3 })
+        .map((items) => items.map(([opens, filler, closes]) => `${'['.repeat(opens)}${filler}${']'.repeat(closes)}`).join(''));
+      property('bracketPartners pairs each opening bracket with the old balanced close', fc.oneof(tokens(['[', ']', 'x', '[', ']', '\n'], 20), bracketNests), (text) => {
         const partner = ask.bracketPartners(text);
         for (let i = 0; i < text.length; i += 1) {
           if (text[i] === '[') assert.equal(partner.has(i) ? partner.get(i) : -1, oldClose(text, i, '[', ']'), `${JSON.stringify(text)} at ${i}`);
@@ -2282,7 +2285,10 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         assert.deepEqual(found, oldViolations(text), JSON.stringify(text));
         return found.length > 0;
       });
-      property('sectionAfter equals the old section extraction', tokens(['ZZ', '\n# ', '\n## ', '\n#', '#', ' ', 'x', '\n', 'ZZ', 'x'], 20), (text) => {
+      // An anchor (or a cut one), a body, the next heading of either level or none, and a tail.
+      const sections = fc.tuple(tokens(['x', '\n'], 3), fc.constantFrom('ZZ', 'Z'), fc.constantFrom('', ' x', '\n'), fc.constantFrom('\n# h', '\n## h', '\n#h', ''), tokens(['x', '\n##', ' '], 3))
+        .map(([prefix, anchor, body, heading, tail]) => `${prefix}${anchor}${body}${heading}${tail}`);
+      property('sectionAfter equals the old section extraction', fc.oneof(tokens(['ZZ', '\n# ', '\n## ', '\n#', '#', ' ', 'x', '\n', 'ZZ', 'x'], 20), sections), (text) => {
         const start = text.indexOf('ZZ');
         const expected = start === -1 ? null : (() => {
           const rest = text.slice(start + 2);
@@ -2386,11 +2392,14 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       });
     }
 
-    test('a js-yaml that cannot be loaded is its own finding and a parse error is another', () => {
-      const { parse } = require(path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', 'release-backmerge-invariants.cjs'));
-      assert.deepEqual(parse('jobs: {}', 'x.yml', () => { throw new Error('boom'); }), { error: 'js-yaml cannot be loaded: boom' });
-      assert.match(parse('a: [\n', 'x.yml').error, /^x\.yml is not valid YAML: /);
-      assert.deepEqual(parse('jobs: { a: {} }', 'x.yml').workflow, { jobs: { a: {} } });
+    test('a js-yaml that cannot be loaded is one finding for both workflows, and a parse error is reported for its workflow', () => {
+      const release = require(path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', 'release-backmerge-invariants.cjs'));
+      const findings = [];
+      const ctx = { fail: (file, message) => findings.push({ file, message }), doc: () => { throw new Error('no workflow is read when the parser cannot be loaded'); } };
+      release.check(ctx, () => { throw new Error('boom'); });
+      assert.deepEqual(findings, [{ file: '.github/workflows', message: 'js-yaml cannot be loaded: boom' }]);
+      assert.match(release.parse('a: [\n', 'x.yml', yaml).error, /^x\.yml is not valid YAML: /);
+      assert.deepEqual(release.parse('jobs: { a: {} }', 'x.yml', yaml).workflow, { jobs: { a: {} } });
     });
   }
 
@@ -3419,6 +3428,22 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         assert.ok(messages.some((m) => /gsd-core\/bin\/lib\/capability-registry\.cjs cannot be loaded: boom/.test(m)), JSON.stringify(messages));
         assert.ok(messages.some((m) => /gates `mempalace\.diary_journal` on positive presence/.test(m)), JSON.stringify(messages));
       });
+      // seed-scan-new-milestone: every misplaced question is named by the one finding.
+      test('two questions before the write-seed step are named by one finding', (t) => {
+        const root = copyOfRepoFiles(t);
+        editFile(root, 'gsd-core/workflows/plant-seed.md', (text) => text.split('<step name="parse-idea">').join('header: "Trigger"\nheader: "Why"\n<step name="parse-idea">'));
+        const own = runShipped(root, ['seed-scan-new-milestone']).filter((f) => f.file === 'gsd-core/workflows/plant-seed.md');
+        assert.equal(own.length, 1, JSON.stringify(own));
+        assert.match(own[0].message, /must precede the Trigger question[^]*must precede the Why question/);
+        assert.doesNotMatch(own[0].message, /must precede the Scope question/);
+      });
+      test('all three questions before the write-seed step are named by one finding', (t) => {
+        const root = copyOfRepoFiles(t);
+        editFile(root, 'gsd-core/workflows/plant-seed.md', (text) => text.split('<step name="parse-idea">').join('header: "Scope"\nheader: "Why"\nheader: "Trigger"\n<step name="parse-idea">'));
+        const own = runShipped(root, ['seed-scan-new-milestone']).filter((f) => f.file === 'gsd-core/workflows/plant-seed.md');
+        assert.equal(own.length, 1, JSON.stringify(own));
+        assert.match(own[0].message, /Trigger question[^]*Why question[^]*Scope question/);
+      });
     }
   }
 
@@ -3933,6 +3958,21 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
       const findings = runShipped(root, ['workflow-jq-dependency']);
       assert.equal(findings.length, 2, JSON.stringify(findings.map((f) => f.message)));
     });
+
+    // ---- review round 5: null and boolean bare entries, the gap closure trigger inside its section.
+    for (const [title, entry] of [['a null', '- null'], ['a true', '- true'], ['a capitalised True', '- True'], ['a false', '- false']]) {
+      for (const rel of ['skills/gsd-mempalace-capture/SKILL.md', 'commands/gsd/mempalace-capture.md']) {
+        findsOne(`${title} rooms entry in ${rel} is one finding`, rel, swap('- name: decisions', entry), 'mempalace-capture-headless-invocation', 'the rooms: block must not contain bare-string entries');
+      }
+    }
+    findsOne('a gap closure trigger outside its section does not count', 'gsd-core/references/thinking-models-planning.md',
+      (text) => {
+        const from = text.indexOf('## Gap Closure Mode');
+        const to = text.indexOf('\n## ', from + 1);
+        const section = text.slice(from, to).split('gaps_found').join('x').split('gap closure mode').join('y');
+        return `gaps_found\n${text.slice(0, from)}${section}${text.slice(to)}`;
+      }, 'thinking-model-guidance', 'the Gap Closure Mode section must name its trigger condition');
+    findsOne('the When NOT to Think heading gone from the planning reference is one finding', 'gsd-core/references/thinking-models-planning.md', swap('\n## When NOT to Think', '\n## Stop'), 'thinking-model-guidance', 'must have a "When NOT to Think" section');
   }
 
   {

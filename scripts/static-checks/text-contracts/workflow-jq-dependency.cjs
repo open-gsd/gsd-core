@@ -107,15 +107,18 @@ module.exports = {
       if (!docs.has(rel)) docs.set(rel, ctx.doc(rel));
       return docs.get(rel);
     };
+    const familyWhy = {
+      'config-get': 'config-get lookups must use --raw, not a jq pipe',
+      'resolve-model': 'resolve-model lookups must use --pick, not a jq pipe',
+      'verification.status': 'verification.status lookups must use --pick, not a jq pipe',
+      'resolve-execution': 'resolve-execution lookups must use --pick, not a jq pipe (sibling of resolve-model)',
+    };
     const probes = [
-      ['config-get lookups must use --raw, not a jq pipe', (text) => wordPipedToJq(text, 'config-get')],
-      ['resolve-model lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'resolve-model')],
-      ['verification.status lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'verification.status')],
+      ...FAMILIES.map((family) => [familyWhy[family], (text) => wordPipedToJq(text, family)]),
       // The general guard reports only a query family written with no word boundary: a pipe a family probe sees is reported once.
       ['no gsd_run query (config-get|resolve-model|resolve-execution|verification.status) may pipe to jq',
         (text) => queryPipedToJq(text, true)],
       ['update-context lookups must not pipe to jq (#1854)', (text) => wordPipedToJq(text, 'update-context')],
-      ['resolve-execution lookups must use --pick, not a jq pipe (sibling of resolve-model)', (text) => wordPipedToJq(text, 'resolve-execution')],
     ];
     for (const name of AUDITED) {
       const doc = docOf(`${WF}/${name}`);

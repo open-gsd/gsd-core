@@ -71,11 +71,13 @@ module.exports = {
       .satisfies((text) => {
         const writeAt = text.indexOf('<step name="write-seed"');
         if (writeAt === -1) return true; // the missing step is reported by the assertion above
+        // Every misplaced question is named: the old test asserted the three headers one by one.
+        const misplaced = [];
         for (const header of ['Trigger', 'Why', 'Scope']) {
           const questionAt = text.indexOf(`header: "${header}"`);
-          if (questionAt !== -1 && !(writeAt < questionAt)) return `write-seed (offset ${writeAt}) must precede the ${header} question (offset ${questionAt})`;
+          if (questionAt !== -1 && !(writeAt < questionAt)) misplaced.push(`write-seed (offset ${writeAt}) must precede the ${header} question (offset ${questionAt})`);
         }
-        return true;
+        return misplaced.length === 0 || misplaced.join('; ');
       }, 'the seed must be written before any Trigger / Why / Scope question (capture first, enrich later)')
       .satisfies((text) => lineHasInOrder(text, ['trigger_when', 'default']) || lineHasInOrder(text, ['default', 'trigger'])
         || /when relevant|when scope matches|unspecified/i.test(text), 'plant-seed.md must document a default for trigger_when when the user provides no Trigger')
