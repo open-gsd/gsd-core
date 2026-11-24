@@ -82,3 +82,17 @@ properties are captured data, not matching criteria.
   `test_known_bug` (`@unittest.expectedFailure`, passes); `add` returns 0.
 - `unittest-load-error.txt`: the same command with a test module whose import
   fails (`import missing_module`).
+
+- `pytest-red.xml`, `pytest-collection-error.xml`, `pytest-setup-error.xml`,
+  `pytest-teardown-error.xml`, `pytest-red-teardown-error.xml` (captured
+  2026-11-24, pytest 9.2.0, CPython 3.14.9; #6641):
+  `python -m pytest -q -p no:cacheprovider <file> --junitxml=<report>`. Each
+  run exited 1 except the collection error (exit 2). The capture directory is
+  rewritten to `/tmp/capture`, the interpreter prefix to `/usr` and the
+  hostname to `capture-host`; nothing else was edited. Sources, in order:
+  `test_evidence.py` (`test_target` asserts `1 == 2`, `test_other` passes);
+  `test_collect.py` (`from os import NO_SUCH_NAME` at module top);
+  `test_setup.py` (a fixture that raises before `yield`; the test passes);
+  `test_teardown.py` (a fixture that raises after `yield`; the test passes);
+  `test_red_teardown.py` (the same fixture; the test asserts `1 == 2`, so
+  pytest writes two `<testcase>` entries for it).
