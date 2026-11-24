@@ -26,6 +26,7 @@ const path = require('node:path');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   resolveModelInternal,
@@ -124,7 +125,7 @@ describe('#6214: attempt 0 agrees with resolve-model', () => {
 
   test('CLI: resolve-execution --attempt 0 model equals resolve-model', () => {
     dir = mkProject(ISSUE_CONFIG);
-    const env = { HOME: dir, USERPROFILE: dir, GSD_HOME: dir, GSD_RUNTIME: 'codex', CLAUDE_CODE_SUBAGENT_MODEL: '' };
+    const env = isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: 'codex', CLAUDE_CODE_SUBAGENT_MODEL: '' } });
     const picked = runGsdTools(['query', 'resolve-model', MAPPER, '--pick', 'model'], dir, env);
     assert.ok(picked.success, picked.error);
     const exec = runGsdTools(['resolve-execution', MAPPER, '--attempt', '0'], dir, env);

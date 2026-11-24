@@ -54,7 +54,10 @@ not exist yet. The whole run is refused as `build_failure`, ahead of the generic
 Which paths count as test files is one list, `src/tdd-test-files.cts`, shared by the
 behavior-adding check and the RED-commit pathspec in `execute-phase.md` (a test pins the
 two together): `*.test.*`, `*.spec.*`, `tests/` or `test/` and `__tests__/` directories,
-`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`.
+`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`. Letter case
+is ignored on both sides: the router folds case itself and the gate passes the same list behind
+git's `:(icase)` pathspec magic, so a RED commit made only of `Tests/foo.rs` or `Foo.TEST.js` is
+found (#5766).
 
 The upstream parsers (`tap-parser` and `saxes`) ship as reproducible bundles,
 including license notices, so installed runtimes need no `node_modules`.

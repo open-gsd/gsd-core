@@ -64,9 +64,19 @@ function isStripped(key) {
  * -> overlay home / path / claudeConfigDir -> overlay `override` -> canonicalize
  * key casing.
  *
+ * The stripping holds only when the result reaches the child verbatim (runNode,
+ * runHook, spawn). runGsdTools*, installSpawnEnv and installerEnv start from
+ * `{ ...process.env, ...testEnvBase() }` and spread what they are handed over it,
+ * so a stripped key (ambient GSD_*, BASH_ENV, CLAUDE_ENV_FILE, ...) returns there.
+ * Through them the result still sets home, path, `override` and the blanks.
+ *
  * @param {object} opts
  * @param {string} opts.home Absolute dir written to BOTH `HOME` and `USERPROFILE`.
  *   Missing or relative throws `TypeError`.
+ * @param {string} [opts.userProfile] Absolute dir written to `USERPROFILE` instead of
+ *   `home`. Only for a test whose subject is `HOME` and `USERPROFILE` pointing at
+ *   different directories (a HOME-only seed that leaks through USERPROFILE on win32,
+ *   #5276). Omitted: `USERPROFILE` is `home`. Relative throws `TypeError`.
  * @param {string} [opts.path] Written to `PATH` verbatim. Omitted: the inherited
  *   PATH is kept (inheriting PATH is allowed; hand-filtering it is not).
  * @param {string} [opts.claudeConfigDir] Written to `CLAUDE_CONFIG_DIR`; omitted:
@@ -78,11 +88,16 @@ function isStripped(key) {
  * @returns {Record<string, string>}
  */
 function isolatedEnv(opts) {
-  const { home, path: pathValue, claudeConfigDir, override, base = process.env } = opts ?? {};
+  const { home, userProfile, path: pathValue, claudeConfigDir, override, base = process.env } = opts ?? {};
   if (typeof home !== 'string' || !path.isAbsolute(home)) {
     throw new TypeError(
       `isolatedEnv: home must be an absolute path (received ${JSON.stringify(home)}). ` +
         'A helper that inherits the real home isolates nothing.',
+    );
+  }
+  if (userProfile !== undefined && (typeof userProfile !== 'string' || !path.isAbsolute(userProfile))) {
+    throw new TypeError(
+      `isolatedEnv: userProfile must be an absolute path when given (received ${JSON.stringify(userProfile)}).`,
     );
   }
 
@@ -92,7 +107,7 @@ function isolatedEnv(opts) {
   }
   Object.assign(env, testEnvBase());
 
-  const set = { HOME: home, USERPROFILE: home };
+  const set = { HOME: home, USERPROFILE: userProfile ?? home };
   if (pathValue !== undefined) set.PATH = pathValue;
   if (claudeConfigDir !== undefined) set.CLAUDE_CONFIG_DIR = claudeConfigDir;
   Object.assign(env, set, override);

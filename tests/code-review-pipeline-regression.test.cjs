@@ -32,6 +32,7 @@ const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempGitProject, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { findShellFencedMatches } = require('./helpers/shell-doc-scan.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const os = require('node:os');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -765,7 +766,7 @@ describe('Bug 4 (#2352) — compute_file_scope tilde-path expansion', () => {
     return toLegacyResult(
       runHook('-c', [script, 'bash', ...files], {
         interpreter: 'bash',
-        env: { ...process.env, HOME: homeDir },
+        env: isolatedEnv({ home: homeDir }),
         timeoutMs: PROBE_TIMEOUT_MS,
       })
     );
@@ -3588,8 +3589,8 @@ describe('#3861 round 12 — block 2 does not compute a shortfall from a self-co
 
 const REVIEWER_AGENT_PATH = path.join(ROOT, 'agents', 'gsd-code-reviewer.md');
 
-// The alternations the shipped script uses to recognise a finding id. There are three —
-// the heading matcher, the ledger row re-parser, and the frontmatter `- id:` matcher —
+// The alternations the shipped script uses to recognise a finding id. There are four —
+// the heading matcher, the prefixed-heading matcher, the ledger row re-parser, and the frontmatter `- id:` matcher —
 // and adding a prefix to only some of them is silent. The severity map below is a fourth
 // copy of the same set; it is not an alternation, so it is extracted separately.
 // This scan is by PATTERN, never a fixed list of sites, which is why round 5's new
@@ -4111,6 +4112,171 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.match(out.stdout, /decision\(s\) DROPPED/, 'the drop must be stated');
     assert.match(out.stdout, /CR-01=deferred/, 'naming the id and what was decided');
     assert.doesNotMatch(out.ledger, /^superseded:/m, 'and no preservation block is written');
+  });
+
+  // ── #5802 — a recorded decision must not leave the ledger without the console saying so, on any path ──
+
+  const REVIEW_HEAD = ['---', 'status: issues_found', '---', ''];
+  const deferredCr01 = () => runShippedDisposition({
+    reviewText: [...REVIEW_HEAD, '### CR-01: the original finding'].join('\n'),
+    priorText: '| CR-01 | critical | deferred | waiting on the vendor |\n',
+  }).ledger;
+
+  test('[regression #5802] a reused id decided by a fix report still reports the displaced decision', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: a brand new finding'].join('\n'),
+      priorText: deferredCr01(),
+      fixText: ['## Fixed Issues', '', '### CR-01: a brand new finding'].join('\n'),
+    });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'fixed');
+    assert.match(out.stdout, /decision\(s\) DROPPED/, 'the applied branch must report the displaced decision');
+    assert.match(out.stdout, /CR-01=deferred/);
+  });
+
+  test('[regression #5802] a reused id carried only by a fix report still reports the displaced decision', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### IN-07: unrelated'].join('\n'),
+      priorText: deferredCr01(),
+      iterFixText: { 2: ['## Fixed Issues', '', '### CR-01: an older, different finding'].join('\n') },
+    });
+    assert.match(out.stdout, /CR-01=deferred/, 'the carried-by-report path must name the displaced decision');
+  });
+
+  test('[regression #5802] a same-finding fix outcome over a recorded decision is an update, not a drop', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: the original finding'].join('\n'),
+      priorText: deferredCr01(),
+      fixText: ['## Fixed Issues', '', '### CR-01: the original finding'].join('\n'),
+    });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'fixed');
+    assert.doesNotMatch(out.stdout, /DROPPED/);
+  });
+
+  test('[regression #5802] a review whose headings carry a review-scoped prefix says it recorded nothing, and why', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### W6-CR-01: first', '### W6-WR-02: second'].join('\n'),
+    });
+    assert.match(out.stdout, /2 finding\(s\) recorded NOWHERE/);
+    assert.match(out.stdout, /carry a prefix before the id \(W6-CR-01, W6-WR-02\)/);
+    assert.match(out.ledger, /^unparsed: 2$/m);
+  });
+
+  test('[regression #5802] a prefixed heading inside a fence is an illustration and is not reported', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: real', '', '```', '### W6-CR-01: example', '```'].join('\n'),
+    });
+    assert.doesNotMatch(out.stdout, /carry a prefix/);
+  });
+
+  test('[regression #5802] a ledger row outside the id grammar is named and kept verbatim, and the run is a fixed point', () => {
+    const row = '| R1-WR-01 | warning | deferred | keep me |';
+    const first = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: row + '\n',
+    });
+    assert.ok(first.ledger.split('\n').includes(row), 'the unparseable row must survive the rewrite verbatim');
+    assert.match(first.stdout, /not in the id \| severity \| disposition \| source shape: R1-WR-01; kept verbatim/);
+    const second = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: first.ledger,
+    });
+    assert.ok(second.wroteNothing, 'the kept row re-reads as the same row, so the next run changes nothing');
+    assert.ok(second.ledger.split('\n').includes(row));
+  });
+
+  test('[regression #5802] a hand-set disposition in another case is a decision, not an unparseable row', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: '| CR-01 | critical | Deferred | vendor |\n',
+    });
+    const cr = ledgerRows(out.ledger).find((r) => r.id === 'CR-01');
+    assert.strictEqual(cr.disposition, 'deferred');
+    assert.strictEqual(cr.source, 'vendor');
+    assert.doesNotMatch(out.stdout, /not in the id/);
+  });
+
+  test('[regression #5802] a row with an invalid disposition whose id a regenerated row takes is reset to open and NAMED with what it held', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: '| CR-01 | critical | wontfix | the reason |\n',
+    });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'open');
+    assert.match(out.stdout, /1 ledger row\(s\) not in the id \| severity \| disposition \| source shape were reset to open/);
+    assert.match(out.stdout, /CR-01 was wontfix \/ the reason/, 'the console keeps what the row held');
+  });
+
+  test('[regression #5802] two rows for one id are named, not collapsed silently', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: '| CR-01 | critical | deferred | a |\n| CR-01 | critical | skipped | b |\n',
+    });
+    assert.match(out.stdout, /1 finding id\(s\) have more than one ledger row, and the last row of each was used: CR-01/);
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'skipped');
+  });
+
+  test('[regression #5802] an indented ledger row is named and kept, not deleted', () => {
+    const row = '  | CR-02 | critical | deferred | indented |';
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'), priorText: row + '\n' });
+    assert.ok(out.ledger.split('\n').includes(row));
+    assert.match(out.stdout, /not in the id \| severity \| disposition \| source shape: CR-02; kept verbatim, not counted/);
+  });
+
+  test('[security #5802] ledger text on the console is masked for control characters and capped', () => {
+    const rows = ['| \u001b[31mred | w | x |', '| ' + 'L'.repeat(100) + ' | w | x |', '| r3 | w | x |', '| r4 | w | x |'];
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'), priorText: rows.join('\n') + '\n' });
+    assert.ok(!out.stdout.includes('\u001b'), 'no escape character reaches the console');
+    assert.match(out.stdout, /\?\[31mred/);
+    assert.ok(!out.stdout.includes('L'.repeat(41)), 'a cell is capped at 40 characters');
+    assert.match(out.stdout, /, \.\.\./, 'the list is capped at three names');
+  });
+
+  test('[regression #5802] a fix-report heading with a prefixed id is named, not ignored', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      fixText: ['## Fixed Issues', '', '### W6-CR-01: x'].join('\n'),
+    });
+    assert.match(out.stdout, /1 fix-report heading\(s\) carry a prefix before the id \(W6-CR-01\) and were not reconciled/);
+  });
+
+  test('[regression #5802] a multi-segment prefix is recognised on a heading', () => {
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### W6-R2-CR-01: y'].join('\n') });
+    assert.match(out.stdout, /carry a prefix before the id \(W6-R2-CR-01\)/);
+  });
+
+  test('[regression #5802] a frontmatter id outside the grammar does not hand its title to the previous finding', () => {
+    const prior = [
+      '---', 'phase: 01', 'review: 01-REVIEW.md', 'titles: json', 'findings:',
+      '  - id: CR-01', '    severity: critical', '    disposition: deferred', '    title: "orig"',
+      '  - id: R1-CR-01', '    severity: critical', '    disposition: open', '    title: "other"',
+      'open: 0', 'total: 2', 'recorded: x', '---', '',
+      '| CR-01 | critical | deferred | why |',
+    ].join('\n');
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: orig'].join('\n'), priorText: prior });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'deferred',
+      'CR-01 still names the same finding, so its decision is inherited');
+    assert.doesNotMatch(out.stdout, /DROPPED/);
+    assert.match(out.ledger, /title: "orig"/);
+    assert.doesNotMatch(out.ledger, /title: "other"/);
+  });
+
+  test('[property #5802] a row or heading with any review-scoped prefix survives or is named', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    fc.assert(fc.property(
+      fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,6}$/),
+      fc.constantFrom('open', 'fixed', 'skipped', 'deferred'),
+      (prefix, disposition) => {
+        const id = prefix + '-WR-01';
+        const row = '| ' + id + ' | warning | ' + disposition + ' | reason |';
+        const rowRun = runShippedDisposition({
+          reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+          priorText: row + '\n',
+        });
+        assert.ok(rowRun.ledger.split('\n').includes(row), id + ' must survive verbatim');
+        assert.ok(rowRun.stdout.includes(id), id + ' must be named on the console');
+        const headingRun = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### ' + id + ': t'].join('\n') });
+        assert.match(headingRun.stdout, /carry a prefix before the id/, id + ' heading must be refused loudly');
+      },
+    ), { numRuns: 12 });
   });
 
   test('a prior decision is NOT inherited when the id now names a different finding', () => {
@@ -4680,12 +4846,12 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
   }
 
   /** Run a resolver block (then print the directory it exported) in the sandboxed project. */
-  function runBlock(block, env, extra = '', prefix = '') {
+  function runBlock(block, env, extra = '', prefix = '', home = emptyHome) {
     const script = prefix + block.text + '\nprintf "%s" "$GSD_LIB_DIR"\n' + extra;
     const result = runHook('-c', [script], {
       interpreter: 'bash',
       cwd: projectDir,
-      env: { PATH: minimalPath, HOME: emptyHome, ...env },
+      env: isolatedEnv({ home, path: minimalPath, base: {}, override: env }),
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
     return toLegacyResult(result);
@@ -4707,7 +4873,7 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
     before_(t);
     {
       for (const site of RESOLVER_SITES) {
-        const r = runBlock(resolverFor(site), { HOME: installHome });
+        const r = runBlock(resolverFor(site), {}, '', '', installHome);
         assert.equal(r.status, 0, site.module + ': ' + r.stderr);
         assert.equal(r.stdout, installedLib(), site.module);
       }
@@ -4719,7 +4885,7 @@ describe('#5640 helper modules resolve from the installed runtime', { skip: !HAS
     {
       const site = RESOLVER_SITES[0];
       const read = "\nnode -e \"const { parseCodeReviewFlags } = require(require('path').join(process.env.GSD_LIB_DIR, 'code-review-flags.cjs')); process.stdout.write(JSON.stringify(parseCodeReviewFlags(process.argv.slice(1))));\" -- 03 --fix";
-      const r = runBlock(resolverFor(site), { HOME: installHome }, '\necho\n' + read.trimStart());
+      const r = runBlock(resolverFor(site), {}, '\necho\n' + read.trimStart(), '', installHome);
       assert.equal(r.status, 0, r.stderr);
       const flags = JSON.parse(r.stdout.slice(r.stdout.indexOf('\n') + 1));
       assert.equal(flags.fix, true, 'the --fix flag reaches the review');

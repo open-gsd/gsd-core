@@ -25,6 +25,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const fc = require('fast-check');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { skipUnless } = require('./helpers/bash-probe.cjs');
 
@@ -108,16 +109,19 @@ async function runFence(t, file, { ports = [], rawPorts, mode = 'ok' }) {
   fs.writeFileSync(scriptPath, script);
   const child = spawn('bash', [scriptPath], {
     cwd: tmp,
-    env: {
-      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      HOME: tmp,
-      TMPDIR: tmp,
-      TEMP: tmp,
-      TMP: tmp,
-      STUB_LOG: log,
-      STUB_MODE: mode,
-      DEV_PORTS: rawPorts === undefined ? ports.join(' ') : rawPorts,
-    },
+    env: isolatedEnv({
+      home: tmp,
+      path: `${bin}${path.delimiter}${process.env.PATH}`,
+      base: {},
+      override: {
+        TMPDIR: tmp,
+        TEMP: tmp,
+        TMP: tmp,
+        STUB_LOG: log,
+        STUB_MODE: mode,
+        DEV_PORTS: rawPorts === undefined ? ports.join(' ') : rawPorts,
+      },
+    }),
   });
   let stdout = '';
   let stderr = '';
@@ -254,7 +258,7 @@ for (const file of AUDITOR_FILES) {
       const script = `${loopHead()}\n  printf '%s\\n' "$PORT"\ndone\n`;
       const r = spawnSync('bash', ['-c', script], {
         cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
-        env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, TEMP: dir, TMP: dir, DEV_PORTS: devPorts },
+        env: isolatedEnv({ home: dir, path: process.env.PATH, base: {}, override: { TMPDIR: dir, TEMP: dir, TMP: dir, DEV_PORTS: devPorts } }),
       });
       assert.equal(r.status, 0, r.stderr);
       return r.stdout.split('\n').filter(Boolean);

@@ -19,6 +19,7 @@ const path = require('path');
 const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runNode, runHook, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 /**
  * Run gsd-tools and capture BOTH stdout and stderr on success.
@@ -65,7 +66,7 @@ function runAgentSkillsJson(args, tmpDir, env) {
   if (cmdIdx !== -1) {
     withJson.splice(cmdIdx + 1, 0, '--json');
   }
-  const result = runGsdTools(withJson, tmpDir, env || { HOME: tmpDir, USERPROFILE: tmpDir });
+  const result = runGsdTools(withJson, tmpDir, env || isolatedEnv({ home: tmpDir }));
   if (!result.success) return { success: false, error: result.error, ir: null };
   try {
     return { success: true, ir: JSON.parse(result.output) };
@@ -123,12 +124,13 @@ describe('agent-skills command', () => {
     markLocalGsdInstall(tmpDir);
     writeConfig(tmpDir, { runtime: 'codex' });
 
-    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], descendant, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-      CODEX_HOME: path.join(tmpDir, 'global-codex'),
-      GSD_RUNTIME: '',
-    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], descendant, isolatedEnv({
+      home: tmpDir,
+      override: {
+        CODEX_HOME: path.join(tmpDir, 'global-codex'),
+        GSD_RUNTIME: '',
+      },
+    }));
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, localPersona);
   });
@@ -144,13 +146,14 @@ describe('agent-skills command', () => {
     fs.mkdirSync(workstreamDir, { recursive: true });
     fs.writeFileSync(path.join(workstreamDir, 'config.json'), JSON.stringify({ runtime: 'codex' }));
 
-    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-      CODEX_HOME: path.join(tmpDir, 'global-codex'),
-      GSD_RUNTIME: '',
-      GSD_WORKSTREAM: 'feature-x',
-    });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({
+      home: tmpDir,
+      override: {
+        CODEX_HOME: path.join(tmpDir, 'global-codex'),
+        GSD_RUNTIME: '',
+        GSD_WORKSTREAM: 'feature-x',
+      },
+    }));
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, localPersona);
   });
@@ -182,7 +185,7 @@ describe('agent-skills command', () => {
       writeConfig(tmpDir, { runtime: 'codex' });
     }
 
-    const ENV = () => ({ HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '' });
+    const ENV = () => isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } });
 
     test('unconfigured Codex with an installed persona: --skills-only returns an empty block', () => {
       installCodexCompanion();
@@ -244,18 +247,14 @@ describe('agent-skills command', () => {
       fs.writeFileSync(path.join(agentsDir, 'gsd-executor.compact.md'), COMPACT);
       writeConfig(tmpDir, { runtime: 'codex', workflow: { compact_content: true } });
 
-      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(r.success, `Command failed: ${r.error}`);
       assert.strictEqual(r.ir.block, COMPACT);
       assert.strictEqual(r.ir.agent_payload_variant, 'compact');
 
       // Raw (non-JSON) mode is what ${AGENT_SKILLS_*} substitution actually
       // consumes — must match the JSON block byte-for-byte.
-      const raw = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const raw = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(raw.success, `Raw command failed: ${raw.error}`);
       assert.strictEqual(raw.output, COMPACT.trimEnd());
     });
@@ -266,9 +265,7 @@ describe('agent-skills command', () => {
       fs.writeFileSync(path.join(agentsDir, 'gsd-executor.md'), CANONICAL);
       writeConfig(tmpDir, { runtime: 'codex' });
 
-      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(r.success, `Command failed: ${r.error}`);
       assert.strictEqual(r.ir.block, CANONICAL);
       assert.strictEqual(r.ir.agent_payload_variant, 'canonical');
@@ -280,9 +277,7 @@ describe('agent-skills command', () => {
       fs.writeFileSync(path.join(agentsDir, 'gsd-executor.md'), CANONICAL);
       writeConfig(tmpDir, { runtime: 'codex', workflow: { compact_content: true } });
 
-      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(r.success, `Command failed: ${r.error}`);
       assert.strictEqual(
         r.ir.block,
@@ -290,9 +285,7 @@ describe('agent-skills command', () => {
       );
       assert.strictEqual(r.ir.agent_payload_variant, 'canonical');
 
-      const raw = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const raw = runGsdTools(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(raw.success, `Raw command failed: ${raw.error}`);
       assert.strictEqual(raw.output, r.ir.block.trimEnd());
     });
@@ -304,9 +297,7 @@ describe('agent-skills command', () => {
       fs.writeFileSync(path.join(agentsDir, 'gsd-executor.compact.md'), '');
       writeConfig(tmpDir, { runtime: 'codex', workflow: { compact_content: true } });
 
-      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(r.success, `Command failed: ${r.error}`);
       assert.strictEqual(
         r.ir.block,
@@ -342,9 +333,7 @@ describe('agent-skills command', () => {
         agent_skills: { 'gsd-executor': ['skills/test-skill'] },
       });
 
-      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-        HOME: tmpDir, USERPROFILE: tmpDir, GSD_RUNTIME: '',
-      });
+      const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: '' } }));
       assert.ok(r.success, `Command failed: ${r.error}`);
       assert.ok(r.ir.block.includes('test-skill'), 'expected the user-configured skills block, not the persona fallback');
       assert.strictEqual(r.ir.agent_payload_variant, null);
@@ -514,10 +503,7 @@ describe('agent-skills empty-resolution diagnostics', () => {
       agent_skills: { 'gsd-planner': ['references/a', 'references/b'] },
     });
 
-    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, `Command failed (exit ${r.exitCode}): ${r.stderr}`);
     assert.ok(
       r.stderr.includes('[agent-skills] WARNING') &&
@@ -614,7 +600,7 @@ describe('config-ensure-section with agent_skills', () => {
   });
 
   test('new configs include agent_skills key', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -631,7 +617,7 @@ describe('config-set agent_skills', () => {
   beforeEach(() => {
     tmpDir = createTempProject();
     // Ensure config exists first
-    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
   });
 
   afterEach(() => {
@@ -642,7 +628,7 @@ describe('config-set agent_skills', () => {
     const result = runGsdTools(
       ['config-set', 'agent_skills.gsd-executor', '["skills/my-skill"]'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -689,7 +675,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.ok(r.ir.block.includes('valid-skill/SKILL.md'), `block must reference the global skill: ${r.ir.block}`);
@@ -702,7 +688,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty when invalid name is rejected');
@@ -714,7 +700,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty when skill is missing');
@@ -733,7 +719,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty — bare name does not resolve as project-relative');
@@ -751,7 +737,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty');
@@ -775,7 +761,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.ok(r.ir.block.includes('shadcn/SKILL.md'), 'block must include global shadcn');
@@ -789,7 +775,7 @@ describe('agent-skills global: prefix', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty for empty global: prefix');
@@ -1084,7 +1070,7 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty when symlink escapes base and no trusted root configured');
@@ -1103,7 +1089,7 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.ok(r.ir.block.includes('<agent_skills>'), `block must contain <agent_skills> tag, got: ${r.ir.block}`);
@@ -1126,7 +1112,7 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
     const r = runGsdToolsWithStderr(
       ['agent-skills', '--json', 'gsd-executor'],
       tmpDir,
-      { HOME: fakeHome, USERPROFILE: fakeHome }
+      isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed (exit ${r.exitCode}): ${r.stderr}`);
     // The NOTE must appear on stderr using only the skill name (no full paths)
@@ -1155,7 +1141,7 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
       });
 
       const r = runAgentSkillsJson(
-        ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+        ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
       );
       assert.ok(r.success, `Command failed: ${r.error}`);
       assert.strictEqual(r.ir.block, '', 'block must be empty when trusted root does not cover the shared skill location');
@@ -1176,7 +1162,7 @@ describe('trusted_global_roots e2e CLI (#52)', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', 'block must be empty when "/" is the trusted root (rejected as too broad)');
@@ -1219,7 +1205,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     // Must contain the namespaced name
@@ -1256,7 +1242,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     // The path-resolvable one must be a @-include
@@ -1281,7 +1267,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `bare unresolved name must produce empty block, got: ${r.ir.block}`);
@@ -1295,7 +1281,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.ok(
@@ -1312,7 +1298,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       agent_skills: { 'gsd-executor': ['global:../evil'] },
     });
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `traversal must be rejected, got: ${r.ir.block}`);
@@ -1324,7 +1310,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       agent_skills: { 'gsd-executor': ['global:a::b'] },
     });
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `double-colon must be rejected, got: ${r.ir.block}`);
@@ -1336,7 +1322,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       agent_skills: { 'gsd-executor': ['global::x'] },
     });
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `leading colon must be rejected, got: ${r.ir.block}`);
@@ -1348,7 +1334,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       agent_skills: { 'gsd-executor': ['global:x:'] },
     });
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `trailing colon must be rejected, got: ${r.ir.block}`);
@@ -1360,7 +1346,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       agent_skills: { 'gsd-executor': ['global:a/b'] },
     });
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `slash in name must be rejected, got: ${r.ir.block}`);
@@ -1372,7 +1358,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
       agent_skills: { 'gsd-executor': ['global:'] },
     });
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `empty name must be rejected, got: ${r.ir.block}`);
@@ -1387,7 +1373,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(
@@ -1404,7 +1390,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.ok(
@@ -1430,7 +1416,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
 
@@ -1456,7 +1442,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
 
   test('regression: empty/missing config → empty block', () => {
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.block, '', `missing config must produce empty block, got: ${r.ir.block}`);
@@ -1478,7 +1464,7 @@ describe('bug #1243: plugin-namespaced agent skills', () => {
     });
 
     const r = runAgentSkillsJson(
-      ['agent-skills', 'gsd-executor'], tmpDir, { HOME: fakeHome, USERPROFILE: fakeHome }
+      ['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: fakeHome })
     );
     assert.ok(r.success, `Command failed: ${r.error}`);
 
@@ -1726,10 +1712,7 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     writeConfig(tmpDir, {
       agent_skills: { 'gsd-executor': ['skills/foo'] },
     });
-    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, `Command failed: ${r.stderr}`);
     const ir = JSON.parse(r.stdout);
     assert.strictEqual(ir.configured, false);
@@ -1745,10 +1728,7 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     writeConfig(tmpDir, {
       agent_skills: { 'gsd-executor': [] },
     });
-    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, `Command failed: ${r.stderr}`);
     const ir = JSON.parse(r.stdout);
     assert.strictEqual(ir.configured, true);
@@ -1765,10 +1745,7 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     writeConfig(tmpDir, {
       agent_skills: { 'gsd-executor': ['skills/nonexistent-1415'] },
     });
-    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, `Command failed: ${r.stderr}`);
     const ir = JSON.parse(r.stdout);
     assert.strictEqual(ir.configured, true);
@@ -1806,7 +1783,7 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     fs.mkdirSync(deepDir, { recursive: true });
     // HOME stays at the project root: the helper's default (HOME = the cwd)
     // would put the project above $HOME, which the walk never reads (#5624).
-    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.configured, true);
     assert.strictEqual(r.ir.reason, 'resolved');
@@ -1827,10 +1804,7 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     writeConfig(tmpDir, {
       agent_skills: { 'gsd-executor': '' },
     });
-    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const r = runGsdToolsWithStderr(['agent-skills', '--json', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(r.success, `Command failed: ${r.stderr}`);
     const ir = JSON.parse(r.stdout);
     assert.strictEqual(ir.configured, true, 'should be configured');
@@ -1937,7 +1911,7 @@ describe('#1400 regression: plain agent-skills output survives pipe/file stdout'
         [TOOLS_PATH, 'query', 'agent-skills', agentType],
         {
           cwd: tmpDir,
-          env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir, GSD_HOME: tmpDir },
+          env: isolatedEnv({ home: tmpDir, override: { GSD_HOME: tmpDir } }),
           stdio: ['ignore', fd, 'pipe'],
           timeout: PROBE_TIMEOUT_MS,
         },
@@ -1959,10 +1933,7 @@ describe('#1400 regression: plain agent-skills output survives pipe/file stdout'
 
   test('plain file output equals the --json .block content byte-for-byte', () => {
     const { contents } = runPlainToFile('gsd-executor');
-    const jsonResult = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const jsonResult = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(jsonResult.success, `--json command failed: ${jsonResult.error}`);
     assert.strictEqual(
       contents,
@@ -2001,7 +1972,7 @@ describe('#1400 regression: plain agent-skills output survives pipe/file stdout'
     // spawnSync maxBuffer default, so no override is needed.
     const result = runNode([TOOLS_PATH, 'query', 'agent-skills', 'gsd-executor'], {
       cwd: tmpDir,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir, GSD_HOME: tmpDir },
+      env: isolatedEnv({ home: tmpDir, override: { GSD_HOME: tmpDir } }),
       timeoutMs: PROBE_TIMEOUT_MS,
     });
     const out = result.stdout || '';
@@ -2038,8 +2009,11 @@ describe('regressions: workflows forward the started workstream to agent-skills 
   // one checkout cannot cross-read each other's workstream. (new-milestone.md
   // predates this and keeps its own persisted GSD_WS_ARG file; its calls are
   // held to the same forwarding rule through the `viaFile` branch below.)
-  const CANONICAL_PARSE =
-    'GSD_WS=$(echo " $GSD_ARGS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
+  // #6218: the name may follow one double or single quote. The closing quote needs no match of its own: the
+  // trailing `.*` consumes it, as it consumes anything after a bare name. (A backreference to the opening
+  // quote is not an option: the macOS sed mishandles one against an optional empty group.)
+  const WS_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
+  const CANONICAL_PARSE = String.raw`GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?(${WS_NAME}).*/--ws \1/p' | head -1)`;
   // The single-token call-site expansion: `--ws=<name>` or nothing. One token
   // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
   const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';
@@ -2109,6 +2083,18 @@ describe('regressions: workflows forward the started workstream to agent-skills 
       }
     }
     assert.deepStrictEqual(failures, []);
+  });
+
+  test('[regression #6218] no workflow expands the persisted $GSD_WS_ARG unquoted: zsh does not word-split it', () => {
+    const bare = [];
+    for (const file of corpus) {
+      for (const fence of fences(fs.readFileSync(file, 'utf-8'))) {
+        for (const l of fence.lines) {
+          if (/(?<![\w{])\$GSD_WS_ARG\b/.test(l.text)) bare.push(`${path.relative(REPO_ROOT, file)}:${l.no} ${l.text.trim()}`);
+        }
+      }
+    }
+    assert.deepStrictEqual(bare, []);
   });
 
   test('the root-scoped exemptions are not stale: each still has a fenced call', () => {
@@ -2203,6 +2189,52 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         assert.strictEqual(expand('2 --skip-research --ws ws-a'), '1|--ws=ws-a');
       });
 
+      test('[regression #6218] a quoted --ws value selects the same workstream as the unquoted one', () => {
+        for (const value of ['feature', 'ws_a.1', 'none']) {
+          const bare = expand(`15.2 --ws ${value} x`);
+          assert.strictEqual(bare, `1|--ws=${value}`);
+          assert.strictEqual(expand(`15.2 --ws "${value}" x`), bare);
+          assert.strictEqual(expand(`15.2 --ws '${value}' x`), bare);
+          assert.strictEqual(expand(`--ws "${value}"`), bare);
+        }
+      });
+
+      test('[boundary #6218] a quote with no name behind it selects nothing; a stray quote after the name is read past', () => {
+        for (const args of ['--ws ""', '--ws "-x"', '--ws "', '--ws \'']) {
+          assert.strictEqual(expand(args), '0|', args);
+        }
+        // the name ends at its first character outside the name set, exactly as for the bare form
+        for (const args of ['--ws "feature', '--ws \'feature"', '--ws "feature x"', '--ws feature"x']) {
+          assert.strictEqual(expand(args), '1|--ws=feature', args);
+        }
+      });
+
+      test('[regression #6218] every arg-stripping line in the workflows removes a quoted --ws value too', () => {
+        const stripLines = [];
+        for (const file of corpus) {
+          for (const line of splitLines(fs.readFileSync(file, 'utf-8'))) {
+            if (/^[A-Z_]+=\$\(echo "\$GSD_ARGS" \| sed -E 's\/--ws\[\[:space:\]\]/.test(line)) stripLines.push(line);
+          }
+        }
+        assert.ok(stripLines.length > 0, 'the corpus has arg-stripping lines');
+        for (const line of stripLines) {
+          const name = line.slice(0, line.indexOf('='));
+          // [args, the workstream the parse selects, what the strip leaves]: a quoted value is removed whole.
+          for (const [input, selected, left] of [
+            ['12 --ws feature --auto', '--ws feature', '12 --auto'],
+            ['12 --ws "feature" --auto', '--ws feature', '12 --auto'],
+            ['12 --ws \'feature\' --auto', '--ws feature', '12 --auto'],
+            ['12 --ws "my team"', '--ws my', '12'],
+            ['12 --ws -x', '', '12'],
+            ['12', '', '12'],
+          ]) {
+            const r = runShellScript(sh, `${CANONICAL_PARSE}\n${line}\nprintf '%s|%s' "$GSD_WS" "$${name}"`, { env: { ...process.env, GSD_ARGS: input } });
+            assertSeamExit(assert, r, 0, r.stderr);
+            assert.strictEqual(r.stdout, `${selected}|${left}`, `${line} on ${input}`);
+          }
+        }
+      });
+
       test('no --ws (or a malformed one) expands to zero tokens, never a stray empty argument', () => {
         assert.strictEqual(expand('2'), '0|');
         assert.strictEqual(expand(''), '0|');
@@ -2246,7 +2278,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     function exec(sh, { script, argumentsValue }, printVars) {
       const r = runShellScript(sh, `${script}\n${printVars}`, {
         cwd: proj,
-        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
+        env: isolatedEnv({ home: proj, override: { GSD_WORKSTREAM: '', GSD_ARGS: argumentsValue, GSD_HOME: proj } }),
         timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
       assertSeamExit(assert, r, 0, `${sh} failed: ${r.stderr}`);
@@ -2286,7 +2318,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
       const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
       const r = runShellScript('bash', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`, {
         cwd: proj,
-        env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
+        env: isolatedEnv({ home: proj, override: { GSD_WORKSTREAM: '', GSD_ARGS: fence.argumentsValue, GSD_HOME: proj } }),
         timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
       assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);

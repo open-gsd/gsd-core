@@ -8,7 +8,7 @@
 node gsd-tools.cjs init plan-phase 1 --raw
 ```
 
-The JSON carries `agent_runtime`, plus the `agents_dir` / `agents_installed` / `missing_agents` triple derived from it. For the config key itself, see [`runtime`](../CONFIGURATION.md#runtime-aware-profiles-2517).
+The JSON carries `agent_runtime`, plus the `agents_dir` / `agents_installed` / `missing_agents` triple derived from it. For a runtime id GSD does not resolve (an out-of-tree host plugin, or any unregistered id) there is no agents directory to read: `agents_installed` and `agents_dir` are `null`, `agents_check_reason` is `unknown_runtime`, and the command still succeeds. For the config key itself, see [`runtime`](../CONFIGURATION.md#runtime-aware-profiles-2517).
 
 ---
 

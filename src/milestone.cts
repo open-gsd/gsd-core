@@ -1323,8 +1323,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
 function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   const phasesDir = planningPaths(cwd).phases;
   const confirm = Array.isArray(args) && args.includes('--confirm');
-  // --force bypasses the uncommitted-changes guard. Only use when the caller
-  // has already archived or explicitly accepts loss of uncommitted work. (#1447)
+  // --force skips only the uncommitted-changes guard (#1447); the directories,
+  // uncommitted edits included, are still archived.
   const force = Array.isArray(args) && args.includes('--force');
   // #2288: explicit outgoing-version override for the archive destination.
   // new-milestone.md runs `state.milestone-switch` BEFORE `phases.clear --confirm`,
@@ -1358,29 +1358,28 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
     // #3185 (ADR-3180 Decision 1): this carried the FIFTH copy of the
     // sentinel rule and its THIRD regex variant — `/^999(?:\.|$)/` — which
-    // excluded 999 but NOT 0. Because this is the DESTRUCTIVE path, that
-    // divergence meant a `0-*` directory `roadmap analyze` preserves as a
-    // sentinel was DELETED here. Routed through the canonical predicate so
-    // every reader of "is this a sentinel phase" agrees by construction.
+    // excluded 999 but NOT 0. That divergence meant a `0-*` directory
+    // `roadmap analyze` preserves as a sentinel was ARCHIVED here. Routed
+    // through the canonical predicate so every reader of "is this a sentinel phase" agrees by construction.
     // #3639: the DIR-AWARE recognizer — the convention-less id predicate
     // never saw bracket sentinel dirs (GSD.999-07-icebox), so they were
-    // counted for deletion here while the disk guards (post-#3639) preserve
-    // them; the destructive path must not be the one blind reader left.
+    // counted for archiving here while the disk guards (post-#3639) preserve
+    // them; this path must not be the one blind reader left.
     const dirs = entries.filter((e) => e.isDirectory() && !isSentinelPhaseDir(e.name));
 
     if (dirs.length > 0 && !confirm) {
       error(
-        `phases clear would delete ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'}. ` +
+        `phases clear would archive ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'} ` +
+          `into milestones/<label>-phases/ under the planning directory. ` +
           `Pass --confirm to proceed.`,
       );
     }
 
-    // Guard (#1447): refuse to hard-delete phase directories that contain
-    // uncommitted changes. This prevents data loss when `new-milestone` runs
-    // `phases.clear --confirm` before the operator has archived or committed
-    // phase work from the outgoing milestone.
-    // Use `--force` to bypass this guard only when you have verified that
-    // archive or commit of the outgoing phases is already done.
+    // Guard (#1447): refuse to archive phase directories that contain
+    // uncommitted changes, so `new-milestone` running `phases.clear --confirm`
+    // does not sweep phase work the operator has not committed into the
+    // archive unreviewed. `--force` skips only this check; the directories,
+    // uncommitted edits included, are still moved into the archive.
     if (dirs.length > 0 && !force) {
       // Compute the path relative to cwd for git status
       let relPhasesDir: string;
@@ -1408,8 +1407,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
       if (uncommittedLines.length > 0) {
         error(
           `phases clear aborted: ${uncommittedLines.length} uncommitted change${uncommittedLines.length === 1 ? '' : 's'} detected in phase directories. ` +
-            `Archive or commit outgoing phase work before running this command, ` +
-            `or pass --force to skip this check and permanently delete the phase directories. (#1447)`,
+            `Commit outgoing phase work before running this command, ` +
+            `or pass --force to skip this check and archive the phase directories with their uncommitted changes. (#1447)`,
         );
       }
     }
@@ -1430,8 +1429,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
 /**
  * #1871: move each non-999 phase directory under `phasesDir` into
  * `milestones/<version>-phases/` (collision-safe). Shared by `phases clear`
- * (archive-then-remove) and the internal milestone.complete phase archival so
- * phase history survives a milestone switch instead of being hard-deleted.
+ * and the internal milestone.complete phase archival so phase history
+ * survives a milestone switch; nothing is deleted.
  *
  * Archive-version precedence (#2288): an explicit `archiveVersionOverride` wins
  * first, then a live `getMilestoneInfo(cwd)` read (which itself defaults to a

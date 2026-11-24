@@ -92,7 +92,8 @@ describe('ci-test-scope.cjs', () => {
     assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
-    assert.ok(result.targeted_tests.includes('tests/policy-lint-shallow-checkout.test.cjs'), JSON.stringify(result));
+    // #6566: the shallow-checkout lint is the policy-lint-shallow-checkout text contract; its cases live in the batch 8 test.
+    assert.ok(result.targeted_tests.includes('tests/text-contracts.batch8.test.cjs'), JSON.stringify(result));
   });
 
   test('TS runtime sources (src/semver-compare.cts) — code_changed true, product_changed true, full_matrix false, semver tests targeted', () => {
@@ -218,12 +219,12 @@ describe('ci-test-scope.cjs', () => {
       assert.ok(result.targeted_tests.includes(t), `expected ${t} in targeted_tests`);
     }
     // No DEFAULT_SMOKE_TESTS files should be injected beyond what the rule selects.
-    // The former smoke list contained package-manifest.test.cjs and core.test.cjs —
-    // neither is in the "command definitions" rule, so they must not appear.
+    // The former smoke list contained package-manifest (now a text contract, whose cases are in the batch 8 test)
+    // and core.test.cjs — neither is in the "command definitions" rule, so they must not appear.
     assert.ok(!result.targeted_tests.includes('tests/core.test.cjs'),
       'tests/core.test.cjs must NOT be unconditionally injected for command changes');
-    assert.ok(!result.targeted_tests.includes('tests/package-manifest.test.cjs'),
-      'tests/package-manifest.test.cjs must NOT be unconditionally injected for command changes');
+    assert.ok(!result.targeted_tests.includes('tests/text-contracts.batch8.test.cjs'),
+      'tests/text-contracts.batch8.test.cjs must NOT be unconditionally injected for command changes');
   });
 
   test('bug-408: code change with no rule match falls back to unit suite token', () => {
@@ -464,9 +465,9 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
     const required = [
       'tests/ci-pr-mergeability.test.cjs',
       'tests/ci-test-scope.test.cjs',
-      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/text-contracts.batch9.test.cjs', // #6573: release-tarball-smoke-workflow and ci-merge-group-wiring are text contracts
       'tests/ci-conformance-pr-gating.test.cjs',
-      'tests/workflow-token-permissions.test.cjs',
+      'tests/text-contracts.batch8.test.cjs', // #6566: workflow-token-permissions and the other workflow contracts
       // #5029: holds the SHARD_BALANCE <-> test.yml layout-parity test, which
       // must fail in the re-shard PR (a test.yml-only diff), not on `next`.
       'tests/ci-timeout-report.test.cjs',

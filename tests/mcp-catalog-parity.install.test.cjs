@@ -61,6 +61,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 const { copyRuntimeFixture, installerEnv } = require('./helpers/install-shared.cjs');
@@ -146,7 +147,7 @@ function installOverlay(overlayRoot, runtime, extraArgs = []) {
   ];
   const result = runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   return { configDir: root, root, result };

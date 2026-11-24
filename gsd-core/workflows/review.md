@@ -1,5 +1,13 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
+<!-- gsd:loop-host
+step: review
+points: review:pre
+agent-roles: reviewer
+produces:
+consumes: PLAN.md
+-->
+
 <purpose>
 Cross-AI peer review — invoke external AI CLIs to independently review phase plans.
 Each CLI gets the same prompt (PROJECT.md context, phase plans, requirements) and
@@ -72,7 +80,8 @@ Parse flags from `$ARGUMENTS`:
 - `--lm-studio` → include LM Studio (local server, OpenAI-compatible)
 - `--llama-cpp` → include llama.cpp (local server, OpenAI-compatible)
 - `--all` → include all available (CLIs + running local servers)
-- No flags → if `review.default_reviewers` is set, include only configured reviewers that are detected; otherwise include all available
+- `--cycle-summary` → not a reviewer: end the run with the machine-readable `CYCLE_SUMMARY` counters (step `cycle_summary`, #4617); it never changes which lanes run
+- No flags (a lone `--cycle-summary` still counts as no reviewer flags) → if `review.default_reviewers` is set, include only configured reviewers that are detected; otherwise include all available
 
 Reviewer-selection precedence:
 1. Individual reviewer flags (`--claude`, `--codex`, etc.)
@@ -152,7 +161,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 PHASE_ARG=$(echo "$GSD_ARGS" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.review ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
@@ -293,6 +302,25 @@ done
 # #3301: append the manifest to the one prompt file every lane reads.
 cat "${RUN_DIR}/.plans-manifest.md" >> "${RUN_DIR}/gsd-review-prompt.md"
 ```
+
+Append the capability review rules addressed to external reviewers (#3997). The `review:pre` loop point
+publishes one role, `reviewer`. The block is appended to the one prompt file every lane reads, so each prompt-bearing lane receives it exactly once and
+a lane declaring `promptChannel: none` is unaffected. The fragments count toward every lane's cap in
+`invoke_reviewers`: an over-cap lane is refused, never shortened. With no matching contribution nothing is appended
+and the prompt is byte-identical. This is advisory by construction: any failure leaves the prompt without the block and
+never blocks the review.
+```bash
+RUN_DIR="{run_dir}"   # from gather_context
+REVIEW_HOOKS_JSON=$(gsd_run loop render-hooks review:pre --raw 2>/dev/null) || REVIEW_HOOKS_JSON=""
+if [[ "$REVIEW_HOOKS_JSON" == @file:* ]]; then REVIEW_HOOKS_JSON=$(cat "${REVIEW_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
+# A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
+REVIEWER_RULES=$(printf '%s' "$REVIEW_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.replace(/<(\s{0,20}\/\s{0,20}capability_reviewer_rules)/gi,(m,g)=>"<"+String.fromCharCode(92)+g));if(h.length)process.stdout.write("<capability_reviewer_rules>\n"+h.join("\n\n")+"\n</capability_reviewer_rules>")}catch(e){}})' 2>/dev/null || true)
+if [ -n "$REVIEWER_RULES" ]; then
+  printf '\n\n%s\n' "$REVIEWER_RULES" >> "${RUN_DIR}/gsd-review-prompt.md" || true
+fi
+```
+
+Dispatch each `kind == "contribution"` hook that `review:pre` returns per @gsd-core/references/loop-hook-dispatch.md. Only an entry whose `into == "reviewer"` is inserted by the block above; every other target is ignored here, and so are `step` and `gate` hooks (the point is wired for contributions only).
 
 Note: `PHASE_DIR` comes from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Every lane receives `gsd-review-prompt.md` whole — it is never trimmed per lane (#4559). A lane whose prompt exceeds its cap is refused in `invoke_reviewers`, not shortened.
 </step>
@@ -848,6 +876,102 @@ fi
 ```
 </step>
 
+<step name="cycle_summary">
+**Runs only when `--cycle-summary` is present in `$ARGUMENTS`** (#4617). Match it as a whole,
+space-delimited token (`(^|[[:space:]])--cycle-summary([[:space:]]|$)`), the way `--override-gate`
+is matched in `plan-review-convergence.md` — `--cycle-summary-x`, or the text inside another argument's value, does not enable it.
+Without the flag, skip this step entirely: `/gsd:review` output is unchanged.
+
+This step is the single owner of the CYCLE_SUMMARY contract. A caller that drives
+`/gsd:review` + `/gsd:plan-phase --reviews` itself (a board worker, a CI job) and
+`/gsd:plan-review-convergence` (which passes this flag to its review agent) all read the same
+counters, produced by the same rules, from this one place. Do not copy these rules into another
+workflow.
+
+**If `write_reviews` set `TOTAL_LANE_FAILURE=true` or `ALL_LANES_SKIPPED=true`, emit no
+CYCLE_SUMMARY line.** Nothing was reviewed, so there is nothing to count; the REVIEW FAILED report
+above stands, and the caller's "did not honor the CYCLE_SUMMARY contract" abort is the correct
+outcome. Never emit `current_high=0 current_actionable=0` for a cycle in which no review ran.
+
+Otherwise, after `present_results` completes:
+
+Your final response MUST include a machine-readable line of exactly this form:
+
+  CYCLE_SUMMARY: current_high=<N> current_actionable=<M>
+
+Where <N> is the integer count of HIGH-severity concerns that REMAIN UNRESOLVED in this cycle's findings.
+Where <M> is the integer count of actionable MEDIUM/LOW concerns that REMAIN UNRESOLVED because the latest PLAN.md files do not yet incorporate them or explicitly defer/reject them.
+
+Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting rules below):
+  This gate engages ONLY when 2 or more reviewers actually ran and produced a review section this
+  cycle. With exactly one reviewer, skip this entire gate — a single reviewer's HIGH always counts.
+
+  Classify each newly raised HIGH by what the claim ASSERTS, not by whether it happens to contain a
+  file:line citation:
+    - EXISTENCE-CLASS — asserts that a named symbol, file, path, flag, commit, or ID exists,
+      is absent, or says something specific ("X does not exist", "the plan cites Y which is missing",
+      "file Z contains Q").
+    - JUDGMENT-CLASS — asserts a design or correctness property ("no idempotency on retried writes",
+      "race between A and B", "missing rate limit"). A judgment-class HIGH stays judgment-class even
+      when it cites a file for context.
+
+  A HIGH raised by 2+ reviewers is corroborated and always counts.
+
+  For a HIGH raised by exactly ONE reviewer:
+    - EXISTENCE-CLASS — counts only if the source-grounding pass independently confirms it against
+      real project source, or another reviewer raised the same or a materially overlapping concern
+      (i.e. it lands in REVIEWS.md's Consensus Summary "Agreed Concerns").
+    - JUDGMENT-CLASS — counts UNLESS that reviewer's own section OPENS with an evidence-quality
+      discount marker blockquote: `[reviewed-without-source-citations]` or
+      `[reviewed-without-repo-access]`, or the reviewer is a diff-only lane (CodeRabbit). The marker
+      must be the LEADING blockquote of that reviewer's section — a review that merely quotes a
+      marker while discussing it is NOT marked. Corroboration by another reviewer overrides the
+      marker and the HIGH counts.
+
+  Judgment-class findings are deliberately NOT subject to corroboration. Different reviewers catch
+  materially different classes of issue, so requiring two of them to independently raise the same
+  architectural concern would suppress exactly the findings a multi-reviewer setup exists to surface.
+
+  FAIL OPEN: if EVERY reviewer that ran this cycle carries a discount marker, this gate does not
+  apply at all — count as if it were absent. A gate must never manufacture convergence out of a
+  cycle in which nothing was verified.
+
+  A HIGH suppressed by this gate is still listed under "## Current HIGH Concerns", tagged
+  `(single-reviewer, unconfirmed)`. It is excluded from current_high only — never silently dropped,
+  and never removed from the report.
+
+  This gate governs current_high only. current_actionable is unaffected.
+
+Counting rules:
+  INCLUDE in the count:
+    - Newly raised HIGHs in this cycle (subject to the consensus gate above)
+    - PARTIALLY RESOLVED HIGHs: concern acknowledged and a mitigation is in progress, but not yet verified/completed
+    - Previously raised HIGHs that are still unresolved
+
+  EXCLUDE from the count:
+    - FULLY RESOLVED HIGHs: concern addressed with verification complete (closed ticket, verification log, or reviewer sign-off)
+    - HIGH mentions in retrospective/summary tables comparing cycles
+    - Quoted excerpts from prior reviews referencing past HIGH items
+    - MEDIUM/LOW concerns that are already incorporated into a PLAN.md task, action, acceptance_criteria, verify command, must_haves item, threat model, artifact list, or explicit deferral/rejection rationale
+
+Definitions:
+  PARTIALLY RESOLVED — concern acknowledged and mitigation is in progress but not yet verified/completed (e.g., open ticket exists but fix not landed).
+  FULLY RESOLVED — concern addressed with verification complete (closed ticket, verification log, or explicit reviewer sign-off confirming closure).
+  ACTIONABLE — a non-HIGH review finding that would be invisible to /gsd:execute-phase unless it is incorporated into PLAN.md or explicitly deferred/rejected in PLAN.md.
+
+Your final response MUST also include this section immediately after the CYCLE_SUMMARY line:
+
+## Current HIGH Concerns
+[List each unresolved HIGH with a brief description, one per bullet]
+[If none: write exactly 'None.']
+
+## Current Actionable Non-HIGH Concerns
+[List each unresolved actionable MEDIUM/LOW with a brief description and the PLAN.md change still needed, one per bullet]
+[If none: write exactly 'None.']
+These two sections MUST be the final content of your response, in this exact order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).
+
+</step>
+
 </process>
 
 <success_criteria>
@@ -856,4 +980,6 @@ fi
 - [ ] Consensus summary synthesized from multiple reviewers
 - [ ] Temp files cleaned up
 - [ ] User knows how to use feedback (/gsd:plan-phase --reviews)
+- [ ] With `--cycle-summary`: the final response ends with `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` followed by the two `## Current ...` sections, counted by the rules in step `cycle_summary`; without the flag, none of that is emitted
+- [ ] With `--cycle-summary` and no review run (every lane failed or skipped): no CYCLE_SUMMARY line at all, never zero counts
 </success_criteria>

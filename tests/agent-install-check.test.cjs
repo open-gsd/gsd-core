@@ -20,7 +20,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempDir, cleanup, captureFdSync } = require('./helpers.cjs');
+const { createTempDir, createTempProject, cleanup, captureFdSync, runGsdTools } = require('./helpers.cjs');
 
 const AGENT_INSTALL_CHECK_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-install-check.cjs'
@@ -1664,3 +1664,156 @@ describe('canonicalAgentSourceDir (#5496)', () => {
   });
 });
 
+
+// ─── #5236: an unregistered runtime id degrades the reporting paths instead of throwing ───────────────────────
+
+describe('#5236: the agents check and the init verbs under a runtime id GSD does not resolve', () => {
+  const { UnknownRuntimeError } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
+  const UNREGISTERED = 'example-host';
+  let tmpDir;
+  let savedAgentsDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-5236-');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: X\n- [ ] w\n');
+    savedAgentsDir = process.env['GSD_AGENTS_DIR'];
+    delete process.env['GSD_AGENTS_DIR'];
+  });
+
+  afterEach(() => {
+    if (savedAgentsDir === undefined) delete process.env['GSD_AGENTS_DIR']; else process.env['GSD_AGENTS_DIR'] = savedAgentsDir;
+    cleanup(tmpDir);
+  });
+
+  function initJson(args, env) {
+    const r = runGsdTools(args, tmpDir, env);
+    assert.ok(r.success, `${args.join(' ')}: ${r.error}`);
+    const out = r.output.startsWith('@file:') ? fs.readFileSync(r.output.slice('@file:'.length).trim(), 'utf8') : r.output;
+    return JSON.parse(out);
+  }
+
+  test('[regression] checkAgentsInstalled reports "could not check" for an unregistered id: null, no directory, a reason, no throw', () => {
+    assert.deepStrictEqual(agentInstallCheck.checkAgentsInstalled(UNREGISTERED, tmpDir), {
+      agents_installed: null,
+      missing_agents: [],
+      installed_agents: [],
+      incomplete_agents: [],
+      agents_dir: null,
+      agent_runtime: UNREGISTERED,
+      agents_check_reason: 'unknown_runtime',
+    });
+  });
+
+  test('[independence] a GSD_AGENTS_DIR override does not turn an unregistered id into a checked one', () => {
+    const dir = createTempDir('gsd-5236-agents-');
+    try {
+      process.env['GSD_AGENTS_DIR'] = dir;
+      const result = agentInstallCheck.checkAgentsInstalled(UNREGISTERED, tmpDir);
+      assert.strictEqual(result.agents_installed, null);
+      assert.strictEqual(result.agents_check_reason, 'unknown_runtime');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('[independence] a registered id is unchanged: a boolean answer and no reason key', () => {
+    process.env['GSD_AGENTS_DIR'] = path.join(tmpDir, 'no-agents-here');
+    const result = agentInstallCheck.checkAgentsInstalled('claude', tmpDir);
+    assert.strictEqual(result.agents_installed, false);
+    assert.deepStrictEqual(result.missing_agents, EXPECTED_AGENTS);
+    assert.ok(!('agents_check_reason' in result));
+  });
+
+  test('[property] the reason enum is frozen and has exactly the wire value the callers assert on', () => {
+    assert.ok(Object.isFrozen(agentInstallCheck.AGENTS_CHECK_REASON));
+    assert.deepStrictEqual({ ...agentInstallCheck.AGENTS_CHECK_REASON }, { UNKNOWN_RUNTIME: 'unknown_runtime' });
+  });
+
+  test('[security] the install-side accessors still refuse an unregistered id: the refusal is not weakened', () => {
+    assert.throws(() => getGlobalConfigDir(UNREGISTERED), UnknownRuntimeError);
+    assert.throws(() => getDirName(UNREGISTERED), UnknownRuntimeError);
+    assert.throws(() => agentInstallCheck.getAgentsDir(UNREGISTERED), UnknownRuntimeError);
+  });
+
+  for (const args of [['query', 'init.new-project'], ['query', 'init.plan-phase', '1'], ['query', 'init.execute-phase', '1'], ['query', 'init.quick', 'x'], ['query', 'init.progress']]) {
+    test(`[regression] ${args.slice(1).join(' ')} exits 0 under GSD_RUNTIME=${UNREGISTERED} and says the agents were not checked`, () => {
+      const json = initJson(args, { GSD_RUNTIME: UNREGISTERED });
+      assert.strictEqual(json.agents_installed, null);
+      assert.strictEqual(json.agents_dir, null);
+      assert.strictEqual(json.agents_check_reason, 'unknown_runtime');
+      assert.strictEqual(json.agent_runtime, UNREGISTERED);
+    });
+  }
+
+  test('[regression] init under a registered id keeps a boolean agents_installed and carries no reason', () => {
+    const json = initJson(['query', 'init.progress'], { GSD_RUNTIME: 'claude', GSD_AGENTS_DIR: path.join(tmpDir, 'no-agents-here') });
+    assert.strictEqual(json.agents_installed, false);
+    assert.ok(!('agents_check_reason' in json));
+  });
+
+  test('[security] a retired runtime spelling is still refused by the check: only an UNKNOWN id degrades', () => {
+    const { RetiredRuntimeError } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
+    assert.throws(() => agentInstallCheck.checkAgentsInstalled('gemini', tmpDir), RetiredRuntimeError);
+  });
+
+  test('[property] for any id the registry does not know, the check never throws and always says not-checkable', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    fc.assert(fc.property(fc.stringMatching(/^[a-z][a-z0-9-]{2,14}$/), (suffix) => {
+      const id = `zz-${suffix}`;
+      const result = agentInstallCheck.checkAgentsInstalled(id, tmpDir);
+      assert.strictEqual(result.agents_installed, null, id);
+      assert.strictEqual(result.agents_dir, null, id);
+      assert.strictEqual(result.agents_check_reason, 'unknown_runtime', id);
+      assert.strictEqual(result.agent_runtime, id);
+    }), { numRuns: 100 });
+  });
+
+  test('[regression] init reads the unregistered id from config.runtime and from the install marker the same way it reads GSD_RUNTIME', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: UNREGISTERED }));
+    const fromConfig = initJson(['query', 'init.new-milestone'], { GSD_RUNTIME: '' });
+    assert.strictEqual(fromConfig.agents_installed, null);
+    assert.strictEqual(fromConfig.agents_check_reason, 'unknown_runtime');
+    assert.strictEqual(fromConfig.agent_runtime, UNREGISTERED);
+  });
+
+  test('[regression] docs-init exits 0 under an unregistered id and carries the reason', () => {
+    const r = runGsdTools(['docs-init'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    const json = JSON.parse(r.output);
+    assert.strictEqual(json.agents_installed, null);
+    assert.strictEqual(json.agents_check_reason, 'unknown_runtime');
+  });
+
+  test('[regression] a project-relative skill entry works under an unregistered id, and a global: entry is skipped with the existing no-skills-directory warning', () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills', 'foo'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'foo', 'SKILL.md'), '# foo\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: UNREGISTERED, agent_skills: { 'gsd-planner': ['skills/foo', 'global:bar'] } }));
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    assert.match(r.output, /skills\/foo\/SKILL\.md/);
+  });
+
+  test('[independence] config.runtime is read through the shared resolver: an alias spelling resolves like init does', () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills', 'foo'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'foo', 'SKILL.md'), '# foo\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: 'Claude-Code', agent_skills: { 'gsd-planner': ['skills/foo'] } }));
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_RUNTIME: '' });
+    assert.ok(r.success, r.error);
+    assert.match(r.output, /skills\/foo\/SKILL\.md/);
+  });
+
+  test('[regression] agent-skills exits 0 with empty output when config.runtime is unregistered and no agent_skills is set', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: UNREGISTERED }));
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    assert.strictEqual(r.output.trim(), '');
+  });
+
+  test('[boundary] validate agents under an unregistered id reports agents_found null with the reason, and exits 0', () => {
+    const r = runGsdTools(['validate', 'agents'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    const json = JSON.parse(r.output);
+    assert.strictEqual(json.agents_found, null);
+    assert.strictEqual(json.agents_check_reason, 'unknown_runtime');
+  });
+});

@@ -23,7 +23,6 @@ const {
   renderLoopHooks,
   _getNestedConfigValue,
   _resolveActivationValue,
-  _readRawConfigKey,
   CANONICAL_POINTS_FALLBACK,
   CANONICAL_POINTS,
 } = require('../gsd-core/bin/lib/loop-resolver.cjs');
@@ -106,7 +105,7 @@ after(() => {
 // ─── 1. Canonical-point validation ───────────────────────────────────────────
 
 describe('canonical point validation', () => {
-  test('all 12 canonical points are accepted by resolveLoopHooks with empty registry', () => {
+  test('all 13 canonical points are accepted by resolveLoopHooks with empty registry', () => {
     const emptyRegistry = makeRegistry();
     const config = {};
     for (const p of CANONICAL_POINTS_FALLBACK) {
@@ -116,8 +115,8 @@ describe('canonical point validation', () => {
     }
   });
 
-  test('12 canonical points total', () => {
-    assert.strictEqual(CANONICAL_POINTS_FALLBACK.length, 12);
+  test('13 canonical points total', () => {
+    assert.strictEqual(CANONICAL_POINTS_FALLBACK.length, 13);
   });
 
   test('invalid point throws with a clear message', () => {
@@ -167,7 +166,7 @@ describe('canonical point validation', () => {
   });
 
   // FIX 2: all 12 canonical points are listed in the error message
-  test('invalid point error lists the canonical 12', () => {
+  test('invalid point error lists the canonical 13', () => {
     const emptyRegistry = makeRegistry();
     assert.throws(
       () => resolveLoopHooks({ point: 'not:real', registry: emptyRegistry, config: {} }),
@@ -182,9 +181,9 @@ describe('canonical point validation', () => {
   });
 
   // CANONICAL_POINTS is derived from LOOP_HOST_CONTRACT, not from registry keys
-  test('CANONICAL_POINTS and CANONICAL_POINTS_FALLBACK are the same 12 points', () => {
+  test('CANONICAL_POINTS and CANONICAL_POINTS_FALLBACK are the same 13 points', () => {
     assert.deepEqual(CANONICAL_POINTS, CANONICAL_POINTS_FALLBACK);
-    assert.strictEqual(CANONICAL_POINTS.length, 12);
+    assert.strictEqual(CANONICAL_POINTS.length, 13);
   });
 });
 
@@ -708,29 +707,6 @@ describe('prototype-pollution guard', () => {
     assert.strictEqual(r.value, true);
   });
 
-  // FIX 4: raw config.json with __proto__ key does not pollute via _readRawConfigKey
-  test('raw config.json with "__proto__" key does not pollute Object.prototype', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-proto-'));
-    try {
-      // Write a raw config.json containing __proto__ at top level and nested
-      // (JSON.parse of {"__proto__":{"x":"polluted"}} does NOT set prototype in modern Node,
-      // but we verify our guarded traversal returns found:false for such keys)
-      const maliciousConfig = '{"__proto__":{"x":"polluted"},"workflow":{"ui_phase":true}}';
-      fs.writeFileSync(path.join(tmpDir, 'config.json'), maliciousConfig, 'utf8');
-      // _readRawConfigKey with '__proto__.x' should return found:false (guard)
-      const r1 = _readRawConfigKey(path.join(tmpDir, 'config.json'), '__proto__.x');
-      assert.strictEqual(r1.found, false, '__proto__ lookup must be guarded');
-      // Normal key should work
-      const r2 = _readRawConfigKey(path.join(tmpDir, 'config.json'), 'workflow.ui_phase');
-      assert.strictEqual(r2.found, true);
-      assert.strictEqual(r2.value, true);
-      // Object.prototype must not be polluted
-      assert.strictEqual(({}).x, undefined);
-    } finally {
-      cleanup(tmpDir);
-    }
-  });
-
   // FIX 4: _resolveActivationValue with cwd pointing to project with __proto__ config key
   test('_resolveActivationValue: raw config with __proto__ key does not pollute', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-proto2-'));
@@ -800,20 +776,23 @@ describe('raw config.json override paths (FIX 4)', () => {
     assert.ok(uiStep, 'no config.json → schema default=true → hook should be active');
   });
 
-  // FIX 4: _readRawConfigKey returns found:false for missing file (ENOENT — silent)
-  test('_readRawConfigKey: missing file → found:false, no throw', () => {
-    const result = _readRawConfigKey('/nonexistent/path/config.json', 'workflow.ui_phase');
-    assert.strictEqual(result.found, false);
+  // FIX 4 (#6032): the raw file read is the resolver's now; a missing layer is silent and a
+  // malformed one never throws out of the activation gate.
+  test('_resolveActivationValue: no config file anywhere → false, no throw', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-missing-'));
+    try {
+      assert.strictEqual(_resolveActivationValue('workflow.ui_phase', {}, tmpDir, {}), false);
+    } finally {
+      cleanup(tmpDir);
+    }
   });
 
-  // FIX 4: _readRawConfigKey returns found:false for malformed JSON, warns once
-  test('_readRawConfigKey: malformed JSON → found:false, no throw', () => {
+  test('_resolveActivationValue: malformed JSON config.json → false, no throw', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resolver-malformed-'));
     try {
-      const malformedPath = path.join(tmpDir, 'config.json');
-      fs.writeFileSync(malformedPath, '{ invalid json }', 'utf8');
-      const result = _readRawConfigKey(malformedPath, 'workflow.ui_phase');
-      assert.strictEqual(result.found, false, 'malformed JSON should return found:false');
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ invalid json }', 'utf8');
+      assert.strictEqual(_resolveActivationValue('workflow.ui_phase', {}, tmpDir, {}), false, 'malformed JSON should resolve to no value');
     } finally {
       cleanup(tmpDir);
     }

@@ -177,6 +177,7 @@
   - [UAT-Passed Predicate](#143-uat-passed-predicate)
   - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
   - [Deep Verify Capability](#3858-deep-verify-capability)
+  - [Validate-Only Verify Commands](#4586-validate-only-verify-commands)
 - [v1.43.0 Features](#v1430-features)
   - [MemPalace Memory Capability](#145-mempalace-memory-capability)
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
@@ -217,8 +218,11 @@
   - [Per-Task External-Tracker Content-Resolution Seam](#3970-per-task-external-tracker-content-resolution-seam)
   - [Unreadable-Directory Scope Signal](#4014-unreadable-directory-scope-signal)
   - [Project Exemptions for the Secret-Read Guard](#4432-project-exemptions-for-the-secret-read-guard)
+  - [Unattended Plan-Review Convergence](#4617-unattended-plan-review-convergence)
   - [Graphify CLI Preferred for Planner and Researcher Graph Queries](#4836-graphify-cli-preferred-for-planner-and-researcher-graph-queries)
   - [Gate Evidence and Verdict-Driven Exit Status](#5170-gate-evidence-and-verdict-driven-exit-status)
+- [v1.23.0 Features](#v1230-features)
+  - [Review-Prompt Capability Contributions](#3997-review-prompt-capability-contributions)
 
 ---
 
@@ -2550,12 +2554,27 @@ artifact whose purpose is telling triaged from forgotten.
 **The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
 is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
 the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision.
+drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
+on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
+row carried only by a fix report (#5802).
 A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
 decided anything, so there is no decision to lose. Preserving a recorded decision in the file
 was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
 three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
 why the console reports the drop rather than pointing at a commit that may not exist.
+
+**Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
+`<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
+into the `unparsed:` shortfall and named on the console ("carry a prefix before the id"). The same holds for a prefixed heading in a fix report (named, not reconciled) and for a multi-segment
+prefix (`W6-R2-CR-01`). A ledger row
+outside the grammar (`| R1-WR-01 | … |`, an indented row, or a row with an unknown disposition) is named on the console and
+kept verbatim after the generated rows, not deleted by the whole-file rewrite; it is not counted in
+`open:` or `total:`. When a regenerated row takes the id of such a row, the row is reset to `open`
+(a value outside the enum is coerced to the safe default) and the console names it with the
+disposition and reason it held, so a hand-set value is never replaced silently. A disposition is
+read case-insensitively (`Deferred` is `deferred`). Two rows for one id are named (the last is used), and
+console names are masked for control characters and capped. A frontmatter `- id:` entry outside the grammar ends
+the previous entry, so its `title:` is never attributed to another finding.
 
 **Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
@@ -3077,7 +3096,10 @@ not exist yet. The whole run is refused as `build_failure`, ahead of the generic
 Which paths count as test files is one list, `src/tdd-test-files.cts`, shared by the
 behavior-adding check and the RED-commit pathspec in `execute-phase.md` (a test pins the
 two together): `*.test.*`, `*.spec.*`, `tests/` or `test/` and `__tests__/` directories,
-`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`.
+`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`. Letter case
+is ignored on both sides: the router folds case itself and the gate passes the same list behind
+git's `:(icase)` pathspec magic, so a RED commit made only of `Tests/foo.rs` or `Foo.TEST.js` is
+found (#5766).
 
 The upstream parsers (`tap-parser` and `saxes`) ship as reproducible bundles,
 including license notices, so installed runtimes need no `node_modules`.
@@ -3705,6 +3727,39 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 **Known limits:** the browser-family gate, the phase-directory boundary and the scope gate are instructions the agent follows, not permissions the runtime enforces; the "diff" is the SUMMARY's changed-file list read with `Read`, not a VCS diff; enumeration is best-effort and not a coverage claim; DOM observation only; #1602 coverage metadata does not reach `{phase}-UAT.md`; no sandbox constrains which origins are reached once browser reach is on ([ADR-1244](adr/1244-capability-ecosystem.md) D5).
 
 **Reference:** [Configuration](CONFIGURATION.md) · [Enable deep verification](how-to/enable-deep-verification.md) · [Agents](reference/agents.md)
+
+---
+
+### 4586. Validate-Only Verify Commands
+
+**Command:** `/gsd-plan-phase` (automatic) (#4586)
+
+**Behavior:** A stated `<fails_when>` (#3172) shows the planner understands what a check should detect. It cannot show that the command parses. In the motivating T-SQL phase every plan satisfied the `<fails_when>` contract and three still shipped commands that could not run: an unaliased derived-table column (`Msg 8155`), `CONCAT()` with one argument, and a batched query that never returned. Each executor then had to decide whether the check or the deliverable was wrong, and the wrong answer, adjusting the deliverable until the check passes, silently corrupts the thing being verified.
+
+Where a validate-only mode exists for an `<automated>` command's language or tool, `gsd-planner` now runs it against the authored body and records the result inside the task's `<verify>`, after `<fails_when>`:
+
+```xml
+<verify>
+  <automated>bash scripts/check-release.sh</automated>
+  <fails_when>non-zero exit</fails_when>
+  [VALIDATED: bash -n exit 0]
+</verify>
+```
+
+A body that fails its validator blocks the plan. Where no validate-only mode applies, behavior is unchanged: the planner states the failing direction and writes `[UNVALIDATABLE: <reason>]`, so `gsd-plan-checker` can tell a considered answer from a skipped one. Check 8g raises a command with no record as a WARNING, and a record that does not hold up as a BLOCKER.
+
+**The sanctioned set is closed, and it is smaller than it looks.** Validate-only means the form does not run the body, does not write to the tree, does not need the command's targets to exist, and needs no network or install. `bash -n`, `node --check`, a `python3` `ast.parse` one-liner, `SET PARSEONLY ON` (T-SQL, with a live session) and `cargo metadata --no-deps` (target shape) qualify. Four forms that read like validators do not, and the reference names them so the planner never reaches for them: `python -m py_compile` writes a `.pyc`; `cargo check` runs the crate's build scripts and procedural macros; `npm run <script> --dry-run` is ignored by `npm run` and executes the script; `terraform validate` needs an initialized directory.
+
+**No schema change.** The record is a plain-text line inside `<verify>`. The `<automated>` and `<fails_when>` elements and the #2401 and #3172 probes are unchanged, and a test pins that.
+
+**Known limits:**
+- A command that hangs has no exit code and is not parse-detectable. The #4586 field case (eight correlated subqueries batched into one plan) is not caught by this tier.
+- Enforcement is prompt-level. The checker reads the record and re-runs only the read-only forms; there is no deterministic CLI probe, and `SET PARSEONLY ON` cannot be re-run by the checker.
+- A pass on an outer layer says nothing about an embedded payload in another language, so each layer is validated separately.
+- A project cannot declare its own validate-only command; the sanctioned set is the closed table in the reference.
+- Plans written before this shipped carry no record and draw a WARNING, never a BLOCKER.
+
+See [Validate an automated command](how-to/validate-an-automated-command.md).
 
 
 ---
@@ -4818,6 +4873,33 @@ phase directory.
 
 ---
 
+### 4617. Unattended Plan-Review Convergence
+
+**Command:** `/gsd-review --cycle-summary`, `/gsd-plan-review-convergence --on-escalation exit`
+
+**Purpose:** A caller with no person attached — a board worker, a CI job — could neither run `/gsd-plan-review-convergence` to its end nor read the convergence counters without it. The wrapper asked "Proceed anyway / Manual review" when cycles ran out, and the `CYCLE_SUMMARY` counters existed only as an instruction the wrapper gave its own review agent, so a caller assembling `/gsd-review` + `/gsd-plan-phase --reviews` itself had to re-implement the counting rules (#4617).
+
+**`CYCLE_SUMMARY` belongs to `/gsd-review`.** With `--cycle-summary`, the review's final response ends with `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` followed by the `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns` sections. The counting rules — the consensus gate with its existence/judgment classification, the evidence-quality markers, fail-open, and the include/exclude lists — live once, in the `cycle_summary` step of `workflows/review.md`. The convergence wrapper passes the flag instead of carrying a copy, so a standalone caller and the wrapper read identical counters. Without the flag nothing changes. When no review ran (every lane failed or was skipped) there is no `CYCLE_SUMMARY` line at all, never `current_high=0`.
+
+**An unattended exit for the wrapper.** `--on-escalation exit` replaces the interactive question with a status. When cycles run out, the run prints the final `CYCLE_SUMMARY` line and both concern sections, then ends with one line:
+
+`CONVERGENCE_STATUS: <status> cycles=<n> current_high=<N> current_actionable=<M> open_conflicts=<K>`
+
+| `<status>` | Meaning |
+|---|---|
+| `converged` | No HIGH, no actionable non-HIGH, no open plan-revision conflict. State was written as usual. |
+| `open_conflicts` | A `## Plan-Revision Conflicts` entry is unresolved. A blocker; outranks the other two. |
+| `stalled` | Cycles ran out and the unresolved count did not decrease in the last cycle. |
+| `max_cycles` | Cycles ran out with concerns still open and neither of the above applies (this includes a run of one cycle, which has no earlier count to compare against). |
+
+The exit path asks nothing, writes no `STATE.md`, and does not replan, so the plans are left as the last cycle left them. The caller decides what a person should do next through its own channel. `--on-escalation` accepts only `ask` (the default, unchanged) and `exit`; any other value is refused before cycle 1, because falling back to the question would hang the very caller that asked for the exit.
+
+**Known limits:** the counting is still performed by an agent following prose — this removes the second copy of the rules, not the judgment. `/gsd-autonomous --converge` does not pass `--on-escalation`, so it keeps asking. There is no config key; the flag is per invocation.
+
+**Reference:** [Commands](COMMANDS.md#gsd-plan-review-convergence) · [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md)
+
+---
+
 ### 4836. Graphify CLI Preferred for Planner and Researcher Graph Queries
 
 **Purpose:** `gsd-planner` gets **one** knowledge-graph query per phase and
@@ -4894,6 +4976,29 @@ default location.
 **Known limits:** `checkUiPresence` is a vocabulary check over prose and reads nothing; it stays outside the evidence type. Gates whose accepted-evidence model is narrower than GSD's producers (#4692, #4867, #4957) are out of scope.
 
 **Reference:** [Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170) · [Exit code reference](reference/exit-codes.md) · [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md)
+
+
+---
+
+## v1.23.0 Features
+
+### 3997. Review-Prompt Capability Contributions
+
+**Purpose:** An enabled capability's constraints reach the external reviewers `/gsd-review` invokes, the way they already reach the planner, checker, executor and verifier. Without it, the plan can obey a capability's guidance while reviewers judge it without that guidance and recommend changes that conflict with it.
+
+**Seam:** A thirteenth loop point, `review:pre`, publishes the `reviewer` role. `/gsd-review` renders the point once while assembling the shared reviewer prompt and appends every active, runtime-compatible `contribution` addressed `into: reviewer` inside one `<capability_reviewer_rules>` block. Every prompt-bearing lane receives the same block exactly once; a lane with `promptChannel: none` is unchanged; `/gsd-plan-review-convergence` inherits it through its existing `/gsd-review` calls.
+
+**Requirements:**
+- REQ-REVIEW-PRE-01: `loop render-hooks review:pre --raw` resolves; the point is part of the generated host contract.
+- REQ-REVIEW-PRE-02: Only `kind: "contribution"` entries with `into: "reviewer"` and an inline fragment are inserted, in registry order; disabled, inactive and incompatible capabilities are excluded.
+- REQ-REVIEW-PRE-03: With no matching contribution the shared prompt is byte-identical and the step is silent.
+- REQ-REVIEW-PRE-04: The block counts toward each lane's prompt cap; an over-cap lane is refused (`prompt_exceeds_context`), never trimmed.
+- REQ-REVIEW-PRE-05: A capability declaring a hook at `review:pre` must declare an `engines.gsd` range that excludes older cores; the registry build enforces it.
+- REQ-REVIEW-PRE-06: The install summary discloses the contribution by point and target as an instruction surface and names the cross-capability egress; the v1 disclosure signature is unchanged.
+
+**Out of scope:** reviewer selection, lane descriptors and consent, the `REVIEWS.md` format, and any first-party capability shipping a reviewer contribution.
+
+See [ADR-3997](adr/3997-review-prompt-capability-contributions.md), the [capability manifest reference](reference/capability-manifest.md#review-pre--reviewer-contributions-3997) and the [trust model](explanation/capability-trust-model.md#reviewer-contributions-cross-the-external-review-boundary).
 
 ---
 
