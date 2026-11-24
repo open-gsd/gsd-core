@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const { runGsdTools, runGsdToolsCaptured, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
@@ -2340,7 +2341,7 @@ describe('phase add — orphan directory collision prevention (#2026)', () => {
       ].join('\n')
     );
 
-    const result = runGsdTools('phase add new-feature', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('phase add new-feature', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2379,7 +2380,7 @@ describe('phase add with project_code', () => {
       '# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n'
     );
 
-    const result = runGsdTools('phase add User Dashboard', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('phase add User Dashboard', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2400,7 +2401,7 @@ describe('phase add with project_code', () => {
       '# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n'
     );
 
-    const result = runGsdTools('phase add User Dashboard', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('phase add User Dashboard', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     assert.ok(
@@ -7326,7 +7327,7 @@ describe('bug-3287 — phase.add emits project_code prefix (sanity)', () => {
   test('phase.add creates XR-02-<slug> when project_code is XR', () => {
     makeXRProject(tmpDir);
 
-    const result = runGsdTools('phase add auth service', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('phase add auth service', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `phase.add failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -7355,7 +7356,7 @@ describe('bug-3287 — init phase-op exposes expected_phase_dir with project_cod
   test('returns expected_phase_dir with XR- prefix when phase directory does not exist', () => {
     makeXRProject(tmpDir);
 
-    const result = runGsdTools('init phase-op 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init phase-op 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init phase-op failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -7386,7 +7387,7 @@ describe('bug-3287 — init phase-op exposes expected_phase_dir with project_cod
       '# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n',
     );
 
-    const result = runGsdTools('init phase-op 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init phase-op 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init phase-op failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -7411,7 +7412,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
   test('returns expected_phase_dir with XR- prefix when phase directory does not exist', () => {
     makeXRProject(tmpDir);
 
-    const result = runGsdTools('init plan-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -7442,7 +7443,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       '# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n',
     );
 
-    const result = runGsdTools('init plan-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -17257,7 +17258,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   }
 
   function gsd(cwd, ...args) {
-    const r = runGsdToolsCaptured(['query', ...args], cwd, { HOME: cwd });
+    const r = runGsdToolsCaptured(['query', ...args], cwd, isolatedEnv({ home: cwd }));
     assert.equal(r.exitCode, 0, `gsd ${args.join(' ')} failed: ${r.stderr}`);
     return r.stdout;
   }
@@ -18113,7 +18114,7 @@ describe('#5676: phase.complete under milestone-prefixed', () => {
   test('#5676: first-time completion of 3-01 advances STATE to 3-02', () => {
     const tmp = buildFixture(true);
     try {
-      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, { HOME: tmp });
+      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, isolatedEnv({ home: tmp }));
       assert.ok(result.success, `phase.complete should succeed: ${result.error}`);
 
       const state = fs.readFileSync(path.join(tmp, '.planning', 'STATE.md'), 'utf8');
@@ -18129,7 +18130,7 @@ describe('#5676: phase.complete under milestone-prefixed', () => {
   test('#5676: re-completing 3-01 does not rewind STATE from 3-02', () => {
     const tmp = buildFixture(false);
     try {
-      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, { HOME: tmp });
+      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, isolatedEnv({ home: tmp }));
       assert.ok(result.success, `phase.complete should succeed: ${result.error}`);
 
       const state = fs.readFileSync(path.join(tmp, '.planning', 'STATE.md'), 'utf8');
