@@ -12,6 +12,7 @@ const WF = 'gsd-core/workflows';
 const AUDITED = ['review.md', 'plan-phase.md', 'ship.md', 'debug.md', 'autonomous.md', 'ai-integration-phase.md', 'eval-review.md', 'update.md'];
 
 const LANES_MARKER = 'jq-dependent reviewer lanes';
+const FAMILIES = ['config-get', 'resolve-model', 'verification.status', 'resolve-execution'];
 const isWord = (ch) => ch !== undefined && /\w/.test(ch);
 
 // True when, on the line that holds `from`, a pipe (not the `||` operator) is followed by `jq`: any stage of the pipeline,
@@ -95,10 +96,7 @@ function laneAfterDeclaration(text, lane) {
 module.exports = {
   id: 'workflow-jq-dependency',
   issue: '#2589',
-  wordPipedToJq,
-  queryPipedToJq,
-  callsWithField,
-  laneAfterDeclaration,
+  walkers: { wordPipedToJq, queryPipedToJq, callsWithField, laneAfterDeclaration },
   check(ctx) {
     // One document per path: a file that is gone, or empty, is one finding however many assertions read it.
     const docs = new Map();
@@ -110,7 +108,9 @@ module.exports = {
       ['config-get lookups must use --raw, not a jq pipe', (text) => wordPipedToJq(text, 'config-get')],
       ['resolve-model lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'resolve-model')],
       ['verification.status lookups must use --pick, not a jq pipe', (text) => wordPipedToJq(text, 'verification.status')],
-      ['no gsd_run query (config-get|resolve-model|resolve-execution|verification.status) may pipe to jq', queryPipedToJq],
+      // The general guard adds only a query family written with no word boundary; a pipe a family probe sees is reported once.
+      ['no gsd_run query (config-get|resolve-model|resolve-execution|verification.status) may pipe to jq',
+        (text) => queryPipedToJq(text) && !FAMILIES.some((family) => wordPipedToJq(text, family))],
       ['update-context lookups must not pipe to jq (#1854)', (text) => wordPipedToJq(text, 'update-context')],
       ['resolve-execution lookups must use --pick, not a jq pipe (sibling of resolve-model)', (text) => wordPipedToJq(text, 'resolve-execution')],
     ];

@@ -30,18 +30,16 @@ function namedBlock(markdown, name) {
   return end === -1 ? null : markdown.slice(start + openBare.length, end);
 }
 
-// The sectionizer, or the reason it cannot be loaded (a missing build is a finding, not a throw).
-function loadSectionizer() {
-  try {
-    return { lib: require('../../../gsd-core/bin/lib/markdown-sectionizer.cjs') };
-  } catch (err) {
-    return { error: `gsd-core/bin/lib/markdown-sectionizer.cjs cannot be loaded: ${err.message}` };
-  }
-}
+const { loadLib } = require('./lib/load-lib.cjs');
 
-// The bodies of the closed fenced blocks of a block, found by the sectionizer's fence rules over the left-trimmed lines.
-function fencedBodies(block) {
-  const loaded = loadSectionizer();
+const SECTIONIZER = 'gsd-core/bin/lib/markdown-sectionizer.cjs';
+const loadSectionizer = () => require('../../../gsd-core/bin/lib/markdown-sectionizer.cjs');
+
+// The bodies of the closed fenced blocks of a block, found by the sectionizer's fence rules over the left-trimmed lines
+// (the test took a fence line at any indentation, so the lines go in without their leading blanks), or the reason the
+// sectionizer cannot be loaded.
+function fencedBodies(block, load = loadSectionizer) {
+  const loaded = loadLib(load, SECTIONIZER);
   if (loaded.error) return { error: loaded.error };
   const lines = block.split('\n').map((line) => line.trimStart());
   return { bodies: loaded.lib.scanFencedBlocks(lines).filter((record) => record.closeLineIdx !== -1).map((record) => lines.slice(record.openLineIdx + 1, record.closeLineIdx).join('\n')) };
@@ -136,8 +134,8 @@ function shellStatements(script) {
 }
 
 // The shell statements of the fenced blocks of a block, or the reason they cannot be read.
-function statementsOf(block) {
-  const found = fencedBodies(block);
+function statementsOf(block, load) {
+  const found = fencedBodies(block, load);
   return found.error ? { error: found.error } : { statements: found.bodies.flatMap((body) => shellStatements(body)) };
 }
 const isFetchPrune = (cmd) => cmd[0] === 'git' && cmd[1] === 'fetch' && (cmd.includes('--prune') || cmd.includes('-p'));
@@ -145,60 +143,64 @@ const isBranchWith = (...flags) => (cmd) => cmd[0] === 'git' && cmd[1] === 'bran
 const isAnyBranch = (cmd) => cmd[0] === 'git' && cmd[1] === 'branch';
 
 
+// The contract over a loader of the sectionizer: a test hands in one that throws.
+const buildCheck = (load) => (ctx) => {
+  // A cause shared by several assertions (a block that is missing, a library that cannot be loaded) is reported once.
+  const seen = new Set();
+  const once = (message) => {
+    if (seen.has(message)) return true;
+    seen.add(message);
+    return message;
+  };
+  // An assertion over a named block: the block must exist and be non-empty (the test's assert.ok(block)).
+  const onBlock = (name, check) => (text) => {
+    const block = namedBlock(text, name);
+    return block ? check(block) : once(`the <${name}> block is missing`);
+  };
+  // A step that is not in <process>: the same cause as a block that is missing, reported once under either message.
+  const stepMissing = (name, message) => {
+    const key = `the <${name}> block is missing`;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    return message;
+  };
+  // An assertion over the shell statements of the fenced blocks of a block.
+  const withShell = (check) => (block) => {
+    const found = statementsOf(block, load);
+    return found.error ? once(found.error) : check(found.statements);
+  };
+  ctx.doc(FILE)
+    .satisfies(onBlock('prune_local_branches', () => true), 'cleanup.md must contain a <prune_local_branches> step')
+    .satisfies(onBlock('show_dry_run', withShell((statements) => statements.some(isFetchPrune) || 'it runs no git fetch --prune')), 'show_dry_run must run `git fetch --prune` so the candidate list matches the execution step')
+    .satisfies(onBlock('prune_local_branches', withShell((statements) => !statements.some(isFetchPrune) || 'it runs git fetch --prune')), 'prune_local_branches must not re-run `git fetch --prune` (a TOCTOU window between the confirmed list and the deletion)')
+    .satisfies(onBlock('prune_local_branches', withShell((statements) => statements.some(isBranchWith('-vv', '--verbose')) || 'it runs no git branch -vv')), 'prune_local_branches must run `git branch -vv` to find branches with a gone upstream')
+    .satisfies(onBlock('prune_local_branches', withShell((statements) => statements.some(isBranchWith('-D', '--delete')) || 'it runs no git branch -D')), 'prune_local_branches must run `git branch -D` to delete stale local branches')
+    .satisfies(onBlock('prune_local_branches', (block) => block.includes('xargs -r') || block.includes('xargs --no-run-if-empty') || 'no xargs -r'), 'prune_local_branches must use `xargs -r` to handle an empty branch list safely')
+    .satisfies(onBlock('process', (block) => {
+      const archive = block.indexOf('<step name="archive_phases">');
+      const prune = block.indexOf('<step name="prune_local_branches">');
+      const commit = block.indexOf('<step name="commit">');
+      if (archive === -1) return stepMissing('archive_phases', 'the archive_phases step is missing');
+      if (commit === -1) return stepMissing('commit', 'the commit step is missing');
+      if (prune === -1) return stepMissing('prune_local_branches', 'the prune_local_branches step is missing');
+      return (archive < prune && prune < commit) || 'the order is not archive_phases, prune_local_branches, commit';
+    }), 'prune_local_branches must appear between archive_phases and commit in <process>')
+    .satisfies(onBlock('show_dry_run', (block) => block.includes(': gone') || block.includes('gone]') || block.includes('upstream is gone') || 'no gone-upstream mention'), 'show_dry_run must mention gone-upstream branches in the dry-run summary')
+    .satisfies(onBlock('show_dry_run', (block) => (block.includes('archive') && (block.includes('prune') || block.includes('branch'))) || 'it covers archiving and pruning'), 'the confirmation prompt must cover both phase archival and branch pruning')
+    .satisfies(onBlock('report', (block) => block.includes('Pruned') || block.includes('pruned') || 'no pruned count'), 'the report step must include the pruned-branch count in the final summary')
+    .satisfies(onBlock('prune_local_branches', (block) => block.includes('$1 != "*"') || block.includes('$1!="*"') || block.includes('$1 !~') || block.includes('!/^\\*/')
+      || block.includes('!/^\\*') || block.includes('--format') || (block.includes('sed') && block.includes('\\*')) || 'no guard against the * marker'), 'the prune_local_branches awk must explicitly exclude the current-branch marker (`*`), so git branch -D is never passed `*`')
+    .satisfies(onBlock('identify_completed_milestones', withShell((statements) => !statements.some(isAnyBranch) || 'it runs a git branch command')), 'identify_completed_milestones must not run git branch commands: branch detection belongs in show_dry_run')
+    .satisfies(onBlock('prune_local_branches', (block) => block.includes('"main"') || block.includes("'main'") || block.includes('^main$') || block.includes('^main|') || 'main is not excluded'), 'the prune_local_branches awk must exclude "main" from the deletion candidates')
+    .satisfies(onBlock('prune_local_branches', (block) => block.includes('"next"') || block.includes("'next'") || block.includes('^next$') || block.includes('^next|')
+      || block.includes('"trunk"') || block.includes("'trunk'") || block.includes('^trunk$') || block.includes('^trunk|') || 'neither next nor trunk is excluded'), 'the prune_local_branches awk must exclude the integration branch names (next or trunk)')
+    .satisfies(onBlock('archive_phases', (block) => (block.includes('mv') && (block.includes('.planning/phases/') || block.includes('phases/'))) || 'it no longer moves phase directories under .planning/phases/'), 'the original archive_phases step must still exist and move phase directories');
+};
+
 module.exports = {
-  walkers: { namedBlock, shellStatements },
+  walkers: { namedBlock, shellStatements, fencedBodies },
   id: 'cleanup-branch-pruning',
   issue: '#40',
-  check(ctx) {
-    // A cause shared by several assertions (a block that is missing, a library that cannot be loaded) is reported once.
-    const seen = new Set();
-    const once = (message) => {
-      if (seen.has(message)) return true;
-      seen.add(message);
-      return message;
-    };
-    // An assertion over a named block: the block must exist and be non-empty (the test's assert.ok(block)).
-    const onBlock = (name, check) => (text) => {
-      const block = namedBlock(text, name);
-      return block ? check(block) : once(`the <${name}> block is missing`);
-    };
-    // A step that is not in <process>: the same cause as a block that is missing, reported once under either message.
-    const stepMissing = (name, message) => {
-      const key = `the <${name}> block is missing`;
-      if (seen.has(key)) return true;
-      seen.add(key);
-      return message;
-    };
-    // An assertion over the shell statements of the fenced blocks of a block.
-    const withShell = (check) => (block) => {
-      const found = statementsOf(block);
-      return found.error ? once(found.error) : check(found.statements);
-    };
-    ctx.doc(FILE)
-      .satisfies(onBlock('prune_local_branches', () => true), 'cleanup.md must contain a <prune_local_branches> step')
-      .satisfies(onBlock('show_dry_run', withShell((statements) => statements.some(isFetchPrune) || 'it runs no git fetch --prune')), 'show_dry_run must run `git fetch --prune` so the candidate list matches the execution step')
-      .satisfies(onBlock('prune_local_branches', withShell((statements) => !statements.some(isFetchPrune) || 'it runs git fetch --prune')), 'prune_local_branches must not re-run `git fetch --prune` (a TOCTOU window between the confirmed list and the deletion)')
-      .satisfies(onBlock('prune_local_branches', withShell((statements) => statements.some(isBranchWith('-vv', '--verbose')) || 'it runs no git branch -vv')), 'prune_local_branches must run `git branch -vv` to find branches with a gone upstream')
-      .satisfies(onBlock('prune_local_branches', withShell((statements) => statements.some(isBranchWith('-D', '--delete')) || 'it runs no git branch -D')), 'prune_local_branches must run `git branch -D` to delete stale local branches')
-      .satisfies(onBlock('prune_local_branches', (block) => block.includes('xargs -r') || block.includes('xargs --no-run-if-empty') || 'no xargs -r'), 'prune_local_branches must use `xargs -r` to handle an empty branch list safely')
-      .satisfies(onBlock('process', (block) => {
-        const archive = block.indexOf('<step name="archive_phases">');
-        const prune = block.indexOf('<step name="prune_local_branches">');
-        const commit = block.indexOf('<step name="commit">');
-        if (archive === -1) return stepMissing('archive_phases', 'the archive_phases step is missing');
-        if (commit === -1) return stepMissing('commit', 'the commit step is missing');
-        if (prune === -1) return stepMissing('prune_local_branches', 'the prune_local_branches step is missing');
-        return (archive < prune && prune < commit) || 'the order is not archive_phases, prune_local_branches, commit';
-      }), 'prune_local_branches must appear between archive_phases and commit in <process>')
-      .satisfies(onBlock('show_dry_run', (block) => block.includes(': gone') || block.includes('gone]') || block.includes('upstream is gone') || 'no gone-upstream mention'), 'show_dry_run must mention gone-upstream branches in the dry-run summary')
-      .satisfies(onBlock('show_dry_run', (block) => (block.includes('archive') && (block.includes('prune') || block.includes('branch'))) || 'it covers archiving and pruning'), 'the confirmation prompt must cover both phase archival and branch pruning')
-      .satisfies(onBlock('report', (block) => block.includes('Pruned') || block.includes('pruned') || 'no pruned count'), 'the report step must include the pruned-branch count in the final summary')
-      .satisfies(onBlock('prune_local_branches', (block) => block.includes('$1 != "*"') || block.includes('$1!="*"') || block.includes('$1 !~') || block.includes('!/^\\*/')
-        || block.includes('!/^\\*') || block.includes('--format') || (block.includes('sed') && block.includes('\\*')) || 'no guard against the * marker'), 'the prune_local_branches awk must explicitly exclude the current-branch marker (`*`), so git branch -D is never passed `*`')
-      .satisfies(onBlock('identify_completed_milestones', withShell((statements) => !statements.some(isAnyBranch) || 'it runs a git branch command')), 'identify_completed_milestones must not run git branch commands: branch detection belongs in show_dry_run')
-      .satisfies(onBlock('prune_local_branches', (block) => block.includes('"main"') || block.includes("'main'") || block.includes('^main$') || block.includes('^main|') || 'main is not excluded'), 'the prune_local_branches awk must exclude "main" from the deletion candidates')
-      .satisfies(onBlock('prune_local_branches', (block) => block.includes('"next"') || block.includes("'next'") || block.includes('^next$') || block.includes('^next|')
-        || block.includes('"trunk"') || block.includes("'trunk'") || block.includes('^trunk$') || block.includes('^trunk|') || 'neither next nor trunk is excluded'), 'the prune_local_branches awk must exclude the integration branch names (next or trunk)')
-      .satisfies(onBlock('archive_phases', (block) => (block.includes('mv') && (block.includes('.planning/phases/') || block.includes('phases/'))) || 'it no longer moves phase directories under .planning/phases/'), 'the original archive_phases step must still exist and move phase directories');
-  },
+  check: buildCheck(loadSectionizer),
+  withLoader: (load) => ({ id: 'cleanup-branch-pruning', issue: '#40', check: buildCheck(load) }),
 };

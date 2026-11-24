@@ -10,6 +10,8 @@
 // job is one finding that skips the checks which depend on it. The two guards that run the step's shell stay in
 // tests/release-backmerge-invariants.test.cjs. Was the YAML half of that test.
 
+const { hasSequence } = require('./lib/has-sequence.cjs');
+
 const BACKMERGE = '.github/workflows/auto-backmerge.yml';
 const RELEASE = '.github/workflows/release.yml';
 const HAS_ADMIN_TOKEN_EXPR = "${{ secrets.GSD_BOT_PR_TOKEN != '' }}";
@@ -23,9 +25,10 @@ const isWordChar = (ch) => ch !== undefined && /\w/.test(ch);
 
 // The parsed workflow, or the reason it cannot be read.
 function parse(text, label) {
+  const yaml = require('js-yaml');
   let workflow;
   try {
-    workflow = require('js-yaml').load(text);
+    workflow = yaml.load(text);
   } catch (err) {
     return { error: `${label} is not valid YAML: ${err.message}` };
   }
@@ -45,27 +48,6 @@ function gatesOnOutcome(condition) {
     }
     return false;
   });
-}
-
-// The words appear in order, each pair separated by at least one whitespace character (no word boundaries).
-function hasSequence(text, words) {
-  let at = text.indexOf(words[0]);
-  while (at !== -1) {
-    let cursor = at + words[0].length;
-    let matched = true;
-    for (const word of words.slice(1)) {
-      const start = cursor;
-      while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
-      if (cursor === start || !text.startsWith(word, cursor)) {
-        matched = false;
-        break;
-      }
-      cursor += word.length;
-    }
-    if (matched) return true;
-    at = text.indexOf(words[0], at + 1);
-  }
-  return false;
 }
 
 // One workflow document with its parsed form; a workflow that cannot be read is one finding and `check` is not run.

@@ -144,7 +144,8 @@ module.exports = {
       }, 'every gate-passed transition must route into the first mandatory probe, not past it')
       .satisfies((text) => {
         const { jumps, probes } = analyse(text);
-        if (probes.length === 0) return 'it has no probe step';
+        // No probe step at all is already reported by the minimum above.
+        if (probes.length === 0) return true;
         const first = probes[0];
         return jumps.some((jump) => jump.target === first.id)
           || `Step ${first.id} (${first.title}) is defined but no jump reaches it; targets found: ${[...new Set(jumps.map((jump) => jump.target))].join(', ')}`;
@@ -159,7 +160,8 @@ module.exports = {
       }, 'the max-rounds bypass must not be redirected into a probe: it never passed the ambiguity gate')
       .satisfies((text) => {
         const { lines, bypass } = analyse(text);
-        if (!bypass) return `no "${MAX_ROUNDS_MARKER}" block`;
+        // A missing max-rounds block is already reported by the redirect assertion above.
+        if (!bypass) return true;
         return lines.slice(bypass.start - 1, bypass.end).some((line) => line.includes('Write SPEC.md')) || 'the block never writes SPEC.md';
       }, 'the max-rounds bypass must still route to SPEC generation')
       .satisfies((text) => {

@@ -38,9 +38,9 @@ const AGENT_WIRING = {
 };
 
 // The sectionizer's fence scanner (build output), loaded once; a load failure is a finding of its own.
-function loadFenceScanner() {
+function loadFenceScanner(loader = () => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'))) {
   try {
-    return { scan: require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs')).scanFencedBlocks };
+    return { scan: loader().scanFencedBlocks };
   } catch (err) {
     return { error: `the markdown sectionizer cannot be loaded: ${err.message}` };
   }
@@ -80,8 +80,7 @@ function inRequiredReading(text, ref) {
 
 module.exports = {
   id: 'thinking-model-guidance',
-  sectionOf,
-  collapsed,
+  walkers: { loadFenceScanner },
   check(ctx) {
     // One document per path: a file that is gone, or empty, is one finding however many assertions read it.
     const docs = new Map();

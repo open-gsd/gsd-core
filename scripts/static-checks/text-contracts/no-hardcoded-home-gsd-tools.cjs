@@ -105,10 +105,7 @@ const offenders = (text, probe) => text.split('\n').flatMap((line, at) => (probe
 module.exports = {
   id: 'no-hardcoded-home-gsd-tools',
   issue: '#637',
-  hardcodedNodeCall,
-  quotedHomeNodeCall,
-  suffixedMktemp,
-  bashBlocks,
+  walkers: { hardcodedNodeCall, quotedHomeNodeCall, suffixedMktemp, bashBlocks },
   check(ctx) {
     for (const dir of SCAN_DIRS) {
       let blockCount = 0;

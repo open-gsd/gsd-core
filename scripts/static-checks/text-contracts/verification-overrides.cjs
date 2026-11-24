@@ -29,6 +29,7 @@ function requiredReadingAt(text) {
 module.exports = {
   id: 'verification-overrides',
   issue: '#1747',
+  walkers: { requiredReadingAt, hasCriterionField },
   check(ctx) {
     ctx.doc(REFERENCE)
       .has('## Override Format', 'the reference should contain an "Override Format" section')

@@ -54,7 +54,8 @@ module.exports = {
         const start = text.indexOf('isolation="worktree"');
         const end = text.indexOf('**Sequential mode**');
         if (start === -1) return 'the isolation="worktree" marker is missing';
-        if (end === -1) return 'the **Sequential mode** marker is missing';
+        // A missing **Sequential mode** marker is already reported by the sequential success_criteria assertions.
+        if (end === -1) return true;
         return command < start || command > end || 'it sits inside the worktree agent prompt';
       }, 'roadmap update-plan-progress must appear outside the worktree agent prompt (orchestrator-owned)')
       .lacks('state update-position', 'state update-position was a ghost reference (the command never existed) and must stay removed')

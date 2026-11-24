@@ -9,6 +9,9 @@
 // carry it (a differential property in the case file feeds random rosters to the contract). Every file is loaded
 // through one handle, so a missing or empty file is one finding.
 
+const { asciiLower } = require('./lib/ascii-lower.cjs');
+const { LINE_ENDS } = require('./lib/line-ends.cjs');
+
 const BOOTSTRAP_REF = 'agent-skills-bootstrap.md';
 const BOOTSTRAP = `gsd-core/references/${BOOTSTRAP_REF}`;
 const RESOLVER = 'gsd-core/references/gsd-run-resolver.md';
@@ -25,7 +28,7 @@ const CONSUMER_AGENTS = [
 // `before`, one or more whitespace characters, `after`, matched without case, by one walk (the regex used an
 // unbounded `\s+`, which a bounded pattern would let a longer gap evade). `before` and `after` are lower case.
 function hasWhitespaceGap(text, before, after) {
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   let at = lower.indexOf(before);
   while (at !== -1) {
     const from = at + before.length;
@@ -40,7 +43,6 @@ function hasWhitespaceGap(text, before, after) {
 // The name the old multiline pattern `^name:\s*"?([A-Za-z0-9-]{1,64})"?\s*$` captured, by one walk with that pattern's
 // semantics: `name:` at a line start (after CR, LF, U+2028 or U+2029), any whitespace (line breaks included) before the
 // value, an optional double quote either side of 1 to 64 letters, digits or hyphens, then whitespace up to a line end.
-const LINE_ENDS = new Set(['\n', '\r', String.fromCharCode(0x2028), String.fromCharCode(0x2029)]);
 function frontmatterNameOf(text) {
   for (let i = 0; i < text.length; i += 1) {
     if (!((i === 0 || LINE_ENDS.has(text[i - 1])) && text.startsWith('name:', i))) continue;
@@ -62,7 +64,7 @@ const agentTypeOf = (rel) => rel.split('/').pop().replace(/\.compact\.md$/, '').
 
 // A check that every word is in the text without regard to case: true, or the words that are missing.
 const hasWords = (...words) => (text) => {
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   const missing = words.filter((word) => !lower.includes(word));
   return missing.length === 0 || `missing ${missing.join(', ')}`;
 };
@@ -90,7 +92,7 @@ module.exports = {
       .has(/agent type/i, 'the bootstrap must tell the agent to use the type stated in its own file')
       .has('gsd-run-resolver.md', 'the bootstrap must point at the shared resolver reference')
       .lacks(/your own init already defines/i, 'gsd_run is not defined by every agent init')
-      .satisfies((text) => (text.includes('non-Claude') && text.toLowerCase().includes('persona')) || `missing ${text.includes('non-Claude') ? 'persona' : 'non-Claude'}`,
+      .satisfies((text) => (text.includes('non-Claude') && asciiLower(text).includes('persona')) || `missing ${text.includes('non-Claude') ? 'persona' : 'non-Claude'}`,
         'the bootstrap must state that a non-Claude runtime returns the agent persona without --skills-only')
       .satisfies((text) => !hasWhitespaceGap(text, 'exits 0 with an empty', 'block when nothing is configured for your type'),
         'the empty-block claim must be scoped to --skills-only')

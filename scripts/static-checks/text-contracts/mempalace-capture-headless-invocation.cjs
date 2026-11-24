@@ -51,9 +51,19 @@ function snippetOf(text) {
   return lines.slice(from, to + 1);
 }
 
+// js-yaml, loaded through a function so a load failure is a finding of its own (not a parse error).
+function loadYaml(loader = () => require('js-yaml')) {
+  try {
+    return { yaml: loader() };
+  } catch (err) {
+    return { error: `js-yaml cannot be loaded: ${err.message}` };
+  }
+}
+
 module.exports = {
   id: 'mempalace-capture-headless-invocation',
   issue: '#2220',
+  walkers: { isMineCommand, isBareEntry, roomsBlock, loadYaml },
   check(ctx) {
     for (const rel of SURFACES) {
       ctx.doc(rel)
@@ -67,21 +77,18 @@ module.exports = {
         .satisfies((text) => {
           const block = roomsBlock(text);
           if (block === null) return 'could not locate a rooms: YAML block';
-          let yaml;
-          try {
-            yaml = require('js-yaml');
-          } catch (err) {
-            return `js-yaml cannot be loaded: ${err.message}`;
-          }
+          const loaded = loadYaml();
+          if (loaded.error) return loaded.error;
           let parsed;
           try {
-            parsed = yaml.load(block);
+            parsed = loaded.yaml.load(block);
           } catch (err) {
             return `the rooms: block is not valid YAML: ${err.message}`;
           }
           if (!(parsed && Array.isArray(parsed.rooms))) return 'rooms: must parse to an array';
           if (parsed.rooms.length < 5) return `expected the GSD room taxonomy (at least 5 rooms), got ${parsed.rooms.length}`;
           for (const [at, entry] of parsed.rooms.entries()) {
+            if (typeof entry === 'string' && /^[A-Za-z][A-Za-z0-9_-]*$/.test(entry)) continue; // a bare-string entry is reported once, below
             if (!(entry !== null && typeof entry === 'object' && !Array.isArray(entry))) return `rooms:[${at}] must be a dict, got ${JSON.stringify(entry)}`;
             if (!(typeof entry.name === 'string' && entry.name.length > 0)) return `rooms:[${at}] must have a non-empty name string`;
           }

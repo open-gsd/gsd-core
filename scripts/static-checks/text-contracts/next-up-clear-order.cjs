@@ -9,6 +9,8 @@
 // The template section ends at `## Error Panel`: the old test ended it at `## Error Box`, a heading renamed long ago,
 // so it read to the end of the file. Was tests/next-up-clear-order.test.cjs (its bug-3083 block was folded in).
 
+const { hasSequence } = require('./lib/has-sequence.cjs');
+
 const UI_BRAND = 'gsd-core/references/ui-brand.md';
 const PLAN_PHASE = 'gsd-core/workflows/plan-phase.md';
 const RESUME = 'gsd-core/workflows/resume-project.md';
@@ -27,27 +29,6 @@ function hasSubClear(text) {
     if (next === -1) return false;
     if (lower.startsWith('</sub>', next) && lower.slice(from, next).includes('/clear')) return true;
     at = lower.indexOf('<sub>', next);
-  }
-  return false;
-}
-
-// The words appear in order, each pair separated by at least one whitespace character (no word boundaries).
-function hasSequence(text, words) {
-  let at = text.indexOf(words[0]);
-  while (at !== -1) {
-    let cursor = at + words[0].length;
-    let matched = true;
-    for (const word of words.slice(1)) {
-      const start = cursor;
-      while (cursor < text.length && /\s/.test(text[cursor])) cursor += 1;
-      if (cursor === start || !text.startsWith(word, cursor)) {
-        matched = false;
-        break;
-      }
-      cursor += word.length;
-    }
-    if (matched) return true;
-    at = text.indexOf(words[0], at + 1);
   }
   return false;
 }
@@ -154,6 +135,7 @@ module.exports = {
         if (!derivesExecFlag(text)) return true;
         const block = derivationBlock(text);
         if (block === null) return 'expected a GAPS_EXEC_FLAG derivation block';
+        if (!block.includes('GAPS_MODE')) return 'the derivation does not mention GAPS_MODE';
         return !block.toLowerCase().includes('reviews') || 'the derivation references reviews';
       }, 'the --gaps-only derivation must be gated on GAPS_MODE alone: reviews-mode Next Up stays unchanged')
       .satisfies((text) => offerNextOf(text).error || true, 'plan-phase.md must have a closed <offer_next> block')

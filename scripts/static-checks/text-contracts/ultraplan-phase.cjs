@@ -38,7 +38,7 @@ function hasNameLine(text) {
 
 module.exports = {
   id: 'ultraplan-phase',
-  hasNameLine,
+  walkers: { hasNameLine },
   check(ctx) {
     const command = ctx.doc(COMMAND);
     command.frontmatter()

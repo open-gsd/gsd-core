@@ -7,13 +7,15 @@
 // Was tests/seed-scan-new-milestone.test.cjs (with the folded bug-3236 cases). The old `.*` patterns match within one
 // line (a dot excludes CR, LF, U+2028 and U+2029): they are one linear walk per line, the parts in order, any case.
 
+const { asciiLower } = require('./lib/ascii-lower.cjs');
+
 const NEW_MILESTONE = 'gsd-core/workflows/new-milestone.md';
 const PLANT_SEED = 'gsd-core/workflows/plant-seed.md';
 
 // True when one line holds every part in order (the old `a.*b.*c`), without regard to case.
 function lineHasInOrder(text, parts) {
   for (const line of text.split(/\r|\n|\u2028|\u2029/)) {
-    const lower = line.toLowerCase();
+    const lower = asciiLower(line);
     let from = 0;
     let all = true;
     for (const part of parts) {

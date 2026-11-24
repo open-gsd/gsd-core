@@ -11,6 +11,9 @@
 
 const path = require('node:path');
 
+const { asciiLower } = require('./lib/ascii-lower.cjs');
+const { loadLib } = require('./lib/load-lib.cjs');
+
 const CAPTURE_SKILL = 'skills/gsd-mempalace-capture/SKILL.md';
 const CAPTURE_COMMAND = 'commands/gsd/mempalace-capture.md';
 const RECALL_SKILL = 'skills/gsd-mempalace-recall/SKILL.md';
@@ -22,15 +25,6 @@ const LOOKBACK = 80;
 const DEFAULT_TRUE_KEYS = ['mempalace.capture_artifacts', 'mempalace.mirror_kg', 'mempalace.diary_journal'];
 
 const isObject = (value) => value !== null && typeof value === 'object';
-
-// A shipped library through `load`, or the reason it cannot be loaded (a missing build is a finding, not a throw).
-function loadLib(load, file) {
-  try {
-    return { lib: load() };
-  } catch (err) {
-    return { error: `${file} cannot be loaded: ${err.message}` };
-  }
-}
 
 // The registry's settings schema (the node holding `mempalace.mirror_kg`), found by the test's depth-first walk; a node
 // is visited once, so a registry that refers back to itself ends the walk.
@@ -53,7 +47,7 @@ function mempalaceSettings(capabilities) {
 function registryProblems(registry) {
   const capabilities = isObject(registry) ? registry.capabilities : undefined;
   const settings = isObject(capabilities) && isObject(capabilities.mempalace) ? mempalaceSettings(capabilities) : null;
-  if (settings === null) return { problems: ['the capability registry must expose a mempalace settings schema'], defaultTrue: [] };
+  if (settings === null) return { problems: ['the capability registry must expose a mempalace settings schema'], defaultTrue: [...DEFAULT_TRUE_KEYS] };
   const problems = [];
   const defaultTrue = [];
   const defaultFalse = [];
@@ -87,8 +81,8 @@ function connectivesBefore(text, predicate) {
         start = -1;
       }
     }
-    const last = (words[words.length - 1] || '').toLowerCase();
-    const prior = (words[words.length - 2] || '').toLowerCase();
+    const last = asciiLower(words[words.length - 1] || '');
+    const prior = asciiLower(words[words.length - 2] || '');
     found.push(prior === 'only' && last === 'if' ? 'only if' : last);
   }
   return found;

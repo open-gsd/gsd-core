@@ -13,6 +13,9 @@
 
 const path = require('node:path');
 
+const { LINE_ENDS } = require('./lib/line-ends.cjs');
+const { loadLib } = require('./lib/load-lib.cjs');
+
 const VERIFIER = 'agents/gsd-verifier.md';
 const TEMPLATE = 'gsd-core/templates/verification-report.md';
 const AGENTS_DOC = 'docs/reference/agents.md';
@@ -25,15 +28,6 @@ const ITEMS_RADIUS = 500;
 const ITEMS_ANCHOR = 'coincidental_reliance_items: #';
 const STATUSES = ['passed', 'gaps_found', 'human_needed'];
 
-// A shipped library through `load`, or the reason it cannot be loaded (a missing build is a finding, not a throw).
-function loadLib(load, file) {
-  try {
-    return { lib: load() };
-  } catch (err) {
-    return { error: `${file} cannot be loaded: ${err.message}` };
-  }
-}
-
 const shippedLib = (name) => loadLib(() => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', name)), `gsd-core/bin/lib/${name}`);
 
 // The source around the first occurrence of `needle`, `radius` characters either side, or null when it is absent.
@@ -42,7 +36,6 @@ function windowAround(text, needle, radius) {
   return at === -1 ? null : text.slice(Math.max(0, at - radius), at + needle.length + radius);
 }
 
-const LINE_ENDS = new Set(['\n', '\r', String.fromCharCode(0x2028), String.fromCharCode(0x2029)]);
 const isWhitespace = (ch) => ch !== undefined && /\s/.test(ch);
 const isStatusWord = (ch) => ch !== undefined && ((ch >= 'a' && ch <= 'z') || ch === '_');
 
