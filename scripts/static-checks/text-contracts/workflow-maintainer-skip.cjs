@@ -6,7 +6,8 @@
 // echoed, the draft sweep is timer-driven with the same carve-out and message, the issue-link verdict stays a step-level
 // `if:` that delegates to the policy module, and auto-backmerge version-only filtering never excludes the lockfile.
 // The old test's backmerge behaviour case (it runs the policy module) stays in tests/workflow-maintainer-skip.test.cjs;
-// its cases that exercised helpers defined in the test (the ordering predicate, the sanitizer) are mutation rows now.
+// its sanitizer case exercised a helper defined in the test and is dropped (the real sanitizer lines are checked here);
+// its ordering-predicate case lives on as a case over the verdict-ordering walk below.
 // Every pattern is a linear walk over one file read once. Was tests/workflow-maintainer-skip.test.cjs.
 
 const { LINE_ENDS } = require('./lib/line-ends.cjs');
@@ -81,12 +82,14 @@ function hasTryBlock(text) {
 
 // /catch\s*\(err\)\s*\{[\s\S]*?core\.warning/
 function hasCatchWarning(text) {
+  const lastWarning = text.lastIndexOf('core.warning');
+  if (lastWarning === -1) return false;
   let at = text.indexOf('catch');
   while (at !== -1) {
     const open = skipSpaces(text, at + 5);
     if (text.startsWith('(err)', open)) {
       const brace = skipSpaces(text, open + 5);
-      if (text[brace] === '{' && text.indexOf('core.warning', brace + 1) !== -1) return true;
+      if (text[brace] === '{' && lastWarning > brace) return true;
     }
     at = text.indexOf('catch', at + 1);
   }
@@ -120,13 +123,11 @@ function declaresSanitizer(text, name) {
   return false;
 }
 
-// /HEAD\s*TAIL/ and /HEAD\s+TAIL/ (`atLeast` is the least number of blanks)
-function afterBlanks(text, head, tail, atLeast = 0) {
+// /HEAD\s*TAIL/
+function afterBlanks(text, head, tail) {
   let at = text.indexOf(head);
   while (at !== -1) {
-    const from = at + head.length;
-    const to = skipSpaces(text, from);
-    if (to - from >= atLeast && text.startsWith(tail, to)) return true;
+    if (text.startsWith(tail, skipSpaces(text, at + head.length))) return true;
     at = text.indexOf(head, at + 1);
   }
   return false;

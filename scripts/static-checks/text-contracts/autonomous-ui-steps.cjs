@@ -5,9 +5,9 @@
 // unconditional `Read and execute:` pointer in the host (#2994), so every assertion reads the host with the reference
 // spliced in at the pointer, as the test did (the splice uses a function replacement: no `$` pattern in the reference
 // can be read as a replacement token). A missing marker is one finding and the checks that need it stay quiet. The
-// test's tail checks of §3d.5 (verify:post dispatch, UI_SPEC_FILE, advisory) lie inside the check that is bounded by the
-// closing step tag, so they are asserted there once (the render-hooks word is part of the verify:post dispatch
-// phrase); `3a.5` anywhere is subsumed by the `**3a.5.` heading.
+// test's tail checks of §3d.5 for verify:post dispatch, UI_SPEC_FILE and advisory lie inside the check that is bounded
+// by the closing step tag, so they are asserted there once (the render-hooks word is part of the verify:post dispatch
+// phrase); `consumes` stays on the unbounded tail as in the test; `3a.5` anywhere is subsumed by the `**3a.5.` heading.
 // Was tests/autonomous-ui-steps.test.cjs.
 
 const WORKFLOW = 'gsd-core/workflows/autonomous.md';
@@ -117,7 +117,7 @@ module.exports = {
     host.satisfies(onContent((content) => {
       const heading = content.indexOf('3a.5');
       const plan = content.indexOf('**3b. Plan**');
-      if (heading === -1 || section3a5(content).error) return true; // the §3a.5 section check reports it
+      if (section3a5(content).error) return true; // the §3a.5 section check reports it
       if (plan === -1) return '**3b. Plan** not found';
       return need(heading < plan, '3b comes first');
     }), 'step 3a.5 (UI design contract) should appear before step 3b (plan)');
@@ -138,7 +138,7 @@ module.exports = {
     host.satisfies(onContent((content) => {
       const routing = content.indexOf('**3d. Post-Execution Routing**');
       const found = content.indexOf('3d.5');
-      if (found === -1 || review(content).error) return true; // the §3d.5 step check reports it
+      if (review(content).error) return true; // the §3d.5 step check reports it
       if (routing === -1) return '**3d. Post-Execution Routing** not found';
       return need(found > routing, '3d.5 comes first');
     }), 'step 3d.5 (UI review) should appear after step 3d (post-execution routing)');

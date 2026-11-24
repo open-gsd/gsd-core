@@ -11,6 +11,7 @@
 
 const { asciiLower } = require('./lib/ascii-lower.cjs');
 const { LINE_ENDS } = require('./lib/line-ends.cjs');
+const { loadLib } = require('./lib/load-lib.cjs');
 
 const COMMAND = 'commands/gsd/discuss-phase.md';
 const WORKFLOW = 'gsd-core/workflows/discuss-phase.md';
@@ -62,18 +63,22 @@ function readsAgentDef(text) {
       let end = cursor + 1;
       while (end < lower.length && !LINE_ENDS.has(lower[end])) end += 1;
       if (lower.slice(cursor + 1, end).includes('gsd-advisor-researcher.md')) return true;
+      // The rest of this line holds no file name, so no later `read @` on it can match: resume at the line end.
+      at = lower.indexOf('read', end);
+    } else {
+      at = lower.indexOf('read', at + 1);
     }
-    at = lower.indexOf('read', at + 1);
   }
   return false;
 }
 
-// A line that pairs the word `ls` with `*-SPEC.md`: the phase SPEC is read from init, never globbed.
-const lsGlobsSpec = (text) => text.split('\n').some((line) => hasWord(line, 'ls') && line.includes('*-SPEC.md'));
+// A line that pairs the word `ls` with `*-SPEC.md`: the phase SPEC is read from init, never globbed. `split` is the
+// line splitter (the test used splitLines of gsd-core/bin/lib/text-lines.cjs: CRLF or LF breaks, a lone CR does not).
+const lsGlobsSpec = (text, split) => split(text).some((line) => hasWord(line, 'ls') && line.includes('*-SPEC.md'));
 
 // One verdict per file: a globbing line, or the file's own literal (discuss-phase.md and plan-phase.md carry one).
-function noSpecGlob(text, own) {
-  if (lsGlobsSpec(text)) return 'a line pairs ls with *-SPEC.md';
+function noSpecGlob(text, own, split) {
+  if (lsGlobsSpec(text, split)) return 'a line pairs ls with *-SPEC.md';
   if (own && text.includes(own.literal)) return own.message;
   return true;
 }
@@ -146,10 +151,25 @@ module.exports = {
       .lacks('MAX_PASSES=', 'auto.md must not read MAX_PASSES (dead config — single-pass rule governs) (#2772)')
       .lacks('max_discuss_passes', 'auto.md must not reference max_discuss_passes (contradicts the single-pass rule) (#2772)');
 
-    gate.slice('## Pattern: context-handling', '## Pattern: gray-area-option')
-      .has('Update it | View it | Skip', 'context-handling options must be "Update it | View it | Skip" (the actual check_existing flow) (#2772)')
-      .lacks('Overwrite | Append | Cancel', 'context-handling must NOT document the obsolete "Overwrite | Append | Cancel" (#2772)');
-    gate.slice('## Pattern: gray-area-option')
+    // The gray-area-option marker is sliced once; the context-handling block ends where it begins, so a missing
+    // marker is one finding (from the gray-area-option slice) and the block checks stay quiet.
+    const GRAY_AREA = '## Pattern: gray-area-option';
+    const contextOpen = '## Pattern: context-handling';
+    // Only the first check reports a missing block marker; the second stays quiet on it.
+    const inContext = (check, reportsMarkers) => (text) => {
+      const gray = text.indexOf(GRAY_AREA);
+      if (gray === -1) return true;
+      const start = text.indexOf(contextOpen);
+      if (start === -1) return reportsMarkers ? `marker "${contextOpen}" not found` : true;
+      const end = text.indexOf(GRAY_AREA, start + contextOpen.length);
+      if (end === -1) return reportsMarkers ? `closing marker ${GRAY_AREA} not found after ${contextOpen}` : true;
+      return check(text.slice(start, end));
+    };
+    gate.satisfies(inContext((block) => need(block.includes('Update it | View it | Skip'), 'not found'), true),
+      'context-handling options must be "Update it | View it | Skip" (the actual check_existing flow) (#2772)')
+      .satisfies(inContext((block) => need(!block.includes('Overwrite | Append | Cancel'), 'found'), false),
+        'context-handling must NOT document the obsolete "Overwrite | Append | Cancel" (#2772)');
+    gate.slice(GRAY_AREA)
       .satisfies((text) => need(!mentions(text, 'always include "let claude decide"'), 'found'),
         'gray-area-option must NOT mandate "Let Claude decide" (#2772)');
 
@@ -193,7 +213,7 @@ module.exports = {
       }, `${mode}: the step that picks what to discuss restricts it to HOW (WHAT is already locked)`);
     }
     for (const mode of ['assumptions', 'power']) {
-      specDocs[mode].satisfies((text) => (specSteps.default === undefined || specSteps.default === '' ? true : need(text === specSteps.default, 'the bodies differ')),
+      specDocs[mode].satisfies((text) => (specSteps.default === undefined ? true : need(text === specSteps.default, 'the bodies differ')),
         `${mode} check_spec matches the default flow exactly (single source of truth)`);
     }
     // The steps' own checks report a missing marker; the order is judged only when both are there.
@@ -209,9 +229,12 @@ module.exports = {
     plan.has('_gsd_field "$INIT" spec_path', 'plan-phase.md reads spec_path from its init payload');
 
     // No workflow globs for the phase SPEC itself; discuss-phase.md and plan-phase.md also keep their own literal out.
+    const lines = loadLib(() => require('../../../gsd-core/bin/lib/text-lines.cjs'), 'gsd-core/bin/lib/text-lines.cjs');
+    if (lines.error) ctx.fail('gsd-core/bin/lib/text-lines.cjs', lines.error);
+    const split = lines.error ? (text) => text.split('\n') : lines.lib.splitLines;
     const named = new Map([[WORKFLOW, workflow], [POWER, power], [POWER_MODE, powerMode], [ADVISOR, advisor], [AUTO, auto], [ASSUMPTIONS, assumptions], [PLAN_PHASE, plan]]);
     for (const rel of ctx.list(WORKFLOWS_DIR, '.md', 'the workflows must exist')) {
-      (named.get(rel) || ctx.doc(rel)).satisfies((text) => noSpecGlob(text, OWN_SPEC_RULES[rel]),
+      (named.get(rel) || ctx.doc(rel)).satisfies((text) => noSpecGlob(text, OWN_SPEC_RULES[rel], split),
         'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
     }
   },

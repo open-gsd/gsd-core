@@ -203,6 +203,25 @@ const ordered = (first, second) => (text) => {
   return (next !== -1 && at < next) || `${JSON.stringify(second)} must follow ${JSON.stringify(first)}`;
 };
 
+// The PREFERRED_RUNTIME inference line of a text, or undefined.
+const inferenceLineOf = (text) => text.split('\n').find((candidate) => candidate.includes(INFER_MARKER));
+
+// A check of the inference line that holds when the line is missing: its absence is reported once, by the parity check.
+const whenInferred = (holds) => (text) => {
+  const line = inferenceLineOf(text);
+  return line === undefined || holds(line);
+};
+
+// The text after the end of the get_installed_version step, or undefined when the step has no end.
+function afterInstalledStep(text) {
+  const start = text.indexOf('<step name="get_installed_version">');
+  const end = start === -1 ? -1 : text.indexOf('</step>', start);
+  return end === -1 ? undefined : text.slice(end);
+}
+
+// The spy needles that the text after the step lacks.
+const missingAfter = (tail) => SPIES.filter(([, needle]) => !tail.includes(needle));
+
 function buildCheck({ loadSectionizer, loadUpdateContext }) {
   return function check(ctx) {
     const sectionizer = loadLib(loadSectionizer, SECTIONIZER);
@@ -216,9 +235,9 @@ function buildCheck({ loadSectionizer, loadUpdateContext }) {
       .has('UPDATE_TARGET_UNRESOLVED', 'the unresolved target must have a typed result')
       .has('TARGET_RUNTIME=""', 'the unresolved fallback must empty TARGET_RUNTIME')
       .has('GSD_DIR=""', 'the unresolved fallback must empty GSD_DIR')
-      .has(/otherwise leave (?:it )?empty/, 'an unrecognized execution_context path must not infer Claude')
-      .has('`/.claude/` -> `claude`', 'the PREFERRED_RUNTIME inference must map /.claude/ to claude')
-      .has('`/.windsurf/`, `/.devin/` -> `windsurf`', 'the PREFERRED_RUNTIME inference must map /.windsurf/ and /.devin/ to windsurf')
+      .satisfies(whenInferred((line) => /otherwise leave (?:it )?empty/.test(line)), 'an unrecognized execution_context path must not infer Claude')
+      .satisfies(whenInferred((line) => line.includes('`/.claude/` -> `claude`')), 'the PREFERRED_RUNTIME inference must map /.claude/ to claude')
+      .satisfies(whenInferred((line) => line.includes('`/.windsurf/`, `/.devin/` -> `windsurf`')), 'the PREFERRED_RUNTIME inference must map /.windsurf/ and /.devin/ to windsurf')
       .lacks(/otherwise `?claude`?\./, 'the inference must not fall back to claude for an unrecognized path')
       .has('INSTALL_SCOPE` is `UNKNOWN`, `TARGET_RUNTIME` is empty, or `GSD_DIR` is empty', 'the unresolved gate must name its three conditions')
       .has(/rerun from a valid installed runtime/i, 'the unresolved result must tell the user to rerun from a valid installed runtime')
@@ -233,12 +252,16 @@ function buildCheck({ loadSectionizer, loadUpdateContext }) {
         'the unresolved-target gate must precede the VERSION-missing bullet, or a fully-unresolved case can fall through to "proceed to install"')
       .satisfies((text) => precedesWithin(text, 'Otherwise, if VERSION file missing', 'but the target above resolved', LINE_ENDS)
         || 'no such line', 'the VERSION-missing bullet must be explicitly scoped to exclude the unresolved-target case');
+    // Every later mutation missing after the step is one cause (a truncated file), not one finding per mutation.
+    update.satisfies((text) => {
+      const tail = afterInstalledStep(text);
+      return tail === undefined || missingAfter(tail).length < SPIES.length || 'none of the later update mutations follows the get_installed_version step';
+    }, 'the later update steps must follow the get_installed_version step');
     for (const [name, needle] of SPIES) {
       installed.lacks(needle, `the unresolved path reaches ${name}`);
       update.satisfies((text) => {
-        const start = text.indexOf('<step name="get_installed_version">');
-        const end = start === -1 ? -1 : text.indexOf('</step>', start);
-        return end === -1 || text.indexOf(needle, end) !== -1 || 'not found after the step';
+        const tail = afterInstalledStep(text);
+        return tail === undefined || missingAfter(tail).length === SPIES.length || tail.includes(needle) || 'not found after the step';
       }, `${name} must remain after the exit`);
     }
 
@@ -288,7 +311,7 @@ function buildCheck({ loadSectionizer, loadUpdateContext }) {
         return n === 2 || `found ${n}`;
       }, 'run_update must hold exactly two resolved-install npx invocations');
     update.satisfies((text) => {
-      const line = text.split('\n').find((candidate) => candidate.includes(INFER_MARKER));
+      const line = inferenceLineOf(text);
       if (line === undefined) return 'the PREFERRED_RUNTIME inference line must exist';
       if (updateContext.error) return true;
       return parityProblems(line, updateContext.lib.RUNTIME_DIRS);

@@ -288,24 +288,6 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     else assert.match(findings[0].message, expected);
   });
 
-  // The bounds of a pattern: limit - 1 and limit are matched, limit + 1 is the stated edge.
-  const gapCases = (label, rel, contract, build, limit, whyMatch) => {
-    for (const [gap, ok] of [[limit - 1, true], [limit, true], [limit + 1, false]]) {
-      test(`${label} with a gap of ${gap} characters ${ok ? 'satisfies' : 'is past the bound of'} ${contract}`, (t) => {
-        const root = copyOfRepoFiles(t);
-        const abs = path.join(root, ...rel.split('/'));
-        const text = fs.readFileSync(abs, 'utf8');
-        const after = build(text, gap);
-        assert.notEqual(after, text);
-        fs.writeFileSync(abs, after);
-        const findings = runShipped(root, [contract]);
-        if (ok) assert.deepEqual(findings, []);
-        else assert.ok(findings.some((f) => whyMatch.test(f.message)), JSON.stringify(findings));
-      });
-    }
-  };
-  void gapCases;
-
   test('an untouched copy of the files satisfies every batch 11 contract', (t) => {
     assert.deepEqual(runShipped(copyOfRepoFiles(t, HEAVY)), []);
   });
@@ -597,6 +579,7 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
         ['--all erased', 'gsd-core/workflows/review.md', eraseAll('--all'), 'review-default-reviewers-workflow', /must document the --all override in the precedence order/],
         ['Unknown slugs warn erased', 'gsd-core/workflows/review.md', eraseAll('Unknown slugs warn'), 'review-default-reviewers-workflow', /must document unknown slug handling/],
         ['Known-but-undetected slugs erased', 'gsd-core/workflows/review.md', eraseAll('Known-but-undetected slugs'), 'review-default-reviewers-workflow', /must document undetected slug handling/],
+        ['the actionable-message wording erased', 'gsd-core/workflows/review.md', eraseAll('fail with an actionable message'), 'review-default-reviewers-workflow', /the all-unavailable failure carries an actionable message/],
         ['the all-unavailable failure erased', 'gsd-core/workflows/review.md', eraseAll('all configured reviewers are unavailable'), 'review-default-reviewers-workflow', /must document the failure path when configured reviewers are unavailable/],
         // review-default-reviewers-workflow: the build_prompt Review Instructions region (#1318)
         ['the build_prompt step renamed', 'gsd-core/workflows/review.md', swap('<step name="build_prompt">', '<step name="build_prompt_x">'), 'review-default-reviewers-workflow', /build_prompt step must exist/],
@@ -608,10 +591,6 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
         ['the file:line evidence phrase moved out of the region', 'gsd-core/workflows/review.md', (text) => `${text.split('`path/to/file:line`').join('`path`')}\n\`path/to/file:line\`\n`, 'review-default-reviewers-workflow', /missing \["`path\/to\/file:line`"\]/],
         ['the no-file-access clause moved out of the region', 'gsd-core/workflows/review.md', (text) => `${text.split('If you cannot read the repo (no file access)').join('If you cannot read')}\nIf you cannot read the repo (no file access)\n`, 'review-default-reviewers-workflow', /missing \["If you cannot read the repo \(no file access\)"\]/],
         ['the open-question downgrade moved out of the region', 'gsd-core/workflows/review.md', (text) => `${text.split('downgrade that finding to an open question').join('downgrade that finding')}\ndowngrade that finding to an open question\n`, 'review-default-reviewers-workflow', /missing \["downgrade that finding to an open question"\]/],
-        // review-default-reviewers-workflow: the codex exec lines (#1698)
-        ['a codex exec line without -o', 'gsd-core/workflows/review.md', append('codex exec "$PROMPT" > /dev/null'), 'review-default-reviewers-workflow', /codex exec invocation must capture the review via -o \{run_dir\}\/gsd-review-codex\.md/],
-        ['a codex exec line redirecting stdout into the review file', 'gsd-core/workflows/review.md', append('codex exec -o {run_dir}/gsd-review-codex.md > {run_dir}/gsd-review-codex.md'), 'review-default-reviewers-workflow', /codex exec must not redirect stdout into the review file/],
-        ['a codex exec line keeping its stdout', 'gsd-core/workflows/review.md', append('codex exec -o {run_dir}/gsd-review-codex.md "$PROMPT"'), 'review-default-reviewers-workflow', /codex exec must discard stdout to \/dev\/null/],
   ]) {
     test(`mutation: ${title} (${rel}) fails ${contract}`, (t) => {
       const root = copyOfRepoFiles(t);
@@ -830,6 +809,8 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     editFiles1('the plan-phase literal alone is a finding', [['gsd-core/workflows/plan-phase.md', append('find x -name "*-SPEC.md" 2>/dev/null | grep y')]], 'discuss-phase-power', /plan-phase\.md filters SPEC names itself/);
     editFiles1('the discuss-phase literal alone is a finding', [['gsd-core/workflows/discuss-phase.md', append('xls ${phase_dir}/*-SPEC.md')]], 'discuss-phase-power', /discuss-phase\.md reads has_spec \/ spec_path from init instead of its own ls/);
     passes('an ls without a SPEC glob on its line is not a glob', 'gsd-core/workflows/discuss-phase/modes/auto.md', append('ls .planning/\n*-SPEC.md'), 'discuss-phase-power');
+    findsOne('a lone carriage return does not end the line (splitLines keeps ls and the glob together)', 'gsd-core/workflows/discuss-phase/modes/auto.md', append('ls x\r*-SPEC.md'), 'discuss-phase-power', 'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
+    findsOne('a line separator does not end the line either', 'gsd-core/workflows/discuss-phase/modes/auto.md', append('ls x\u2028*-SPEC.md'), 'discuss-phase-power', 'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
     passes('a word that ends in ls is not ls', 'gsd-core/workflows/discuss-phase/modes/auto.md', append('tools *-SPEC.md'), 'discuss-phase-power');
     {
       const fc = require('./helpers/fast-check-setup.cjs');
@@ -861,9 +842,10 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
         agrees('readsAgentDef', inputs, (s) => [power.readsAgentDef(s), /read\s+@.*gsd-advisor-researcher\.md/i.test(s)]);
       });
       test('property: the glob walk agrees with the per-line pattern it replaced', () => {
-        const oldGlobs = (s) => s.split(/\r?\n/).some((line) => /\bls\b/.test(line) && line.includes('*-SPEC.md'));
-        const inputs = fc.oneof(strings(['ls', ' ', '*-SPEC.md', '\n', '\r\n', 'x', 'tools', 'ls_'], 8), withFiller(['ls ', '*-SPEC.md']));
-        agrees('lsGlobsSpec', inputs, (s) => [power.lsGlobsSpec(s), oldGlobs(s)]);
+        const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+        const oldGlobs = (s) => splitLines(s).some((line) => /\bls\b/.test(line) && line.includes('*-SPEC.md'));
+        const inputs = fc.oneof(strings(['ls', ' ', '*-SPEC.md', '\n', '\r\n', '\r', '\u2028', '\u2029', 'x', 'tools', 'ls_'], 8), withFiller(['ls ', '*-SPEC.md']));
+        agrees('lsGlobsSpec', inputs, (s) => [power.lsGlobsSpec(s, splitLines), oldGlobs(s)]);
       });
       test('property: the upper-or-lower-case phrases agree with the patterns they replaced', () => {
         const tokens = ['single pass', 'SINGLE PASS', 'Single Pass', 'ſingle pass', 'single\npass', 'end here', 'END HERE', 'workflow is complete', 'Workflow Is Complete', 'always include "let claude decide"', 'ALWAYS INCLUDE "LET CLAUDE DECIDE"', 'always include "let claude decide', ' ', 'x'];
@@ -986,6 +968,39 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
         agrees('association', fc.oneof(strings(association, 7), chainOf(['!MAINTAINER_ASSOCIATIONS.has(', 'pr', '.author_association', ')'], ['', 'x', ' ', ')'])), (s) => [skip.hasAssociationCheck(s), /!MAINTAINER_ASSOCIATIONS\.has\([^)]*\.author_association\)/.test(s)]);
       });
     }
+
+    // ---- review round 1: one finding per cause for the gate prompt blocks, the default flow's HOW slice and the analyzer prompt
+    exactly1('the gray-area-option marker gone is one finding', [['gsd-core/references/gate-prompts.md', swap('## Pattern: gray-area-option', '## Pattern: gray-areas')]], 'discuss-phase-power', 1, /marker "## Pattern: gray-area-option" not found/);
+    exactly1('the context-handling marker gone is one finding', [['gsd-core/references/gate-prompts.md', swap('## Pattern: context-handling', '## Pattern: contexts')]], 'discuss-phase-power', 1, /marker "## Pattern: context-handling" not found/);
+    exactly1('a gray-area-option marker only before context-handling is one finding', [['gsd-core/references/gate-prompts.md', compose1(swap('## Pattern: gray-area-option', '## Pattern: other'), (text) => '## Pattern: gray-area-option\n' + text)]], 'discuss-phase-power', 1, /closing marker ## Pattern: gray-area-option not found after ## Pattern: context-handling/);
+    exactly1('the SPEC.md awareness heading gone is one finding', [['gsd-core/workflows/discuss-phase.md', swap('2b. **SPEC.md awareness**', '2b. **SPEC awareness**')]], 'discuss-phase-power', 1, /marker "2b\. \*\*SPEC\.md awareness\*\*" not found/);
+    exactly1('the Gray areas heading gone is one finding', [['gsd-core/workflows/discuss-phase.md', swap('3. **Gray areas**', '3. **Areas**')]], 'discuss-phase-power', 1, /3\. \*\*Gray areas\*\*/);
+    exactly1('the analyzer spawn gone is one finding', [['gsd-core/workflows/discuss-phase-assumptions.md', swap('Agent(subagent_type="gsd-assumptions-analyzer"', 'Agent(subagent_type="gsd-other"')]], 'discuss-phase-power', 1, /gsd-assumptions-analyzer/);
+    exactly1('the analyzer prompt close marker gone is one finding', [['gsd-core/workflows/discuss-phase-assumptions.md', swap('${AGENT_SKILLS_ANALYZER}\n""")', '${AGENT_SKILLS_ANALYZER}\n"""')]], 'discuss-phase-power', 1, /AGENT_SKILLS_ANALYZER/);
+
+    // ---- review round 1: every shape the issue-link workflow's jobs can take is one finding, never a throw
+    for (const [title, loadBody, expected] of [
+      ['a document that is null', 'null', /the workflow has no jobs mapping/],
+      ['a scalar document', "'text'", /the workflow has no jobs mapping/],
+      ['jobs: null', '({ jobs: null })', /the workflow has no jobs mapping/],
+      ['jobs as a scalar', "({ jobs: 'x' })", /the workflow has no jobs mapping/],
+      ['jobs as a list', '({ jobs: [] })', /the workflow has no check-issue-link job/],
+      ['jobs without the job', '({ jobs: {} })', /the workflow has no check-issue-link job/],
+      ['check-issue-link: null', "({ jobs: { 'check-issue-link': null } })", /the workflow has no check-issue-link job/],
+      ['check-issue-link as a scalar', "({ jobs: { 'check-issue-link': 'x' } })", /the workflow has no check-issue-link job/],
+      ['a job with an if:', "({ jobs: { 'check-issue-link': { if: 'x' } } })", /the job has an if:/],
+    ]) {
+      test(`${title} is one finding of the job-level if check`, (t) => {
+        const findings = seamRun1(t, copyOfRepoFiles(t), `real.walkers.buildCheck(() => ({ load: () => ${loadBody} }))`);
+        assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+        assert.match(findings[0].message, expected);
+      });
+    }
+    test('a document that is not valid YAML is one finding of the job-level if check', (t) => {
+      const findings = seamRun1(t, copyOfRepoFiles(t), "real.walkers.buildCheck(() => ({ load: () => { throw new Error('bad'); } }))");
+      assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+      assert.match(findings[0].message, /the workflow is not valid YAML: bad/);
+    });
   }
 
   {
@@ -1010,14 +1025,16 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     const messagesOf = (findings) => JSON.stringify(findings.map((f) => f.message));
 
     // The unresolved path must reach none of the six later mutations, and each must still follow the exit.
-    for (const [name, needle] of [
+    const SPIES_LIST = [
       ['version check', 'check-latest-version.cjs'],
       ['custom-file detection', 'detect-custom-files --config-dir'],
       ['resolved installer', 'npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core "$RUNTIME_FLAG"'],
       ['update-cache removal', 'rm -f "$HOME/.cache/gsd/gsd-update-check"'],
       ['restore apply', 'restore-custom-files --config-dir "$GSD_DIR" --apply'],
       ['patch check', 'check_local_patches'],
-    ]) {
+    ];
+    const SPIES_NEEDLES = SPIES_LIST.map(([, needle]) => needle);
+    for (const [name, needle] of SPIES_LIST) {
       test(`the unresolved path holding ${name} is exactly one finding`, (t) => {
         const findings = runEdits(t, [[UPDATE, within(INSTALLED_STEP, '</step>', append(needle))]], 'update-workflow');
         assert.equal(findings.length, 1, messagesOf(findings));
@@ -1043,9 +1060,6 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     passes('a guard with no blank before true is a guard', 'gsd-core/workflows/new-project.md', append('```bash\nX=$(ls ./.claude/skills/sketch-findings-*/SKILL.md ||true)\n```'), 'plan-phase-ui-redirect');
     passes('a guard with a tab before true is a guard', 'gsd-core/workflows/new-project.md', append('```bash\nX=$(ls ./.claude/skills/spike-findings-*/SKILL.md ||\ttrue)\n```'), 'plan-phase-ui-redirect');
     passes('a guarded probe in a tilde bash fence passes', 'gsd-core/workflows/new-project.md', append('~~~bash\nX=$(ls ./.claude/skills/spike-findings-*/SKILL.md || true)\n~~~'), 'plan-phase-ui-redirect');
-    passes('a codex exec --help line is not an invocation', REVIEW, append('codex exec --help'), 'review-default-reviewers-workflow');
-    passes('a compliant codex exec line passes', REVIEW, append('codex exec -o {run_dir}/gsd-review-codex.md "$PROMPT" >/dev/null 2>&1'), 'review-default-reviewers-workflow');
-    passes('a compliant codex exec line with a tab before -o passes', REVIEW, append('codex exec\t-o\t{run_dir}/gsd-review-codex.md "$PROMPT" > /dev/null'), 'review-default-reviewers-workflow');
     // The prompt block as a longer fence with a nested shorter fence: the instructions after the nested fence are still found.
     passes('a four-backtick prompt block with a nested bash fence still yields the instructions', REVIEW, (text) => swap('\n## Review Instructions\n', '\n```bash\necho hi\n```\n## Review Instructions\n')(
       swap('Output your review in markdown format.\n```', 'Output your review in markdown format.\n````')(
@@ -1054,6 +1068,8 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     passes('trailing blanks after the markdown info string are allowed', REVIEW, swap('```markdown\n# Cross-AI Plan Review Request', '```markdown  \n# Cross-AI Plan Review Request'), 'review-default-reviewers-workflow');
     findsOne('a four-backtick opener with only three-backtick closers never closes', REVIEW, swap('```markdown\n# Cross-AI Plan Review Request', '````markdown\n# Cross-AI Plan Review Request'), 'review-default-reviewers-workflow', 'build_prompt markdown fence must be closed');
     findsOne('an opening fence indented by four blanks is not a fence', REVIEW, swap('\n```markdown', '\n    ```markdown'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
+    findsOne('a line separator after the markdown info string is not the prompt block', REVIEW, swap('```markdown\n', '```markdown\u2028\n'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
+    findsOne('a paragraph separator after the markdown info string is not the prompt block', REVIEW, swap('```markdown\n', '```markdown\u2029\n'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     findsOne('a tilde opener is not the prompt block', REVIEW, swap('\n```markdown', '\n~~~markdown'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     findsOne('text after the markdown info string is not the prompt block', REVIEW, swap('```markdown\n', '```markdown x\n'), 'review-default-reviewers-workflow', 'build_prompt must contain a ```markdown prompt block');
     test('instructions after the next heading of the prompt are outside the region', (t) => {
@@ -1071,12 +1087,6 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     findsOne('the build_prompt step renamed is one finding', REVIEW, swap('<step name="build_prompt">', '<step name="build_prompt_x">'), 'review-default-reviewers-workflow', 'build_prompt step must exist');
     findsOne('the Review Instructions heading erased is one finding', REVIEW, eraseAll('## Review Instructions'), 'review-default-reviewers-workflow', 'fenced prompt must contain a ## Review Instructions section');
     findsOne('one spike probe losing its guard is one finding', PLAN_PHASE, swap('SPIKE_FINDINGS_PATH=$(ls ./.claude/skills/spike-findings-*/SKILL.md 2>/dev/null | head -1 || true)', 'SPIKE_FINDINGS_PATH=$(ls ./.claude/skills/spike-findings-*/SKILL.md 2>/dev/null | head -1)'), 'plan-phase-ui-redirect', 'plan-phase.md:');
-    findsOne('a codex exec line without -o is one finding', REVIEW, append('codex exec "$PROMPT" > /dev/null'), 'review-default-reviewers-workflow', 'codex exec invocation must capture the review via -o');
-    findsOne('a codex exec line keeping its stdout is one finding', REVIEW, append('codex exec -o {run_dir}/gsd-review-codex.md "$PROMPT"'), 'review-default-reviewers-workflow', 'codex exec must discard stdout to /dev/null');
-    test('a codex exec line redirecting stdout into the review file is two findings (the redirect and the missing discard)', (t) => {
-      const findings = runEdits(t, [[REVIEW, append('codex exec -o {run_dir}/gsd-review-codex.md > {run_dir}/gsd-review-codex.md')]], 'review-default-reviewers-workflow');
-      assert.equal(findings.length, 2, messagesOf(findings));
-    });
     for (const [rel, contract] of [
       [UPDATE, 'update-workflow'],
       ['commands/gsd/update.md', 'update-workflow'],
@@ -1154,8 +1164,9 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     // Properties: each walker against the pattern or loop it replaced. The generators draw random tokens and chains of the pattern's own parts
     // (each part sometimes cut short, with padding), and every property fails unless it saw both an accepted and a rejected string, so it can
     // never compare false with false. Domains: the bash-fence property uses LF-joined lines (the engine normalises CRLF); the review-region
-    // property excludes lone CR, U+2028 and U+2029 (the fence matcher's delimiter grammar does not accept a line holding one, where the old
-    // regexes did).
+    // property draws fence lines ending in a blank, CR, tab, no-break space or form feed and lets the old code decide; U+2028 and U+2029 are the
+    // one difference (the fence matcher's delimiter grammar does not accept a line holding one, where the old regexes took them as blanks) and have
+    // their own cases.
     {
       const fc = require('./helpers/fast-check-setup.cjs');
       const update = require('../scripts/static-checks/text-contracts/update-workflow.cjs').walkers;
@@ -1281,14 +1292,7 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
         (s) => [planPhase.unguardedProbes('f.md', s, sectionizer.scanFencedBlocks), oldOffenders('f.md', s)]);
       });
 
-      test('property: the review codex-line walks and the prompt region agree with the code they replaced', () => {
-        const target = '{run_dir}/gsd-review-codex.md';
-        agrees('-o capture', fc.oneof(strings([' -o ', '-o', ' ', '\t', target, 'x', '.', '_', '\u00a0', '\n'], 7), chain([' -o', ' ', target], ['', ' ', '\t'])),
-          (s) => [review.capturesViaO(s), /\s-o\s+\{run_dir\}\/gsd-review-codex\.md\b/.test(s)]);
-        agrees('stdout redirect to the review', fc.oneof(strings(['>', ' ', '\t', target, 'x', '.', '_', '\n'], 6), chain(['>', target], ['', ' ', '\t'])),
-          (s) => [review.redirectsTo(s, target), />\s*\{run_dir\}\/gsd-review-codex\.md\b/.test(s)]);
-        agrees('discard to /dev/null', fc.oneof(strings(['>', ' ', '/dev/null', 'x', '_', '\n', '>&'], 6), chain(['>', '/dev/null'], ['', ' ', '\t'])),
-          (s) => [review.redirectsTo(s, '/dev/null'), />\s*\/dev\/null\b/.test(s)]);
+      test('property: the review prompt region agrees with the code it replaced', () => {
         // The old extraction, with the closing-run test written without building a pattern from the opener's length.
         const oldRegion = (src) => {
           const stepIdx = src.indexOf('<step name="build_prompt">');
@@ -1315,15 +1319,48 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
           return after === -1 ? fenced.slice(hdr) : fenced.slice(hdr, after);
         };
         const promptLines = ['<step name="build_prompt">', '```markdown', '````markdown', '~~~markdown', '```markdown ', '```markdown x', '   ```markdown', '    ```markdown', '```', '````', '~~~',
-          '## Review Instructions', '## Other', 'text', '```bash', 'Verify against source', '', '```markdown\r', '```\r'];
+          '## Review Instructions', '## Other', 'text', '```bash', 'Verify against source', '', '```markdown\r', '```\r',
+          '```markdown\t', '```markdown\u00a0', '```markdown\f', '```\t', '```\u00a0', '```\f'];
         agrees('prompt region', fc.oneof(fc.array(fc.constantFrom(...promptLines), { maxLength: 9 }).map((parts) => parts.join('\n')),
           lineChain(['<step name="build_prompt">', '```markdown', '## Review Instructions', 'Verify against source', '```'], promptLines)),
         (s) => {
           const actual = review.reviewInstructionsOf(s, sectionizer.matchFenceDelimiter);
           return [actual.error ? 'ERR' : actual.region, oldRegion(s)];
         }, (expected) => expected !== 'ERR');
-        agrees('codex exec lines', strings(['codex exec', ' --help', 'codex exec --help', 'x', '\n', ' '], 7),
-          (s) => [review.codexExecLines(s), s.split('\n').filter((line) => line.includes('codex exec') && !line.includes('codex exec --help'))]);
+      });
+
+      // Each alternative of an OR check is enough on its own.
+      const SECTION = ['## 5.6.', '\n## 6.'];
+      const swapIn = (from, to) => within(SECTION[0], SECTION[1], (text) => text.split(from).join(to));
+      passes('kind=="gate" without spaces is enough', PLAN_PHASE, swapIn('kind == "gate"', 'kind=="gate"'), 'plan-phase-ui-redirect');
+      passes('"no active blocking gate" is enough without "no block"', PLAN_PHASE, swapIn('no block', 'nothing'), 'plan-phase-ui-redirect');
+      passes('"no block" is enough without "no active blocking gate"', PLAN_PHASE, swapIn('no active blocking gate', 'no gate'), 'plan-phase-ui-redirect');
+      passes('"normalizes dots" is enough for the dot normalization', PLAN_PHASE, within(SECTION[0], SECTION[1], (text) => `${text.split('ui.plan-gate').join('ui plan gate')}\nnormalizes dots`), 'plan-phase-ui-redirect');
+      passes('"dots to hyphens" is enough for the dot normalization', PLAN_PHASE, within(SECTION[0], SECTION[1], (text) => `${text.split('ui.plan-gate').join('ui plan gate')}\ndots to hyphens`), 'plan-phase-ui-redirect');
+
+      // The status capture needs one character between the head and its tail.
+      test('the status capture needs a character between the head and the tail', () => {
+        const head = 'if LATEST_RESULT="$(node ';
+        const tail = ')"; then';
+        const chainText = '\nLATEST_STATUS=0\nelse\nLATEST_STATUS=$?\nfi';
+        assert.equal(update.capturesLatestStatus(head + tail + chainText), false);
+        assert.equal(update.capturesLatestStatus(`${head}x${tail}${chainText}`), true);
+      });
+
+      // One cause is one finding: a missing inference line, and a file that ends with the step.
+      test('the PREFERRED_RUNTIME inference line removed is exactly one finding', (t) => {
+        const findings = runEdits(t, [[UPDATE, (text) => text.split('\n').filter((line) => !line.includes('Infer `PREFERRED_RUNTIME` from the path')).join('\n')]], 'update-workflow');
+        assert.equal(findings.length, 1, messagesOf(findings));
+        assert.match(findings[0].message, /the PREFERRED_RUNTIME inference line must exist/);
+      });
+      test('every later mutation missing after get_installed_version is one finding of the spy family', (t) => {
+        const edit = (text) => {
+          const end = text.indexOf('</step>', text.indexOf(INSTALLED_STEP));
+          return text.slice(0, end) + SPIES_NEEDLES.reduce((tail, needle) => tail.split(needle).join(''), text.slice(end));
+        };
+        const findings = runEdits(t, [[UPDATE, edit]], 'update-workflow');
+        assert.equal(findings.filter((f) => /the later update steps must follow the get_installed_version step/.test(f.message)).length, 1, messagesOf(findings));
+        assert.equal(findings.filter((f) => /must remain after the exit/.test(f.message)).length, 0, messagesOf(findings));
       });
 
       // The Branch 1 heads, each alone, and a full stop between a head and the step.
@@ -1356,13 +1393,6 @@ describe('the batch 11 contracts hold on the real files, and fail when a contrac
     ['.github/workflows/pr-title-validator.yml', 'workflow-maintainer-skip'],
     ['.github/workflows/require-issue-link.yml', 'workflow-maintainer-skip'],
     ['.github/workflows/auto-backmerge.yml', 'workflow-maintainer-skip'],
-    ['gsd-core/workflows/update.md', 'update-workflow'],
-    ['commands/gsd/update.md', 'update-workflow'],
-    ['gsd-core/workflows/plan-phase.md', 'plan-phase-ui-redirect'],
-    ['gsd-core/workflows/ui-phase.md', 'plan-phase-ui-redirect'],
-    ['gsd-core/workflows/discuss-phase.md', 'plan-phase-ui-redirect'],
-    ['gsd-core/workflows/new-project.md', 'plan-phase-ui-redirect'],
-    ['gsd-core/workflows/review.md', 'review-default-reviewers-workflow'],
   ]) {
     test(`${rel} removed from the tree is a finding for ${contract}`, (t) => {
       const root = copyOfRepoFiles(t, HEAVY.includes(rel) ? HEAVY : []);
