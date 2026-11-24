@@ -9,8 +9,10 @@
  * End-to-end tests use gsd-tools CLI via spawnSync with explicit hermetic envs.
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -29,6 +31,9 @@ const { resolveTeamsStatus } = require('../gsd-core/bin/lib/teams-status.cjs');
  * same batch's sibling file, tests/gsd-statusline.test.cjs).
  */
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const gsdToolsPath = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -115,16 +120,15 @@ describe('resolveTeamsStatus — pure unit tests', () => {
  * NEVER inherit the dev shell env — always set GSD_RUNTIME and
  * CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS explicitly.
  */
+const SANDBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-teams-status-home-'));
+after(() => cleanup(SANDBOX_HOME));
+
 function makeEnv({ runtime, teamsFlag } = {}) {
-  // Start with a safe minimal env (PATH is required for node to find modules)
-  const env = {
-    PATH: process.env['PATH'] || '',
-    HOME: process.env['HOME'] || '',
-    // Prevent any ambient GSD env from leaking in
-  };
-  if (runtime !== undefined) env['GSD_RUNTIME'] = runtime;
-  if (teamsFlag !== undefined) env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = teamsFlag;
-  return env;
+  // Minimal env (PATH is required for node to find modules); no ambient GSD env leaks in.
+  const override = {};
+  if (runtime !== undefined) override['GSD_RUNTIME'] = runtime;
+  if (teamsFlag !== undefined) override['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = teamsFlag;
+  return isolatedEnv({ home: SANDBOX_HOME, path: process.env['PATH'] || '', base: {}, override });
 }
 
 describe('gsd-tools query teams-status — CLI subprocess tests', () => {

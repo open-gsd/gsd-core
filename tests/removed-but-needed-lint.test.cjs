@@ -45,6 +45,7 @@ const {
 } = require(LINT_SCRIPT);
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode, runGit } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -1346,7 +1347,7 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     fs.writeFileSync(path.join(home, '.gitconfig'), `[init]\n\ttemplateDir = ${tpl.replace(/\\/g, '/')}\n`);
     // Deliberately NOT isolatedGitEnv(): that env disables global config, which
     // is exactly what would hide the positive control below.
-    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
+    const env = isolatedEnv({ home, override: { XDG_CONFIG_HOME: path.join(home, 'xdg') } });
     for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_TEMPLATE_DIR', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[k];
     // Positive control: a plain `git init` DOES pick the template up here.
     const plain = runGit(['init', '-q', control], { env, timeoutMs: GIT_TIMEOUT_MS });
