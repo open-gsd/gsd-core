@@ -1272,7 +1272,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     receiptAged(f, 5);
     // dispatched 11 minutes ago against a 10-minute threshold: with no receipt this is `stalled`.
     assert.equal(watch(NOW - 11 * 60, f.receipt, f.noPlans, CHECKER_MARKERS), 'active');
-    fs.rmSync(f.receipt);
+    fs.unlinkSync(f.receipt);
     assert.equal(watch(NOW - 11 * 60, f.receipt, f.noPlans, CHECKER_MARKERS), 'stalled', 'control: no receipt, same clock');
   });
 
