@@ -1062,6 +1062,33 @@ describe('#5074 platform split — .platform sibling rule', () => {
     }
   });
 
+  // ─── #6638: a .platform sibling declared in ALWAYS_REAL_OS needs no signal of its own.
+  // Pure-function row with an injected map, like row 7.
+  test('a .platform sibling declared in ALWAYS_REAL_OS satisfies the signal requirement (#6638)', () => {
+    const entries = [
+      { rel: 'tests/fake-declared.test.cjs', content: 'assert.equal(1 + 1, 2);\n' },
+      { rel: 'tests/fake-declared.platform.test.cjs', content: 'assert.equal(2 + 2, 4);\n' },
+    ];
+    const siblingRel = 'tests/fake-declared.platform.test.cjs';
+    const baseRel = 'tests/fake-declared.test.cjs';
+
+    assert.deepEqual(findPlatformSplitViolations(entries, new Map()), [
+      { file: siblingRel, kind: 'sibling-without-signal', signals: [] },
+    ]);
+    assert.deepEqual(findPlatformSplitViolations(entries, new Map([[siblingRel, 'fixture reason']])), []);
+    assert.deepEqual(
+      findPlatformSplitViolations(entries, new Map([[baseRel, 'fixture reason']])),
+      [
+        { file: siblingRel, kind: 'sibling-without-signal', signals: [] },
+        { file: baseRel, kind: 'base-always-real-os', signals: [] },
+      ],
+    );
+    assert.deepEqual(
+      findPlatformSplitViolations(entries, new Map([[siblingRel, 'a'], [baseRel, 'b']])),
+      [{ file: baseRel, kind: 'base-always-real-os', signals: [] }],
+    );
+  });
+
   // ─── Row 6: an orphan .platform file (no base) with a genuine signal ─────
   test('an orphan .platform file is classified on its own content', () => {
     const tmpDir = createTempDir('gen-platform-split-orphan-');

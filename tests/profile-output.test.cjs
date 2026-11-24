@@ -19,6 +19,7 @@ const {
   cleanup,
   withIsolatedProcessState,
 } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   PROFILING_QUESTIONS,
@@ -116,7 +117,7 @@ describe('write-profile command', () => {
     const analysisPath = path.join(tmpDir, 'analysis.json');
     fs.writeFileSync(analysisPath, JSON.stringify(analysis));
 
-    const result = runGsdTools(['write-profile', '--input', analysisPath, '--raw'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['write-profile', '--input', analysisPath, '--raw'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.ok(out.profile_path, 'should return profile_path');
@@ -157,7 +158,7 @@ describe('write-profile command', () => {
     // Clear ambient runtime vars so the test is hermetic regardless of the
     // developer's shell (a stray GSD_RUNTIME/CLAUDE_CONFIG_DIR would redirect it).
     const result = runGsdTools(['write-profile', '--input', analysisPath, '--raw'], tmpDir,
-      { HOME: tmpDir, GSD_RUNTIME: '', CLAUDE_CONFIG_DIR: '', CODEX_HOME: '' });
+      isolatedEnv({ home: tmpDir, claudeConfigDir: '', override: { GSD_RUNTIME: '', CODEX_HOME: '' } }));
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     // os.homedir() returns HOME verbatim, so assert on the suffix to stay
@@ -193,7 +194,7 @@ describe('write-profile command', () => {
   test('#2665: ambient CLAUDE_CONFIG_DIR cannot escape a HOME-only sandbox', () => {
     // The defect: TEST_ENV_BASE blanked session-identity vars but none of the
     // config-LOCATION vars, and the dot-home resolver is env-first. So an
-    // ambient CLAUDE_CONFIG_DIR in the DEVELOPER'S shell beat `{ HOME: tmpDir }`
+    // ambient CLAUDE_CONFIG_DIR in the DEVELOPER'S shell beat `isolatedEnv({ home: tmpDir })`
     // and the suite wrote into their real config directory. Setting it on the
     // PARENT process is the actual vector — passing it in the per-call env
     // argument would test nothing, because that path was never broken.
@@ -212,7 +213,7 @@ describe('write-profile command', () => {
       const result = runGsdTools(
         ['write-profile', '--input', analysisPath, '--raw'],
         tmpDir,
-        { HOME: tmpDir }
+        isolatedEnv({ home: tmpDir })
       );
       assert.ok(result.success, `Failed: ${result.error}`);
       return JSON.parse(result.output);
@@ -354,7 +355,7 @@ describe('generate-dev-preferences command', () => {
     const result = runGsdTools(
       ['generate-dev-preferences', '--analysis', analysisPath, '--raw'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
@@ -378,7 +379,7 @@ describe('generate-dev-preferences command', () => {
       // #2088 (ADR-1239 upgrade 3): Codex skills resolve to $HOME/.agents/skills
       // (HOME-relative), so sandbox HOME to keep the dev-preferences write inside
       // the temp dir rather than the developer's real ~/.agents/skills.
-      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex', HOME: codexHome, USERPROFILE: codexHome }
+      isolatedEnv({ home: codexHome, override: { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex' } })
     );
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
@@ -401,7 +402,7 @@ describe('generate-dev-preferences command', () => {
       ['generate-dev-preferences', '--analysis', analysisPath, '--raw'],
       tmpDir,
       // #2088: codex-app alias canonicalizes to codex → $HOME/.agents/skills.
-      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex-app', HOME: codexHome, USERPROFILE: codexHome }
+      isolatedEnv({ home: codexHome, override: { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex-app' } })
     );
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
