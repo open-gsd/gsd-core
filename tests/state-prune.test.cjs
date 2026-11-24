@@ -1586,6 +1586,19 @@ describe('#6542: state prune --keep-recent validation', () => {
     });
   }
 
+  for (const value of ['-2', 'abc', '2abc', '1.5', '']) {
+    test(`--keep-recent ${JSON.stringify(value)} leaves an existing STATE-ARCHIVE.md byte-identical`, () => {
+      fs.writeFileSync(archivePath, '# STATE Archive\r\n\r\n- [Phase 0]: kept\r\n');
+      const stateBefore = fs.readFileSync(statePath);
+      const archiveBefore = fs.readFileSync(archivePath);
+      const result = runGsdTools(['--json-errors', 'state', 'prune', '--keep-recent', value], tmpDir);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(JSON.parse(result.error).reason, 'usage');
+      assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md byte-identical');
+      assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'STATE-ARCHIVE.md byte-identical');
+    });
+  }
+
   for (const value of ['0', '00', '007', '3', '9007199254740991']) {
     test(`--keep-recent ${value} is a whole number and is accepted`, () => {
       const result = runGsdTools(['state', 'prune', '--keep-recent', value, '--dry-run'], tmpDir);
