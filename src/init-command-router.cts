@@ -215,10 +215,17 @@ function routeInitCommand({ init, args, cwd, raw, error }: RouteInitCommandOptio
       // (`--discuss`/`--full` are rejected upstream by `parseQuickBatchArgs`
       // before this init bundle is ever reached).
       'quick-batch': () => {
-        const namedArgs = parseNamedArgsOrExit(args, { booleanFlags: ['research', 'validate'], positionals: 2 }, error);
+        const namedArgs = parseNamedArgsOrExit(
+          args,
+          { valueFlags: ['resume'], nonEmptyFlags: ['resume'], booleanFlags: ['research', 'validate'], positionals: 2 },
+          error,
+        );
         init.cmdInitQuickBatch(cwd, raw, {
           research: namedArgs['research'],
           validate: namedArgs['validate'],
+          // #6532: `--resume <batch_id>`; the parser keeps the first, so init refuses a repeat.
+          resume: namedArgs['resume'],
+          resumeRepeated: args.filter((tok) => tok === '--resume').length > 1,
         });
       },
       'ingest-docs': () => init.cmdInitIngestDocs(cwd, raw),

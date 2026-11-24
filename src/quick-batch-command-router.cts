@@ -73,7 +73,7 @@ interface RouteQuickBatchCommandOptions {
   args: string[];
   cwd: string;
   raw: boolean;
-  error: (message: string, reason?: string) => void;
+  error: (message: string, reason?: string, extra?: Record<string, unknown>) => void;
   _quickBatch?: QuickBatchModule;
   _quickBatchDispatch?: QuickBatchDispatchModule;
   /** Test seam: replaces the default read of the process's standard input. */
@@ -114,9 +114,15 @@ function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatc
   /** Forward a `Result<T>` from either module straight to output()/error(). */
   function emit(result: unknown): void {
     if (result && typeof result === 'object' && 'ok' in result) {
-      const r = result as { ok: boolean; reason?: string; value?: unknown };
+      const r = result as { ok: boolean; reason?: string; value?: unknown; field?: unknown };
       if (!r.ok) {
-        error(r.reason ?? 'quick-batch command failed', ERROR_REASON.USAGE);
+        // #6532: a failure about one field (`options.modes`) names it as a typed
+        // `field` for `--json-errors` callers.
+        if (typeof r.field === 'string') {
+          error(r.reason ?? 'quick-batch command failed', ERROR_REASON.USAGE, { field: r.field });
+        } else {
+          error(r.reason ?? 'quick-batch command failed', ERROR_REASON.USAGE);
+        }
         return;
       }
       output(r.value, raw);
