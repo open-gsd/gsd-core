@@ -2024,32 +2024,22 @@ function assertPhaseDirectoryDestinationSafe(
   }
 }
 
-/**
- * #4304: the bracket writers mint every identity from the milestone's own
- * numbering. A caller-supplied `--id` or `phase_naming: "custom"` has no
- * bracket write semantics yet: #5067 owns their precedence (a supplied id is
- * validated against the resolved convention, "custom" keeps bypassing
- * generation). Until it lands, refuse before any write rather than discard
- * the id or override the naming mode.
- */
-function assertBracketGeneratedIdentity(
-  command: string,
-  config: Record<string, unknown>,
-  customId?: string | null,
-): void {
-  if (customId) {
-    error(
-      `${command}: --id ${JSON.stringify(customId)} is not supported under phase_id_convention "bracket"; ` +
-        'bracket phase identities are generated from the active milestone. ' +
-        'Custom id precedence under the bracket convention lands with #5067.',
-    );
+/** Validate caller-owned bracket identities without allocating or repairing them. */
+function suppliedBracketIdentity(context: BracketWriteContext, supplied: string): ReturnType<typeof parsePhaseId> {
+  try {
+    const id = parsePhaseId(supplied);
+    const token = bracketDirPrefix(id).slice(0, -1);
+    if (id.plan || (supplied !== renderPhaseId(id) && supplied !== token)
+      || id.project !== context.project || id.milestone !== context.milestone) throw new Error('identity mismatch');
+    return id;
+  } catch {
+    return error('Pass a canonical bracket id for the active project and milestone to phase add --id.', ERROR_REASON.USAGE);
   }
-  if (config['phase_naming'] === 'custom') {
-    error(
-      `${command}: phase_naming "custom" is not supported under phase_id_convention "bracket"; ` +
-        'bracket phase identities are generated from the active milestone. ' +
-        'Custom naming precedence under the bracket convention lands with #5067.',
-    );
+}
+
+function requireBracketCustomId(naming: unknown, customId?: string): void {
+  if (naming === 'custom' && !customId) {
+    error('phase_naming custom requires a canonical bracket id; pass a canonical bracket id to phase add --id.', ERROR_REASON.USAGE);
   }
 }
 
@@ -2152,7 +2142,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   // The naming projection reads config silently, so a corrupt project config is
   // reported as `config_parse_failed` before the loader's own diagnostics run.
   const naming = phaseDirectoryOptions(cwd, undefined, '');
-  if (customId != null && convention !== 'bracket') {
+  if (customId != null) {
     const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
     if (usage) error(usage, naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
@@ -2163,7 +2153,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   }
 
   const slug = generateSlugInternal(description) || '';
-  if (convention === 'bracket') assertBracketGeneratedIdentity('phase add', config, customId);
+  if (convention === 'bracket') requireBracketCustomId(naming.phaseNaming, customId);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const { newPhaseId, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
@@ -2175,11 +2165,17 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     let _dirName = '';
     if (bracketContext) {
+      const supplied = customId ? suppliedBracketIdentity(bracketContext, customId) : null;
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
       const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
       collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
-      _newPhaseId = nextPhaseNum(maxPhaseNum(usedPhaseNums));
-      _dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, _newPhaseId), slug, description);
+      _newPhaseId = supplied ? (supplied.subphase ? `${supplied.phase}.${supplied.subphase}` : Number(supplied.phase)) : nextPhaseNum(maxPhaseNum(usedPhaseNums));
+      if (supplied && (usedPhaseNums.has(Number(_newPhaseId))
+        || bracketIdsInContext(phasesOnDisk, bracketContext).some(entry => renderPhaseId(entry.id) === renderPhaseId(supplied))
+        || tokenizeHeadings(content).some(heading => heading.text.split(':')[0].trim() === renderPhaseId(supplied)))) {
+        error(`Phase ${customId} already exists`, ERROR_REASON.PHASE_ID_COLLISION);
+      }
+      _dirName = bracketDirNameOrRefuse(supplied ?? bracketPhaseId(bracketContext, _newPhaseId), slug, description);
     } else if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
@@ -2206,15 +2202,15 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     }
 
     let phaseEntry: string;
-    if (bracketContext && typeof _newPhaseId === 'number') {
-      const id = bracketPhaseId(bracketContext, _newPhaseId);
+    if (bracketContext) {
+      const id = customId ? suppliedBracketIdentity(bracketContext, customId) : bracketPhaseId(bracketContext, _newPhaseId);
       const display = renderPhaseId(id);
       const declared = new Set<number>();
       addBracketRoadmapPhaseNumbers(content, declared);
-      const dependsOn = dependsOnLine(_newPhaseId, [...declared],
+      const dependsOn = customId ? '' : dependsOnLine(Number(_newPhaseId), [...declared],
         (phase) => renderPhaseId(bracketPhaseId(bracketContext, phase)));
       phaseEntry =
-        `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+        `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${bracketArtifactToken(id)} to break down)\n`;
     } else {
       const dependsOn =
         naming.phaseNaming === 'custom' ? '' : dependsOnFor(_newPhaseId, rawContent);
@@ -2224,7 +2220,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
     const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, _newPhaseId, description, undefined,
-      bracketContext && typeof _newPhaseId === 'number' ? renderPhaseId(bracketPhaseId(bracketContext, _newPhaseId)) : undefined);
+      bracketContext ? renderPhaseId(customId ? suppliedBracketIdentity(bracketContext, customId) : bracketPhaseId(bracketContext, _newPhaseId)) : undefined);
 
     platformWriteSync(roadmapPath, recorded.content, { verbatim: true });
     return { newPhaseId: _newPhaseId, dirName: _dirName, roadmapEntry: recorded.entry };
@@ -2274,14 +2270,14 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   const config = loadConfig(cwd);
   const convention = resolvePhaseIdConvention(cwd);
   const naming = phaseDirectoryOptions(cwd, undefined, '');
-  if (descriptions.includes('--id') && convention !== 'bracket') {
+  if (descriptions.includes('--id')) {
     error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', naming.phaseNaming === 'custom' ? ERROR_REASON.USAGE : naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
   }
-  if (convention === 'bracket') assertBracketGeneratedIdentity('phase add-batch', config);
+  if (convention === 'bracket') requireBracketCustomId(naming.phaseNaming);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const results = withPlanningLock(cwd, () => {

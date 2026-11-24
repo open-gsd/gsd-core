@@ -7,6 +7,7 @@
  */
 
 import fs from 'node:fs';
+import { parsePhaseId } from './phase-id.cjs';
 import path from 'node:path';
 import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -305,7 +306,16 @@ interface NewProjectConfigPlan {
  * and the settings workflow). loadConfig() handles both flat and nested formats, so this
  * is backward-compatible with existing projects that have flat keys.
  */
-function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectConfigPlan {
+/** Deterministic project abbreviation; collisions across projects are possible. */
+function deriveProjectCode(name: string): string {
+  const words = name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2').match(/[A-Za-z0-9]+/g) || [];
+  let code = (words.length > 1 ? words.map(word => word[0]).join('') : words[0] || '').toUpperCase().slice(0, 6);
+  if (/^[0-9]/.test(code)) code = `P${code}`;
+  return code || 'PROJ';
+}
+
+function planNewProjectConfig(userChoices: Record<string, unknown>, cwd?: string): NewProjectConfigPlan {
   const choices = userChoices || {};
   let defaultsRewrite: NewProjectConfigPlan['defaultsRewrite'] = null;
   // #4976: the GSD-owned store resolves exactly as the config loader resolves
@@ -409,7 +419,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
       context_warnings: true,
     },
     project_code: null,
-    phase_naming: 'sequential',
+    phase_naming: 'generated',
+    ...(cwd ? { phase_id_convention: 'bracket' } : {}),
     agent_skills: {},
     claude_md_path: './.claude/CLAUDE.md',
     plan_review: {
@@ -469,6 +480,24 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     },
   };
 
+  if (config['phase_naming'] === 'sequential') config['phase_naming'] = 'generated';
+  if (cwd && config['phase_id_convention'] === 'bracket') {
+    if (config['project_code'] == null) {
+      let name = path.basename(cwd);
+      try {
+        const project = fs.readFileSync(path.join(planningDir(cwd, null), 'PROJECT.md'), 'utf8');
+        const title = project.match(/^# +(.+?)[ \t]*$/m);
+        if (title) name = title[1].trim();
+      } catch { /* No project title: use the directory name. */ }
+      config['project_code'] = deriveProjectCode(name);
+    }
+    try {
+      const id = parsePhaseId(`${String(config['project_code'])}.01-01`);
+      if (id.project !== config['project_code']) throw new Error('Invalid project code');
+    } catch {
+      error('Invalid project_code for bracket: use [A-Z][A-Z0-9_]*.', ERROR_REASON.USAGE);
+    }
+  }
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
   return { config, defaultsRewrite };
 }
@@ -661,7 +690,7 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     return;
   }
 
-  const plan = planNewProjectConfig(checkedChoices);
+  const plan = planNewProjectConfig(checkedChoices, cwd);
   const config = plan.config;
 
   if (dryRun) {
@@ -1161,6 +1190,10 @@ function normalizeSecretReadExemptEntry(entry: unknown): string | null {
  * to persist, so it is refused through `error()` instead.
  */
 function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val: string): unknown {
+  if (kp === 'phase_naming' && parsedValue === 'sequential') {
+    process.stderr.write('Warning: phase_naming "sequential" is deprecated; use "generated".\n');
+    return 'generated';
+  }
   // #1581: project_code is an identifier, and config-set stores it as the text
   // typed. Through config-set this never fires; it holds a JSON choice (#5268)
   // to the type config-set stores, rather than writing a number readers cast
