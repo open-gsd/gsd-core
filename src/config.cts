@@ -495,7 +495,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>, cwd?: string
       const id = parsePhaseId(`${String(config['project_code'])}.01-01`);
       if (id.project !== config['project_code']) throw new Error('Invalid project code');
     } catch {
-      error('Invalid project_code for bracket: use [A-Z][A-Z0-9_]*.', ERROR_REASON.USAGE);
+      error('Invalid project_code for bracket: start with an uppercase ASCII letter, followed by uppercase ASCII letters, digits or underscores.', ERROR_REASON.USAGE);
     }
   }
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
