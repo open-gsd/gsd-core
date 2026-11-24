@@ -1246,11 +1246,13 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   });
 
   // #5182 hand-back (2026-11-22): the agent writes its receipt as its LAST tool action, before
-  // its final message, so a receipt that exists is not yet a return that arrived. The watch reads
-  // a receipt younger than the settle window as `active`; the window is stated once, in the helper
-  // doc, and every route that reads "when the watch ends" inherits it. Ages are set on the
-  // receipt's mtime against the injected NOW; no wall clock is read.
+  // its final message, so a receipt that exists is not yet a return that arrived. When the watch
+  // finds a receipt younger than the settle window it sleeps out the rest of the window in the
+  // same call, then reports it. The window is stated once, in the helper doc, and every route
+  // that reads "when the watch ends" inherits it. Ages are set on the receipt's mtime against the
+  // injected NOW and `sleep` records its arguments; no wall clock is read.
   const SETTLE_SECONDS = 120;
+  const INTERVAL_SECONDS = 5 * 60;
   const CHECKER_MARKERS = ['## VERIFICATION PASSED', '## ISSUES FOUND'];
 
   function receiptAged(f, age, marker = '## VERIFICATION PASSED') {
@@ -1258,51 +1260,70 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     fs.utimesSync(f.receipt, NOW - age, NOW - age);
   }
 
-  test('a receipt younger than the settle window reads active, not marker_received; at the window it counts (#5182)', (t) => {
+  // Run the watch with `sleep` recording every argument; returns the verdict and the sleeps.
+  function watchSleeps(f, dispatchTs, markers, prelude = '') {
+    const log = `${f.fwd}/sleeps.log`;
+    fs.writeFileSync(log, '');
+    const out = watch(dispatchTs, f.receipt, f.noPlans, markers, { prelude: `${prelude}\nsleep() { printf '%s\\n' "$1" >> ${q(log)}; }` });
+    return { out, sleeps: fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(Number) };
+  }
+
+  test('a receipt younger than the settle window is waited out in the same call, then reported; at the window it is not (#5182)', (t) => {
     const f = fixture(t);
     // limit-1 / limit / limit+1, and the instant after the write.
-    for (const [age, want] of [[0, 'active'], [1, 'active'], [SETTLE_SECONDS - 1, 'active'], [SETTLE_SECONDS, 'marker_received'], [SETTLE_SECONDS + 1, 'marker_received']]) {
+    for (const age of [0, 1, SETTLE_SECONDS - 1]) {
       receiptAged(f, age);
-      assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), want, `receipt age ${age}s`);
+      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS, SETTLE_SECONDS - age] }, `receipt age ${age}s: the rest of the window is slept`);
+    }
+    for (const age of [SETTLE_SECONDS, SETTLE_SECONDS + 1]) {
+      receiptAged(f, age);
+      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `receipt age ${age}s: settled, no extra sleep`);
     }
   });
 
-  test('a settling receipt past the stall threshold still reads active, never stalled (#5182)', (t) => {
+  test('a settling receipt past the stall threshold is reported, not stalled (#5182)', (t) => {
     const f = fixture(t);
     receiptAged(f, 5);
     // dispatched 11 minutes ago against a 10-minute threshold: with no receipt this is `stalled`.
-    assert.equal(watch(NOW - 11 * 60, f.receipt, f.noPlans, CHECKER_MARKERS), 'active');
+    assert.deepEqual(watchSleeps(f, NOW - 11 * 60, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS, SETTLE_SECONDS - 5] });
     fs.unlinkSync(f.receipt);
-    assert.equal(watch(NOW - 11 * 60, f.receipt, f.noPlans, CHECKER_MARKERS), 'stalled', 'control: no receipt, same clock');
+    assert.deepEqual(watchSleeps(f, NOW - 11 * 60, CHECKER_MARKERS), { out: 'stalled', sleeps: [INTERVAL_SECONDS] }, 'control: no receipt, same clock');
   });
 
-  test('a receipt dated in the future, or with an unreadable mtime, counts at once (#5182)', (t) => {
+  test('a receipt dated in the future, or with an unreadable or odd mtime, counts at once (#5182)', (t) => {
     const f = fixture(t);
     for (const age of [-1, -86400]) {
       receiptAged(f, age);
-      assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'marker_received', `receipt age ${age}s (future mtime)`);
+      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `receipt age ${age}s (future mtime)`);
     }
     receiptAged(f, 0);
-    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS, { prelude: 'stat() { return 1; }' }), 'marker_received', 'no stat form works');
-    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS, { prelude: 'stat() { echo not-a-number; }' }), 'marker_received', 'stat prints a non-number');
+    // No stat form works / stat prints a non-number: the old behavior, no extra sleep.
+    for (const stub of ['stat() { return 1; }', 'stat() { echo not-a-number; }']) {
+      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, stub), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, stub);
+    }
+    // A leading zero is not octal: `08`/`09` are valid (long past) mtimes, not an arithmetic error.
+    for (const mtime of ['08', '09', '0000001']) {
+      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, `stat() { echo ${mtime}; }`), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `mtime ${mtime}`);
+    }
   });
 
-  test('a fresh receipt without a watched marker is not activity (#5182)', (t) => {
+  test('a fresh receipt without a watched marker is not activity and is not waited on (#5182)', (t) => {
     const f = fixture(t);
     receiptAged(f, 0, '## PLANNING COMPLETE');
-    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'waiting');
+    assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'waiting', sleeps: [INTERVAL_SECONDS] });
   });
 
-  test('the settle verdict matches its oracle for any receipt age (#5182)', (t) => {
+  test('the settle sleep matches its oracle for any receipt age (#5182)', (t) => {
     const f = fixture(t);
     fc.assert(fc.property(fc.integer({ min: -5, max: 400 }), (age) => {
       receiptAged(f, age);
-      const want = age >= 0 && age < SETTLE_SECONDS ? 'active' : 'marker_received';
-      return watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS) === want;
-    }), { numRuns: 10, examples: [[-1], [0], [SETTLE_SECONDS - 1], [SETTLE_SECONDS], [SETTLE_SECONDS + 1]] });
+      const want = age >= 0 && age < SETTLE_SECONDS ? [INTERVAL_SECONDS, SETTLE_SECONDS - age] : [INTERVAL_SECONDS];
+      const got = watchSleeps(f, NOW, CHECKER_MARKERS);
+      return got.out === 'marker_received' && JSON.stringify(got.sleeps) === JSON.stringify(want);
+    }), { seed: 5182, numRuns: 10, examples: [[-1], [0], [SETTLE_SECONDS - 1], [SETTLE_SECONDS], [SETTLE_SECONDS + 1]] });
   });
 
-  test('the settle window in the helper constant, the prose and this suite agree (#5182)', () => {
+  test('the settle window in the helper constant, the prose, the docs, the changeset and this suite agree (#5182)', () => {
     const doc = readStallHelpersDoc();
     const constant = doc.match(/^RECEIPT_SETTLE_SECONDS=(\d+)$/m);
     assert.ok(constant, 'the helper fence defines RECEIPT_SETTLE_SECONDS=<n>');
@@ -1310,6 +1331,12 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.ok(prose, 'the prose states the window as `RECEIPT_SETTLE_SECONDS` (<n>)');
     assert.equal(Number(constant[1]), Number(prose[1]), 'constant and prose name the same number');
     assert.equal(Number(constant[1]), SETTLE_SECONDS, 'this suite pins the same number');
+    // The user-facing copies state it in words: seconds in the changeset, minutes in the docs.
+    const changeset = fs.readFileSync(path.join(REPO_ROOT, '.changeset', 'lively-sloths-forage.md'), 'utf8');
+    assert.ok(changeset.includes(`${SETTLE_SECONDS} seconds old`), 'the changeset states the window in seconds');
+    for (const rel of ['docs/FEATURES.md', 'docs/features/planner-stall-watchdog.md']) {
+      assert.ok(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8').includes(`younger than ${SETTLE_SECONDS / 60 === 2 ? 'two' : SETTLE_SECONDS / 60} minutes`), `${rel} states the window in minutes`);
+    }
   });
 
   test('AC1 wiring: all five watch sites bind {receipt}; none binds the host {outputFile}', () => {
