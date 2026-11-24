@@ -43,6 +43,28 @@ function isProcessEnv(node) {
   );
 }
 
+/** A read of `process.env.<key>`, where `key` is the one named. */
+function isProcessEnvKeyRead(node, key) {
+  return (
+    !!node &&
+    node.type === 'MemberExpression' &&
+    isProcessEnv(node.object) &&
+    staticName(node.property, node.computed) === key
+  );
+}
+
+/**
+ * True when `value`, assigned to the HOME or USERPROFILE `key`, cannot be a per-test sandbox: a
+ * fixed string (a fixture handed to a pure function or compared against in an assertion) or the
+ * ambient value of the same key (saving or passing it through).
+ */
+function isNotASandbox(value, key) {
+  if (!value) return false;
+  if (value.type === 'Literal' && typeof value.value === 'string') return true;
+  if (value.type === 'TemplateLiteral' && value.expressions.length === 0) return true;
+  return isProcessEnvKeyRead(value, key);
+}
+
 /** `path.delimiter`, `path.win32.delimiter`, `require('path').delimiter`, or a bare `delimiter`. */
 function isPathDelimiter(node) {
   if (!node) return false;
@@ -156,13 +178,27 @@ const rule = {
       return !!outer && outer.type === 'CallExpression' && outer.callee === member;
     }
 
+    /** True when `call`'s result is read only for `.length`: a count, not a filtered or rebuilt PATH. */
+    function isLengthOnly(call) {
+      const member = call.parent;
+      return (
+        !!member &&
+        member.type === 'MemberExpression' &&
+        member.object === call &&
+        staticName(member.property, member.computed) === 'length'
+      );
+    }
+
     return {
       CallExpression(node) {
         const callee = node.callee;
         if (callee.type !== 'MemberExpression' || staticName(callee.property, callee.computed) !== 'split') {
           return;
         }
-        if (readsEnvPath(callee.object) || (isPathDelimiter(node.arguments[0]) && isFilteredSplit(node))) {
+        if (
+          (readsEnvPath(callee.object) && !isLengthOnly(node)) ||
+          (isPathDelimiter(node.arguments[0]) && isFilteredSplit(node))
+        ) {
           violation(node, 'inlinePathFilter');
         }
       },
@@ -171,7 +207,7 @@ const rule = {
         for (const prop of node.properties) {
           if (prop.type !== 'Property') continue;
           const key = staticName(prop.key, prop.computed);
-          if (HOME_KEYS.has(key)) {
+          if (HOME_KEYS.has(key) && !isNotASandbox(prop.value, key)) {
             violation(prop, 'adhocHomeConstruction', { key });
             return;
           }
@@ -182,7 +218,9 @@ const rule = {
         const left = node.left;
         if (left.type !== 'MemberExpression' || isProcessEnv(left.object)) return;
         const key = staticName(left.property, left.computed);
-        if (HOME_KEYS.has(key)) violation(node, 'adhocHomeConstruction', { key });
+        if (HOME_KEYS.has(key) && !isNotASandbox(node.right, key)) {
+          violation(node, 'adhocHomeConstruction', { key });
+        }
       },
 
       'Program:exit'(node) {
