@@ -242,6 +242,7 @@ describe('#4020 — run-tests temp root', () => {
         userProfile: process.env.USERPROFILE,
         keys: Object.fromEntries(keys.map((k) => [k, process.env[k] ?? null])),
         defaultsVisible: fs.existsSync(path.join(os.homedir(), '.gsd', 'defaults.json')),
+        gsdHome: process.env.GSD_HOME ?? null,
         marker: process.env[${JSON.stringify(helpers.TEST_HOME_SANDBOX_MARKER)}] ?? null,
       });
     `;
@@ -273,19 +274,22 @@ describe('#4020 — run-tests temp root', () => {
       const sandbox = createTempDir('gsd-4635-spawn-');
       t.after(() => cleanup(sandbox));
       const out = path.join(sandbox, 'snapshot.json');
-      const target = path.join(__dirname, 'helpers-4635-probe.test.cjs');
-      fs.writeFileSync(target, [
+      const testDir = path.join(sandbox, 'probe-tests');
+      fs.mkdirSync(testDir);
+      fs.writeFileSync(path.join(testDir, 'probe.test.cjs'), [
         SNAPSHOT_SOURCE,
         "require('node:test').test('probe #4635', () => {",
         '  fs.writeFileSync(process.env.GSD_PROBE_OUT, JSON.stringify(snapshot()));',
         '});',
         '',
       ].join('\n'));
-      t.after(() => fs.unlinkSync(target));
 
-      const r = runNode([RUNNER, '--files', path.basename(target)], {
+      const r = runNode([RUNNER], {
         timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS,
-        env: { ...nestedRunnerEnv(sandbox), ...env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox, GSD_PROBE_OUT: out },
+        env: {
+          ...nestedRunnerEnv(sandbox), ...env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox,
+          GSD_TEST_DIR: testDir, GSD_PROBE_OUT: out,
+        },
       });
       assert.equal(r.exitCode, 0, `runner should pass: ${r.stderr.slice(-400)}`);
       const seen = JSON.parse(fs.readFileSync(out, 'utf8'));
@@ -294,21 +298,23 @@ describe('#4020 — run-tests temp root', () => {
       assert.equal(seen.userProfile, seen.home, 'HOME and USERPROFILE name one sandbox');
       assert.ok(path.basename(seen.home).startsWith(runner.RUN_USER_HOME_PREFIX), `sandbox home: ${seen.home}`);
       assert.equal(seen.defaultsVisible, false, 'a real ~/.gsd/defaults.json is not visible');
-      assert.equal(seen.marker, seen.home, 'the real-home guard marker names the sandbox');
+      assert.ok(seen.gsdHome && path.basename(seen.gsdHome).startsWith('gsd-test-home-'),
+        `the defaults store root is the run sandbox, not a real GSD_HOME: ${seen.gsdHome}`);
+      assert.equal(seen.marker, null,
+        'the runner leaves the real-home guard marker unset so a test that forgot sandboxHome() still fails loudly');
     });
 
     test('setupRunHermeticEnv deletes exactly the listed keys and reuses an inherited sandbox home', (t) => {
       const root = createTempDir('gsd-4635-unit-');
       t.after(() => cleanup(root));
-      const marker = 'MARKER_X';
       const env = { A: '1', B: '2', KEEP: 'k', HOME: '/real', USERPROFILE: '/real' };
-      const first = runner.setupRunHermeticEnv({ env, root, keys: ['A', 'B', 'ABSENT'], marker });
+      const first = runner.setupRunHermeticEnv({ env, root, keys: ['A', 'B', 'ABSENT'] });
       assert.deepEqual(first.removed.sort(), ['A', 'B']);
       assert.equal(env.KEEP, 'k', 'a variable outside the list is left alone');
       assert.equal(path.dirname(first.home), root);
       assert.ok(path.basename(first.home).startsWith(runner.RUN_USER_HOME_PREFIX));
-      assert.deepEqual([env.HOME, env.USERPROFILE, env[marker]], [first.home, first.home, first.home]);
-      const second = runner.setupRunHermeticEnv({ env, root, keys: ['A'], marker });
+      assert.deepEqual([env.HOME, env.USERPROFILE], [first.home, first.home]);
+      const second = runner.setupRunHermeticEnv({ env, root, keys: ['A'] });
       assert.equal(second.home, first.home, 'a nested runner reuses the inherited sandbox home');
     });
 
@@ -317,10 +323,10 @@ describe('#4020 — run-tests temp root', () => {
       t.after(() => cleanup(root));
       const sandboxHome = path.join(root, 'gsd-test-home-abc');
       const kept = { GSD_HOME: sandboxHome };
-      runner.setupRunHermeticEnv({ env: kept, root, keys: ['GSD_HOME'], marker: 'M' });
+      runner.setupRunHermeticEnv({ env: kept, root, keys: ['GSD_HOME'] });
       assert.equal(kept.GSD_HOME, sandboxHome);
       const dropped = { GSD_HOME: path.join(root, 'developer-gsd-home') };
-      runner.setupRunHermeticEnv({ env: dropped, root, keys: ['GSD_HOME'], marker: 'M' });
+      runner.setupRunHermeticEnv({ env: dropped, root, keys: ['GSD_HOME'] });
       assert.equal(dropped.GSD_HOME, undefined);
     });
 
@@ -328,7 +334,7 @@ describe('#4020 — run-tests temp root', () => {
       assert.ok(runner.RESERVED_TEMP_PREFIXES.includes(runner.RUN_USER_HOME_PREFIX));
       const root = createTempDir('gsd-4635-sweep-');
       t.after(() => cleanup(root));
-      const { home } = runner.setupRunHermeticEnv({ env: {}, root, keys: [], marker: 'M' });
+      const { home } = runner.setupRunHermeticEnv({ env: {}, root, keys: [] });
       fs.mkdirSync(path.join(root, 'gsd-leak-fixture'));
       runner.sweepRunTempRoot(root);
       assert.ok(fs.existsSync(home), 'the sandbox home survives the sweep');

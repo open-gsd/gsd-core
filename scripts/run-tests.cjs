@@ -447,10 +447,11 @@ function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir, platform = pro
  * never hand-listed) and points HOME/USERPROFILE at a private dir under `root`, which keeps a real
  * `~/.gsd/defaults.json` and `~/.claude` out of reach. IDEMPOTENT like the GSD_HOME sandbox: a
  * nested run-tests inherits the sandbox home, and an inherited run-sandbox GSD_HOME is kept.
- * `marker` names the variable recording which home was sandboxed (the real-home guard reads it).
+ * The real-home guard marker is NOT set: it stays fail-closed for a test that forgot sandboxHome().
+ * One home is shared by every chunk of the run (a test needing its own state sandboxes its own).
  * @returns {{home: string, removed: string[]}}
  */
-function setupRunHermeticEnv({ env = process.env, root, keys, marker }) {
+function setupRunHermeticEnv({ env = process.env, root, keys }) {
   const removed = [];
   for (const key of keys) {
     if (env[key] === undefined) continue;
@@ -461,7 +462,7 @@ function setupRunHermeticEnv({ env = process.env, root, keys, marker }) {
   const [homeKey, profileKey] = ['HOME', 'USERPROFILE'];
   const inherited = env[homeKey] && basename(env[homeKey]).startsWith(RUN_USER_HOME_PREFIX) ? env[homeKey] : '';
   const home = inherited || mkdtempSync(join(root, RUN_USER_HOME_PREFIX));
-  for (const key of [homeKey, profileKey, marker]) env[key] = home;
+  for (const key of [homeKey, profileKey]) env[key] = home;
   return { home, removed };
 }
 
@@ -2279,7 +2280,6 @@ async function main() {
       env: process.env,
       root: runTempRoot,
       keys: testHelpers.CONFIG_LOCATION_ENV_KEYS,
-      marker: testHelpers.TEST_HOME_SANDBOX_MARKER,
     });
   }
 

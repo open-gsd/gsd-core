@@ -759,7 +759,8 @@ passed down instead, so `scripts/run-tests.cjs` closes that case once for every 
 (`setupRunHermeticEnv`, #4635): it deletes every config-location variable in the registry-derived
 list (`CONFIG_LOCATION_ENV_KEYS` in `tests/helpers.cjs`, so `CODEX_HOME`, `KILO_CONFIG`,
 `ANTIGRAVITY_CONFIG_DIR` and the rest follow the registry, never a hand-written list) and sets
-`HOME` and `USERPROFILE` to a `gsd-test-userhome-*` directory under the run temp root. A real
+`HOME` and `USERPROFILE` to a `gsd-test-userhome-*` directory under the run temp root, shared by every chunk of the run, and leaves the real-home guard
+marker unset so a test that forgot `sandboxHome()` still fails loudly. A real
 `~/.gsd/defaults.json` or `~/.claude` is not there for a chunk to read, and an exported
 `CLAUDE_CONFIG_DIR` does not reach one. The one variable kept is a `GSD_HOME` that is already a run
 sandbox. The step runs after the live-config guard has snapshotted the real config roots, so the
