@@ -73,7 +73,7 @@ if [ $QB_INIT_RC -ne 0 ]; then exit 1; fi
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 QB_MODES=$(printf '%s' "$INIT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const m=JSON.parse(s).modes;process.stdout.write(Array.isArray(m)?m.join(" "):"")}catch{process.stdout.write("")}})')
 VALIDATE_MODE=false; RESEARCH_MODE=false
-for QB_MODE in $QB_MODES; do
+for QB_MODE in $(printf '%s' "$QB_MODES"); do
   case "$QB_MODE" in validate) VALIDATE_MODE=true ;; research) RESEARCH_MODE=true ;; esac
 done
 AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
