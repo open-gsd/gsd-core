@@ -1949,9 +1949,6 @@
     "block": 1,
     "directive": 1
   },
-  "tests/cursor-reviewer.test.cjs": {
-    "directive": 1
-  },
   "tests/cursor-subagent-isolation.test.cjs": {
     "block": 2
   },
@@ -1991,9 +1988,6 @@
     "block": 1
   },
   "tests/discuss-mode.test.cjs": {
-    "directive": 1
-  },
-  "tests/discuss-phase-power.test.cjs": {
     "directive": 1
   },
   "tests/dispatch-identity.test.cjs": {
@@ -2935,9 +2929,6 @@
   "tests/plan-phase-stall-detection.test.cjs": {
     "block": 6
   },
-  "tests/plan-phase-ui-redirect.test.cjs": {
-    "directive": 1
-  },
   "tests/plan-pre-hook-e2e.test.cjs": {
     "block": 1
   },
@@ -3425,10 +3416,6 @@
     "block": 2,
     "directive": 1
   },
-  "tests/update-workflow.test.cjs": {
-    "block": 2,
-    "directive": 1
-  },
   "tests/user-artifact-staging.test.cjs": {
     "block": 1
   },
@@ -3495,9 +3482,6 @@
     "block": 1
   },
   "tests/workflow-guard-registration.test.cjs": {
-    "directive": 1
-  },
-  "tests/workflow-maintainer-skip.test.cjs": {
     "directive": 1
   },
   "tests/workflow-shell-pinning.test.cjs": {
