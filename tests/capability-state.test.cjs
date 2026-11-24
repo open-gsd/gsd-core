@@ -16,8 +16,9 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { cleanup, runGsdTools, installSpawnEnv } = require('./helpers.cjs');
+const { cleanup, runGsdToolsAsync, installSpawnEnv } = require('./helpers.cjs');
 const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const {
   PROBE_TIMEOUT_MS,
   INSTALL_TIMEOUT_MS,
@@ -1184,7 +1185,7 @@ describe('installed-runtime agent manifest parity (#5356)', () => {
     const cwd = path.join(home, 'project');
     fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{}');
-    const env = installSpawnEnv({ HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: configDir, GSD_HOME: home });
+    const env = installSpawnEnv(isolatedEnv({ home, claudeConfigDir: configDir, override: { GSD_HOME: home } }));
     const install = runNode([path.join(repoRoot, 'bin', 'install.js'), `--${runtime}`, '--global', '--config-dir', configDir], {
       cwd, env, timeoutMs: INSTALL_TIMEOUT_MS,
     });
@@ -2290,7 +2291,7 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
     }
   });
 
-  test('CLI: `capability state --runtime claude` reports the Claude config dir despite persisted runtime:"codex"', () => {
+  test('CLI: `capability state --runtime claude` reports the Claude config dir despite persisted runtime:"codex"', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-cli-'));
     try {
       writePersistedRuntime(tmpDir, 'codex');
@@ -2305,10 +2306,7 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
       // test onto the env-FIRST branch, silently dropping the only coverage this
       // #2003 regression has of the fallback branch. Sandboxing HOME keeps the
       // expectation test-controlled AND keeps the branch under test unchanged.
-      const result = runGsdTools('capability state --runtime claude --raw', tmpDir, {
-        HOME: tmpDir,
-        USERPROFILE: tmpDir,
-      });
+      const result = await runGsdToolsAsync('capability state --runtime claude --raw', tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(result.success, `capability state --runtime should succeed: ${result.error || ''}`);
       const parsed = JSON.parse(result.output);
       // Home-derived Claude dir. That this is NOT <tmpDir>/.codex is the #2003
@@ -2324,11 +2322,11 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
   // L-2 (review): end-to-end CLI test for loop render-hooks --runtime — the exact
   // command the bug report calls out as silently no-op'ing. Guards the copy-pasted
   // arg parsing in gsd-tools.cjs from diverging from the capability-state branch.
-  test('CLI: `loop render-hooks verify:post --runtime claude` resolves against the Claude config dir', () => {
+  test('CLI: `loop render-hooks verify:post --runtime claude` resolves against the Claude config dir', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-loop-cli-'));
     try {
       writePersistedRuntime(tmpDir, 'codex');
-      const result = runGsdTools('loop render-hooks verify:post --runtime claude --raw', tmpDir);
+      const result = await runGsdToolsAsync('loop render-hooks verify:post --runtime claude --raw', tmpDir);
       assert.ok(result.success, `loop render-hooks --runtime should succeed: ${result.error || ''}`);
       const parsed = JSON.parse(result.output);
       // The envelope carries activeHooks/rendered; the key assertion is that it
@@ -2372,12 +2370,12 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
 
   // N-1 (review): CLI arg-parsing boundary — --config-dir wins over --runtime
   // (most-explicit input takes precedence), and missing --runtime value errors.
-  test('CLI: --config-dir takes precedence over --runtime when both are given', () => {
+  test('CLI: --config-dir takes precedence over --runtime when both are given', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-precedence-'));
     const explicitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-explicit-cfg-'));
     try {
       writePersistedRuntime(tmpDir, 'codex');
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         `capability state --config-dir ${explicitDir} --runtime claude --raw`,
         tmpDir,
       );
@@ -2391,11 +2389,11 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
     }
   });
 
-  test('CLI: `capability state --runtime` with no value errors with USAGE', () => {
+  test('CLI: `capability state --runtime` with no value errors with USAGE', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-missing-'));
     try {
       writePersistedRuntime(tmpDir, 'codex');
-      const result = runGsdTools('capability state --runtime', tmpDir);
+      const result = await runGsdToolsAsync('capability state --runtime', tmpDir);
       assert.ok(!result.success, 'missing --runtime value must produce a non-zero exit');
       assert.ok(/Missing value for --runtime/.test(result.error || ''),
         `error must name the missing --runtime value: ${result.error || ''}`);

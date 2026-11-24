@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 let project;
 let seq = 0;
@@ -19,7 +20,7 @@ let seq = 0;
 before(() => { project = createTempProject('gsd-6302-'); });
 after(() => { cleanup(project); });
 
-const env = () => ({ HOME: project, USERPROFILE: project, GSD_HOME: project });
+const env = () => isolatedEnv({ home: project, base: {}, override: { GSD_HOME: project } });
 
 const AUTO_TASK = [
   '<task type="auto">',

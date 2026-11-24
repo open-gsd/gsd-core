@@ -6,13 +6,11 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const processSeam = require('./helpers/process-seam.cjs');
-const { runGsdTools, cleanup, absPlanningPath, TOOLS_PATH, parseFrontmatter, captureFdSync, homeSandboxEnv, TEST_ENV_BASE } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
-const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * #3188: write the canonical flat planning docs so an init-query "present" test
@@ -3853,11 +3851,7 @@ describe('init section manifest', () => {
    * a scope-dependent fact; a case's own scope is applied after it.
    */
   function runSectionManifestCli(args, cwd, env = {}) {
-    const seamResult = processSeam.runNode([TOOLS_PATH, 'query', ...args], {
-      cwd,
-      env: { ...process.env, ...TEST_ENV_BASE, GSD_JSON_ERRORS: '1', ...env },
-      timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
-    });
+    const seamResult = runGsdToolsCaptured(['query', ...args], cwd, { GSD_JSON_ERRORS: '1', ...env });
     let stdout = seamResult.stdout || '';
     // output() spills payloads over 50KB to a tmpfile and prints "@file:<path>"
     // (src/io.cts) — dereference it exactly as the workflow itself does.
@@ -5033,6 +5027,57 @@ describe('init section manifest', () => {
       const body = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'research-plan-absent');
       assert.strictEqual(body.research_enabled, true);
       assert.strictEqual(body.nyquist_validation_enabled, true);
+    });
+
+    test('#5096: blocked sections keep init payloads explicit and operationally safe', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-blocked-init-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+        workflow: null,
+        planning: null,
+      }));
+
+      const plan = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'blocked-plan');
+      assert.deepEqual({
+        research_enabled: plan.research_enabled,
+        plan_checker_enabled: plan.plan_checker_enabled,
+        nyquist_validation_enabled: plan.nyquist_validation_enabled,
+        text_mode: plan.text_mode,
+        commit_docs: plan.commit_docs,
+      }, {
+        research_enabled: false,
+        plan_checker_enabled: false,
+        nyquist_validation_enabled: false,
+        text_mode: false,
+        commit_docs: false,
+      });
+
+      const execute = parseOkJson(runSectionManifestCli(['init.execute-phase', '1'], dir), 'blocked-execute');
+      assert.equal(execute.verifier_enabled, false);
+      assert.equal(execute.commit_docs, false);
+
+      const mapResult = runGsdTools('init map-codebase', dir);
+      assert.ok(mapResult.success, `Command failed: ${mapResult.error}`);
+      const map = JSON.parse(mapResult.output);
+      assert.equal(map.commit_docs, false);
+      assert.equal(map.search_gitignored, false);
+      assert.equal(map.subagent_timeout, 300000);
+    });
+
+    test('#5096: a present hand-edited timeout retains its existing init representation', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-present-timeout-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+        workflow: { subagent_timeout: 'hand-edited-value' },
+      }));
+      const result = runGsdTools('init map-codebase', dir);
+      assert.ok(result.success, result.error);
+      assert.equal(JSON.parse(result.output).subagent_timeout, 'hand-edited-value');
+    });
+
+    test('#5096: the pre-existing TDD boolean projection retains its coercion', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-legacy-tdd-projection-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ workflow: { tdd_mode: 1 } }));
+      const body = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'legacy-tdd');
+      assert.equal(body.tdd_mode, true);
     });
   });
 

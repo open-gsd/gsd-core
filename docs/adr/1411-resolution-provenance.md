@@ -327,7 +327,8 @@ found by path-construction search over `src/`, `bin/`, `hooks/`, `scripts/` at `
 | Site | What it re-implements |
 |---|---|
 | `src/capability-activation.cts` `resolveConfigKey` | A full four-level walk (loadConfig result → workstream file → root file → schema default) returning `{found, value}` with **no layer**. The closest thing to the epic's owner that already exists, and the reason the owner must absorb these rather than become another walk beside them |
-| `src/config.cts` `resolveFromRootConfig` + `resolveSchemaDefault` | `cmdConfigGet`'s own workstream→root→schema cascade (#2702, #2256) |
+| `src/config.cts` `resolveFromRootConfig` | `cmdConfigGet`'s own workstream→root inheritance rung (#2702, #2256) |
+| `src/config-schema-defaults.cts` `resolveSchemaDefault` | `cmdConfigGet`'s schema-default fallback, extracted from `src/config.cts` by C1 (#5096) and shared with the resolver |
 | `src/config-loader.cts` `_globalBaseCfg` (Branch D) | The 26-key `??` / `\|\|` projection of `~/.gsd/defaults.json` — #4071's site |
 | `src/config.cts` `buildNewProjectConfig` | A project-creation merge of `~/.gsd/defaults.json` |
 | `src/install-model-override-resolver.cts` | Install-time global+project merges (`model_overrides`, `agent_tools`, runtime/profile) |
@@ -390,6 +391,22 @@ already imports both install-time resolvers), never a mocked CLI. C5 additionall
 guard **failing**: reintroduce one deleted merge, watch the rule go red, remove it again. A guard
 that has never been observed red is an assumption.
 
+*C5 amendment (#6032).* The guard landed as `local/no-adhoc-config-merge` over `src/**`, `hooks/**`,
+`gsd-core/bin/**`, `scripts/**` and `bin/**`, with three shapes: (a) a read of a layer file whose
+path was built outside the boundary, (b) a spread merge of two parsed config objects, and (c) one
+function reading two or more different layers, so a precedence walk written with the owner's path
+helpers is still caught. Write, probe, report and compare sites never match, by shape. The permanent
+`resolverInternal` boundary is the five files that name layer locations: `src/config-value-resolver.cts`,
+`src/config-loader.cts`, `src/planning-workspace.cts` (the owner of `planningDir`, so of
+`projectConfigPath` and `rootConfigPath`), `hooks/lib/config-read.js` (hooks are standalone files
+and cannot require the built library, so the hook-side equivalent is pinned to the loader by
+`tests/layer-path-helpers.test.cjs`) and `hooks/gsd-statusline.js` (the Claude-only hook that reads
+Claude Code's own settings layers for display; `hooks/lib` ships to every runtime, so that code stays
+in the hook). The census at `9bcb0be79a` found 41 layer-path constructions
+in 25 files that C1–C4 had left; all of them now take their path from the owner, the four walks
+moved into it (`claudeSettingsLayers`, `readConfigFilesQuiet`, the resolver's
+`allowUndeclared`), and the `temporary` section is empty at merge.
+
 ### The #4588 boundary, restated
 
 #4588 separately investigates what a current Claude Code harness actually honours when it forks a
@@ -427,3 +444,17 @@ not read them as drift:
   pinned by tests.
 
 The child issues now exist: C1 #5096, C2 #6029, C3 #6030, C4 #6031, C5 #6032.
+
+## Amendment — 2026-11-19: C1 (#5096) keys are canonical spellings
+
+The Config Value Resolution Module resolves a declared key exactly as written. It does not apply
+the Config Loader's flat-then-nested alias reading, which `CONFIG_KEY_ALIASES` (#5470) declares
+for twenty-one settings. The two owners can therefore disagree for a flat spelling: with a flat
+`research: false`, `loadConfig` resolves `false`, while `resolveConfigValue('workflow.research')`
+reports the schema default and the flat `research` is not configured. C1 leaves that difference in
+place because it migrates no caller. C3 must close it for each loader reader it migrates, either by
+resolving the alias in the owner or by keeping that reader on the loader, and must not inherit the
+difference silently.
+
+The non-object section barrier (C1) reads the effective project configuration, the root file merged
+with the active workstream file, so a flat key in either file outranks the blocked nested alias.

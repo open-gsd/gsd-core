@@ -63,16 +63,15 @@ if (require.main === module && !process.env.NODE_V8_COVERAGE) {
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { allow } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath, globalDefaultsPath } = require('./lib/config-read.js');
 
 // Workspace resolution is shared across the Cursor hooks (#2587) — see
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
 const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
+const { REASON_CODE, remedyFor, composeRemedyText, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
 // resolveIsolationEvidence and resolveFallbackIsolation) are tsc build
@@ -466,7 +465,7 @@ function resolveFallbackIsolation(root, configPath) {
   if (!runtimeId) {
     try {
       // #5017: GSD_HOME when set and non-blank, else the home directory — the loader's rule.
-      const defaultsPath = path.join(process.env.GSD_HOME || os.homedir(), '.gsd', 'defaults.json');
+      const defaultsPath = globalDefaultsPath();
       const defaultsParsed = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
       if (defaultsParsed && typeof defaultsParsed === 'object' && 'runtime' in defaultsParsed) {
         runtimeId = resolveRuntimeNameFromCandidates(defaultsParsed.runtime) || null;
@@ -501,7 +500,7 @@ function resolveFallbackIsolation(root, configPath) {
  * workspace runs the identical check.
  */
 function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds = null, realpath = fs.realpathSync, sentinel: preRead = null } = {}) {
-  const configPath = path.join(root, '.planning', 'config.json');
+  const configPath = projectConfigPath(root);
   let isGsdProject;
   try {
     fs.accessSync(configPath, fs.constants.F_OK);
@@ -610,17 +609,23 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
     };
   }
 
+  // #6028: the same remedy rule as hooks/gsd-agent-isolation-guard.js — a fresh recorded `none` that did not
+  // apply to this dispatch is a recorded degrade, so "start an isolated session" is not the advice.
+  const remedy = remedyFor(sentinelDiscarded);
   return {
     action: 'deny',
     reason:
       `GSD subagent isolation guard: this project's dispatch isolation resolves to ` +
       `"harness-worktree", but subagent_type="${displayAgentName(subagentType)}" is about to spawn in "${root}", ` +
       `which is not an isolated Cursor worktree — it would edit the user's primary checkout ` +
-      `directly, with no consent and no warning. Start an isolated session first (the ` +
-      `"--worktree" CLI flag or the "/worktree" chat command; Cursor manages these worktrees ` +
-      `under "~/.cursor/worktrees/") and retry.` +
-      (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
+      `directly, with no consent and no warning.` +
+      composeRemedyText(
+        sentinelDiscarded,
+        ` Start an isolated session first (the "--worktree" CLI flag or the "/worktree" chat command; ` +
+          `Cursor manages these worktrees under "~/.cursor/worktrees/") and retry.`,
+      ),
     reasonCode: REASON_CODE.NOT_ISOLATED_WORKTREE,
+    remedy,
     sentinelDiscarded,
     agentName: displayAgentName(subagentType),
   };
@@ -676,6 +681,7 @@ function main() {
           permission: 'deny',
           user_message: decision.reason,
           reason_code: decision.reasonCode,
+          remedy: decision.remedy ?? null,
           sentinel_discarded: decision.sentinelDiscarded ?? null,
         };
         if (additionalContext !== null) out.additional_context = additionalContext;

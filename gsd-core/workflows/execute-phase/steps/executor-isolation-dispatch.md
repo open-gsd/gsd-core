@@ -29,9 +29,14 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # as references/dispatch-isolation-gate.md does — this site declares that gate
 # canonical, so it must not carry the older collapsing shape. Both outcomes fail
 # closed, which is right, but only one of them may claim the host declared no
-# primitive (#2652 review).
-_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}")
+# primitive (#2652 review). The decision and whether it is HELD (a degrade an
+# earlier step recorded, reported as `none` with `held: true`) come from ONE call,
+# exactly as in the gate's own block.
+_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}")
 _ISOLATION_RC=$?
+_ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held:"+(Number.isSafeInteger(j.decidedAt)&&j.decidedAt>=0?j.decidedAt:""):"live"))}catch{process.stdout.write(" live")}})')
+_ISOLATION_RAW=${_ISOLATION_FIELDS% *}
+_ISOLATION_HELD=${_ISOLATION_FIELDS##* }
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
   ISOLATION=none
   ISOLATION_RESOLVED=false      # fail closed, but we did NOT learn a verdict
@@ -43,6 +48,15 @@ case "$ISOLATION" in
   harness-worktree|orchestrator-worktree|none) ;;
   *) ISOLATION=none; ISOLATION_RESOLVED=false ;;   # out of vocabulary is not a verdict either
 esac
+
+# A HELD `none` is a degrade an earlier step of this run recorded for this phase,
+# not a capability verdict: run the wave sequentially instead of failing closed.
+_RENEW_HELD=""
+if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "${_ISOLATION_HELD%%:*}" = "held" ]; then
+  USE_WORKTREES=false
+  _RENEW_HELD="${_ISOLATION_HELD#held:}"
+  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded phase ${PHASE_NUMBER:-} to sequential dispatch within the last 10 minutes. Running its plans sequentially. _RENEW_HELD=$_RENEW_HELD" >&2
+fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
 [ "$USE_WORKTREES" = "false" ] && ISOLATION=none
@@ -71,10 +85,14 @@ fi
 # Re-resolve (and, as a side effect, re-persist) now that the base-check
 # auto-degrade above may have changed $ISOLATION since the first
 # `dispatch-isolation` call. `--force-isolation` pushes the FINAL,
-# shell-computed value (which the resolver itself cannot see — the #683
-# base-check degrade is decided here, not inside gsd-tools.cjs) through the
-# SAME single write path (`--force-isolation none` also clears the stored
-# harnessFlag, since none applies to sequential dispatch). The isolation
+# shell-computed value through the SAME single write path
+# (`--force-isolation none` also clears the stored harnessFlag, since none
+# applies to sequential dispatch). Since #4222 the resolver re-derives the
+# #683 base-check degrade itself for the RECORDED decision (as it already
+# did the project opt-out, #3737), so a later plain re-query no longer
+# overwrites this record with the host capability; this re-record stays
+# because it is the one write that carries the shell's FINAL value for every
+# degrade, including the ones the resolver cannot see. The isolation
 # guard hooks (hooks/gsd-agent-isolation-guard.js,
 # hooks/gsd-cursor-subagent-start.js) read this sentinel instead of
 # re-deriving a host CAPABILITY from the registry — the registry's
@@ -83,13 +101,18 @@ fi
 # base-check auto-degrade) is a legitimate ISOLATION=none outcome the guards
 # must not treat as a bypass. Best-effort: a write failure here must never
 # fail the wave — the guards' own sentinel-absent fallback is safe, just less
-# precise.
-gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" >/dev/null 2>&1 || true
+# precise. A HELD `none` is re-recorded too, for the reason the gate's own
+# block gives: the guard reads the record at dispatch time, and the held one
+# can name another plan or expire before this wave dispatches. `--renew-held`
+# passes the held answer's `decidedAt`, so this re-record does not restart
+# the hold (dispatch-isolation-gate.md, "A plain re-query reports the held
+# decision").
+gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 `ISOLATION` — not `RUNTIME` — selects how the wave fans out. These three values are the only
 branch points; **never add a `RUNTIME = "codex"` test to the scheduler.** The per-host
-invocation detail is descriptor data, surfaced by `dispatch-isolation --json` as
+invocation detail is descriptor data, surfaced by `inspect-dispatch-isolation --json` as
 `harnessFlag` / `exec`.
 
 | `ISOLATION` | Fan-out | What the scheduler does |
@@ -108,13 +131,13 @@ both degrade to `none` rather than dispatching executors that only believe they 
 Read the flag once before dispatching; it is descriptor data, never hardcoded per runtime:
 
 ```bash
-# #3045 CORE REDESIGN: `dispatch-isolation --json` already resolves and
-# atomically records `harnessFlag` together with `isolation` and `phase` in
-# ONE write, as a side effect of this same call (routeDispatchIsolation,
-# gsd-core/bin/gsd-tools.cjs) — there is no separate "now also record the
-# flag" step, and therefore no flagless window between recording the mode and
-# recording the flag.
-HARNESS_FLAG=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" 2>/dev/null \
+# The flag is the host's DESCRIPTOR, so it is read from the sentinel-free
+# `inspect-dispatch-isolation`. The re-record above already wrote it into the
+# sentinel with the mode (#3045: a forced `harness-worktree` keeps the host's
+# flag), so this read records nothing. A plain `query dispatch-isolation`
+# here would hold a per-plan degrade already recorded for another plan of
+# this run and answer `none` with no flag (#4904), stopping the whole wave.
+HARNESS_FLAG=$(gsd_run query inspect-dispatch-isolation --json 2>/dev/null \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.harnessFlag?j.harnessFlag:"")}catch{process.stdout.write("")}})')
 [ -n "$HARNESS_FLAG" ] || { echo "FATAL: runtime declares dispatch.isolation=harness-worktree but no harnessIsolationFlag — refusing to dispatch executors that would believe they are isolated." >&2; exit 1; }
 ```
@@ -138,21 +161,21 @@ Every entry with `needsReconciliation: true` (recorded running, process gone) is
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
-**Before running the bash block, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{plan_number}` and `{phase_number}` with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
+**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}`, `{plan_padded}`, `{plan_id}`, `{phase_name}`, `{project_rel}`, `{state_rel}`, `{config_rel}`, `{prior_wave_summaries}` and `{worker_note}` wherever a bash block or the prompt template uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
 
 First build the executor prompt. It is the **same prompt text the harness path's `Agent()` call uses** — same executor identity, same execution context, same required-reading contract — with only the harness-only framing removed: drop the `<worktree_branch_check>` build-time embed note (this backend pins the base itself via `worktree create --base` and verifies it at merge) and the `<parallel_execution>` harness block (its SUMMARY-commit semantics ride inside the embedded `execute-plan.md` worktree mode). Keep `<objective>`, `<execution_context>`, `<required_reading>`, `${AGENT_SKILLS}`, and `<success_criteria>` from the harness prompt — substituting the worktree-specific `<execution_context>` framing below. The checkpoint gate rule (#3370, in `per-plan-executor-routing.md`) applies here too: add no prompt text refusing or overriding auto-approval for the default `gate="blocking"` — only `blocking-human` always surfaces.
 
-#3637: the process-spawned child has NO host subagent machinery — nothing loads the `gsd-executor` agent definition or the execute-plan workflow unless THIS prompt carries them. A short objective-only prompt forces the child to reconstruct its role from the repository (skill discovery, inference) and leaves it unaware of the gitignored-planning skip semantics, which is how executors ended up force-staging gitignored `SUMMARY.md` files to satisfy an unconditional commit criterion. Build-time embeds below are therefore MANDATORY, and the resolution check after the assignment fails closed: if any embed source cannot be read, do NOT spawn a generic process and hope — halt the wave (the fail-closed check after `dispatch-isolation` handles the worktree teardown).
+#3637: the process-spawned child has NO host subagent machinery — nothing loads the `gsd-executor` agent definition or the execute-plan workflow unless THIS prompt carries them. A short objective-only prompt forces the child to reconstruct its role from the repository (skill discovery, inference) and leaves it unaware of the gitignored-planning skip semantics, which is how executors ended up force-staging gitignored `SUMMARY.md` files to satisfy an unconditional commit criterion. Build-time embeds below are therefore MANDATORY, and the empty-prompt and placeholder checks after the read fail closed: if any embed source cannot be read, do NOT spawn a generic process and hope — halt the wave (the fail-closed check after `dispatch-isolation` handles the worktree teardown).
 
-Assign the composed prompt to a shell variable so it can be passed as one argument:
+Create the prompt file for THIS plan; the block prints its path as `PROMPT_FILE=<path>`:
 
 ```bash
-# Compose the executor prompt for THIS plan. Single-quoted multi-line
-# assignment (NOT a heredoc): these blocks are indented inside the workflow,
-# and a heredoc terminator must sit at column 0 — `<<-` strips only tabs, not
-# the leading spaces, so a heredoc here would never terminate. Single quotes
-# also stop the shell expanding anything in the prompt body — the prompt MUST
-# contain no single-quote character.
+# Compose the executor prompt for THIS plan (#5531). The prompt text below the
+# block is written to PROMPT_FILE with your file-writing tool, never through
+# the shell, so every substituted or inlined text (the ${AGENT_SKILLS} value,
+# the role definition, the execute-plan/summary/checkpoints files) reaches the
+# prompt unchanged whatever quote characters it holds — apostrophes in a
+# persona must NEVER be escaped or stripped.
 #
 # ORCHESTRATOR BUILD-TIME EMBEDS (do these BEFORE the spawn, in order):
 #   1. Inline each file listed in <execution_context> verbatim, in order.
@@ -192,7 +215,31 @@ if [ $_TDD_APPLICABLE_RC -ne 0 ]; then
 fi
 TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
-EXECUTOR_PROMPT='<objective>
+# The prompt file lives under ORCH_ROOT/.claude, inside every host's writable
+# root (the worktrees live there too). Its name is keyed by plan so the
+# read-and-check block finds it by name pattern; leftover files of this plan are removed first.
+# The name carries this wave's manifest name, so two orchestrators in one checkout never touch
+# each other's file for the same phase and plan numbers. A prompt file a crashed wave left
+# behind is swept once it is a day old.
+# The halts that #5531 adds exit with codes of the exit-code registry (docs/reference/exit-codes.md),
+# chosen by meaning: every one is 69 UNAVAILABLE (a prerequisite is absent or the input is
+# unreadable): the directory, the file or a leftover cannot be created or removed, the read-and-check
+# block finds no prompt file or more than one, or the file holds a NUL byte or cannot be read.
+# The guards that were already here keep exit 1.
+_PROMPT_PREFIX='gsd-executor-prompt'
+_PROMPT_STEM="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}"
+mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 69; }
+find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_PREFIX}-*" -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || :
+find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -type f -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 69; }
+PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 69; } # XXXXXX path-final on BSD/macOS (#1520)
+echo "PROMPT_FILE=$PROMPT_FILE"
+echo "TDD_APPLICABLE=$TDD_APPLICABLE"
+```
+
+Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted. Resolve the conditional embed line of the template from the verdict line block 1 printed after `PROMPT_FILE=`: replace the whole line, its trailing `#` comment included, with `- tdd.md` when the verdict is `true` and with nothing otherwise, and never guess it. `mktemp` created that file empty, so a file tool that refuses to overwrite a file it has not read must read it first:
+
+```text
+<objective>
 Execute plan {plan_number} of phase {phase_number}-{phase_name}.
 [gsd:dispatch phase="{phase_number}" plan="{plan_id}"]
 Commit each task atomically. Create SUMMARY.md.
@@ -258,7 +305,44 @@ ${AGENT_SKILLS}
       Never force-stage gitignored planning artifacts: git add -f on
       .planning paths is forbidden. An intentional skip is a success path.
 - [ ] No modifications to shared orchestrator artifacts (the orchestrator handles all post-wave shared-file writes)
-</success_criteria>'
+</success_criteria>
+```
+
+Then read it back and check it:
+
+```bash
+# This block runs as its own command: it finds the file block 1 created by the
+# same plan-keyed name pattern, so no path text is spliced into shell source.
+# `find` takes the pattern as an argument: an unmatched pattern is not a shell
+# glob error under bash or zsh. No match, or more than one, halts. The exit codes of
+# these halts are listed in block 1.
+_PROMPT_PREFIX='gsd-executor-prompt'
+_PROMPT_NAME="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}-??????"
+# Count the matches, not the lines of the output, so a newline in a path cannot read as two files.
+_PROMPT_HITS=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -type f -name "$_PROMPT_NAME" -exec printf x \; 2>/dev/null || :)
+if [ "${#_PROMPT_HITS}" -ne 1 ]; then
+  find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
+  echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
+  exit 69
+fi
+PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -type f -name "$_PROMPT_NAME" 2>/dev/null)
+# Count bytes in the C locale: BSD tr stops at the first byte that is not valid in the user's locale.
+_PROMPT_BYTES=$(LC_ALL=C wc -c 2>/dev/null < "$PROMPT_FILE" || :)
+_PROMPT_NONNUL=$(LC_ALL=C tr -d '\000' 2>/dev/null < "$PROMPT_FILE" | LC_ALL=C wc -c || :)
+if [ -z "$_PROMPT_BYTES" ] || [ -z "$_PROMPT_NONNUL" ]; then
+  rm -rf -- "$PROMPT_FILE" || :
+  echo "FATAL: could not count the bytes of the executor prompt file for plan {plan_number}. Halting." >&2
+  exit 69
+fi
+if [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
+  rm -rf -- "$PROMPT_FILE" || :
+  echo "FATAL: executor prompt file for plan {plan_number} holds a NUL byte, which a shell variable cannot carry. Halting." >&2
+  exit 69
+fi
+if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE" 2>/dev/null && printf x); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
+EXECUTOR_PROMPT=${EXECUTOR_PROMPT%x}
+rm -rf -- "$PROMPT_FILE" || { echo "FATAL: could not remove the executor prompt file for plan {plan_number}. Halting." >&2; exit 69; }
+[ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 69; }
 [ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty for plan {plan_number}." >&2; exit 1; }
 # #3637 fail-closed verification. Two classes of check:
 #   (a) template completeness — the prompt must carry the required-reading
@@ -289,13 +373,17 @@ printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${AGENT_SKILLS}' && {
   echo "FATAL: executor prompt for plan {plan_number} still contains the un-substituted \${AGENT_SKILLS} marker — the role definition was not spliced in (#3637). Halting." >&2
   exit 1
 }
-printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE' && {
+if printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE'; then
   echo "FATAL: executor prompt for plan {plan_number} still contains the un-substituted \${TDD_APPLICABLE marker — the TDD-applicability decision was not resolved into the prompt (#4266). Halting." >&2
   exit 1
-}
+fi
 ```
 
-The prompt body must contain no single-quote character, since the assignment above is single-quoted; keep apostrophes out of it when editing.
+The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. The read-back appends a sentinel `x` inside the command substitution and strips it, which keeps the trailing newlines `$(...)` would drop, so a CRLF, a BOM or trailing newlines the file tool writes reach the executor as written. A prompt file that holds a NUL byte halts instead, because a shell variable cannot carry one.
+
+Run the blocks in one shell, each as its own command: `$ORCH_ROOT`, `$EXPECTED_BASE` and `$WAVE_WORKTREE_MANIFEST` stay set, and `$EXECUTOR_PROMPT` from the read-and-check block reaches the spawn block. No path text is handed from block 1 to the read-and-check block: it finds the file by the same plan-keyed name pattern block 1 created it with.
+
+The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes the file on every halt, the NUL halt included. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -rf --` on the path block 1 printed before halting.
 
 Then create the worktree and resolve the spawn:
 
@@ -320,10 +408,19 @@ CREATE_JSON=$(gsd_run query worktree.create \
 
 # 2. Resolve the host's headless-exec argv for that worktree. Descriptor
 #    data — command, args, cwd flag and prompt flag all come from the
-#    capability descriptor, so no host is named here.
+#    capability descriptor, so no host is named here. Scoped to this plan
+#    (#6303), so a hold reaches it only through a `none` this plan's own
+#    caller recorded, which per-plan-worktree-gate.md replaces for a plan
+#    decided `true` (#4904); a held host answer is exec:null and halts below.
 EXEC_JSON=$(gsd_run query dispatch-isolation --json \
+  --phase "${PHASE_NUMBER:-}" --plan "{plan_id}" \
   --cwd-target "$WT_PATH" \
   --prompt "$EXECUTOR_PROMPT")
+# A non-null executorRuntime with a null fallback means the plan declared executor_runtime and the
+# route resolved the TARGET runtime's exec: follow execute-phase/steps/cross-runtime-executor-dispatch.md
+# for the launch record (--executor-runtime) and reconciliation. The prompt above is reused unchanged.
+# That plan may reach this block on a phase whose ISOLATION is harness-worktree: the per-plan answer
+# from per-plan-worktree-gate.md Part 2 overrides the phase-level value for that plan only.
 
 # 3. MANDATORY fail-closed check. `dispatch-isolation` degrades to
 #    isolation:"none" / exec:null rather than exiting non-zero, so the

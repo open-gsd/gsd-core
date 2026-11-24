@@ -44,7 +44,8 @@ describe('#6213 execute-phase records the routed executor without a carried shel
   after(() => { cleanup(dir); });
 
   // The Part 2 block (the `if` that picks the forced-none or the re-resolve call), run per decision value.
-  const part2 = () => span(GATE, 'if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]', 'fi');
+  // Its `true` branch nests an `if` (the capability read), so the block ends at the comment after it.
+  const part2 = () => span(GATE, 'if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]', '# An EMPTY value');
   const runGate = (decision) => {
     fs.writeFileSync(log, '');
     return runBash(part2(), { stdout: '', rc: 0 }, {
@@ -65,9 +66,12 @@ describe('#6213 execute-phase records the routed executor without a carried shel
     const r = runGate('true');
     assert.equal(r.status, 0, r.stderr);
     const argv = calls(log);
-    assert.equal(argv.length, 1);
-    assert.deepEqual(argv[0], ['query', 'dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01-api']);
-    assert.ok(!argv[0].includes('--executor-type'));
+    // #6303: the per-plan call asks for --json so the plan's executorRuntime and fallback are readable.
+    // #4904: a plan not sent to another runtime then reads the host capability (the stub prints none,
+    // so the record stays plain and nothing is forced).
+    assert.deepEqual(argv.map((a) => a[1]), ['dispatch-isolation', 'inspect-dispatch-isolation']);
+    assert.deepEqual(argv[0], ['query', 'dispatch-isolation', '--json', '--phase', '02', '--plan', '02-01-api']);
+    assert.ok(!argv.some((a) => a.includes('--executor-type')));
   });
 
   test('an empty decision records nothing', () => {
@@ -75,23 +79,89 @@ describe('#6213 execute-phase records the routed executor without a carried shel
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(calls(log), []);
   });
+
+  // #6303 x #4904: the `true` branch forces the host's capability for every plan with an id, one that goes
+  // to another runtime included, so a held `none` of its own never outlives the hold; PLAN_DISPATCH stays
+  // the plain answer, which is where the orchestrator reads executorRuntime and fallback.
+  // This stub answers the plain --json query with the given JSON and the capability read with a mode.
+  const answeringStub = (dispatchJson) => [
+    `gsd_run() { { for a in "$@"; do printf '%s\\037' "$a"; done; printf '\\n'; } >> '${log}'; ` +
+      `case "$2" in dispatch-isolation) case " $* " in *" --json "*) printf '%s' '${dispatchJson}';; esac;; inspect-dispatch-isolation) printf harness-worktree;; esac; }`,
+  ];
+  const runTrue = (dispatchJson) => {
+    fs.writeFileSync(log, '');
+    return runBash(part2(), { stdout: '', rc: 0 }, {
+      preamble: ['PHASE_NUMBER=02; plan_id=02-01-api; USE_WORKTREES_FOR_PLAN=true', ...answeringStub(dispatchJson)],
+    });
+  };
+  const plainJson = ['query', 'dispatch-isolation', '--json', '--phase', '02', '--plan', '02-01-api'];
+
+  for (const [label, json] of [
+    ['goes to another runtime', '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":null,"held":false}'],
+    ['goes to another runtime, held', '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":null,"held":true}'],
+    ['stays on the host', '{"isolation":"harness-worktree","executorRuntime":null,"fallback":null,"held":false}'],
+    ['falls back, held', '{"isolation":"none","executorRuntime":"codex","fallback":"binary_absent","held":true}'],
+    // Any fallback reason means the host dispatches, whatever isolation field sits beside it.
+    ['names a fallback', '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":"binary_absent","held":false}'],
+  ]) {
+    test(`a plan that ${label} is forced to the host capability, and PLAN_DISPATCH stays the plain answer`, () => {
+      const r = runTrue(json);
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(calls(log), [
+        plainJson,
+        ['query', 'inspect-dispatch-isolation', '--raw'],
+        ['query', 'dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01-api', '--force-isolation', 'harness-worktree'],
+      ]);
+      assert.ok(r.stdout.includes(`PLAN_DISPATCH=${json}`), r.stdout);
+    });
+  }
 });
 
-describe('#6213 the phase-level dispatch-isolation call surfaces the truncation warning', { skip: SKIP }, () => {
+describe('#6213 the dispatch-isolation calls that can truncate surface the warning', { skip: SKIP }, () => {
   const DISPATCH = 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md';
 
   test('a warning the call writes to stderr reaches the orchestrator, and the raw value is still captured', () => {
-    const lines = span(DISPATCH, '_ISOLATION_RAW=$(gsd_run query dispatch-isolation', '_ISOLATION_RC=$?');
+    // The block reads the decision and `held` from one --json call (#4904), then takes the mode from it.
+    const lines = span(DISPATCH, '_ISOLATION_JSON=$(gsd_run query dispatch-isolation', '_ISOLATION_RAW=${_ISOLATION_FIELDS% *}');
     const r = runBash(lines, { stdout: '', rc: 0 }, {
       preamble: [
         'PHASE_NUMBER=02',
-        'gsd_run() { echo "STUB-TRUNCATION-WARNING" >&2; printf harness-worktree; }',
+        'gsd_run() { echo "STUB-TRUNCATION-WARNING" >&2; printf \'{"isolation":"harness-worktree","held":false}\'; }',
       ],
       probe: 'printf "RAW=%s RC=%s\\n" "$_ISOLATION_RAW" "$_ISOLATION_RC"',
     });
     assert.equal(r.status, 0, r.stderr);
     assert.ok(r.stderr.includes('STUB-TRUNCATION-WARNING'), `the call's stderr must stay visible: ${r.stderr}`);
     assert.equal(r.stdout.trim(), 'RAW=harness-worktree RC=0', 'the warning does not leak into the captured value');
+  });
+
+  test('the dispatch-isolation gate\'s unscoped query lets the same warning reach the orchestrator (#4904)', () => {
+    // dispatch-isolation-gate.md's query names no phase, so its record lists every phase's hinted executors
+    // and is the one most likely to be truncated; its warning must not be discarded.
+    const lines = span('gsd-core/references/dispatch-isolation-gate.md',
+      '_ISOLATION_JSON=$(gsd_run query dispatch-isolation', '_ISOLATION_RAW=${_ISOLATION_FIELDS% *}');
+    const r = runBash(lines, { stdout: '', rc: 0 }, {
+      preamble: ['gsd_run() { echo "STUB-TRUNCATION-WARNING" >&2; printf \'{"isolation":"harness-worktree","held":false}\'; }'],
+      probe: 'printf "RAW=%s RC=%s\\n" "$_ISOLATION_RAW" "$_ISOLATION_RC"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stderr.includes('STUB-TRUNCATION-WARNING'), `the call's stderr must stay visible: ${r.stderr}`);
+    assert.equal(r.stdout.trim(), 'RAW=harness-worktree RC=0', 'the warning does not leak into the captured value');
+  });
+
+  test('the per-plan gate\'s plan-scoped query lets a held query\'s warning reach the orchestrator (#4904)', () => {
+    // A held plan query writes its executor identity to a record of its own and warns on stderr when it cannot;
+    // the per-plan gate's capture must not discard that warning.
+    const lines = span(GATE, 'PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation', 'PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation');
+    assert.equal(lines.length, 1, 'the capture is one line');
+    const r = runBash(lines, { stdout: '', rc: 0 }, {
+      preamble: ['PHASE_NUMBER=02; plan_id=02-01-api',
+        'gsd_run() { echo "STUB-HELD-IDENTITY-WARNING" >&2; printf \'{"isolation":"none","held":true}\'; }'],
+      probe: 'printf "JSON=%s\\n" "$PLAN_DISPATCH_JSON"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stderr.includes('STUB-HELD-IDENTITY-WARNING'), `the call's stderr must stay visible: ${r.stderr}`);
+    assert.equal(r.stdout.trim(), 'JSON={"isolation":"none","held":true}', 'the warning does not leak into the captured value');
   });
 });
 

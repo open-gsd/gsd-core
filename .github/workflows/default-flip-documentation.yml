@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
         with:
-          # Intentionally shallow — see tests/policy-lint-shallow-checkout.test.cjs.
+          # Intentionally shallow — see the policy-lint-shallow-checkout text contract.
           fetch-depth: 50
       - name: Fetch base ref for diff
         # git show origin/<base>:<path> needs the base ref present locally;

@@ -70,6 +70,13 @@ export interface ScopeOptions {
   commitsOnly?: boolean;
   /** Plan/quick units only: only commits made since this git date ("1 hour ago", "2026-10-01"). */
   committedSince?: string;
+  /**
+   * Plan/quick units only: look the commits up across every local branch instead of the ones reachable from `ref`,
+   * and report the newest commit's time as `latestCommitTime` (#6117). For a progress probe: a worktree executor's
+   * commits sit on its own unmerged agent branch until the wave merges. The gates keep the reachable-from-ref
+   * contract (#5164); only this explicit opt-in widens the lookup.
+   */
+  allBranches?: boolean;
   /** Git runner. Default: `execGit` from shell-command-projection. */
   execGit?: GitRunner;
   /** Shas per git argv chunk (default 400, safely under the Windows 32,767-char limit). A test seam. */
@@ -105,6 +112,8 @@ export interface EvaluationScope {
    */
   reason: string | null;
   commits: ScopeCommit[];
+  /** Only with `allBranches`: the committer time (unix seconds) of the newest matching commit, or null when none matched. */
+  latestCommitTime?: number | null;
   /** Every path the scope touched, deleted ones included. */
   changedFiles: string[];
   /** `changedFiles` that exist on disk — the reviewable set. */
@@ -118,6 +127,11 @@ export interface EvaluationScope {
   outsideUnion: string[];
   /** Listed commit ids not reachable from the ref (other branch, dropped by a rebase), by name. */
   unreachable: string[];
+  /**
+   * Phase units: the live SUMMARY files that have a `## Task Commits` section from which no commit id could be read, by
+   * name. Their work is not in the scope, so a reviewer must be told rather than left to assume the scope is complete (#6215).
+   */
+  unparsedSummaries: string[];
   /** The phase-start anchor (parent of the commit that first added the phase dir); null if none. */
   rangeBase: string | null;
 }
@@ -142,8 +156,21 @@ const MAX_ID_LOOKUPS = 1024;
 
 const TASK_COMMITS_HEADING = /^## Task Commits[ \t\r]*$/;
 const NEXT_HEADING = /^## /;
-const TASK_ROW_PREFIX = /^[ \t]*(?:[0-9]+\.|[-*])?[ \t]*\*\*Task[ \t]+[0-9]+:/;
+// `**Task N:` with an optional qualifier between the number and the colon (`**Task 1 (tracer):**`, `**Task 1 RED:**`, #6215).
+const TASK_ROW_PREFIX = /^[ \t]*(?:(?:[0-9]+\.|[-*])[ \t]*)?\*\*Task[ \t]+[0-9]+(?:[^0-9:*\r\n][^:*\r\n]*)?:/;
+// A task row the strict label does not recognise (`**Task 1 - tracer**`, `**Task 1 (x)**:`): counted as an unread row.
+const TASK_ROW_LOOSE = /^[ \t]*(?:(?:[0-9]+\.|[-*])[ \t]*)?\*\*Task[ \t]+[0-9]+/;
+// A list item nested under a task row (`  - RED \`<sha>\``): the TDD commits gsd-executor writes under the task (#6215).
+const SUB_BULLET = /^([ \t]+)(?:[-*+]|[0-9]+\.)[ \t]/;
+const PLAN_METADATA_LINE = /\*\*Plan metadata:?\*\*/;
 const HEX_TOKEN = /`[0-9a-f]{7,40}`/g;
+
+/** Indentation width in columns, a tab advancing to the next multiple of 4. */
+function indentWidth(line: string): number {
+  let width = 0;
+  for (const ch of /^[ \t]*/.exec(line)?.[0] ?? '') width = ch === '\t' ? width + 4 - (width % 4) : width + 1;
+  return width;
+}
 
 /**
  * The commit ids a SUMMARY names, in document order, duplicates included. Section-scoped (every
@@ -152,20 +179,56 @@ const HEX_TOKEN = /`[0-9a-f]{7,40}`/g;
  * counts, so a sha quoted in prose or on the `**Plan metadata:**` line is not a task commit.
  */
 export function extractTaskCommitRefs(text: string): string[] {
+  return scanTaskCommits(text).refs;
+}
+
+/**
+ * `extractTaskCommitRefs` plus whether the text has a `## Task Commits` section and how many task rows yielded no id.
+ * A task row may carry a qualifier before its colon, and the backticked ids on the first list level nested under a task
+ * row (deeper than the row; wrapped continuation lines allowed, a blank line or an unindented line ends the row) belong
+ * to that row, so a TDD task's RED and GREEN sub-bullets are read (#6215).
+ */
+function scanTaskCommits(text: string): { refs: string[]; sectionFound: boolean; unreadRows: number } {
   const refs: string[] = [];
   let inside = false;
+  let sectionFound = false;
+  let unreadRows = 0;
+  let rowIndent = -1; // column of the task row whose sub-bullets are being read; -1 when none
+  let rowIds = 0;
+  let subIndent = -1; // column of the first nested list level under that row
+  const tokens = (from: string): void => {
+    const found = from.match(HEX_TOKEN) ?? [];
+    for (const token of found) refs.push(token.slice(1, -1));
+    rowIds += found.length;
+  };
+  const endRow = (): void => {
+    if (rowIndent !== -1 && rowIds === 0) unreadRows += 1;
+    rowIndent = -1; rowIds = 0; subIndent = -1;
+  };
   for (const line of text.split('\n')) {
-    if (TASK_COMMITS_HEADING.test(line)) { inside = true; continue; }
-    if (NEXT_HEADING.test(line)) { inside = false; continue; }
+    if (TASK_COMMITS_HEADING.test(line)) { endRow(); inside = true; sectionFound = true; continue; }
+    if (NEXT_HEADING.test(line)) { endRow(); inside = false; continue; }
     if (!inside) continue;
     const row = TASK_ROW_PREFIX.exec(line);
-    if (!row) continue;
-    const rest = line.slice(row[0].length);
-    const close = rest.indexOf('**');
-    if (close === -1) continue;
-    for (const token of rest.slice(close + 2).match(HEX_TOKEN) ?? []) refs.push(token.slice(1, -1));
+    if (row) {
+      endRow();
+      rowIndent = indentWidth(line);
+      const rest = line.slice(row[0].length);
+      const close = rest.indexOf('**');
+      if (close !== -1) tokens(rest.slice(close + 2));
+      continue;
+    }
+    if (TASK_ROW_LOOSE.test(line)) { endRow(); unreadRows += 1; continue; }
+    if (rowIndent === -1) continue;
+    if (line.trim() === '' || indentWidth(line) <= rowIndent) { endRow(); continue; }
+    const nested = SUB_BULLET.exec(line);
+    if (!nested) continue; // a wrapped continuation of the row's description
+    const width = indentWidth(line);
+    if (subIndent === -1 || width < subIndent) subIndent = width;
+    if (width === subIndent && !PLAN_METADATA_LINE.test(line)) tokens(line);
   }
-  return refs;
+  endRow();
+  return { refs, sectionFound, unreadRows };
 }
 
 // ─── Plan-id → anchored subject pattern ───────────────────────────────────────
@@ -335,6 +398,18 @@ const SUB_REPO_GIT_HARDENING: readonly string[] = [
   '-c', 'core.fsmonitor=false', '-c', 'log.showSignature=false', '-c', 'gpg.program=false',
 ];
 
+/**
+ * #6272: every `git log` and `git show` whose output this module parses (a sha, a time, a name list) states
+ * `--no-show-signature`.
+ * The single-repo path keeps the user's git config, and with `log.showSignature=true` a signed commit's `gpg:` lines
+ * land before its record, so the parser read the first field as something other than a sha and dropped the commit
+ * silently, and a `git show --name-only` listed the `gpg:` text as file names. The flag is also stated on the sub_repos
+ * path, where `SUB_REPO_GIT_HARDENING` already sets the config. The name-listing calls likewise state
+ * `-c diff.relative=false`: a user's `diff.relative=true` strips the working directory's prefix from the listed
+ * paths, which the repo-root join then reports as missing (a config, not an option, so every git version accepts it).
+ */
+const NO_SHOW_SIGNATURE = '--no-show-signature';
+
 function makeGit(projectDir: string, runner: GitRunner, leading: readonly string[] = []): Git {
   return (args, cwd = projectDir) => {
     const result = runner([...leading, ...args], { cwd });
@@ -435,7 +510,7 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
 function emptyScope(unit: ScopeUnit): EvaluationScope {
   return {
     unit, status: 'resolved', source: 'none', reason: null, commits: [],
-    changedFiles: [], files: [], missingOnDisk: [], outsideUnion: [], unreachable: [], rangeBase: null,
+    changedFiles: [], files: [], missingOnDisk: [], outsideUnion: [], unreachable: [], unparsedSummaries: [], rangeBase: null,
   };
 }
 
@@ -555,7 +630,7 @@ const withPrefix = (prefix: string, file: string): string => (prefix === '' ? fi
 function commitTimes(git: Git, shas: readonly string[]): Map<string, number> {
   const times = new Map<string, number>();
   for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct', ...group]).split('\n')) {
+    for (const line of git(['log', NO_SHOW_SIGNATURE, '--no-walk=unsorted', '--format=%H%x1f%ct', ...group, '--']).split('\n')) {
       const [sha, time] = line.split('\x1f');
       if (sha && time !== undefined && /^[0-9]+$/.test(time)) times.set(sha, Number(time));
     }
@@ -642,7 +717,9 @@ function resolveAcrossSources(projectDir: string, unit: ScopeUnit, options: Scop
 
   const finished = found.map((entry, index) => {
     const part = emptyScope(unit);
-    finishSubjectScope(part, entry.source.git, kept.filter((k) => k.index === index).map((k) => k.commit), entry.lookup.parentsOf, entry.opts, entry.source.repoRoot);
+    // The newest time is taken across the repos below; the per-repo part must not look the times up again.
+    const partOptions = entry.opts.allBranches === true ? { ...entry.opts, allBranches: false } : entry.opts;
+    finishSubjectScope(part, entry.source.git, kept.filter((k) => k.index === index).map((k) => k.commit), entry.lookup.parentsOf, partOptions, entry.source.repoRoot);
     return part;
   });
   const byRepo = new Map<string, ScopeCommit>();
@@ -651,6 +728,14 @@ function resolveAcrossSources(projectDir: string, unit: ScopeUnit, options: Scop
     for (const commit of part.commits) byRepo.set(commit.sha, withSourcePrefix(commit, prefix));
   });
   scope.commits = kept.map((k) => byRepo.get(k.commit.sha) ?? k.commit);
+  if (options.allBranches === true) {
+    const keptTimes = kept.flatMap((k) => {
+      const time = found[k.index]?.times.get(k.commit.sha);
+      return time === undefined ? [] : [time];
+    });
+    if (kept.length > 0 && keptTimes.length === 0) throw new ScopeUnreadable('commit-time-unreadable');
+    scope.latestCommitTime = kept.length === 0 ? null : Math.max(...keptTimes);
+  }
   const gather = (pick: (part: EvaluationScope) => string[]): string[] =>
     uniqueSorted(finished.flatMap((part, index) => pick(part).map((f) => withPrefix(found[index]?.source.prefix ?? '', f))));
   scope.changedFiles = gather((part) => part.changedFiles);
@@ -717,6 +802,7 @@ function resolvePhaseAcrossSources(
     merged.status = 'degraded';
     merged.source = 'phase-range';
     merged.reason = `${parts[0]?.part.reason ?? 'no-task-commits'}:no-phase-start-anchor`;
+    merged.unparsedSummaries = [...gathered.unparsed].sort();
     return merged;
   }
   merged.status = taken.length > 0 ? 'resolved' : 'degraded';
@@ -736,6 +822,8 @@ function resolvePhaseAcrossSources(
   merged.files = gather((part) => part.files);
   merged.missingOnDisk = gather((part) => part.missingOnDisk);
   merged.outsideUnion = gather((part) => part.outsideUnion);
+  // The unparsed SUMMARYs belong to the workspace's phase directory, not to a repo: no prefix.
+  merged.unparsedSummaries = uniqueSorted(pick.flatMap(({ part }) => part.unparsedSummaries));
   return merged;
 }
 
@@ -747,6 +835,8 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
   try {
     if (!isSafeRefArgument(ref)) throw new ScopeUnreadable('unsafe-ref');
     if (options.since !== undefined && !isSafeRefArgument(options.since)) throw new ScopeUnreadable('unsafe-since');
+    // #6117: the all-branches lookup is a plan/quick progress probe; a phase window is a range of one ref.
+    if (options.allBranches === true && unit.kind === 'phase') throw new ScopeUnreadable('all-branches-needs-plan-or-quick');
     // #5867: a `planning.sub_repos` workspace keeps its history in the sub-repos, not at the root.
     const subRepoNames = readSubRepoNames(projectDir);
     if (subRepoNames.length > 0) return resolveAcrossSources(projectDir, unit, options, openSources(projectDir, subRepoNames, runner, ref), ref);
@@ -758,7 +848,7 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
     return scope;
   } catch (error) {
     const reason = error instanceof ScopeUnreadable ? error.reason : 'resolver-error';
-    return { ...emptyScope(unit), status: 'unresolvable', reason };
+    return { ...emptyScope(unit), status: 'unresolvable', reason, unparsedSummaries: scope.unparsedSummaries };
   }
 }
 
@@ -817,18 +907,18 @@ function commitFiles(git: Git, sha: string, parents: number): string[] {
   if (parents > 1) {
     if (parents !== 2 || !supportsRemergeDiff(git)) return [];
     return splitNul(git(
-      ['-c', 'core.quotepath=off', 'show', '--remerge-diff', '--pretty=format:', '--name-only', '-z', sha, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
+      ['-c', 'core.quotepath=off', '-c', 'diff.relative=false', 'show', NO_SHOW_SIGNATURE, '--remerge-diff', '--pretty=format:', '--name-only', '-z', sha, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
     ));
   }
   const out = git(
-    ['-c', 'core.quotepath=off', 'show', '--first-parent', '--pretty=format:', '--name-only', '-z', sha, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
+    ['-c', 'core.quotepath=off', '-c', 'diff.relative=false', 'show', NO_SHOW_SIGNATURE, '--first-parent', '--pretty=format:', '--name-only', '-z', sha, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
   );
   return splitNul(out);
 }
 
 function rangeFiles(git: Git, base: string, tip: string): string[] {
   const out = git(
-    ['-c', 'core.quotepath=off', 'diff', '--name-only', '-z', `${base}..${tip}`, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
+    ['-c', 'core.quotepath=off', '-c', 'diff.relative=false', 'diff', '--name-only', '-z', `${base}..${tip}`, '--', '.', ...SCOPE_EXCLUSION_PATHSPECS],
   );
   return splitNul(out);
 }
@@ -870,7 +960,7 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): Scope
 function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
+    out.push(...parseLog(git(['log', NO_SHOW_SIGNATURE, '--no-walk=unsorted', logFormat(withBody), ...group, '--']), withBody, parentsOut));
   }
   return out;
 }
@@ -910,7 +1000,7 @@ function forkedAtOrBeforePhaseStart(git: Git, p1: string, p2: string, rangeBase:
 function phaseSideFiles(git: Git, tip: string, p2: string, rangeBase: string, mergeSha: string): Set<string> {
   const files = new Set<string>();
   const out = git([
-    '-c', 'core.quotepath=off', 'log', '-m', '--format=%x01%H', '--name-only', '-z', tip, `^${p2}`,
+    '-c', 'core.quotepath=off', '-c', 'diff.relative=false', 'log', NO_SHOW_SIGNATURE, '-m', '--format=%x01%H', '--name-only', '-z', tip, `^${p2}`,
     ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--', '.', ...SCOPE_EXCLUSION_PATHSPECS,
   ]);
   let own = false;
@@ -933,12 +1023,12 @@ function baseSideMergeFiles(
     if (parents.length !== 2) continue;
     const [p1 = '', p2 = ''] = parents;
     try {
-      const secondSide = git(['rev-list', p2, `^${p1}`]).split('\n').filter(Boolean);
+      const secondSide = git(['rev-list', p2, `^${p1}`, '--']).split('\n').filter(Boolean);
       if (secondSide.some((entry) => listed.has(entry))) continue;
       // One walk of the second parent's history after the phase start, intersected with the listed
       // non-merge commits (never one ancestry spawn per listed commit).
       const reachable = new Set(git([
-        'rev-list', p2, ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]),
+        'rev-list', p2, ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--',
       ]).split('\n').filter(Boolean));
       if (listedNonMerge.some((entry) => reachable.has(entry))) continue;
       if (!forkedAtOrBeforePhaseStart(git, p1, p2, rangeBase)) continue;
@@ -969,7 +1059,7 @@ function newestOf(git: Git, shas: readonly string[], chunkSize: number): string 
     const tips = chunk(shas, chunkSize).map((group) => newestOf(git, group, chunkSize));
     return newestOf(git, tips, chunkSize);
   }
-  const tip = git(['rev-list', '--topo-order', '-n', '1', ...shas]).split('\n').filter(Boolean)[0];
+  const tip = git(['rev-list', '--topo-order', '-n', '1', ...shas, '--']).split('\n').filter(Boolean)[0];
   return tip ?? shas[0] ?? 'HEAD';
 }
 
@@ -988,7 +1078,7 @@ const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
  * anchor is the empty tree — `<empty>..<ref>` then includes the root commit's own files.
  */
 function phaseRangeBase(git: Git, phaseDir: string, ref: string): string | null {
-  const first = git(['log', ref, '--format=%H', '--diff-filter=A', '--', '.'], phaseDir)
+  const first = git(['log', NO_SHOW_SIGNATURE, ref, '--format=%H', '--diff-filter=A', '--', '.'], phaseDir)
     .split('\n').filter(Boolean).pop();
   if (!first) return null;
   return gitOrNo(git, ['rev-parse', '--verify', '--quiet', `${first}^`]) ?? EMPTY_TREE;
@@ -999,6 +1089,8 @@ interface PhaseGather {
   /** Every `## Task Commits` id of the live SUMMARY set, in document order, duplicates included. */
   refs: string[];
   summaryCount: number;
+  /** The live SUMMARYs whose `## Task Commits` section yielded no id (#6215). */
+  unparsed: string[];
 }
 
 function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; phaseDir?: string }): PhaseGather {
@@ -1011,6 +1103,7 @@ function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; p
   if (!phaseDir) throw new ScopeUnreadable('phase-dir-not-found');
 
   const refs: string[] = [];
+  const unparsed: string[] = [];
   let summaryCount = 0;
   // The canonical LIVE summary set (root + nested, superseded excluded) from its single owner. A scan
   // that did not see every summary (an existing nested plans/ that could not be read) is "could not
@@ -1020,13 +1113,15 @@ function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; p
   const entries = [...planScan.value.summaryFiles].sort();
   for (const name of entries) {
     try {
-      refs.push(...extractTaskCommitRefs(fs.readFileSync(path.join(phaseDir, name), 'utf-8')));
+      const scanned = scanTaskCommits(fs.readFileSync(path.join(phaseDir, name), 'utf-8'));
+      refs.push(...scanned.refs);
+      if (scanned.sectionFound && (scanned.refs.length === 0 || scanned.unreadRows > 0)) unparsed.push(name.replace(/\p{Cc}/gu, '?'));
       summaryCount += 1;
     } catch {
       throw new ScopeUnreadable(`summary-unreadable:${name}`);
     }
   }
-  return { phaseDir, refs, summaryCount };
+  return { phaseDir, refs, summaryCount, unparsed };
 }
 
 /**
@@ -1041,7 +1136,8 @@ function resolvePhase(
   git: Git, ref: string, options: ScopeOptions, repoRoot: string,
   gathered?: PhaseGather, anchored = true, partial = false, notAfter?: number,
 ): void {
-  const { phaseDir, refs, summaryCount } = gathered ?? gatherPhase(projectDir, unit);
+  const { phaseDir, refs, summaryCount, unparsed } = gathered ?? gatherPhase(projectDir, unit);
+  scope.unparsedSummaries = [...unparsed].sort();
 
   // Resolve each listed id to a full sha reachable from the ref (and, for wave scoping, newer than `since`).
   const shas: string[] = [];
@@ -1116,7 +1212,7 @@ function resolvePhase(
   scope.source = 'phase-range';
   const max = clampMaxCommits(options.maxCommits);
   scope.commits = parseLog(
-    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max)]),
+    git(['log', NO_SHOW_SIGNATURE, `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max), '--']),
     options.includeBody === true,
   );
   finalizeFiles(scope, repoRoot, rangeFiles(git, scope.rangeBase, ref));
@@ -1167,8 +1263,9 @@ function lookupSubjectCommits(
     if (!isSafeDateArgument(options.committedSince)) throw new ScopeUnreadable('unsafe-committed-since');
     sinceArgs.push(`--since=${options.committedSince}`);
   }
+  const rangeArgs = options.allBranches === true ? ['--branches'] : [range];
   const out = git(
-    ['log', range, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
+    ['log', NO_SHOW_SIGNATURE, ...rangeArgs, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, '--', ...pathspecs],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
   const parentsOf: ParentMap = new Map();
@@ -1182,6 +1279,13 @@ function lookupSubjectCommits(
 function finishSubjectScope(
   scope: EvaluationScope, git: Git, commits: readonly ScopeCommit[], parentsOf: ParentMap, options: ScopeOptions, repoRoot: string,
 ): void {
+  if (options.allBranches === true) {
+    const times = commitTimes(git, commits.map((c) => c.sha));
+    const known = commits.flatMap((c) => (times.has(c.sha) ? [times.get(c.sha) as number] : []));
+    // A commit whose time cannot be read is "could not look", never a time of 0 beside non-empty commits.
+    if (commits.length > 0 && known.length === 0) throw new ScopeUnreadable('commit-time-unreadable');
+    scope.latestCommitTime = commits.length === 0 ? null : Math.max(...known);
+  }
   if (options.commitsOnly === true) {
     scope.commits = [...commits];
     if (commits.length === 0) scope.reason = 'no-matching-commits';
@@ -1220,7 +1324,7 @@ function resolveBySubject(
 // ─── The `check evaluation-scope` verb ────────────────────────────────────────
 
 const VALUE_FLAGS = new Set(['--phase', '--phase-dir', '--plan', '--quick', '--since', '--ref', '--pathspec', '--committed-since', '--max-commits']);
-const BOOLEAN_FLAGS = new Set(['--milestone-bound', '--include-body', '--include-files', '--commits-only']);
+const BOOLEAN_FLAGS = new Set(['--milestone-bound', '--include-body', '--include-files', '--commits-only', '--all-branches']);
 
 function parseScopeArgs(args: readonly string[]): { unit: ScopeUnit; options: ScopeOptions } | string {
   const values = new Map<string, string[]>();
@@ -1266,6 +1370,11 @@ function parseScopeArgs(args: readonly string[]): { unit: ScopeUnit; options: Sc
   if (flags.has('--include-body')) options.includeBody = true;
   if (flags.has('--include-files')) options.includeFiles = true;
   if (flags.has('--commits-only')) options.commitsOnly = true;
+  if (flags.has('--all-branches')) {
+    if (unit.kind === 'phase') return '--all-branches applies to --plan and --quick units only';
+    if (flags.has('--milestone-bound')) return '--all-branches and --milestone-bound cannot be combined: the milestone range is a range of one ref';
+    options.allBranches = true;
+  }
   return { unit, options };
 }
 

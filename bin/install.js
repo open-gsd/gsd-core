@@ -139,12 +139,20 @@ const GSD_CODEX_HOOKS_OWNERSHIP_PREFIX = '# GSD codex_hooks ownership: ';
 // when every direct key is one of these (named agent roles live in the flattened
 // `[agents.<name>]` sub-tables, a separate `AgentRoleToml`). GSD writes only
 // `max_depth` (ADR-1239 upgrade 2 / #2088); the full set is enumerated so the
-// schema check accepts a user's other legitimate AgentsToml scalars too.
+// schema check accepts a user's other legitimate AgentsToml scalars too (#6165:
+// `enabled`, `max_concurrent_threads_per_session`, `default_subagent_model` and
+// `default_subagent_reasoning_effort` joined the struct). Values are integers,
+// booleans or single-line strings; a multiline-string value is never accepted.
+// The schema validator and the user-scalar extractor both read this one set.
 const CODEX_AGENTS_TOML_SCALAR_KEYS = new Set([
+  'enabled',
   'max_threads',
+  'max_concurrent_threads_per_session',
   'max_depth',
   'job_max_runtime_seconds',
   'interrupt_message',
+  'default_subagent_model',
+  'default_subagent_reasoning_effort',
 ]);
 // GSD's managed dispatch-depth value. Codex's implicit default is also 1 (root
 // sessions start at depth 0); writing it EXPLICITLY pins the negotiated
@@ -625,6 +633,8 @@ const {
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
 // #5759: bounded config.json reader shared with the runtime (non-blocking open, regular file, 1 MiB cap).
 const { readConfigFileBounded } = require(path.join(_gsdLibDir, 'config-file-read.cjs'));
+// #6032: the owner names the project config path; the installer's walk-up probe takes it from there.
+const { rootConfigPath: gsdRootConfigPath } = require(path.join(_gsdLibDir, 'planning-workspace.cjs'));
 let _capabilityRegistry;
 try {
   _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
@@ -1007,6 +1017,20 @@ function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
   // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
   // #5715: the converter runs after the path above was emitted; shield it from the converter.
   return runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
+}
+
+/**
+ * #6158 — the Codex role sources in `agentsSrc`: every `gsd-*.md` EXCEPT the
+ * `*.compact.md` alternate renderings, sorted so the emit order never depends on
+ * the filesystem's directory order. A compact file is not a role: it shares its
+ * canonical sibling's frontmatter `name:`, so emitting it writes the same `.toml`
+ * twice. A compact file with no canonical sibling is therefore not emitted either
+ * (the same rule as tests/helpers/agent-roster.cjs).
+ */
+function codexAgentSourceFiles(agentsSrc) {
+  return fs.readdirSync(agentsSrc)
+    .filter(f => f.startsWith('gsd-') && f.endsWith('.md') && !f.endsWith('.compact.md'))
+    .sort();
 }
 
 function codexAgentTomlName(file, source) {
@@ -3391,7 +3415,9 @@ function _stripCallArgument(spanText, matchStart, matchEnd, { consumeLeadingComm
 /**
  * Replace a named-role argument token's `[matchStart, matchEnd)` span
  * (`subagent_type=`/`subagent_type:` + its value) with the projected
- * `gsd_role=` / role-prompt-resolution / structural-role argument group.
+ * `gsd_role=` / role-prompt-resolution / structural-role argument group (the
+ * `context=<role prompt>` / structural-role group for a `rolePromptResolution: 'context'`
+ * primitive such as Hermes's `delegate_task`, #6066).
  * Preserves the pretty multi-line one-arg-per-line style when the original
  * token owned its own line; falls back to an inline, comma-joined group for
  * the single-line-compact and object-literal forms.
@@ -3406,6 +3432,10 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
   }
   const lineStart = spanText.lastIndexOf('\n', matchStart - 1) + 1;
   const startsOwnLine = /^[ \t]*$/.test(spanText.slice(lineStart, matchStart));
+  // #6066: a primitive with no role parameters at all (Hermes `delegate_task`: goal / context / role ...) takes the
+  // resolved role prompt as the task's `context` (instructions, not a tool result the child could window or
+  // compact) and the plan as the first thing the child reads from `goal`. No `gsd_role` / `gsd_role_prompt`.
+  const contextMode = toolConfig.rolePromptResolution === 'context';
 
   // Consume an immediately-following separator comma (+ same-line whitespace/
   // newline) into `end` — never leave it dangling AFTER an injected trailing
@@ -3418,17 +3448,22 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
   if (afterMatch) end += afterMatch[0].length;
   const ownLine = startsOwnLine && hadTrailingComma && /\n$/.test(afterMatch[0]);
 
-  const promptContentPhrase =
-    `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
-    'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+  const promptContentPhrase = contextMode
+    ? `${toolConfig.contextParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and put ` +
+      `its full contents here as the task's instructions (never a pointer to the file); the \`${toolConfig.taskParam}\` ` +
+      'names the plan and tells the child to read it with read_file as a call of its own, first; FAIL CLOSED with an ' +
+      'explicit error if unresolved — never execute the role inline>'
+    : `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
+      'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+  const namedRolePart = contextMode ? '' : `${namedRoleParam}=${roleValueExpr},`;
 
   let replacement;
   if (ownLine) {
     const indent = spanText.slice(lineStart, matchStart);
     const depthNote = canOrchestrate ? '' : '  # nested delegation is unavailable at this dispatch depth/toolkit';
     replacement =
-      `${namedRoleParam}=${roleValueExpr},\n` +
-      `${indent}${promptContentPhrase},\n` +
+      (contextMode ? '' : `${namedRoleParam}=${roleValueExpr},\n${indent}`) +
+      `${promptContentPhrase},\n` +
       `${indent}${structuralRoleParam}="${leafRoleValue}",${depthNote}\n`;
   } else {
     // Inline forms never carry a trailing `#` comment mid-argument-list (it
@@ -3437,7 +3472,7 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
     // Re-emit exactly the separator that originally followed this argument
     // (a comma if more args follow; nothing if it was the last one).
     replacement =
-      `${namedRoleParam}=${roleValueExpr}, ${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
+      `${contextMode ? '' : namedRolePart + ' '}${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
       (hadTrailingComma ? ', ' : '');
   }
   return spanText.slice(0, matchStart) + replacement + spanText.slice(end);
@@ -3537,8 +3572,9 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
 
   // 1b. #5569: a tool-resolved primitive (`rolePromptResolution: 'tool'`) takes
   //     `role` + `task` only. The task text arrives as `prompt`, so the key is
-  //     renamed; `description` has no counterpart and is dropped.
-  if (toolConfig.rolePromptResolution === 'tool') {
+  //     renamed; `description` has no counterpart and is dropped. #6066: Hermes's `delegate_task`
+  //     (`rolePromptResolution: 'context'`) takes `goal` for the task text and has no `description` either.
+  if (toolConfig.rolePromptResolution === 'tool' || toolConfig.rolePromptResolution === 'context') {
     const pm = /\bprompt(\s*[=:])/.exec(_maskStringsAndComments(text));
     if (pm) {
       text = text.slice(0, pm.index) + toolConfig.taskParam + text.slice(pm.index + 'prompt'.length);
@@ -3546,6 +3582,16 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
     const dm = _callArgValueRe('description').exec(_maskStringsAndComments(text));
     if (dm) {
       text = _stripCallArgument(text, dm.index, dm.index + dm[0].length);
+    }
+  }
+
+  // 1c. #6066: Hermes's `delegate_task` (goal / context / role / background) has no `isolation` or `mode`
+  //     parameter, so a Claude-shaped `isolation="worktree"` / `mode="auto"` argument is dropped rather than
+  //     forwarded to a primitive that does not accept it.
+  if (toolConfig.rolePromptResolution === 'context') {
+    for (const key of ['isolation', 'mode']) {
+      const am = _callArgValueRe(key).exec(_maskStringsAndComments(text));
+      if (am) text = _stripCallArgument(text, am.index, am.index + am[0].length);
     }
   }
 
@@ -3762,7 +3808,7 @@ function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
  *
  * @param {string} content
  * @param {{namedDispatch?: boolean, nested?: boolean, maxDepth?: number, background?: boolean, backgroundDispatch?: boolean, subagentToolkit?: string}} dispatch
- * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string}} toolConfig
+ * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string, rolePromptResolution?: string, contextParam?: string, taskParam?: string}} toolConfig
  */
 function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig) {
   const d = dispatch || {};
@@ -3787,6 +3833,18 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
         'runs the role in an isolated child session; the child cannot dispatch further. FAIL CLOSED — surface the ' +
         `tool's error and stop — if it reports the role unresolved; never execute the role inline as a substitute. ` +
         `Always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
+      );
+    }
+    if (toolConfig.rolePromptResolution === 'context') {
+      return (
+        `${sessionName} has no \`Agent\` tool. It exposes \`${toolName}\`, which takes a \`${toolConfig.taskParam}\` and a ` +
+        `\`${toolConfig.contextParam}\` and has no named-role parameter. GSD projects each named gsd-* role onto it itself: ` +
+        `resolve the role's prompt file from the active install, load its contents, and put them in the task's ` +
+        `\`${toolConfig.contextParam}\` as the child's operating instructions (a pointer to the file is not enough: file reads ` +
+        `can be windowed, truncated and compacted). The \`${toolConfig.taskParam}\` names the plan and tells the child to read ` +
+        'it with `read_file` as a call of its own, as its first read. FAIL CLOSED — surface an explicit error and stop — ' +
+        'if a referenced role prompt cannot be resolved; never execute the role inline as a substitute. In a top-level ' +
+        `${sessionName} session, always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
       );
     }
     return (
@@ -3916,6 +3974,10 @@ const HERMES_DISPATCH_TOOL_CONFIG = Object.freeze({
   leafRoleValue: 'leaf',
   backgroundParam: 'background',
   supportsPerCallModel: false,
+  // #6066: `delegate_task` takes goal / context / role; the role prompt rides `context`.
+  rolePromptResolution: 'context',
+  contextParam: 'context',
+  taskParam: 'goal',
 });
 
 /**
@@ -4723,6 +4785,7 @@ function extractCodexUserAgentsScalars(content) {
     const key = record.keySegments[0];
     if (key === 'max_depth') continue; // GSD-managed — GSD's value wins.
     if (!CODEX_AGENTS_TOML_SCALAR_KEYS.has(key)) continue;
+    if (tomlAssignmentStartsMultilineString(record.text)) continue; // only its first line would be kept
     preserved.push(trimmed);
   }
   return preserved;
@@ -6315,6 +6378,14 @@ function parseTomlToObject(content) {
  *   - `hooks.<Event>` MUST be an array of tables when present (Codex ≥0.124
  *     rejects bare `[hooks.<Event>]` single-bracket maps).
  */
+/** True when a TOML assignment line's value opens a multiline string (triple single or double quote). */
+function tomlAssignmentStartsMultilineString(recordText) {
+  const equalsIndex = findTomlAssignmentEquals(recordText);
+  if (equalsIndex === -1) return false;
+  const value = recordText.slice(equalsIndex + 1).trimStart();
+  return value.startsWith("'''") || value.startsWith('"""');
+}
+
 /**
  * True when a bare `[agents]` table body contains ONLY known AgentsToml scalar
  * keys (CODEX_AGENTS_TOML_SCALAR_KEYS) — i.e. it is a valid AgentsToml struct
@@ -6326,10 +6397,9 @@ function codexBareAgentsHasOnlyKnownScalars(body) {
   const lineRecords = getTomlLineRecords(body);
   for (const record of lineRecords) {
     // Conservative reject of anything not positively a single known-scalar
-    // assignment. A multiline-string value cannot be a valid AgentsToml scalar
-    // (max_threads/max_depth/job_max_runtime_seconds are integers,
-    // interrupt_message is a bool — none are strings), so codex would reject it
-    // too; rejecting here is correct, not a false negative.
+    // assignment. The scalars are integers, booleans or single-line strings
+    // (model, reasoning effort, interrupt message), never a multiline string,
+    // so a multiline-string value is rejected here as codex would reject it.
     if (record.startsInMultilineString) return false;
     if (record.tableHeader) return false;
     const trimmed = record.text.trim();
@@ -6338,6 +6408,7 @@ function codexBareAgentsHasOnlyKnownScalars(body) {
         !CODEX_AGENTS_TOML_SCALAR_KEYS.has(record.keySegments[0])) {
       return false;
     }
+    if (tomlAssignmentStartsMultilineString(record.text)) return false;
   }
   return true;
 }
@@ -6818,6 +6889,9 @@ function repairTrappedFeaturesKeys(content) {
     if (record.start < featuresSection.headerEnd) return false;
     if (record.end + record.eol.length > featuresSection.end) return false;
     if (!record.keySegments || record.keySegments.length === 0) return false;
+    // #6165: a dotted assignment (`multi_agent_v2.<key> = …`) is a nested feature setting that is legitimately a
+    // `[features]` entry whatever its value; only a plain single-segment key can be trapped there.
+    if (record.keySegments.length > 1) return false;
 
     // Check if the value is a boolean — if so, it belongs under [features]
     const equalsIndex = findTomlAssignmentEquals(record.text);
@@ -7444,12 +7518,36 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   // rename / F1(b) sibling-clobber rows), asserted on the emitted `.toml`'s
   // `sandbox_mode`, not on the derivation's return value.
 
-  const agentEntries = fs.readdirSync(agentsSrc).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+  // #6158: one `.toml` per role, from the canonical source, in a fixed order. The
+  // roster is enumerated by `codexAgentSourceFiles` (no `*.compact.md` alternates,
+  // sorted), and every destination is resolved BEFORE any write so two sources that
+  // name the same role fail the install loudly instead of one silently overwriting
+  // the other.
+  const agentEntries = codexAgentSourceFiles(agentsSrc).map(file => {
+    const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
+    const name = codexAgentTomlName(file, source);
+    // Confine the per-agent write to the agents/ dir itself: a crafted agent
+    // `name` containing path separators must not escape agents/ (which would let
+    // it clobber config.toml or write elsewhere under the configHome). Resolved
+    // here, before any write, so a bad name never leaves earlier roles half-written.
+    return { file, source, name, agentTomlPath: assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`) };
+  });
+  // Case-folded: roles differing only in case share one file on a case-insensitive volume.
+  const sourceByRole = new Map();
+  for (const { file, name } of agentEntries) {
+    const key = name.toLowerCase();
+    if (sourceByRole.has(key)) {
+      throw new Error(
+        `Codex agent role "${name}" is declared by both ${sourceByRole.get(key)} and ${file}; ` +
+        'each role needs exactly one source file, so one would overwrite the other. Rename or remove one.',
+      );
+    }
+    sourceByRole.set(key, file);
+  }
   const agents = [];
 
-  for (const file of agentEntries) {
+  for (const { file, source, name, agentTomlPath } of agentEntries) {
     const agentTomlSourcePath = path.join(agentsSrc, file);
-    const source = fs.readFileSync(agentTomlSourcePath, 'utf8');
     // #2995 (epic #1671 Phase 6.4): Codex embeds each agent's prompt into a
     // per-agent `.toml`, reading the source .md independently of the inline
     // agent loop — a separate emission path that must strip gsd:section
@@ -7472,7 +7570,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // for that call; see `deriveCodexSandboxMode`'s doc in
     // `codex-agent-toml.cts` for the resolution.
     const fileStem = file.replace(/\.md$/, '');
-    const name = codexAgentTomlName(file, source);
     const description = extractFrontmatterField(frontmatter, 'description') || '';
 
     agents.push({ name, description: toSingleLine(description) });
@@ -7498,10 +7595,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // and folds in the frontmatter `name:` for the sandbox decision (F1
     // above) — this call site does not need to pass `name` explicitly.
     const tomlContent = generateCodexAgentToml(fileStem, content, modelOverrides, runtimeResolver, effortCfg, sandboxTier);
-    // Confine the per-agent write to the agents/ dir itself: a crafted agent
-    // `name` containing path separators must not escape agents/ (which would let
-    // it clobber config.toml or write elsewhere under the configHome).
-    const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
     if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath, { allowOptInFollow: symlinkOptIn })) {
       throw new Error(
         installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath),
@@ -8778,6 +8871,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     console.log(`  ${yellow}⚠${reset} Directory does not exist: ${locationLabel}`);
     console.log(`  Nothing to uninstall.\n`);
     return;
+  }
+
+  // #5978: a symlinked Windsurf hooks.json holding GSD entries is refused without
+  // GSD_ALLOW_SYMLINKED_DEST. Refuse here, before anything is removed, so a refused run leaves
+  // the link, its target and every other GSD file exactly as they were (as #5946 does for Copilot).
+  if (resolveInstallPlan(runtime).hooksSurface === 'windsurf-hooks-json') {
+    const windsurfRefusal = hooksSurface.windsurfHooksJsonRemovalRefusal(targetDir);
+    if (windsurfRefusal) {
+      console.error(`  ${yellow}⚠${reset} ${windsurfRefusal}`);
+      console.error('  Nothing was uninstalled.\n');
+      process.exitCode = 1;
+      return;
+    }
   }
 
   let removedCount = 0;
@@ -10616,6 +10722,79 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 }
 
 /**
+ * The two content rewrites install() runs on manifest-listed files AFTER the first writeManifest
+ * (#5954): the Codex `@~/.claude/gsd-core/` include rewrite (#4667) and the Copilot / Antigravity /
+ * Kimi include retarget (#5123, global installs only). Applied to `relPaths` under `rootDir` (the
+ * install dir, or the staging dir populatePristineDir builds baselines in, so a regenerated baseline
+ * has the bytes the manifest records). `installRoot` is the real install dir the retarget prefix is
+ * computed for. Returns true when any file changed.
+ *
+ * #5123: the Copilot and Antigravity converters write their DEFAULT home
+ * into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
+ * path, none of which exist when the payload lives somewhere else. Point
+ * them at the real install root (the same `$HOME/…` / absolute prefix the
+ * other runtimes use). Global installs only: a local install resolves
+ * against its project, which the converters already handle.
+ */
+function rewriteInstalledIncludes({ rootDir, relPaths, runtime, isGlobal, installRoot }) {
+  let rewrittenAny = false;
+  const behaviors = hostBehaviorsFor(runtime);
+  const textTargets = relPaths.filter((relPath) => {
+    const fileName = path.basename(relPath);
+    return (fileName.endsWith('.md') || fileName.endsWith('.toml')) && fileName !== 'CHANGELOG.md';
+  });
+  if (behaviors.rewriteClaudeAtIncludes) {
+    for (const relPath of textTargets) {
+      const rewritePath = path.join(rootDir, relPath);
+      let rewriteContent;
+      try {
+        rewriteContent = fs.readFileSync(rewritePath, 'utf8');
+      } catch (_rewriteErr) {
+        continue; // inaccessible or missing — the leak scan reports or skips it
+      }
+      const rewritten = rewriteContent
+        .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
+        .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
+      if (rewritten !== rewriteContent) {
+        try {
+          fs.writeFileSync(rewritePath, rewritten);
+          rewrittenAny = true;
+        } catch (_rewriteWriteErr) {
+          continue; // never fail the install over the rewrite; the scan still warns
+        }
+      }
+    }
+  }
+  if (isGlobal && (behaviors.defaultHomeIncludeRoot || behaviors.retargetsGsdCoreProsePath === true)) {
+    const includePrefix = runtimeArtifactConversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      resolvedTarget: installRoot,
+      homeDir: os.homedir(),
+    });
+    for (const relPath of textTargets) {
+      const retargetPath = path.join(rootDir, relPath);
+      let retargetContent;
+      try {
+        retargetContent = fs.readFileSync(retargetPath, 'utf8');
+      } catch (_retargetReadErr) {
+        continue; // inaccessible or missing — never fail the install over this pass
+      }
+      const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, behaviors, includePrefix);
+      if (retargeted !== retargetContent) {
+        try {
+          fs.writeFileSync(retargetPath, retargeted);
+          rewrittenAny = true;
+        } catch (_retargetWriteErr) {
+          continue;
+        }
+      }
+    }
+  }
+  return rewrittenAny;
+}
+
+/**
  * Populate gsd-pristine/ with the transformed pristine versions of every
  * `modified` file, derived from the current package's source tree by
  * running the install transform pipeline (`copyWithPathReplacement`)
@@ -10637,7 +10816,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
  * would have written under normal install. Cost: one extra full transform
  * pass per install where local patches were detected; acceptable.
  */
-function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal }) {
+function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal, installRoot }) {
   if (!modified || modified.length === 0) return 0;
   // Modified paths come from manifest.files which can live under several
   // install roots: gsd-core/, commands/gsd/, command/, skills/, agents/,
@@ -10681,6 +10860,9 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
       if (!fs.existsSync(srcDir)) continue;
       copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal, stageRoot);
     }
+    // #5954: the installed files were rewritten after the manifest was first hashed and the manifest
+    // is re-hashed after those rewrites, so a regenerated baseline needs the same rewrites to match.
+    if (installRoot) rewriteInstalledIncludes({ rootDir: stageRoot, relPaths: safeModified, runtime, isGlobal, installRoot });
 
     for (const relPath of safeModified) {
       // Only populate pristine for paths we successfully staged. If a path's
@@ -10984,6 +11166,7 @@ function saveLocalPatches(configDir, pristineCtx) {
             runtime: pristineCtx.runtime,
             pathPrefix: pristineCtx.pathPrefix,
             isGlobal: pristineCtx.isGlobal,
+            installRoot: configDir,
           });
           for (const relPath of missingPaths) {
             const tempRef = resolveInstallRelativePath(tempPristineDir, relPath);
@@ -13046,64 +13229,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // verification backstop. The `_GSD_RUNTIME_ROOT`/`$PREFERRED_CONFIG_DIR`
       // fallback chains and prose `.claude` mentions carry no `@~/` prefix and
       // are deliberately untouched, as is CHANGELOG.md.
-      if (hostBehaviorsFor(runtime).rewriteClaudeAtIncludes) {
-        for (const relPath of manifestFiles) {
-          const fileName = path.basename(relPath);
-          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-          if (fileName === 'CHANGELOG.md') continue;
-          const rewritePath = path.join(targetDir, relPath);
-          let rewriteContent;
-          try {
-            rewriteContent = fs.readFileSync(rewritePath, 'utf8');
-          } catch (rewriteErr) {
-            continue; // inaccessible or missing — the scan below reports or skips it
-          }
-          const rewritten = rewriteContent
-            .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
-            .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
-          if (rewritten !== rewriteContent) {
-            try {
-              fs.writeFileSync(rewritePath, rewritten);
-            } catch (writeErr) {
-              continue; // never fail the install over the rewrite; the scan still warns
-            }
-          }
-        }
-      }
-      // #5123: the Copilot and Antigravity converters write their DEFAULT home
-      // into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
-      // path, none of which exist when the payload lives somewhere else. Point
-      // them at the real install root (the same `$HOME/…` / absolute prefix the
-      // other runtimes use). Global installs only: a local install resolves
-      // against its project, which the converters already handle.
-      const includeRetarget = hostBehaviorsFor(runtime);
-      if (isGlobal && (includeRetarget.defaultHomeIncludeRoot || includeRetarget.retargetsGsdCoreProsePath === true)) {
-        const includePrefix = runtimeArtifactConversion._computePathPrefix({
-          isGlobal: true,
-          isOpencode: false,
-          resolvedTarget: targetDir,
-          homeDir: os.homedir(),
-        });
-        for (const relPath of manifestFiles) {
-          const fileName = path.basename(relPath);
-          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-          if (fileName === 'CHANGELOG.md') continue;
-          const retargetPath = path.join(targetDir, relPath);
-          let retargetContent;
-          try {
-            retargetContent = fs.readFileSync(retargetPath, 'utf8');
-          } catch (_retargetReadErr) {
-            continue; // inaccessible or missing — never fail the install over this pass
-          }
-          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, includeRetarget, includePrefix);
-          if (retargeted !== retargetContent) {
-            try {
-              fs.writeFileSync(retargetPath, retargeted);
-            } catch (_retargetWriteErr) {
-              continue;
-            }
-          }
-        }
+      // #5954: the first writeManifest above hashed these files BEFORE the two rewrites below changed
+      // them, so any rewrite makes that manifest stale; it is re-hashed once both have run.
+      const _includesRewritten = rewriteInstalledIncludes({
+        rootDir: targetDir, relPaths: manifestFiles, runtime, isGlobal, installRoot: targetDir,
+      });
+      if (_includesRewritten) {
+        writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: _installScopeId });
       }
       for (const relPath of manifestFiles) {
         const fileName = path.basename(relPath);
@@ -14192,7 +14324,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     try {
       let probeDir = path.resolve(targetDir);
       for (let depth = 0; depth < 8; depth += 1) {
-        const candidate = path.join(probeDir, '.planning', 'config.json');
+        const candidate = gsdRootConfigPath(probeDir);
         if (fs.existsSync(candidate)) {
           try {
             // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
@@ -15468,6 +15600,9 @@ module.exports = {
     validateCodexConfigSchema,
     mergeCodexConfig,
     installCodexConfig,
+    ensureCodexHooksFeature,
+    repairTrappedFeaturesKeys,
+    codexAgentSourceFiles,
     install,
     installAllRuntimes,
     uninstall,

@@ -25,7 +25,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { TEST_ENV_BASE } = require('../../helpers.cjs');
+const { isolatedEnv } = require('../../helpers/isolated-env.cjs');
 const { runNode } = require('../../helpers/process-seam.cjs');
 const { gitOrThrow } = require('../../helpers/git-fixture.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('../../helpers/timeouts.cjs');
@@ -771,14 +771,10 @@ function normalize(text, root) {
 }
 
 function runArm(spec, root) {
-  const env = {
-    ...process.env,
-    ...TEST_ENV_BASE,
-    HOME: root,
-    USERPROFILE: root,
-    GSD_CUTOVER_FAIL_READ_SUFFIX: spec.failRead || '',
-    ...(spec.env || {}),
-  };
+  const env = isolatedEnv({
+    home: root,
+    override: { GSD_CUTOVER_FAIL_READ_SUFFIX: spec.failRead || '', ...(spec.env || {}) },
+  });
   const nodeArgs = spec.failRead ? ['--require', PRELOAD_PATH] : [];
   const r = runNode([...nodeArgs, TOOLS_PATH, ...spec.argv], {
     cwd: root,

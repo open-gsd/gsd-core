@@ -41,6 +41,7 @@ const {
   MANIFEST_FAMILIES,
   MINIMUM_MANIFEST_FAMILIES,
   runMinimalInstall,
+  installRuntimeFixture,
   buildParityManifest,
   extraEmitRootsFor,
   PKG_VERSION,
@@ -967,7 +968,12 @@ function currentManifests({ repoRoot } = {}) {
   const pkgVersion = measuredPackageVersion(repoRoot);
   const manifests = {};
   for (const { name, runtime, scope } of MANIFEST_FAMILIES) {
-    const { configDir, root } = runMinimalInstall({ runtime, scope, installScript });
+    // This checkout's own install is only read here, so it is the shared fixture
+    // (#6335). Another checkout's installer makes a tree of its own, removed below.
+    const own = installScript === undefined;
+    const { configDir, root } = own
+      ? installRuntimeFixture({ runtime, scope })
+      : runMinimalInstall({ runtime, scope, installScript });
     try {
       manifests[name] = buildParityManifest(configDir, root, {
         pkgVersion,
@@ -976,7 +982,7 @@ function currentManifests({ repoRoot } = {}) {
         extraEmitRoots: extraEmitRootsFor(runtime, scope, root),
       });
     } finally {
-      cleanup(root);
+      if (!own) cleanup(root);
     }
   }
   return manifests;
@@ -1069,6 +1075,19 @@ function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_
 // breaks the `rawBody.slice(0, match.index)` usage pattern this function needs).
 const GITHUB_SQUASH_SUFFIX_RE = /\n\n-{9,}\n\n/g;
 const SQUASH_BULLET_SPLIT_RE = /\n\n(?=\* )/;
+// #5993: GitHub writes the `---------` suffix only when at least one squashed commit has a
+// `Co-authored-by:` trailer. A squash with none is `<title> (#<pr>)`, a blank line, then the
+// squashed commits as `* <subject>` bullet chunks separated by blank lines. An ordinary commit
+// cannot produce that whole shape: the subject ends in an exact ` (#<digits>)` AND at least two
+// bullet chunks follow it (preamble + two or more chunks), so a commit whose body merely uses
+// markdown bullets does not match.
+// Accepted trade-off: a human-written commit whose subject ends ` (#<digits>)` and whose body is
+// two or more blank-separated `* ` paragraphs has exactly this shape, so a trailer-shaped terminal
+// paragraph in one of them is read as a declaration. That is no new capability (a PR author can
+// already write the trailer as the commit's final paragraph) and the shape cannot be told apart
+// from a real no-co-author squash. Chunk count is bounded by GitHub's 250-commit PR limit for a
+// real squash; one `interpret-trailers` spawn per chunk is the same cost the suffix path pays.
+const NO_COAUTHOR_SQUASH_HEAD_RE = /^[^\n]+ \(#\d+\)\n\n\* /;
 
 /** Index of the START of the LAST GitHub-squash-suffix occurrence in `text`, or -1. */
 function findLastGithubSquashSuffixIndex(text) {
@@ -1094,15 +1113,26 @@ const ACK_TRAILER_LINE_RE = new RegExp(
  * merge both into the same value lists before the final `parseAckTrailers` call, so
  * this never needs its own dedup or its own result-shape handling.
  *
- * A commit whose body does not contain GitHub's squash suffix signal is not a squash
- * commit by this heuristic and is returned untouched (empty arrays) — this is the sole
- * gate against widening false-positive risk to ordinary commits.
+ * A commit whose body carries neither GitHub's squash suffix signal nor the no-co-author
+ * squash shape (#5993) is not a squash commit by this heuristic and is returned untouched
+ * (empty arrays) — this is the sole gate against widening false-positive risk to ordinary
+ * commits.
  */
 function extractSquashBuriedTrailers(rawBody, { cwd, timeoutMs }) {
   const suffixIndex = findLastGithubSquashSuffixIndex(rawBody);
-  if (suffixIndex === -1) return { hash: [], growth: [] };
-  const beforeSuffix = rawBody.slice(0, suffixIndex);
-  const chunks = beforeSuffix.split(SQUASH_BULLET_SPLIT_RE);
+  let chunks;
+  if (suffixIndex !== -1) {
+    chunks = rawBody.slice(0, suffixIndex).split(SQUASH_BULLET_SPLIT_RE);
+  } else if (NO_COAUTHOR_SQUASH_HEAD_RE.test(rawBody)) {
+    // #5993: a squash with no co-author has no suffix. Its LAST chunk's terminal trailer block
+    // is already the whole message's final paragraph, which the `%(trailers:...)` pass in
+    // `readAckTrailers` reads, so only the chunks before it are recovered here.
+    const all = rawBody.split(SQUASH_BULLET_SPLIT_RE);
+    if (all.length < 3) return { hash: [], growth: [] };
+    chunks = all.slice(0, -1);
+  } else {
+    return { hash: [], growth: [] };
+  }
   const hash = [];
   const growth = [];
   for (const chunk of chunks) {

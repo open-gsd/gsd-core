@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-check-update.js');
 
@@ -16,7 +17,7 @@ describe('#4839: update check must not break SessionStart', () => {
     t.after(() => cleanup(home));
     if (blockCache) fs.writeFileSync(path.join(home, '.cache'), 'not a directory');
     const source = [prelude, `require(${JSON.stringify(HOOK)});`].join('\n');
-    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
+    const env = isolatedEnv({ home, override: { GSD_HOME: home } });
     const result = runNode(['-e', source], { cwd: home, env });
     assert.equal(result.outcome, OUTCOME.EXITED, result.stderr);
     assert.equal(result.exitCode, 0, result.stderr);

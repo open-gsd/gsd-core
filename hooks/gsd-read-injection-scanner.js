@@ -23,7 +23,7 @@
 
 const path = require('path');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath } = require('./lib/config-read.js');
 
 // This is a PostToolUse advisory scanner over content the tool call already
 // returned; a crash while scanning must not retroactively block that Read/
@@ -342,7 +342,7 @@ process.stdin.on('end', () => {
     if (severity === 'HIGH') {
       try {
         const cfgBase = data.cwd || process.cwd();
-        const cfgPath = path.join(cfgBase, '.planning', 'config.json');
+        const cfgPath = projectConfigPath(cfgBase);
         const cfg = JSON.parse(readConfigFileBounded(cfgPath, { required: true }));
         blocking = cfg.security?.injection_blocking === true;
       } catch { /* no config ⇒ advisory */ }

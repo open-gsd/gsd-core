@@ -73,11 +73,10 @@ if (require.main === module && !process.env.NODE_V8_COVERAGE) {
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
+const { REASON_CODE, remedyFor, composeRemedyText, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath, globalDefaultsPath } = require('./lib/config-read.js');
 
 // Required at module top, alongside the other ./lib requires — NOT behind
 // ensureRuntimeBuild() below. Terminating on a parse/timeout failure must
@@ -230,7 +229,7 @@ function resolveRuntimeIdentity(cwd, configPath, resolveRuntimeNameFromCandidate
   try {
     // #5017: the store root is GSD_HOME when set and non-blank, else the home
     // directory — the config loader's rule (src/runtime-homes.cts resolveGsdHome).
-    const defaultsPath = path.join(process.env.GSD_HOME || os.homedir(), '.gsd', 'defaults.json');
+    const defaultsPath = globalDefaultsPath();
     const defaultsRaw = fs.readFileSync(defaultsPath, 'utf-8');
     const defaultsParsed = JSON.parse(defaultsRaw);
     if (defaultsParsed && typeof defaultsParsed === 'object' && 'runtime' in defaultsParsed) {
@@ -411,7 +410,7 @@ function resolveRegistryIsolation(cwd, configPath) {
  * "a mismatch is 'no applicable sentinel', not an allow" (#3045 review).
  */
 function resolveIsolationState(cwd, { clock = Date, dispatchIds = null, sentinel: preRead = null, subagentType = null } = {}) {
-  const configPath = path.join(cwd, '.planning', 'config.json');
+  const configPath = projectConfigPath(cwd);
   let projectExists;
   try {
     fs.accessSync(configPath, fs.constants.F_OK);
@@ -587,14 +586,19 @@ function evaluateDispatch(data, { clock = Date } = {}) {
 
   if (toolInput[parsed.param] === parsed.value) return { action: 'allow' };
 
-  let reason =
+  // #6028: a fresh recorded `none` that did not apply to this dispatch means the flag was deliberately absent
+  // (a base-check degrade); advising "add the flag" there is the action the degrade refused as unsafe.
+  const remedy = remedyFor(state.sentinelDiscarded);
+  const reason =
     `Agent isolation guard: this project's dispatch isolation resolves to "harness-worktree", ` +
     `but the Agent() dispatch for subagent_type="${displayAgentName(subagentType)}" is missing ` +
-    `${parsed.param}="${parsed.value}". Add ${parsed.param}="${parsed.value}" to the Agent() ` +
-    `call so the executor runs in an isolated worktree instead of the primary checkout ` +
-    `(gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`;
-  if (state.sentinelDiscarded) reason += describeSentinelDiscard(state.sentinelDiscarded);
-  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded, agentName: displayAgentName(subagentType) };
+    `${parsed.param}="${parsed.value}".` +
+    composeRemedyText(
+      state.sentinelDiscarded,
+      ` Add ${parsed.param}="${parsed.value}" to the Agent() call so the executor runs in an isolated worktree ` +
+        `instead of the primary checkout (gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`,
+    );
+  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, remedy, sentinelDiscarded: state.sentinelDiscarded, agentName: displayAgentName(subagentType) };
 }
 
 /* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
@@ -613,6 +617,7 @@ function main() {
           decision: 'block',
           reason: decision.reason,
           reason_code: decision.reasonCode,
+          remedy: decision.remedy ?? null,
           sentinel_discarded: decision.sentinelDiscarded ?? null,
         };
         // Kimi feeds stderr (not stdout) back to the model on exit 2.

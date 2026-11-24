@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
 const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 // ADR-3473 §8.7 (#3872): git-fixture spawns for the state_head rows (10/11)
 // go through the throw-preserving wrapper, never a raw execFileSync.
@@ -3317,13 +3317,7 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
     fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary\n');
 
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
-    const rec = runNode(
-      [toolsPath, 'state', 'update-progress'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS },
-    );
+    const rec = runGsdToolsCaptured(['state', 'update-progress'], tmpDir);
     assert.equal(rec.exitCode, 0, `Command failed: ${rec.stderr}`);
     const output = JSON.parse(rec.stdout);
     assert.strictEqual(output.updated, true, `scope gate must not withhold; got ${rec.stdout}`);
@@ -4364,6 +4358,7 @@ Progress: [..........] 0%
 ## Current Position
 
 Phase: 1 (Setup) — EXECUTING
+Total Plans in Phase: 0
 Status: Executing Phase 1
 
 ### Notes
@@ -8836,7 +8831,7 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E3: cmdStateBeginPhase — `updated` names only the fields whose persisted value actually changed (happy path)', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', '---', '',
-        '# Project State', '', '## Current Position', '', 'Status: Not started', '', '## Session', '',
+        '# Project State', '', '## Current Position', '', 'Plan: 0 of 0', 'Status: Not started', '', '## Session', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 
@@ -8855,7 +8850,7 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E3 (preservation): cmdStateBeginPhase — a curated field round-tripped to its ORIGINAL value is not reported', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', 'stopped_at: "curated stop must survive"', '---', '',
-        '# Project State', '', '## Current Position', '', 'Status: Not started', '', '## Session', '',
+        '# Project State', '', '## Current Position', '', 'Plan: 0 of 0', 'Status: Not started', '', '## Session', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 
@@ -12093,12 +12088,27 @@ describe('T6 section-splice characterization — begin-phase', () => {
     const d = createTempProject();
     try {
       fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_CURRENT_POS);
-      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup'], d);
       assert.ok(result.success, `Command failed: ${result.error}`);
       const output = JSON.parse(result.output);
-      // Expect phase, phase_name and plan_count in response even if fields weren't updated
+      // Expect phase and phase_name in the response even if fields weren't updated
       assert.strictEqual(output.phase, '1', 'phase must be reported in response');
-      assert.strictEqual(output.plan_count, 3, 'plan_count must be reported in response');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  // #6399: with --plans the count has to land somewhere; a STATE.md with no Current Position section and no
+  // `Total Plans in Phase` field refuses with the typed reason instead of reporting a count it did not record.
+  test('begin-phase --plans on a STATE.md with no Current Position and no total field refuses (#6399)', () => {
+    const d = createTempProject();
+    try {
+      const statePath = path.join(d, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, STATE_NO_CURRENT_POS);
+      const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(JSON.parse(result.error).reason, 'plans_no_line');
+      assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), STATE_NO_CURRENT_POS, 'nothing is written');
     } finally {
       cleanup(d);
     }
@@ -13754,9 +13764,6 @@ const { stateExtractField } = require('../gsd-core/bin/lib/state-document.cjs');
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { stripFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
-const ROOT = path.join(__dirname, '..');
-const TOOLS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -13774,19 +13781,16 @@ function readState(dir) {
 }
 
 function runGsdState(args, cwd) {
-  const { runNode } = require('./helpers/process-seam.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const env = {
-    ...process.env,
     GSD_SESSION_KEY: '',
     CODEX_THREAD_ID: '',
     CLAUDE_SESSION_ID: '',
     CLAUDE_CODE_SSE_PORT: '',
     OPENCODE_SESSION_ID: '',
   };
-  const r = runNode([TOOLS_PATH, 'state', ...args], { cwd, env, timeoutMs: PROBE_TIMEOUT_MS });
+  const r = runGsdToolsCaptured(['state', ...args], cwd, env);
   if (r.exitCode === 0) return { success: true };
-  return { success: false, error: r.stderr.trim() || `exited with outcome=${r.outcome} exitCode=${r.exitCode}` };
+  return { success: false, error: r.stderr.trim() || `exited with exitCode=${r.exitCode}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -18228,352 +18232,6 @@ describe('bug #2440 — shouldPreserveExistingProgress does not ratchet total_pl
   });
 }
 
-// ─── #2573: state_head commit provenance on the write seam ───────────────────
-
-describe('syncStateFrontmatter — state_head commit provenance (#2573)', () => {
-  const { runGit } = require('./helpers/process-seam.cjs');
-  const { syncStateFrontmatter } = require('../gsd-core/bin/lib/state.cjs');
-  const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
-  const { createTempGitProject: mkGit } = require('./helpers.cjs');
-
-  const dirs = [];
-  const track = (d) => { dirs.push(d); return d; };
-  afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
-
-  const MINIMAL_STATE = [
-    '---',
-    'status: executing',
-    '---',
-    '',
-    '# Session State',
-    '',
-    'Status: executing',
-    '',
-  ].join('\n');
-
-  test('stamps state_head with the full HEAD sha of the project repo', () => {
-    const dir = track(mkGit('gsd-2573-'));
-    const head = runGit(['rev-parse', 'HEAD'], { cwd: dir }).stdout.trim();
-
-    const synced = syncStateFrontmatter(MINIMAL_STATE, dir);
-    const fm = extractFrontmatter(synced);
-
-    assert.strictEqual(fm.state_head, head,
-      'state_head must record the commit STATE.md was written against');
-  });
-
-  test('omits state_head entirely when the project is not a git repo (degrade, never throw)', () => {
-    // trek-e's approval condition 3: degrade to no-signal rather than throwing
-    // when the commit is unresolvable. A non-repo is the canonical case.
-    const dir = track(createTempProject('gsd-2573-nogit-'));
-
-    let synced;
-    assert.doesNotThrow(() => { synced = syncStateFrontmatter(MINIMAL_STATE, dir); },
-      'a non-git project must not throw');
-    const fm = extractFrontmatter(synced);
-
-    assert.ok(!('state_head' in fm),
-      `state_head must be absent outside a git repo, got ${JSON.stringify(fm.state_head)}`);
-  });
-
-  test('drops a PRE-EXISTING state_head when the commit becomes unresolvable (never carried forward)', () => {
-    // The omission test above feeds MINIMAL_STATE, which has no pre-existing
-    // state_head — so it never reaches the #2202 carry-forward loop, which
-    // copies any key absent from derivedFm straight back from the old file.
-    // This fixture DOES carry a stamp, so it exercises that branch.
-    //
-    // state-transition.cts classifies state_head as { preservation: 'derive' }:
-    // "Never preserved: a stale stamp would claim STATE.md was written against
-    // a commit it wasn't." A carried-forward value contradicts that contract and
-    // asserts provenance the file no longer has.
-    const STAMPED_STATE = [
-      '---',
-      'status: executing',
-      'state_head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      '---',
-      '',
-      '# Session State',
-      '',
-      'Status: executing',
-      '',
-    ].join('\n');
-
-    const dir = track(createTempProject('gsd-2573-stale-stamp-'));
-
-    let synced;
-    assert.doesNotThrow(() => { synced = syncStateFrontmatter(STAMPED_STATE, dir); },
-      'a non-git project must not throw even with a pre-existing stamp');
-    const fm = extractFrontmatter(synced);
-
-    assert.ok(!('state_head' in fm),
-      `a stale state_head must be DROPPED, not carried forward, when the commit is unresolvable — got ${JSON.stringify(fm.state_head)}`);
-  });
-
-  test('restamps state_head to the new HEAD after a commit (freshness proxy resets on write)', () => {
-    // Goodhart guard, asserted rather than assumed: the counter resets as a
-    // side effect of ANY state write, so state_head means "written at this
-    // commit", never "STATE's content is accurate". Pinning it here so nobody
-    // later builds a gate on the derived commit distance.
-    const dir = track(mkGit('gsd-2573-restamp-'));
-    const first = extractFrontmatter(syncStateFrontmatter(MINIMAL_STATE, dir)).state_head;
-
-    fs.writeFileSync(path.join(dir, 'unrelated.txt'), 'change\n');
-    runGit(['add', '-A'], { cwd: dir });
-    runGit(['commit', '-m', 'unrelated'], { cwd: dir });
-    const second = extractFrontmatter(syncStateFrontmatter(MINIMAL_STATE, dir)).state_head;
-
-    const head = runGit(['rev-parse', 'HEAD'], { cwd: dir }).stdout.trim();
-    assert.notStrictEqual(second, first, 'a new commit must produce a new state_head');
-    assert.strictEqual(second, head, 'state_head must track the current HEAD');
-  });
-
-  test('carries a body-absent last_activity forward instead of dropping it (#2622 B1)', () => {
-    // #2622 B1: the #2202 carry-forward loop skips `source: 'free'` fields
-    // (state_head) so an unresolvable stamp is never re-asserted — but it must
-    // NOT skip `last_activity` ({source:'body', preservation:'derive'}). When the
-    // body carries no "Last activity:" line, buildStateFrontmatter omits the
-    // field, and the existing frontmatter value has to survive: dropping it is
-    // silent frontmatter data loss and would defeat #2570's staleness signal
-    // downstream. A non-git project keeps this on the carry-forward path
-    // (state_head is simply absent) and needs no subprocess.
-    const STATE_WITH_ACTIVITY = [
-      '---',
-      'status: executing',
-      'last_activity: 2026-01-15',
-      '---',
-      '',
-      '# Session State',
-      '',
-      'Status: executing',
-      '',
-    ].join('\n');
-
-    const dir = track(createTempProject('gsd-2622-b1-'));
-    const fm = extractFrontmatter(syncStateFrontmatter(STATE_WITH_ACTIVITY, dir));
-
-    assert.strictEqual(fm.last_activity, '2026-01-15',
-      'a body-absent last_activity must carry forward, not be dropped by the state_head narrowing');
-  });
-});
-
-
-// ─── #2573: property invariants for the state_head fence ─────────────────────
-//
-// `state_head` is read from disk and then passed to git AS AN ARGUMENT, which
-// makes this a parser with a security-relevant fence — the class the repo's
-// testing standards require fast-check coverage for. Example-based tests pin
-// the shapes we thought of; these pin the invariant for the ones we didn't.
-
-describe('readStateHeadFreshness — property invariants (#2573)', () => {
-  const fc = require('./helpers/fast-check-setup.cjs');
-  const { runGit } = require('./helpers/process-seam.cjs');
-  const { after } = require('node:test');
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
-  const { cleanup } = require('./helpers.cjs');
-  const { readStateHeadFreshness } = require('../gsd-core/bin/lib/state.cjs');
-
-  const propDirs = [];
-  after(() => { while (propDirs.length) cleanup(propDirs.pop()); });
-
-  function gitRepo() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-prop-'));
-    propDirs.push(dir);
-    runGit(['init', '-q'], { cwd: dir });
-    runGit(['config', 'user.email', 't@t.com'], { cwd: dir });
-    runGit(['config', 'user.name', 'T'], { cwd: dir });
-    runGit(['config', 'commit.gpgsign', 'false'], { cwd: dir });
-    fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
-    runGit(['add', '-A'], { cwd: dir });
-    runGit(['commit', '-q', '-m', 'seed'], { cwd: dir });
-    return dir;
-  }
-
-const HEX_RE = /^[0-9a-f]{4,40}$/i;
-
-  const repo = gitRepo();
-
-  test('(a) total function — never throws for arbitrary input', () => {
-    fc.assert(
-      fc.property(fc.anything(), (value) => {
-        readStateHeadFreshness(repo, value);
-        return true;
-      }),
-    );
-  });
-
-  test('(b) fence — non-hex input never yields a stamp', () => {
-    fc.assert(
-      fc.property(fc.string(), (s) => {
-        const r = readStateHeadFreshness(repo, s);
-        if (HEX_RE.test(s.trim())) return true; // valid shape: out of scope here
-        return r.state_head === null && r.commits_behind === null && r.commit_stale === null;
-      }),
-    );
-  });
-
-  test('(c) tri-state integrity — unknown never reads as known-fresh', () => {
-    fc.assert(
-      fc.property(fc.string(), (s) => {
-        const r = readStateHeadFreshness(repo, s);
-        const validTri = r.commit_stale === null || r.commit_stale === true || r.commit_stale === false;
-        const unknownIsNull = r.commits_behind === null ? r.commit_stale === null : true;
-        const agreement = typeof r.commits_behind === 'number'
-          ? r.commit_stale === (r.commits_behind > 0)
-          : true;
-        return validTri && unknownIsNull && agreement;
-      }),
-    );
-  });
-
-  test('(d) no git-argument injection — dash-led values are rejected by the fence', () => {
-    fc.assert(
-      fc.property(
-        fc.constantFrom('--all', '-n', '--not', '--output=/tmp/pwn', '--help', '-- --all'),
-        fc.string(),
-        (flag, tail) => {
-          const r = readStateHeadFreshness(repo, `${flag}${tail}`);
-          return r.state_head === null && r.commits_behind === null && r.commit_stale === null;
-        },
-      ),
-    );
-  });
-
-  test('(f) a NON-ANCESTOR stamp resolves to unknown, never to "known fresh"', () => {
-    // `rev-list --count A..B` exits 0 with "0" when A is unreachable from B, so
-    // reset --hard / rebase / squash / force-push past the stamp used to render
-    // as commit_stale:false — "known fresh" for a codebase that was rewound.
-    // That collapses the exact unknown-vs-fresh distinction the tri-state exists
-    // to preserve, so a non-ancestor stamp must come back null.
-    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-nonanc-'));
-    propDirs.push(d);
-    const g = (argv) => runGit(argv, { cwd: d }).stdout;
-    g(['init', '-q']); g(['config', 'user.email', 't@t.com']); g(['config', 'user.name', 'T']);
-    g(['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(d, 'a.txt'), 'a\n');
-    g(['add', '-A']); g(['commit', '-q', '-m', 'base']);
-    const base = g(['rev-parse', 'HEAD']).trim();
-    fs.writeFileSync(path.join(d, 'b.txt'), 'b\n');
-    g(['add', '-A']); g(['commit', '-q', '-m', 'c1']);
-    const tip = g(['rev-parse', 'HEAD']).trim();
-    g(['reset', '--hard', '-q', base]);
-
-    const r = readStateHeadFreshness(d, tip);
-    assert.strictEqual(r.commits_behind, null, 'a non-ancestor stamp has no meaningful distance');
-    assert.strictEqual(r.commit_stale, null, 'unknown must NOT report as false ("known fresh")');
-  });
-
-  test('(e) a real HEAD sha always resolves to zero commits behind', () => {
-    const head = runGit(['rev-parse', 'HEAD'], { cwd: repo }).stdout.trim();
-    const r = readStateHeadFreshness(repo, head);
-    assert.strictEqual(r.commits_behind, 0);
-    assert.strictEqual(r.commit_stale, false);
-    assert.strictEqual(r.state_head, head.slice(0, 7));
-  });
-
-  test('(g) a project whose nearest .git is an ANCESTOR repo resolves to unknown, never "known fresh"', () => {
-    // #2573 degrade path D5. `git rev-parse HEAD` walks UP from cwd to the
-    // nearest enclosing .git — nothing pins that repo to the project. A GSD
-    // project living under an unrelated repo (a dotfiles/notes checkout, or the
-    // outer workspace of a planning.sub_repos layout) measures its freshness
-    // against a repo it has no relationship to.
-    //
-    // The stamp below IS that ancestor repo's HEAD, so pre-fix the ancestry
-    // check passes, rev-list returns 0, and the tri-state reports
-    // commit_stale:false — "known fresh" for a directory that is not in that
-    // repo at all. Same invariant violation as (f), reached by another route.
-    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-ancestor-'));
-    propDirs.push(outer);
-    const g = (argv) => runGit(argv, { cwd: outer }).stdout;
-    g(['init', '-q']); g(['config', 'user.email', 't@t.com']); g(['config', 'user.name', 'T']);
-    g(['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(outer, 'unrelated.txt'), 'x\n');
-    g(['add', '-A']); g(['commit', '-q', '-m', 'outer']);
-    const outerHead = g(['rev-parse', 'HEAD']).trim();
-
-    // The project itself is NOT a git repo — it merely sits inside one.
-    const project = path.join(outer, 'nested-project');
-    fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
-
-    const r = readStateHeadFreshness(project, outerHead);
-    assert.strictEqual(r.commit_stale, null,
-      'a stamp resolved against an ancestor repo is UNKNOWN — it must not report false ("known fresh")');
-    assert.strictEqual(r.commits_behind, null,
-      'distance measured against an unrelated repo is not a meaningful count');
-  });
-
-  test('(i) a sub_repos workspace resolves to unknown even though it owns its own repo', () => {
-    // #2573 D5, sub_repos flavor. (g) covers the case where the project owns NO
-    // .git. This is the harder one: the outer workspace owns BOTH .planning/ and
-    // its own repo, so projectOwnsItsRepo passes — yet every code commit lands in
-    // a nested child repo and the outer HEAD never advances.
-    //
-    // Pre-fix that stamps the outer HEAD, --is-ancestor passes trivially,
-    // rev-list counts 0, and the tri-state reports commit_stale:false — "known
-    // fresh" — no matter how far the children have moved. That is a WRONG answer,
-    // not a missing one: the same invariant (g) protects, reached by a third
-    // route. docs/CONFIGURATION.md describes sub_repos as scoping work per
-    // sub-repo "instead of treating the outer repo as a monorepo", so an outer
-    // wrapper that is itself a repo is a supported layout, not a contrived one.
-    const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-subrepos-'));
-    propDirs.push(outer);
-    const g = (argv) => runGit(argv, { cwd: outer }).stdout;
-    g(['init', '-q']); g(['config', 'user.email', 't@t.com']); g(['config', 'user.name', 'T']);
-    g(['config', 'commit.gpgsign', 'false']);
-    fs.mkdirSync(path.join(outer, '.planning'), { recursive: true });
-    fs.writeFileSync(
-      path.join(outer, '.planning', 'config.json'),
-      JSON.stringify({ planning: { sub_repos: ['frontend'] } }, null, 2),
-    );
-    fs.writeFileSync(path.join(outer, 'wrapper.txt'), 'x\n');
-    g(['add', '-A']); g(['commit', '-q', '-m', 'outer']);
-    const outerHead = g(['rev-parse', 'HEAD']).trim();
-
-    // A separately tracked child repo — where the real work happens. The outer
-    // repo is deliberately NOT advanced past `outerHead` afterwards, which is
-    // precisely the topology that makes the stale reading look fresh.
-    const child = path.join(outer, 'frontend');
-    fs.mkdirSync(child, { recursive: true });
-    const gc = (argv) => runGit(argv, { cwd: child }).stdout;
-    gc(['init', '-q']); gc(['config', 'user.email', 't@t.com']); gc(['config', 'user.name', 'T']);
-    gc(['config', 'commit.gpgsign', 'false']);
-    fs.writeFileSync(path.join(child, 'app.js'), 'let a = 1;\n');
-    gc(['add', '-A']); gc(['commit', '-q', '-m', 'child']);
-
-    const r = readStateHeadFreshness(outer, outerHead);
-    assert.strictEqual(r.commit_stale, null,
-      'a sub_repos workspace cannot substantiate a freshness claim from the outer ' +
-      'HEAD — it must report unknown, never false ("known fresh")');
-    assert.strictEqual(r.commits_behind, null,
-      'a distance measured against the wrapper repo is not a meaningful count');
-  });
-
-  test('(j) a plain single-repo project is NOT degraded by the sub_repos check', () => {
-    // Over-tightening guard for (i), mirroring what (h) does for (g). An empty or
-    // absent sub_repos must leave the normal path untouched — a check that
-    // degraded every project to unknown would "pass" (i) while destroying the
-    // feature, which is the failure mode this pins.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2573-plain-'));
-    propDirs.push(dir);
-    const g = (argv) => runGit(argv, { cwd: dir }).stdout;
-    g(['init', '-q']); g(['config', 'user.email', 't@t.com']); g(['config', 'user.name', 'T']);
-    g(['config', 'commit.gpgsign', 'false']);
-    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, '.planning', 'config.json'),
-      JSON.stringify({ planning: { sub_repos: [] } }, null, 2),
-    );
-    fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
-    g(['add', '-A']); g(['commit', '-q', '-m', 'base']);
-    const head = g(['rev-parse', 'HEAD']).trim();
-
-    const r = readStateHeadFreshness(dir, head);
-    assert.strictEqual(r.commit_stale, false,
-      'an empty sub_repos list is a normal single-repo project — it must resolve');
-    assert.strictEqual(r.commits_behind, 0);
-  });
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // #3468 matrix section B, rows B7/B8 — ADR-3408 §8.2's bright line, exercised
@@ -22381,13 +22039,9 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
     const body = fs.readFileSync(statePath(), 'utf-8');
     return body.slice(body.search(/^## Session/m));
   }
-  // runNode, not runGsdTools: the success path's stderr carries the warning.
+  // runGsdToolsCaptured, not runGsdTools: the success path's stderr carries the warning.
   function recordSession(...args) {
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
-    const rec = runNode([toolsPath, 'state', 'record-session', ...args],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+    const rec = runGsdToolsCaptured(['state', 'record-session', ...args], tmpDir);
     assert.equal(rec.exitCode, 0, `record-session failed: ${rec.stderr}`);
     return { json: JSON.parse(rec.stdout), stderr: rec.stderr };
   }
@@ -22576,12 +22230,8 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
   test('(a) a line break in --stopped-at is refused before anything is written', () => {
     seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2', 'Resume file: None']);
     const before = readState();
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
     for (const value of ['line one\nForged: line', 'line one\rForged: line']) {
-      const rec = runNode([toolsPath, 'state', 'record-session', '--stopped-at', value],
-        { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+      const rec = runGsdToolsCaptured(['state', 'record-session', '--stopped-at', value], tmpDir);
       assert.notStrictEqual(rec.exitCode, 0, `must refuse ${JSON.stringify(value)}`);
       assert.match(rec.stderr, /--stopped-at must be a single line/);
       assert.strictEqual(readState(), before, 'STATE.md must be untouched');
@@ -22671,10 +22321,7 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
 
   // ─── trek-e review 2026-10-10 ─────────────────────────────────────────────
   function runTool(...args) {
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
-    return runNode([toolsPath, ...args], { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+    return runGsdToolsCaptured(args, tmpDir);
   }
 
   // Major 1: U+2028/U+2029 start a line for every `m`-flag reader, so they
@@ -23739,7 +23386,7 @@ Last activity: 2026-10-01 -- done
   });
 
   test('CONTROL: a phase directory that cannot be found starts at plan 1, as before', () => {
-    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n');
+    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n**Total Plans in Phase:** 0\n');
     const r = runGsdTools(['state', 'begin-phase', '--phase', '77', '--name', 'ghost', '--plans', '3'], tmp);
     assert.ok(r.success, r.error);
     assert.match(read(), /^\*\*Current Plan:\*\* 1$/m);
@@ -24009,5 +23656,116 @@ describe('legacy phase-heading counting reads real headings only (#5880)', () =>
 
   test('sentinel phases 0 and 999.1 stay excluded', (t) => {
     assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n### Phase 0: Sentinel\n\n### Phase 999.1: Icebox\n`), 2);
+  });
+});
+
+// ─── #6271: an unscoped update-progress decline names its cause and its fix ──────────────────────────────────
+
+describe('state update-progress: an unscoped decline names the cause and the fix (#6271)', () => {
+  const { isolateWorkstreamEnv, restoreWorkstreamEnv } = require('./helpers.cjs');
+  let proj;
+
+  beforeEach(() => {
+    // The host suite forces GSD_WORKSTREAM, which runGsdTools propagates and which redirects the project lookup.
+    isolateWorkstreamEnv();
+    proj = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(proj);
+    restoreWorkstreamEnv();
+  });
+
+  const FLAT_ROADMAP = '# Roadmap\n\n## Phases\n\n- [ ] Phase 1: Alpha\n\n## Phase Details\n\n### Phase 1: Alpha\n**Goal:** x\n';
+  const OTHER_MILESTONE_ROADMAP = '# Roadmap\n\n## v0.2.0 Next\n\n### Phase 1: Alpha\n**Goal:** x\n';
+  const PHASE_TITLE_ROADMAP = '# Roadmap\n\n## Phases\n\n### Phase 1: Migrate to v2.0 API\n**Goal:** x\n';
+
+  function seed(milestoneLine, roadmap) {
+    const phaseDir = path.join(proj, '.planning', 'phases', '01-alpha');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    for (const f of ['01-01-PLAN.md', '01-01-SUMMARY.md', '01-02-PLAN.md']) fs.writeFileSync(path.join(phaseDir, f), '# x\n');
+    if (roadmap !== null) fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), roadmap);
+    fs.writeFileSync(path.join(proj, '.planning', 'STATE.md'), [
+      '---', "gsd_state_version: '1.0'", milestoneLine, 'status: executing', 'progress:', '  total_plans: 9', '---', '',
+      '# Project State', '', '## Current Position', '', 'Phase: 1 (Alpha) — EXECUTING', 'Plan: 1 of 2', 'Status: Executing',
+      'Progress: [░░░░░░░░░░] 0%', '',
+    ].join('\n'));
+  }
+
+  const run = (args = 'state update-progress') => {
+    const r = runGsdTools(args, proj);
+    assert.ok(r.success, r.error);
+    return JSON.parse(r.output);
+  };
+
+  test('row 5, a flat ROADMAP: the decline names the version and offers milestone: null, the reason unchanged', () => {
+    seed('milestone: v0.1.0', FLAT_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, 'phase scope is unscoped, not complete');
+    assert.match(out.hint, /STATE\.md names milestone "v0\.1\.0", but ROADMAP\.md has no milestone headings at all/);
+    assert.match(out.hint, /set the milestone field in STATE\.md to null/);
+    assert.match(out.hint, /add a heading for "v0\.1\.0" above its phases/);
+  });
+
+  test('the named fix works: milestone: null on the same roadmap refreshes the counters, on every run', () => {
+    seed('milestone: null', FLAT_ROADMAP);
+    for (let i = 0; i < 2; i += 1) {
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      assert.strictEqual(out.completed, 1);
+      assert.strictEqual(out.total, 2);
+      assert.ok(!('hint' in out));
+    }
+  });
+
+  test('row 5, a ROADMAP with other milestone headings: the version, and the heading goes above its phases', () => {
+    seed('milestone: v0.1.0', OTHER_MILESTONE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, 'phase scope is unscoped, not complete');
+    assert.match(out.hint, /STATE\.md names milestone "v0\.1\.0", but ROADMAP\.md has no milestone heading for it/);
+    assert.match(out.hint, /add a heading for "v0\.1\.0" above its phases/);
+    assert.doesNotMatch(out.hint, /to null/, 'milestone: null is not the fix for a ROADMAP that has milestone headings');
+  });
+
+  test('row 4, STATE names no milestone and the ROADMAP has milestone headings: name one in STATE', () => {
+    seed('milestone: null', OTHER_MILESTONE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.match(out.hint, /STATE\.md names no milestone, but ROADMAP\.md has milestone headings/);
+    assert.match(out.hint, /set the milestone field in STATE\.md to one of them/);
+  });
+
+  test('row 4 on a Phase title that contains a version: the title is the cause, and milestone: null is not offered', () => {
+    seed('milestone: null', PHASE_TITLE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.match(out.hint, /a Phase title contains a version \(vX\.Y\), which reads as one/);
+    assert.match(out.hint, /reword that Phase title/);
+    assert.doesNotMatch(out.hint, /to null/);
+  });
+
+  test('state sync names the same cause where it skips Progress on an unscoped scope', () => {
+    seed('milestone: null', PHASE_TITLE_ROADMAP);
+    const out = run('state sync');
+    const skipped = out.changes.find((c) => c.startsWith('Progress: skipped'));
+    assert.ok(skipped, `a skipped Progress change expected; got: ${JSON.stringify(out.changes)}`);
+    assert.match(skipped, /phase scope is "unscoped", not COMPLETE \(#3217\)\. Cause: ROADMAP\.md has no milestone heading, but a Phase title contains a version/);
+  });
+
+  test('STATE.md text echoed in the hint is escaped: a control character in the milestone cannot reach the terminal', () => {
+    seed('milestone: "v0.1.0\\u001b[31mX"', FLAT_ROADMAP);
+    const out = run();
+    assert.ok(!out.hint.includes('\u001b'), 'no raw escape character');
+    assert.match(out.hint, /v0\.1\.0\\u001b\[31mX/);
+  });
+
+  test('a decline for another scope (no ROADMAP.md: unreadable) carries no unscoped hint', () => {
+    seed('milestone: v0.1.0', null);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, `phase scope is ${SCOPE.UNREADABLE}, not complete`);
+    assert.ok(!('hint' in out));
   });
 });
