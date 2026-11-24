@@ -423,10 +423,9 @@ If user_setup exists: create `{phase}-USER-SETUP.md` using the template at `~/.c
 <step name="create_summary">
 **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
 emit narrative output between the Write tool call and the commit tool call.
-Truncation at this boundary is a known failure mode (see #2070 rescue logic in
-execute-phase.md step 5.5).
+Truncation recovery: execute-phase.md step 5.5 (#2070).
 
-Create `{summary_path}` beside the supplied plan (replace its final `-PLAN.md` with `-SUMMARY.md`). Use the template at `~/.claude/gsd-core/templates/summary.md` (or `summary.compact.md` — same `compact-content-gate.md` resolution as the USER-SETUP template above).
+Create `{summary_path}` from the plan path: final `-PLAN.md` → `-SUMMARY.md`. Use `~/.claude/gsd-core/templates/summary.md` or `summary.compact.md`; resolve via `compact-content-gate.md` as for USER-SETUP.
 
 **Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration ($DURATION), completed ($PLAN_END_TIME date).
 
@@ -543,8 +542,7 @@ fi
 <step name="git_commit_metadata">
 **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
 emit narrative output between the Write tool call and the commit tool call.
-Truncation at this boundary is a known failure mode (see #2070 rescue logic in
-execute-phase.md step 5.5).
+Truncation recovery: execute-phase.md step 5.5 (#2070).
 
 Task code already committed per-task. Commit plan metadata:
 
