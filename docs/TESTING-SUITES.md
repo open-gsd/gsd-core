@@ -142,7 +142,7 @@ margin went unnoticed.
 DEFAULT-tier and already bounded by the DEFAULT cap — no separate new-agent cap
 is needed. (This tier-cap machinery is distinct from the separate 45 KB-*char*
 extraction-evidence threshold on `gsd-planner` enforced by
-`tests/planner-decomposition.test.cjs` — that one proves mode sections were
+the `planner-decomposition` text contract — that one proves mode sections were
 extracted; this one bounds total agent bytes.)
 
 ### How-to: a workflow or agent grew and CI is red

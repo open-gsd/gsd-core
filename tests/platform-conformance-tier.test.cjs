@@ -55,7 +55,7 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 // The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
 // swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
 const WINDOWS_TIER_SIZE_BASELINE = 351; // -2 (#6039): wave 4 moved 2 files off the lane (env literal only)
-const MACOS_TIER_SIZE_BASELINE = 300; // -1: tests/debugger-semantic-recall.test.cjs became a text contract (#6566)
+const MACOS_TIER_SIZE_BASELINE = 298; // -2: tests/contributor-standards.test.cjs and tests/verification-overrides.test.cjs became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566)
 
 // A tier of `count` files against its committed baseline: nonzero, not above, not below.
 function assertTierAtBaseline(count, baseline, label, constantName) {
