@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -81,11 +81,48 @@ function writeShellStub(dir, name) {
   return target;
 }
 
+describe('homePair (#6639)', () => {
+  test('returns a new HOME/USERPROFILE pair for the directory given, on every call', () => {
+    const first = homePair('/h/one');
+    assert.deepEqual(Object.keys(first).sort(), ['HOME', 'USERPROFILE']);
+    assert.equal(first.HOME, '/h/one');
+    assert.equal(first.USERPROFILE, '/h/one');
+    assert.notEqual(homePair('/h/one'), first);
+    delete first.HOME;
+    assert.equal(homePair('/h/one').HOME, '/h/one', 'a caller mutating one pair must not change the next');
+  });
+
+  test('isolated-env.cjs and helpers.cjs load in either order, with no require cycle', (t) => {
+    const isolatedEnvPath = path.join(__dirname, 'helpers', 'isolated-env.cjs');
+    const helpersPath = path.join(__dirname, 'helpers.cjs');
+    const script = [
+      'const [a, b] = process.argv.slice(1).map((p) => require(p));',
+      'const iso = a.homePair ? a : b;',
+      'const hel = a.homeSandboxEnv ? a : b;',
+      'process.stdout.write(JSON.stringify({',
+      '  pair: iso.homePair("/x"),',
+      '  sandbox: hel.homeSandboxEnv("/y"),',
+      '  built: Object.keys(iso.isolatedEnv({ home: process.cwd(), base: {} })).includes("HOME"),',
+      '}));',
+    ].join('\n');
+    const home = tmp(t, 'gsd-6639-order-');
+
+    for (const order of [[isolatedEnvPath, helpersPath], [helpersPath, isolatedEnvPath]]) {
+      const out = probe(script, isolatedEnv({ home }), order);
+      assert.equal(out.pair.HOME, '/x', `load order ${order.map((p) => path.basename(p)).join(' then ')}`);
+      assert.equal(out.pair.USERPROFILE, '/x');
+      assert.equal(out.sandbox.HOME, '/y');
+      assert.equal(out.sandbox.USERPROFILE, '/y');
+      assert.equal(out.built, true, 'isolatedEnv builds an env after both modules loaded');
+    }
+  });
+});
+
 describe('isolatedEnv: home', () => {
   test('HOME and USERPROFILE both point at home', (t) => {
     const home = tmp(t, 'gsd-6033-home-');
     const hostile = tmp(t, 'gsd-6033-hostile-home-');
-    const base = { ...SYSTEM_VARS, HOME: hostile, USERPROFILE: hostile };
+    const base = { ...SYSTEM_VARS, ...homePair(hostile) };
 
     const view = childView(isolatedEnv({ home, base }));
     assert.equal(view.env.HOME, home);
@@ -391,7 +428,7 @@ describe('createHermeticRoot: ancestor config discovery', () => {
 
   /** Bypass: the same probe, but the child's HOME/USERPROFILE come from a raw (un-isolated) merge. */
   function readToolsRaw(dir, home) {
-    return probe(MODEL_PROBE, { ...SYSTEM_VARS, HOME: home, USERPROFILE: home }, [MODEL_RESOLVER, dir]);
+    return probe(MODEL_PROBE, { ...SYSTEM_VARS, ...homePair(home) }, [MODEL_RESOLVER, dir]);
   }
 
   function ancestorWithTools(t) {

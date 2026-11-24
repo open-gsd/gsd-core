@@ -10,6 +10,7 @@ process.env.GSD_TEST_MODE = '1';
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const { homePair } = require('./helpers/isolated-env.cjs');
 
 const {
   buildKimiAgentArtifacts,
@@ -225,7 +226,7 @@ describe('Kimi runtime homes', () => {
   test('default Kimi global root is recommended ~/.config/agents when no generic skills root exists', () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-home-default-'));
     try {
-      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined, HOME: tmpHome, USERPROFILE: tmpHome }, () => {
+      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined, ...homePair(tmpHome) }, () => {
         assert.strictEqual(
           getGlobalConfigDir('kimi'),
           path.join(tmpHome, '.config', 'agents'),
@@ -289,7 +290,7 @@ describe('Kimi runtime homes', () => {
   test('XDG_CONFIG_HOME does not change Kimi default root', () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-home-xdg-'));
     try {
-      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: XDG_HOME, HOME: tmpHome, USERPROFILE: tmpHome }, () => {
+      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: XDG_HOME, ...homePair(tmpHome) }, () => {
         assert.strictEqual(
           getGlobalConfigDir('kimi'),
           path.join(tmpHome, '.config', 'agents'),

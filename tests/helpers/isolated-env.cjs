@@ -26,14 +26,16 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const helpers = require('../helpers.cjs');
 
-const { cleanup } = helpers;
+// helpers.cjs requires THIS module at load (it builds its own HOME/USERPROFILE pairs with
+// homePair, #6639), so helpers.cjs is read at call time, never at module scope: a
+// top-level require here would cycle and hand back a half-built exports object.
+const helpers = () => require('../helpers.cjs');
 
 // helpers.cjs exports the derived set as a LAZY getter (TEST_ENV_BASE), not as the
 // testEnvBase() function: reading it at module scope would make an unbuilt tree
 // throw during require. Read it only when an env is actually built.
-const testEnvBase = () => helpers.TEST_ENV_BASE;
+const testEnvBase = () => helpers().TEST_ENV_BASE;
 
 // Variables stripped by PREFIX (case-insensitive). GSD_* is the product's own
 // namespace; RUN_TESTS_* are the runner's control variables (#4070's
@@ -217,7 +219,7 @@ function isolatedPath(opts) {
   try {
     linkExecutable(nodeBinDir, NODE_BIN);
   } catch (err) {
-    cleanup(nodeBinDir);
+    helpers().cleanup(nodeBinDir);
     throw err;
   }
 
@@ -245,4 +247,22 @@ function createHermeticRoot(prefix, { parent } = {}) {
   return root;
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable };
+/**
+ * The HOME / USERPROFILE pair that points a process at `dir`, as a NEW object each call.
+ *
+ * The one place a test spells the pair. `isolatedEnv({ home })` is the route for an env handed
+ * to a child; `homePair` is for the sites that cannot build a full env: the in-process route
+ * (`homeSandboxEnv`, `withEnv`), the spawn helpers in tests/helpers.cjs that sit below
+ * `isolatedEnv` (`installSpawnEnv`, the npm envs), an env object handed to code in-process,
+ * and a deliberately hostile env that must keep ambient keys `isolatedEnv` would strip.
+ * Spread it into the larger literal. `os.homedir()` reads HOME on POSIX and USERPROFILE on
+ * Windows, so a `{ HOME }` alone is not hermetic there.
+ *
+ * @param {string} dir directory to use as the home; used as given (not required to be absolute).
+ * @returns {{ HOME: string, USERPROFILE: string }}
+ */
+function homePair(dir) {
+  return { HOME: dir, USERPROFILE: dir };
+}
+
+module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair };

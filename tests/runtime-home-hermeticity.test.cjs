@@ -25,7 +25,7 @@ const path = require('node:path');
 const { runNode, formatSeamResult, OUTCOME } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS, QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, cleanup, TEST_HOME_SANDBOX_MARKER } = require('./helpers.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, homePair } = require('./helpers/isolated-env.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const RUNTIME_HOMES = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs');
@@ -79,8 +79,7 @@ function hostileEnv() {
 
   const env = {
     ...process.env,
-    HOME: home,
-    USERPROFILE: home,
+    ...homePair(home),
     [TEST_HOME_SANDBOX_MARKER]: home,
     CLAUDE_CONFIG_DIR: claudeConfigDir,
     GSD_HOME: gsdHome,
