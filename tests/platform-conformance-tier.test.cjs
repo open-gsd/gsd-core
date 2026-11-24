@@ -54,8 +54,8 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 // constant in the same change, so the bound only tightens. Do not raise a number to make a red test green.
 // The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
 // swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
-const WINDOWS_TIER_SIZE_BASELINE = 354; // -2 (#6037): wave 2 moved 5 files off the lane; 3 files wave 1 moved off it (home-resolving tests) are back
-const MACOS_TIER_SIZE_BASELINE = 302; // +2 (#5178): tests/agent-query-contract.test.cjs resolves the tmpdir realpath (/var vs /private/var) and tests/plan-checker-artifact-loop.test.cjs runs the plan-checker step under zsh, macOS's default shell
+const WINDOWS_TIER_SIZE_BASELINE = 351; // -2 (#6039): wave 4 moved 2 files off the lane (env literal only)
+const MACOS_TIER_SIZE_BASELINE = 300; // +2 (#5178): tests/agent-query-contract.test.cjs resolves the tmpdir realpath (/var vs /private/var) and tests/plan-checker-artifact-loop.test.cjs runs the plan-checker step under zsh, macOS's default shell; -2: tests/contributor-standards.test.cjs and tests/verification-overrides.test.cjs became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566)
 
 // A tier of `count` files against its committed baseline: nonzero, not above, not below.
 function assertTierAtBaseline(count, baseline, label, constantName) {
@@ -1060,6 +1060,33 @@ describe('#5074 platform split — .platform sibling rule', () => {
     } finally {
       cleanup(tmpDir2);
     }
+  });
+
+  // ─── #6638: a .platform sibling declared in ALWAYS_REAL_OS needs no signal of its own.
+  // Pure-function row with an injected map, like row 7.
+  test('a .platform sibling declared in ALWAYS_REAL_OS satisfies the signal requirement (#6638)', () => {
+    const entries = [
+      { rel: 'tests/fake-declared.test.cjs', content: 'assert.equal(1 + 1, 2);\n' },
+      { rel: 'tests/fake-declared.platform.test.cjs', content: 'assert.equal(2 + 2, 4);\n' },
+    ];
+    const siblingRel = 'tests/fake-declared.platform.test.cjs';
+    const baseRel = 'tests/fake-declared.test.cjs';
+
+    assert.deepEqual(findPlatformSplitViolations(entries, new Map()), [
+      { file: siblingRel, kind: 'sibling-without-signal', signals: [] },
+    ]);
+    assert.deepEqual(findPlatformSplitViolations(entries, new Map([[siblingRel, 'fixture reason']])), []);
+    assert.deepEqual(
+      findPlatformSplitViolations(entries, new Map([[baseRel, 'fixture reason']])),
+      [
+        { file: siblingRel, kind: 'sibling-without-signal', signals: [] },
+        { file: baseRel, kind: 'base-always-real-os', signals: [] },
+      ],
+    );
+    assert.deepEqual(
+      findPlatformSplitViolations(entries, new Map([[siblingRel, 'a'], [baseRel, 'b']])),
+      [{ file: baseRel, kind: 'base-always-real-os', signals: [] }],
+    );
   });
 
   // ─── Row 6: an orphan .platform file (no base) with a genuine signal ─────
