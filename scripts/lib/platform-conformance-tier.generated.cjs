@@ -298,6 +298,7 @@ module.exports = {
   "tests/secret-read-exemptions.test.cjs",
   "tests/section-manifest-init-facts.test.cjs",
   "tests/security.test.cjs",
+  "tests/seed-close.test.cjs",
   "tests/self-test-report-policy.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/sh-hook-paths.test.cjs",
