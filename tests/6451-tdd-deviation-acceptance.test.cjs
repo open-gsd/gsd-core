@@ -22,6 +22,7 @@ const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 
 const { evaluateTddReviewCheckpoint } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const WORKFLOW_STEP = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'verify-phase-goal.md');
 const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
@@ -141,9 +142,21 @@ describe('6451 the Phase blocked message names only real flags', () => {
   test('every --flag in the TDD block message is parsed by execute-phase', () => {
     // allow-test-rule: runtime-contract-is-the-product see #6451
     const step = fs.readFileSync(WORKFLOW_STEP, 'utf8');
-    const block = step.match(/```\n(Phase blocked[\s\S]*?)```/);
-    assert.ok(block, 'the Phase blocked message block exists in verify-phase-goal.md');
-    const flags = [...new Set(block[1].match(/--[a-z][a-z-]+/g) || [])];
+    // Line-scan the fenced message block with the shared splitter: CRLF-safe and
+    // no regex over the file's content.
+    const stepLines = splitLines(step);
+    let blockLines = null;
+    for (let i = 0; i + 1 < stepLines.length; i++) {
+      if (stepLines[i].trim() === '```' && stepLines[i + 1].startsWith('Phase blocked')) {
+        blockLines = [];
+        for (let j = i + 2; j < stepLines.length && stepLines[j].trim() !== '```'; j++) {
+          blockLines.push(stepLines[j]);
+        }
+        break;
+      }
+    }
+    assert.ok(blockLines !== null, 'the Phase blocked message block exists in verify-phase-goal.md');
+    const flags = [...new Set((blockLines.join('\n').match(/--[a-z][a-z-]+/g) || []))];
     assert.ok(flags.length > 0, 'the message names at least one flag');
     const surface = fs.readFileSync(WORKFLOW, 'utf8') + fs.readFileSync(COMMAND_DOC, 'utf8');
     for (const flag of flags) {
