@@ -109,12 +109,12 @@ GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw) && CHEC
 
 ```
 Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD.
-Resolve and re-run /gsd:execute-phase, or override with /gsd:execute-phase {phase} --force-mvp-gate to ship anyway.
+Resolve and re-run /gsd:execute-phase, or record an acceptance with /gsd:execute-phase {phase} --force-mvp-gate "<reason>" to proceed anyway.
 ```
 
-(`--force-mvp-gate` is the documented, not-yet-implemented escape hatch.) Outside TDD mode, TDD-review violations remain advisory (table shown, execution continues).
+`--force-mvp-gate "<reason>"` (value required) writes one entry per violating FAIL row into `<phase-dir>/TDD-DEVIATIONS.md` frontmatter `deviations:` — fields `plan`, `violation`, `reason` (the flag value), `accepted_by` (`git config user.name`, fallback `user`), `accepted_at` (UTC ISO-8601) — matching the `overrides:` shape of `~/.claude/gsd-core/references/verification-overrides.md`; then re-runs `check tdd.review-checkpoint` and applies the Proceed rule to the new verdict. Accepted plans keep their FAIL row annotated `deviationAccepted` and no longer count as violations. The record persists, so a later re-run WITHOUT the flag proceeds (block=false) straight to the verifier. An unreadable record fails closed (`unreadable` verdict, never a pass). Outside TDD mode, TDD-review violations remain advisory (table shown, execution continues).
 
-**Proceed rule:** If `TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: STOP — do NOT proceed to `close_parent_artifacts`, `regression_gate`, the verifier, or `phase.complete`. Otherwise proceed normally.
+**Proceed rule:** If `TDD_MODE && GATE_RESULT.block == true` for `tdd.review-checkpoint`: when `FORCE_MVP_GATE_REASON` is set, first write/append the deviation entries to `<phase-dir>/TDD-DEVIATIONS.md` (one per FAIL row of `GATE_RESULT.rows`: `violation` = `missing:<r.missing joined>`, or `green_before_red` when the row carries that reason; `reason` = `FORCE_MVP_GATE_REASON`; `accepted_by`/`accepted_at` as above), then re-run the `tdd.review-checkpoint` check and evaluate this Proceed rule on the fresh `GATE_RESULT`; when the flag is absent, STOP — do NOT proceed to `close_parent_artifacts`, `regression_gate`, the verifier, or `phase.complete`. Otherwise proceed normally.
 </step>
 
 <step name="close_parent_artifacts_dispatch">
