@@ -153,8 +153,10 @@ function resolveQuickResume(cwd: string, slug: string): QuickResumeResult {
       has_plan: hasPlanFile(taskDir),
       has_summary: resolveQuickTaskSummaryFile(taskDir, match.name) !== null,
       // The STATE.md row is keyed by the id prefix: the quick id, or a legacy
-      // directory's date prefix (gsd-core/workflows/quick.md Step 2).
-      state_row: hasQuickTaskRow(readStateContent(cwd), match.prefix),
+      // directory's date prefix (gsd-core/workflows/quick.md Step 2). Two
+      // legacy tasks of one day share that date, so a legacy row must also
+      // name this directory.
+      state_row: hasQuickTaskRow(readStateContent(cwd), match.prefix, match.legacy ? match.name : undefined),
     },
   };
 }

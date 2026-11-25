@@ -195,6 +195,8 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
     makeTask(tmpDir, '20250101-fix-login', { 'PLAN.md': '# plan\n' });
     // Same day, so the same date prefix: only the Directory cell tells the two rows apart.
     makeTask(tmpDir, '20250101-other');
+    // A directory whose name is only a prefix of the row's directory is not named by it.
+    makeTask(tmpDir, '20250101-fix');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
       '# STATE',
       '',
@@ -207,10 +209,12 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
     ].join('\n'));
     const done = okJson(initQuick(tmpDir, ['--resume', 'fix-login']));
     const open = okJson(initQuick(tmpDir, ['--resume', 'other']));
+    const shorter = okJson(initQuick(tmpDir, ['--resume', 'fix']));
     assert.equal(done.legacy, true);
     assert.equal(done.quick_id, null);
     assert.deepEqual(done.resume, { has_plan: true, has_summary: false, state_row: true });
     assert.deepEqual(open.resume, { has_plan: false, has_summary: false, state_row: false });
+    assert.deepEqual(shorter.resume, { has_plan: false, has_summary: false, state_row: false });
   });
 
   test('mode flags still decide the section manifest, as on a first run', () => {
