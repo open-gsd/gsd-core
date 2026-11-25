@@ -319,6 +319,23 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
         } finally { cleanup(dir); }
       });
 
+      test('a sub_repos workspace whose .planning root is not a Git repository keeps one marker from root and sub-repo shells', () => {
+        const root = createTempDir('gsd-plan-timing-ws-');
+        try {
+          fs.mkdirSync(path.join(root, '.planning'));
+          const subRepo = path.join(root, 'backend');
+          fs.mkdirSync(subRepo);
+          gitOrThrow(['init', '-q'], { cwd: subRepo, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+          const marker = runFresh(root, start(), 1000, ['03', '01'], true).file;
+          assert.equal(path.dirname(marker), path.join(root, '.planning'));
+          // The executor may cd into a sub-repo before completion; the marker stays anchored at the .planning root.
+          assert.deepEqual(runFresh(subRepo, finish(), 1060), {
+            duration: '1 min', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T00:17:40Z',
+          });
+          assert.equal(fs.readdirSync(path.join(subRepo, '.git')).some((entry) => entry.startsWith('gsd-plan-timing-')), false);
+        } finally { cleanup(root); }
+      });
+
       test('bracket/project/slash identities remain distinct and confined to their worktree Git directory', () => {
         const dir = fixture();
         try {
@@ -365,7 +382,7 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
         const dir = fixture();
         try {
           const initial = fs.readdirSync(dir);
-          assert.throws(() => runFresh(dir, 'git() { if [ "$1" = rev-parse ]; then return 23; fi; command git "$@"; }\n' + start(), 1000), (error) => error.exitCode === 1);
+          assert.throws(() => runFresh(dir, 'git() { case " $* " in *" rev-parse "*) return 23 ;; esac; command git "$@"; }\n' + start(), 1000), (error) => error.exitCode === 1 && /could not resolve the timing directory/.test(error.stderr));
           assert.throws(() => runFresh(dir, 'git() { if [ "$1" = hash-object ]; then return 23; fi; command git "$@"; }\n' + start(), 1000), (error) => error.exitCode === 1);
           assert.throws(() => runFresh(dir, finish(), 1000), (error) => error.exitCode === 1);
           assert.deepEqual(fs.readdirSync(dir), initial);

@@ -37,16 +37,22 @@ CANONICAL_PLAN_ID=$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v!=="
 CANONICAL_PHASE_ID=$(canonicalize_timing_id "$CANONICAL_PHASE_ID")
 CANONICAL_PLAN_ID=$(canonicalize_timing_id "$CANONICAL_PLAN_ID")
 TIMING_KEY=$(printf '%s\0%s' "$CANONICAL_PHASE_ID" "$CANONICAL_PLAN_ID" | git hash-object --stdin) || exit 1
-TIMING_FILE="$(git rev-parse --path-format=absolute --git-common-dir)/gsd-plan-timing-$TIMING_KEY" || exit 1
+# Anchor at the directory that owns .planning/: its shared Git directory (one marker for every
+# worktree), or .planning/ itself when that root has no .git (a sub_repos workspace); a Git failure stops.
+TIMING_ROOT=$PWD
+while [ ! -d "$TIMING_ROOT/.planning" ] && [ "$TIMING_ROOT" != / ]; do TIMING_ROOT=$(dirname "$TIMING_ROOT"); done
+[ -d "$TIMING_ROOT/.planning" ] || TIMING_ROOT=$PWD
+TIMING_DIR=$(git -C "$TIMING_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { [ ! -e "$TIMING_ROOT/.git" ] || { echo "ERROR: git could not resolve the timing directory." >&2; exit 1; }; TIMING_DIR="$TIMING_ROOT/.planning"; }
+TIMING_FILE="$TIMING_DIR/gsd-plan-timing-$TIMING_KEY"
 # plan-timing-key:end
 case "$GSD_TIMING_ATTEMPT" in
   fresh)
-    rm -f -- "$TIMING_FILE.result"
-    printf '%s\n' "$(date +%s)" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" > "$TIMING_FILE"
+    rm -f -- "$TIMING_FILE.result" || exit 1
+    printf '%s\n' "$(date +%s)" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" > "$TIMING_FILE" || { echo "ERROR: could not write the plan timing marker $TIMING_FILE." >&2; exit 1; }
     ;;
   continuation)
     if [ ! -s "$TIMING_FILE" ]; then
-      echo "ERROR: continuation timing marker is missing from the shared Git directory (cleared or never written); restart explicitly as fresh." >&2
+      echo "ERROR: continuation timing marker is missing from $TIMING_DIR (cleared or never written); restart explicitly as fresh." >&2
       exit 1
     fi
     ;;

@@ -102,6 +102,11 @@ describe('#6118 harness-worktree checkpoint continuation', () => {
     const step = readFileNormalized(CONTINUATION_PART);
     assert.ok(step.includes('`harness-worktree` plan'), 'step 6 names the harness-worktree case');
     assert.ok(step.includes('worktree-recovery-policy.md'), 'step 6 points at the policy section that owns the path');
+    // The policy continues when the harness removed a clean worktree, so no fail-closed rule may cover that mode.
+    for (const line of splitLines(step).filter((l) => l.includes('fail closed'))) {
+      assert.ok(/except for `harness-worktree`/i.test(line),
+        `a fail-closed rule must exempt harness-worktree: ${line.trim().slice(0, 80)}`);
+    }
   });
 
   test('the policy documents resume-by-agent-id and the paused-branch fast-forward, and keeps the manifest-scoped merge', () => {
