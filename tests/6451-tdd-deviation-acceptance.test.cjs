@@ -248,6 +248,8 @@ describe('6451 the Phase blocked message names only real flags', () => {
     assert.ok(rule !== undefined, 'the Proceed rule exists in verify-phase-goal.md');
     assert.ok(rule.includes('unreadable'), 'the Proceed rule must name the unreadable verdict');
     assert.ok(rule.includes('STOP'), 'the Proceed rule must STOP on an unreadable verdict under TDD');
+    assert.ok(rule.includes('GATE_RESULT.unreadable'), 'the rule condition must name the unreadable field the emitted CLI payload actually carries');
+    assert.ok(!rule.includes('GATE_RESULT.outcome'), 'the rule must not test GATE_RESULT.outcome: the CLI router serializes the payload only and the payload has no outcome field');
   });
 
   test('the blocked message in execute-mvp-tdd.md names the same flags as the step message', () => {
