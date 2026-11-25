@@ -276,7 +276,7 @@ function normalizeKimiPayload(data) {
 }
 
 let input = '';
-const stdinTimeout = setTimeout(() => { process.exitCode = 0; }, 3000); // PROOF-ONLY MUTANT (#5837 failing-first run): reverted by the next commit
+const stdinTimeout = setTimeout(() => allow(undefined), 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
