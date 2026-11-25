@@ -1413,18 +1413,29 @@ describe('workflow call sites declare --files (#2269)', () => {
   // first cut of this rule keyed on an assignment prefix, because 437 of the
   const isGsdBinary = (t) => GSD_BINARY_RE.test(bareCommandName(t));
 
-  // routeCommit's predicate, verbatim, over one invocation's tokens. Stops at
-  // the first control operator so that a later command's --files can never
-  // vouch for this one even when the caller passes an unsegmented line, and
-  // drops redirection tokens — they are consumed by the shell, so a `--files`
-  // whose only successors are redirections has no value at runtime.
+  // routeCommit's predicate over one invocation's tokens (gsd-core/bin/
+  // gsd-tools.cjs, the #4253 rule): `--files` and `--files-removed` are two
+  // LIST flags, each running from its flag to the NEXT LIST FLAG — a boolean
+  // flag inside a list is skipped, not a terminator, and a repeated list flag
+  // merges, so every occurrence contributes its run — and cmdCommit treats
+  // either non-empty list as explicit scope. Stops at the first control
+  // operator so that a later command's --files can never vouch for this one
+  // even when the caller passes an unsegmented line, and drops redirection
+  // tokens — they are consumed by the shell, so a list whose only successors
+  // are redirections has no value at runtime.
+  const COMMIT_LIST_FLAGS = new Set(['--files', '--files-removed']);
   const hasScopedFiles = (line) => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
     const tokens = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir).map((t) => t.value);
-    const filesIndex = tokens.indexOf('--files');
-    if (filesIndex === -1) return false;
-    return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
+    const starts = [];
+    tokens.forEach((t, i) => {
+      if (COMMIT_LIST_FLAGS.has(t)) starts.push(i);
+    });
+    return starts.some((start, k) => {
+      const end = k + 1 < starts.length ? starts[k + 1] : tokens.length;
+      return tokens.slice(start + 1, end).some((t) => !t.startsWith('--'));
+    });
   };
 
   // Usage-synopsis notation is documentation OF the CLI, never a call TO it:
