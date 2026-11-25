@@ -165,8 +165,10 @@ describe('#4669 hostile keys', () => {
   test('a prototype-named agent is not an override, whatever the map holds', (t) => {
     const config = { model_overrides: { [AGENT]: TWO_RUNTIMES } };
     const root = setup(t, config, 'claude');
+    const bare = setup(t, {}, 'claude');
     for (const agent of ['toString', 'constructor', '__proto__']) {
-      assert.equal(typeof resolveModelInternal(root, agent), 'string', agent);
+      assert.equal(resolveModelInternal(root, agent), resolveModelInternal(bare, agent), agent);
+      assert.equal(resolveModelOverride({ model_overrides: {} }, agent), null, agent);
     }
   });
 

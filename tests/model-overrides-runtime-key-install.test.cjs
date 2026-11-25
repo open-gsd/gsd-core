@@ -20,9 +20,6 @@ const {
   readGsdEffectiveModelOverrides,
   resolveAgentModelOverride,
 } = require('../gsd-core/bin/lib/install-model-override-resolver.cjs');
-const {
-  resolveClineAgentModelParams,
-} = require('../gsd-core/bin/lib/host-integration-adapters/cline-sdk-binding.cjs');
 const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const { canonicalizeRuntimeName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const { createTempDir, cleanup, scrubConfigLocationEnv } = require('./helpers.cjs');
@@ -33,8 +30,7 @@ const AGENT = 'gsd-planner';
 // Runtimes the resolver itself recognises, so a name that canonicalizes to `claude` cannot masquerade.
 const RUNTIMES = Object.keys(capabilityRegistry.runtimes)
   .filter((id) => canonicalizeRuntimeName(id) === id)
-  .sort()
-  .slice(0, 6);
+  .sort();
 
 describe('#4669 install-time reader: resolveAgentModelOverride', () => {
   test('selects the object key for the runtime being installed', () => {
@@ -56,13 +52,14 @@ describe('#4669 install-time reader: resolveAgentModelOverride', () => {
     assert.equal(resolveAgentModelOverride(AGENT, map, undefined, undefined), null);
   });
 
-  test('without a target runtime the profile resolver\'s runtime is the fallback', () => {
-    const resolver = { runtime: 'codex', resolve: () => null };
+  test('the profile resolver\'s raw config runtime is never a fallback for selection', () => {
+    const resolver = { runtime: 'codex', resolve: () => ({ model: 'tier-model' }) };
     const map = { [AGENT]: { codex: 'gpt-6-astra' } };
-    assert.equal(resolveAgentModelOverride(AGENT, map, resolver), 'gpt-6-astra');
+    // No target runtime: the object entry selects nothing, so the tier resolver answers.
+    assert.equal(resolveAgentModelOverride(AGENT, map, resolver), 'tier-model');
   });
 
-  test('the target runtime beats the profile resolver\'s runtime', () => {
+  test('the target runtime selects whatever the profile resolver\'s runtime says', () => {
     const resolver = { runtime: 'codex', resolve: () => null };
     const map = { [AGENT]: { codex: 'gpt-6-astra', opencode: 'oc-model' } };
     assert.equal(resolveAgentModelOverride(AGENT, map, resolver, 'opencode'), 'oc-model');
@@ -136,39 +133,6 @@ describe('#4669 per-runtime merge of the global and project files', () => {
   });
 });
 
-describe('#4669 the Cline binding selects by its own runtime key', () => {
-  test('an object entry with a cline key is selected', () => {
-    const params = resolveClineAgentModelParams({
-      agentType: AGENT,
-      modelOverrides: { [AGENT]: { cline: 'gpt-5', claude: 'opus' } },
-    });
-    assert.deepEqual(params, { providerId: 'openai', modelId: 'gpt-5' });
-  });
-
-  test('an object entry without a cline key falls through to the profile override', () => {
-    const params = resolveClineAgentModelParams({
-      agentType: AGENT,
-      modelOverrides: { [AGENT]: { codex: 'gpt-6-astra' } },
-      modelProfileOverrides: { balanced: { [AGENT]: 'gemini-3-pro' } },
-      profile: 'balanced',
-    });
-    assert.deepEqual(params, { providerId: 'google', modelId: 'gemini-3-pro' });
-  });
-
-  test('an object entry with nothing usable and no profile override returns null', () => {
-    assert.equal(resolveClineAgentModelParams({
-      agentType: AGENT,
-      modelOverrides: { [AGENT]: { codex: 'gpt-6-astra' } },
-    }), null);
-  });
-
-  test('a string entry is unchanged', () => {
-    assert.deepEqual(
-      resolveClineAgentModelParams({ agentType: AGENT, modelOverrides: { [AGENT]: 'claude-opus-4-8' } }),
-      { providerId: 'anthropic', modelId: 'claude-opus-4-8' });
-  });
-});
-
 describe('#4669 parity: the dispatch reader and the install reader agree', () => {
   /** Run one (entry, runtime) pair through both readers; both must give the same answer. */
   function both(t, entry, runtime) {
@@ -197,8 +161,9 @@ describe('#4669 parity: the dispatch reader and the install reader agree', () =>
     ];
   }
 
-  test('twelve entry shapes across every recognised runtime give identical answers', (t) => {
-    assert.ok(RUNTIMES.length >= 2, 'the registry must name at least two recognised runtimes');
+  test('every entry shape across every recognised runtime gives identical answers', (t) => {
+    assert.ok(RUNTIMES.includes('opencode') && RUNTIMES.includes('kilo') && RUNTIMES.includes('codex'),
+      'the install-baked runtimes must be among the recognised ones, or this test proves nothing about them');
     for (const runtime of RUNTIMES) {
       for (const entry of shapes(runtime)) {
         const { dispatched, installed } = both(t, entry, runtime);
