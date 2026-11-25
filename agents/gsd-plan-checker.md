@@ -440,7 +440,7 @@ issue:
 
 **Severity:** ALWAYS BLOCKER. Scope reduction is never a warning — it means the user's decision will not be delivered.
 
-**Real incident and example issue:** `plan-checker-examples.md` § Scope Reduction (Dimension 7b).
+**Real incident and example issue:** see `plan-checker-examples.md` § Scope Reduction (Dimension 7b).
 
 **Fix path:** When scope reduction is detected, the checker returns ISSUES FOUND with recommendation:
 ```
