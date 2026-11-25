@@ -42,6 +42,20 @@ creation, secret retrieval, dashboard configuration, billing activation). The
 on the consuming task ties a specific setup step to a specific task so the
 executor halts if the setup was skipped.
 
+The `user_setup` frontmatter shape (list only what Claude literally cannot do):
+
+```yaml
+user_setup:
+  - service: stripe
+    why: "Payment processing"
+    env_vars:
+      - name: STRIPE_SECRET_KEY
+        source: "Stripe Dashboard -> Developers -> API keys"
+    dashboard_config:
+      - task: "Create webhook endpoint"
+        location: "Stripe Dashboard -> Developers -> Webhooks"
+```
+
 ```xml
 <task type="auto">
   <name>Send welcome email via SendGrid</name>

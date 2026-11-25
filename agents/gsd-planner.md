@@ -423,27 +423,11 @@ See `gsd-core/references/planner-interface-context.md` for the full interface ex
 
 ## Context Section Rules
 
-Only include prior plan SUMMARY references if genuinely needed (uses types/exports from prior plan, or prior plan made decision affecting this one).
-
-**Anti-pattern:** Reflexive chaining (02 refs 01, 03 refs 02...). Independent plans need NO prior SUMMARY references.
+Reference a prior plan's SUMMARY only when this plan uses its types/exports or a decision it made; never chain reflexively (`planner-antipatterns.md` § Context Section Anti-Patterns).
 
 ## User Setup Frontmatter
 
-When external services involved:
-
-```yaml
-user_setup:
-  - service: stripe
-    why: "Payment processing"
-    env_vars:
-      - name: STRIPE_SECRET_KEY
-        source: "Stripe Dashboard -> Developers -> API keys"
-    dashboard_config:
-      - task: "Create webhook endpoint"
-        location: "Stripe Dashboard -> Developers -> Webhooks"
-```
-
-Only include what Claude literally cannot do.
+With external services, `user_setup` lists only what Claude literally cannot do; shape and example: `gsd-core/references/planner-preconditions.md` § Case 1.
 
 </plan_format>
 
@@ -835,14 +819,13 @@ Use the resolved `{padded_phase}` artifact stem from init and plan sequence `{NN
 
 - `{padded_phase}` = resolved artifact stem received from init (sequential examples: `01`, `02`, `03`, `02.1`); preserve its configured convention.
 - `{NN}` = zero-padded sequential plan number within the phase (e.g. `01`, `02`, `03`)
-- The suffix is always `-PLAN.md` — NEVER `PLAN-NN.md`, `NN-PLAN.md`, or any other variation
 
 **Correct examples:**
 - Phase 1, Plan 1 → `01-01-PLAN.md`
 - Phase 3, Plan 2 → `03-02-PLAN.md`
 - Phase 2.1, Plan 1 → `02.1-01-PLAN.md`
 
-**Incorrect (will break GSD plan filename conventions / tooling detection):**
+**Incorrect — the suffix is always `-PLAN.md`; any other variation breaks tooling detection:**
 - ❌ `PLAN-01-auth.md`
 - ❌ `01-PLAN-01.md`
 - ❌ `plan-01.md`
