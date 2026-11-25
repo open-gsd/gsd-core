@@ -659,15 +659,6 @@ describe('Bug #1660: frontmatter set of an object-list field fails closed instea
   });
 });
 
-// ─── #1778: thread workflow must use the 1.6 named-flag frontmatter.set form ─
-//
-// The thread workflow's CLOSE and RESUME branches previously invoked the
-// pre-1.6 positional shape (frontmatter.set <file> <field> <value>). Since 1.6
-// the dispatcher (gsd-tools.cjs) reads field/value from the named --field/
-// --value flags via parseNamedArgs; the positional form leaves field/value
-// undefined, cmdFrontmatterSet errors `file, field, and value required`, and
-// the status/updated writes are silently skipped — so closing a thread never
-// marked it status: resolved and resuming never marked it status: in_progress.
 // ─── #6278: a dotted --field over an existing map ──────────────────────────────
 
 describe('#6278: frontmatter set/merge refuses a dotted field whose prefix is an existing map', () => {
@@ -752,6 +743,15 @@ describe('#6278: frontmatter set/merge refuses a dotted field whose prefix is an
   });
 });
 
+// ─── #1778: thread workflow must use the 1.6 named-flag frontmatter.set form ─
+//
+// The thread workflow's CLOSE and RESUME branches previously invoked the
+// pre-1.6 positional shape (frontmatter.set <file> <field> <value>). Since 1.6
+// the dispatcher (gsd-tools.cjs) reads field/value from the named --field/
+// --value flags via parseNamedArgs; the positional form leaves field/value
+// undefined, cmdFrontmatterSet errors `file, field, and value required`, and
+// the status/updated writes are silently skipped — so closing a thread never
+// marked it status: resolved and resuming never marked it status: in_progress.
 describe('#1778: thread workflow uses the 1.6 named-flag frontmatter.set form', () => {
   test('behavioral: named-flag form writes the field; positional form errors and does not mutate', () => {
     // 1.6 named-flag form — must succeed and write status: resolved.
