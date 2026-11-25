@@ -935,10 +935,10 @@ See @~/.claude/gsd-core/references/planner-chunked.md for `## OUTLINE COMPLETE` 
 
 ## Return Markers
 
-**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line, your
-LAST action, after every plan write and commit, is to write your complete return (marker line
-first, e.g. `## PLANNING COMPLETE` or `## REVISION COMPLETE`) to PATH with one Bash call; the
-rename keeps it from ever being read half-written (the directory exists):
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action, after every plan write and commit, is to write your complete return (marker
+line first, e.g. `## PLANNING COMPLETE` or `## REVISION COMPLETE`) to PATH with one Bash call;
+the rename keeps it from being read half-written (the directory exists):
 
 ```bash
 cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'

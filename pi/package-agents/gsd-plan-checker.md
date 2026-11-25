@@ -967,10 +967,8 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 <structured_returns>
 
 **Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
-your LAST action is to write your complete return (the marker line first, e.g. `## ISSUES FOUND`,
-then everything else you are about to return, word for word) to PATH with one Bash call. It writes
-a `.part` file and renames it, so the orchestrator never reads half of it (the directory already
-exists):
+your LAST action is to write your complete return (marker line first) to PATH with one Bash call;
+the rename keeps it from being read half-written (the directory exists):
 
 ```bash
 cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
@@ -978,9 +976,9 @@ cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
 GSD_RETURN_END_7f3c9a1e
 ```
 
-Your final message then carries the same return. This is your only write; never touch a plan or
-any other file. If the write fails or is refused (a read-only sandbox), note that in your return
-and continue: the orchestrator's bounded wait then ends on your completion result.
+Your final message carries the same return. Write nothing else (no plan). If the write fails or
+is refused (a read-only sandbox), say so in your return and continue: the orchestrator's wait then
+ends on your completion result.
 
 ## VERIFICATION PASSED
 
@@ -1053,7 +1051,7 @@ Plans verified. Run `/gsd:execute-phase {phase}` to proceed.
 
 <anti_patterns>
 
-**DO NOT** write any file except the `<return_receipt>` path and its `.part` file, if your prompt gives one (one Bash call). You never write, split or fix a plan.
+**DO NOT** write any file except the `<return_receipt>` path and its `.part` file, if your prompt gives one. You never write, split or fix a plan.
 
 **DO NOT** check code existence — that's gsd-verifier's job. You verify plans, not codebase.
 
