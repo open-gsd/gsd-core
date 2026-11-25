@@ -188,8 +188,8 @@ module.exports = {
         return placeholders.length >= MIN_PLACEHOLDERS || `the substitution list names ${placeholders.length} placeholders, expected at least ${MIN_PLACEHOLDERS}`;
       }, "the fragment's substitution list must name at least the 7 known placeholders");
 
-    ctx.doc('gsd-core/workflows/execute-phase.md')
-      .has('mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX"', 'the manifest must be named gsd-worktree-wave-XXXXXX');
+    ctx.doc(DISPATCH)
+      .has(/_PROMPT_STEM=.*basename "\$WAVE_WORKTREE_MANIFEST" \.json/, 'the executor prompt must use the basename of the durable wave manifest');
 
     const bullet = ctx.doc(QUICK_STEP).slice('**`isolation == "orchestrator-worktree"`:**', '**`isolation == "none"`:**');
     bullet

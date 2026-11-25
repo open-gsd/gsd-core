@@ -10,6 +10,8 @@
 // fix-3722 cases). The old `.*` between the worktree-list command and the agent path (dot-all) is one linear scan.
 
 const WORKFLOW = 'gsd-core/workflows/execute-phase.md';
+const CLEANUP_TAIL_FRAGMENT = 'execute-phase/steps/worktree-cleanup-tail.md';
+const CLEANUP_TAIL_DOC = `gsd-core/workflows/${CLEANUP_TAIL_FRAGMENT}`;
 const WORKTREE_LIST = 'git worktree list --porcelain';
 const AGENT_WORKTREES = '.claude/worktrees/agent-';
 
@@ -22,12 +24,16 @@ module.exports = {
     workflow.slice('\n5.5.', '\n5.6.')
       .has('Standard wave contract', 'step 5.5 must name the standard wave contract explicitly')
       .has('Cross-wave dependency deviation', 'step 5.5 must name the cross-wave dependency deviation as a supported mode')
-      .has('git worktree prune', 'the step 5.5 cleanup-tail snippet must include git worktree prune')
-      .satisfies((text) => text.includes('git worktree remove') && text.includes('--force'), 'the step 5.5 cleanup-tail snippet must include git worktree remove --force')
-      .has('git worktree unlock', 'the step 5.5 cleanup-tail snippet must include git worktree unlock')
-      .has('git branch -D', 'the step 5.5 cleanup-tail snippet must include git branch -D')
+      .has(CLEANUP_TAIL_FRAGMENT, 'step 5.5 must reference the cleanup-tail fragment')
       .has('WAVE_WORKTREE_PLANS', 'step 5.5 must document the empty-WAVE_WORKTREE_PLANS skip condition')
-      .has('cleanup-tail', 'step 5.5 must document the custom-merge-deviation skip condition with a pointer to the cleanup-tail')
+      .has('cleanup-tail', 'step 5.5 must document the custom-merge-deviation skip condition with a pointer to the cleanup-tail');
+
+    ctx.doc(CLEANUP_TAIL_DOC)
+      .has('git worktree prune', 'the step 5.5 cleanup-tail snippet must include git worktree prune')
+      .has(/^\s*if ! git worktree remove "\$WT"; then$/m, 'the step 5.5 cleanup-tail snippet must invoke non-forced worktree removal')
+      .has('git worktree unlock', 'the step 5.5 cleanup-tail snippet must include git worktree unlock')
+      .has('git branch -d ', 'the step 5.5 cleanup-tail snippet must use non-forced branch deletion')
+      .lacks('git branch -D ', 'the step 5.5 cleanup-tail snippet must not force-delete branches with git branch -D')
       .has('WAVE_WORKTREE_MANIFEST', 'the cleanup-tail must consume the current wave manifest')
       .has('avoid touching unrelated active agents', 'the cleanup-tail must document why manifest-scoped cleanup is required')
       .satisfies((text) => {
