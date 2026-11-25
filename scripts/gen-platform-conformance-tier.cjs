@@ -428,6 +428,20 @@ const ALWAYS_REAL_OS = new Map([
     'The product resolves the runtime-user settings layer from <sandbox home>/.claude/settings.json ' +
       'and .claude files under the sandbox, through HOME/USERPROFILE and the Claude config dir.',
   ],
+  // #6639: files whose subject is the home resolution itself. They build their HOME/USERPROFILE pair
+  // with homePair() (tests/helpers/isolated-env.cjs), which leaves no `windows-env-var` token in the
+  // file, so the lane would drop them; a Windows run is what proves os.homedir() follows USERPROFILE.
+  [
+    'tests/kimi-agent-converter.test.cjs',
+    'The Kimi runtime-home tests assert getGlobalConfigDir(\'kimi\') resolves under the sandbox home ' +
+      '(~/.config/agents and the XDG variants) through HOME and USERPROFILE; os.homedir() reads ' +
+      'USERPROFILE on Windows.',
+  ],
+  [
+    'tests/runtime-home-hermeticity.test.cjs',
+    'Asserts that runtime home resolution stays inside the sandbox home while hostile ambient config ' +
+      'keys leak into the child; the home resolves through USERPROFILE on Windows.',
+  ],
 ]);
 
 /**
@@ -811,6 +825,24 @@ function walkTestFiles(dir) {
 }
 
 /**
+ * Read one enumerated test file, or `null` when it vanished between the walk
+ * and this read (ENOENT): tests create and remove probe files under the live
+ * tests tree, so a file the walk listed may be gone by now. Any other read
+ * error still throws.
+ *
+ * @param {string} absPath
+ * @returns {string | null}
+ */
+function readTestFile(absPath) {
+  try {
+    return fs.readFileSync(absPath, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/**
  * Classify every test file under `testsDir`, returning `{ total, files }`
  * where `files` is the SORTED array of `tests/<...>.test.cjs`-relative paths
  * (POSIX-normalized, per RULESET.CONTENT-PATH-NORMALIZATION) whose content
@@ -827,9 +859,14 @@ function classifyTree(testsDir) {
   const unitFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
   const entries = [];
   const flagged = [];
+  let vanished = 0;
   for (const absPath of unitFiles) {
     const rel = 'tests/' + path.relative(testsDir, absPath).replace(/\\/g, '/');
-    const content = fs.readFileSync(absPath, 'utf8');
+    const content = readTestFile(absPath);
+    if (content === null) {
+      vanished += 1;
+      continue;
+    }
     // Read once, reused below both for this file's own flagging AND (via
     // `entries`) for the #5074 split-invariant check — a second read of the
     // same file for that check would double the I/O for no reason.
@@ -858,7 +895,7 @@ function classifyTree(testsDir) {
   }
 
   const result = [...new Set(flagged)].sort();
-  return { total: absoluteFiles.length, files: result };
+  return { total: absoluteFiles.length - vanished, files: result };
 }
 
 /**
@@ -872,8 +909,13 @@ function classifyMacosTree(testsDir) {
   const absoluteFiles = walkTestFiles(testsDir);
   const unitFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
   const flagged = [];
+  let vanished = 0;
   for (const absPath of unitFiles) {
-    const content = fs.readFileSync(absPath, 'utf8');
+    const content = readTestFile(absPath);
+    if (content === null) {
+      vanished += 1;
+      continue;
+    }
     const { needsRealOs } = classifyMacosContent(content);
     if (needsRealOs) {
       const rel = path.relative(testsDir, absPath).replace(/\\/g, '/');
@@ -881,7 +923,7 @@ function classifyMacosTree(testsDir) {
     }
   }
   flagged.sort();
-  return { total: absoluteFiles.length, files: flagged };
+  return { total: absoluteFiles.length - vanished, files: flagged };
 }
 
 /**
@@ -1050,6 +1092,7 @@ module.exports = {
   NOISY_FOR_SOURCE_REACHABILITY,
   ALWAYS_REAL_OS,
   walkTestFiles,
+  readTestFile,
   classifyTree,
   renderGeneratedFile,
   classifyMacosContent,

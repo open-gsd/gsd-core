@@ -404,7 +404,7 @@ The Research Module implements an **L2-hybrid seam**: code owns the cache, provi
 Three compiled modules (generated to `gsd-core/bin/lib/*.cjs` per ADR-457) are reachable via `gsd-tools query research-plan | research-store | package-legitimacy`:
 
 - **Research Store** — content-addressed cache (`sha256(ecosystem+library+version+query+kind)`) with per-source TTL (curated-doc: 30 d, medium: 7 d, web/synthesis: 1 d) and two storage tiers: `~/.gsd/research-cache` for cross-project curated-doc hits, `.planning/research/.cache` for project-local web/synthesis results.
-- **Research Provider** — single `PROVIDER_WATERFALL` (`Context7→Ref→Jina→websearch` for docs; `Exa→Tavily→Perplexity→Brave→websearch` for web; `Firecrawl→Jina` for scrape-only). `planResearch()` returns cache hits plus a fetch plan; `classifyConfidence()` stamps `HIGH|MEDIUM|LOW` by provider tier.
+- **Research Provider** — single `PROVIDER_WATERFALL` (`Context7→Ref→Jina→websearch` for docs; `Exa→Tavily→Perplexity→Brave→Serply→websearch` for web; `Firecrawl→Jina` for scrape-only). `planResearch()` returns cache hits plus a fetch plan; `classifyConfidence()` stamps `HIGH|MEDIUM|LOW` by provider tier.
 - **Package Legitimacy** — registry-API verdicts (npm/PyPI/crates.io injectable adapters) producing `OK|SUS|SLOP` per package. `slopcheck` is an optional escalate-only adapter; absence leaves registry verdicts intact rather than downgrading everything to `[ASSUMED]`.
 
 **Data flow:**

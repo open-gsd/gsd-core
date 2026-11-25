@@ -753,32 +753,40 @@ file. [docs/contributing/no-adhoc-env-isolation.md](docs/contributing/no-adhoc-e
 states the forms each arm recognises. Every other spelling, such as a `HOME=` inside a shell
 script string, is out of scope; the page gives examples.
 
-`eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
-and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
-A count falls as copies migrate. A new copy in a file the list does not name fails lint, and
-`tests/no-adhoc-env-isolation.rule.test.cjs` counts every `tests/**/*.cjs` file: it fails when a
-listed file holds more copies than its count, or fewer. The count reads the files ESLint lints, and
-it also fails when ESLint skips a `.cjs` file under `tests/`, so an ESLint ignore over a `tests/`
-subtree cannot hide that subtree's copies. When you migrate copies, lower the count, and delete
-the entry when it reaches zero (until you do, lint reports the entry as stale). An
-`eslint-disable` comment for this rule does not exempt a copy: the count runs with inline config
-off and still sees it. Entries are repository-relative, so run lint from the repository root, as
-`npm run lint` does.
+`isolatedEnv()` covers the env a test hands to a child. A test that calls the product in-process,
+or a helper that spreads `process.env` (`runGsdTools`, `installSpawnEnv`), reads the env the runner
+passed down instead, so `scripts/run-tests.cjs` closes that case once for every chunk
+(`setupRunHermeticEnv`, #4635): it deletes every config-location variable in the registry-derived
+list (`CONFIG_LOCATION_ENV_KEYS` in `tests/helpers.cjs`, so `CODEX_HOME`, `KILO_CONFIG`,
+`ANTIGRAVITY_CONFIG_DIR` and the rest follow the registry, never a hand-written list) and sets
+`HOME` and `USERPROFILE` to a `gsd-test-userhome-*` directory under the run temp root, shared by every chunk of the run, and leaves the real-home guard
+marker unset so a test that forgot `sandboxHome()` still fails loudly. A real
+`~/.gsd/defaults.json` or `~/.claude` is not there for a chunk to read, and an exported
+`CLAUDE_CONFIG_DIR` does not reach one. The one variable kept is a `GSD_HOME` that is already a run
+sandbox. The step runs after the live-config guard has snapshotted the real config roots, so the
+guard still watches them. A test file run outside the runner (`node` on one file) does not get the
+step; use `isolatedEnv()` or `sandboxHome()` there.
 
-The count is per file. A PR that adds a copy fails it, as `grown` in a listed file and as `added`
-in any other; a PR that removes one copy and adds another in the same file leaves the count
-unchanged, so review sees that swap only in the diff. Build a child env with `isolatedEnv()`
-instead of a copy: `home` sets `HOME` and `USERPROFILE` (`userProfile` sets `USERPROFILE` to another
-directory, only for a test whose subject is the two diverging), `claudeConfigDir` sets
-`CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries every other key the test needs the
-helper to set or keep. A `HOME` or `USERPROFILE` key in `override` is an object-literal copy, so
-the rule flags it. Build a filtered PATH with `isolatedPath()`. If the helpers cannot build it, for
-example because the test's subject is an env object handed to code in-process and its exact keys
-are the fixture, add or raise that file's entry in the same PR and say in the PR description which
-site needs it and why. That is the only way an entry grows, and review decides it. When two open
-PRs change a listed file and one adds copies, whichever lands second rebases onto `next`: the PR
-that adds copies moves them to the helpers or takes this route for each, and the other sets the
-file's entry to the count the test measures on the rebased tree.
+There is no allowlist: the rule takes no options, and every file under `tests/` except the helper
+holds zero copies. `tests/helpers/isolated-env.cjs` is the only
+route. `tests/no-adhoc-env-isolation.rule.test.cjs` lints every `tests/**/*.cjs` file with the rule
+on and inline config off, and fails on any site. It also fails when ESLint skips a `.cjs` file
+under `tests/`, so an ESLint ignore over a `tests/` subtree cannot hide that subtree's copies, and
+when the allowlist file reappears or the rule is given an option. An `eslint-disable` comment for
+this rule exempts nothing: the count runs with inline config off and still sees the site, and an
+unused directive fails `npm run lint`.
+
+[docs/how-to/replace-a-hand-written-env-isolation-copy.md](docs/how-to/replace-a-hand-written-env-isolation-copy.md)
+shows each replacement. Build a child env with `isolatedEnv()` instead of a copy: `home` sets `HOME` and `USERPROFILE`
+(`userProfile` sets `USERPROFILE` to another directory, only for a test whose subject is the two
+diverging), `claudeConfigDir` sets `CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries
+every other key the test needs the helper to set or keep. A `HOME` or `USERPROFILE` key in
+`override` is an object-literal copy, so the rule flags it. Build a filtered PATH with
+`isolatedPath()`. Where a full env is not what the site needs, the same module has the two
+narrower routes: `homePair(dir)` is the one spelling of the `HOME` / `USERPROFILE` pair to spread
+into a larger literal, and `setEnvForTest(t, vars)` / `withHome(t, dir)` set variables on
+`process.env` for one test and restore them. If none of these can build it, change the helper in
+the same PR so the next site can use it; there is no per-file exemption to add.
 
 ### Test Structure
 
