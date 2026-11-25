@@ -279,19 +279,17 @@ function finishSeamResult(result, timing) {
 
 /**
  * #5837: the `holdStdin` path. spawnSync cannot hold a pipe open — with no
- * `input` it closes the child's stdin at once — so holding stdin open for the
- * whole run requires async `spawn`. The child's stdin is never written to and
- * never ended; the run settles when the child exits on its own or when the
- * same `timeoutMs` bound fires and kills it. The raw result is synthesized in
- * the spawnSync shape so BOTH paths classify through finishSeamResult and are
- * observed by recordSpawnIfNoteworthy — one OUTCOME contract, one metrics
- * path. Differences from the sync path, by necessity: the return is a
- * Promise; stdout/stderr stream in, so output written before a kill survives
- * on every platform (spawnSync discards partial output on Linux); and there
- * is no maxBuffer, so BUFFER_OVERFLOW cannot occur on this path; the bound
- * bounds the KILL, not the resolution — the promise settles on stdio close,
- * so a killed child whose descendant still holds the inherited pipes can
- * outlive the bound (spawnSync bounds the return itself).
+ * `input` it closes the child's stdin at once — so holding stdin open for
+ * the whole run requires async `spawn`: stdin is never written and never
+ * ended, and the run settles when the child exits or the `timeoutMs` bound
+ * kills it. The raw result is synthesized in the spawnSync shape so BOTH
+ * paths classify through finishSeamResult and recordSpawnIfNoteworthy — one
+ * OUTCOME contract, one metrics path. Differences by necessity: the return
+ * is a Promise; streamed output written before a kill survives on every
+ * platform (spawnSync discards it on Linux); no maxBuffer, so
+ * BUFFER_OVERFLOW cannot occur; and the bound bounds the KILL, not the
+ * resolution — settling waits for stdio close, so a killed child whose
+ * descendant holds the inherited pipes can outlive the bound.
  */
 function spawnSeamHeld(command, args, options, timeoutMs) {
   return new Promise((resolve) => {
