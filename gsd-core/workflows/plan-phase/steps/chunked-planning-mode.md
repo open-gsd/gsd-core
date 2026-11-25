@@ -199,7 +199,11 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
 7. **Commit, per entry, in outline row order (not completion order):** for each verified entry —
    never one combined commit for the batch — preserving crash resilience: an interrupt mid-batch
    leaves every already-verified entry committed, exactly as a mid-loop interrupt did before this
-   change.
+   change. Before each commit, run `threat-id-check.md` § After planning using `PHASE` and the normalized `GSD_WS` from plan-phase initialization.
+   If the scan reports collisions, return the structured issues to the planner to revise the
+   affected uncommitted entries from this batch with distinct IDs, then scan again. Allow at
+   most two revisions. If collisions remain or the scan fails, report the result and stop
+   before committing the entry.
 ```bash
 gsd_run query commit "docs(${PADDED_PHASE}): plan ${plan_id} (chunked)" --files "${PHASE_DIR}/${plan_id}-PLAN.md"
 ```

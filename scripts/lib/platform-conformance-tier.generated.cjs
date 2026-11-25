@@ -224,6 +224,7 @@ module.exports = {
   "tests/pause-work-improvements.test.cjs",
   "tests/perf-317-context-monitor-fs.test.cjs",
   "tests/phase.platform.test.cjs",
+  "tests/phase.process.test.cjs",
   "tests/phase6-capstone-conformance.test.cjs",
   "tests/pi-config-dir-env-override.test.cjs",
   "tests/pi-dispatch-install.test.cjs",

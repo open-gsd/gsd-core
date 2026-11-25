@@ -195,13 +195,15 @@ If the directory does not exist, create it:
 mkdir -p "${expected_phase_dir}"
 ```
 
-Set `phase_dir="${expected_phase_dir}"` for use in subsequent steps.
+Set `phase_dir="${expected_phase_dir}"` and bind `PHASE` to the imported plan’s phase number. Preserve the normalized `GSD_WS` from the phase lookup for validation and commit.
 
 Write the PLAN.md file to the target directory.
 
 </step>
 
 <step name="plan_validate">
+
+Run the installed `plan-phase/steps/threat-id-check.md` § After planning with this import’s `PHASE` and `GSD_WS`. Stop if the scan fails.
 
 Delegate validation to gsd-plan-checker:
 
@@ -223,7 +225,7 @@ CHECKER_MODEL=$(gsd_run query resolve-model gsd-plan-checker --raw)
 Agent({
   subagent_type: "gsd-plan-checker",
   model: "{CHECKER_MODEL}",
-  prompt: "Validate: ${phase_dir}/{plan}-PLAN.md — check frontmatter completeness, task structure, and GSD conventions. Report any issues."
+  prompt: "Validate: ${phase_dir}/{plan}-PLAN.md — check frontmatter completeness, task structure, and GSD conventions. Phase: {PHASE}. Workstream option: {GSD_WS} (empty for root). Fresh <threat_id_issues>{THREAT_ID_ISSUES}</threat_id_issues>. Report any issues."
 })
 ```
 
@@ -247,8 +249,26 @@ Update `{planning_root}/ROADMAP.md` to reflect the new plan:
 
 Update `{planning_root}/STATE.md` if appropriate (e.g., increment total plan count).
 
+Before committing, run the scoped scan and commit in a single shell call with `PHASE`, the normalized `GSD_WS`, and `gsd_run` bound. On failure or collision, stop and leave the file available for correction.
+
 Commit the imported plan and updated files:
 ```bash
+if [[ -z "${GSD_WS+x}" ]]; then
+  echo "BLOCKED: threat-ID scan needs explicit workstream scope" >&2
+  exit 1
+fi
+GSD_WS="${GSD_WS:-}"
+if [[ -z "${PHASE:-}" ]]; then
+  echo "BLOCKED: threat-ID scan needs a phase" >&2
+  exit 1
+fi
+THREAT_SCAN=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") || { echo "BLOCKED: threat-ID scan failed" >&2; exit 1; }
+if [[ "$THREAT_SCAN" == @file:* ]]; then THREAT_SCAN=$(cat "${THREAT_SCAN#@file:}") || { echo "BLOCKED: cannot read threat-ID scan payload" >&2; exit 1; }; fi
+THREAT_ID_ISSUES=$(THREAT_SCAN="$THREAT_SCAN" node -e 'const j=JSON.parse(process.env.THREAT_SCAN);if(j.phase_found===false)throw new Error("threat-ID scan phase not found");if(j.phase_found!==true||!Array.isArray(j.threat_id_duplicates)||j.threat_id_duplicate_count!==j.threat_id_duplicates.length)throw new Error("invalid threat-ID scan");const issues=j.threat_id_duplicates.map(d=>{if(typeof d.id!=="string"||!Array.isArray(d.plans)||d.plans.length<2)throw new Error("invalid duplicate claim");return {plan:d.plans.join(", "),dimension:"threat_id_uniqueness",severity:"blocker",required_property:"A numbered threat ID is claimed by at most one live plan in the phase.",description:d.id+" claimed by "+d.plans.join(", "),fix_hint:"Assign the colliding row a new phase threat ID and update its references."}});process.stdout.write(JSON.stringify(issues))') || { echo "BLOCKED: cannot validate threat-ID scan" >&2; exit 1; }
+if [[ "${THREAT_ID_ISSUES:-}" != "[]" ]]; then
+  printf 'BLOCKED: imported plan threat-ID scan did not clear: %s\n' "${THREAT_ID_ISSUES:-missing scan}" >&2
+  exit 1
+fi
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
 : "${PLANNING_ROOT:?}"
 gsd_run query commit "docs({phase}): import plan from {basename FILEPATH}" --files "${PLANNING_ROOT}/phases/{phase}/{plan}-PLAN.md" "${PLANNING_ROOT}/ROADMAP.md"
