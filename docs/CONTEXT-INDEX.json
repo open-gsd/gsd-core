@@ -124,7 +124,7 @@
     {
       "id": "GSD-RESEARCH.MODULE.research-provider",
       "klass": "GSD-RESEARCH",
-      "value": "single source of truth PROVIDER_WATERFALL (docs Context7->Ref->Jina->websearch; web Exa->Tavily->Perplexity->Brave->websearch; scrape Firecrawl->Jina); planResearch returns cache-hits+fetch-plan; classifyConfidence stamps HIGH|MEDIUM|LOW by provider AUTHORITY + verification EVIDENCE (HIGH requires code-computed ground-truth corroboration e.g. legitimacyVerdict OK; provider authority alone caps at MEDIUM; SLOP caps at LOW); Firecrawl is scrape-only (not in the docs or web legs)"
+      "value": "single source of truth PROVIDER_WATERFALL (docs Context7->Ref->Jina->websearch; web Exa->Tavily->Perplexity->Brave->Serply->websearch; scrape Firecrawl->Jina); planResearch returns cache-hits+fetch-plan; classifyConfidence stamps HIGH|MEDIUM|LOW by provider AUTHORITY + verification EVIDENCE (HIGH requires code-computed ground-truth corroboration e.g. legitimacyVerdict OK; provider authority alone caps at MEDIUM; SLOP caps at LOW); Firecrawl is scrape-only (not in the docs or web legs)"
     },
     {
       "id": "GSD-RESEARCH.MODULE.research-store",
@@ -134,7 +134,7 @@
     {
       "id": "GSD-RESEARCH.PROVIDER.availability",
       "klass": "GSD-RESEARCH",
-      "value": "config flags brave_search/exa_search/firecrawl/tavily_search/ref_search/perplexity/jina (env <X>_API_KEY or ~/.gsd/<x>_api_key); context7/jina/websearch always available; planResearch falls through waterfall to websearch terminal"
+      "value": "config flags brave_search/exa_search/firecrawl/tavily_search/ref_search/perplexity/jina/serply_search (env <X>_API_KEY or ~/.gsd/<x>_api_key); context7/jina/websearch always available; planResearch falls through waterfall to websearch terminal"
     },
     {
       "id": "LEARNING.prompt-budget.boundary-gap",
