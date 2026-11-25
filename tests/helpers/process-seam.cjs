@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Process seam — the single spawnSync-based primitive test helpers use to
- * run a subprocess and get back a typed, discriminated-union result.
+ * Process seam — the primitive test helpers use to run a subprocess and get
+ * back a typed, discriminated-union result: a sync spawnSync path and, since
+ * #5837, an async hold path selected by `holdStdin`.
  *
  * Design contract: .gsd/phase/test-3055-process-seam-module/40-design.md
  * Test matrix:      .gsd/phase/test-3055-process-seam-module/50-test-matrix.md
@@ -287,34 +288,35 @@ function finishSeamResult(result, timing) {
  * path. Differences from the sync path, by necessity: the return is a
  * Promise; stdout/stderr stream in, so output written before a kill survives
  * on every platform (spawnSync discards partial output on Linux); and there
- * is no maxBuffer, so BUFFER_OVERFLOW cannot occur on this path.
+ * is no maxBuffer, so BUFFER_OVERFLOW cannot occur on this path; the bound
+ * bounds the KILL, not the resolution — the promise settles on stdio close,
+ * so a killed child whose descendant still holds the inherited pipes can
+ * outlive the bound (spawnSync bounds the return itself).
  */
 function spawnSeamHeld(command, args, options, timeoutMs) {
   return new Promise((resolve) => {
     const startedAtMs = Date.now();
     const t0 = process.hrtime.bigint();
-    let child;
-    try {
-      child = spawn(command, args, {
-        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-        ...(options.env !== undefined ? { env: options.env } : {}),
-        ...(options.killSignal !== undefined ? { killSignal: options.killSignal } : {}),
-        stdio: 'pipe', // stdin exists and stays open: never written, never ended
-      });
-    } catch (syncSpawnError) {
+    const child = spawn(command, args, {
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      ...(options.env !== undefined ? { env: options.env } : {}),
+      ...(options.killSignal !== undefined ? { killSignal: options.killSignal } : {}),
+      stdio: 'pipe', // stdin exists and stays open: never written, never ended
+    });
+    // One settle shape for both settle sites: timing -> finishSeamResult ->
+    // recordSpawnIfNoteworthy -> resolve. A synchronous throw from spawn()
+    // (invalid command type) propagates on purpose, symmetric with the sync
+    // path where spawnSync throws on the same contract violation.
+    const settle = (raw) => {
       const timing = {
         startedAtMs,
         endedAtMs: Date.now(),
         durationMs: Math.round(Number(process.hrtime.bigint() - t0) / 1e6),
       };
-      const seamResult = finishSeamResult(
-        { error: syncSpawnError, status: null, signal: null, stdout: '', stderr: '' },
-        timing,
-      );
+      const seamResult = finishSeamResult(raw, timing);
       recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult);
       resolve(seamResult);
-      return;
-    }
+    };
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -332,30 +334,24 @@ function spawnSeamHeld(command, args, options, timeoutMs) {
     }, timeoutMs);
     child.on('close', (code, signal) => {
       clearTimeout(timer);
-      const timing = {
-        startedAtMs,
-        endedAtMs: Date.now(),
-        durationMs: Math.round(Number(process.hrtime.bigint() - t0) / 1e6),
-      };
       let error = streamError;
       if (timedOut && code === null) {
         // Match the shape spawnSync produces at its own bound so
         // toSeamResult classifies this TIMED_OUT, not KILLED.
         error = Object.assign(new Error(`${command} ETIMEDOUT`), { code: 'ETIMEDOUT' });
       }
-      const seamResult = finishSeamResult(
-        {
-          error: error ?? undefined,
-          status: code,
-          signal: signal ?? null,
-          stdout,
-          stderr,
-          pid: child.pid,
-        },
-        timing,
-      );
-      recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult);
-      resolve(seamResult);
+      settle({
+        error: error ?? undefined,
+        // A spawn that never started emits 'error' and closes with a
+        // negative code; spawnSync would have handed back an error-only
+        // result. Null status keeps toSeamResult on the SPAWN_FAILED
+        // branch instead of reporting EXITED with a negative exitCode.
+        status: streamError === null ? code : null,
+        signal: signal ?? null,
+        stdout,
+        stderr,
+        pid: child.pid,
+      });
     });
   });
 }
@@ -365,7 +361,7 @@ function spawnSeamHeld(command, args, options, timeoutMs) {
  * typed OUTCOME-discriminated result. Never throws on a child's exit code,
  * a timeout, a buffer overflow, or a spawn failure — those are all data.
  * Throws (TypeError) only for a seam-contract violation: a non-array
- * `args`, or an invalid `timeoutMs`.
+ * `args`, an invalid `timeoutMs`, or `holdStdin` combined with `input`.
  *
  * @param {string} command - binary to spawn (never shell-interpreted).
  * @param {string[]} args - argv array. No shell-string parsing.

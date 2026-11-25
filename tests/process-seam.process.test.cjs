@@ -301,6 +301,23 @@ describe('process-seam', () => {
     }
   });
 
+  test('at-the-bound child on the hold path yields one deterministic outcome', async () => {
+    const fixture = writeFixture(tmpDir, 'sleeper.cjs', FIXTURE_SLEEPER);
+    const result = await runNode([fixture, '300'], { timeoutMs: SEAM_SHORT_TIMEOUT_MS, holdStdin: true });
+    // Mirror of the sync at-bound row: either side of the race is acceptable
+    // (the bound kill and the child's own exit contend), but the fields must
+    // be coherent with whichever branch won. Guards the hold path's
+    // `timedOut && code === null` discrimination (#5837 review).
+    assert.ok([OUTCOME.EXITED, OUTCOME.TIMED_OUT].includes(result.outcome));
+    if (result.outcome === OUTCOME.EXITED) {
+      assert.equal(result.timedOut, false);
+      assert.notEqual(result.exitCode, null);
+    } else {
+      assert.equal(result.timedOut, true);
+      assert.equal(result.exitCode, null);
+    }
+  });
+
   test('toSeamResult classifies a raced status+ETIMEDOUT as EXITED, not TIMED_OUT', () => {
     // Synthetic reproduction of the exact-bound race: spawnSync's timer
     // fired (error.code === 'ETIMEDOUT') just as the child finished on its
@@ -393,6 +410,23 @@ describe('process-seam', () => {
       () => runNode([fixture], { holdStdin: true, input: 'x' }),
       (e) => e instanceof TypeError && /cannot be combined with input/.test(e.message),
     );
+  });
+
+  test('holdStdin spawn failure is SPAWN_FAILED, not EXITED with a negative code', async () => {
+    // #5837 review: async spawn of a child that never starts emits 'error'
+    // then 'close' with a negative code. Passing that through as a status
+    // would classify EXITED with a negative exitCode; the OUTCOME contract
+    // requires SPAWN_FAILED, exactly what the sync path reports for the same
+    // input. A nonexistent cwd fails uv_spawn with ENOENT, the same failure
+    // class as a missing binary, without exposing a raw command parameter
+    // (the seam keeps spawnSeam unexported by design — see the missing-binary
+    // row above).
+    const missing = path.join(tmpDir, 'definitely-not-a-binary-5837');
+    const held = await runNode(['--version'], { cwd: missing, holdStdin: true, timeoutMs: SEAM_GENEROUS_TIMEOUT_MS });
+    const sync = runNode(['--version'], { cwd: missing, timeoutMs: SEAM_GENEROUS_TIMEOUT_MS });
+    assert.equal(held.outcome, sync.outcome);
+    assert.equal(held.outcome, OUTCOME.SPAWN_FAILED);
+    assert.equal(held.exitCode, null);
   });
 
   test('caller cannot override encoding into Buffers', () => {

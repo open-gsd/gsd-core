@@ -500,7 +500,10 @@ describe('hooks-crash-policy: C4 stdin never closes -> bounded termination, not 
       const outerTimeoutMs = (row.stdinTimeoutMs ?? 3000) + 10000;
       // holdStdin -> the seam's async path: stdin unwritten-then-open for the
       // whole run. EXITED with code 0 below is then reachable only through
-      // the hook's own stdin timer.
+      // the hook's own stdin timer — except the two `stdinTimeoutMs: null`
+      // rows (`gsd-ensure-canonical-path.js`, `gsd-path-export.js`), whose
+      // hooks never read stdin and exit on their own; those rows pin that the
+      // held pipe does not introduce a hang.
       const r = await runHook(row.file, { timeoutMs: outerTimeoutMs, holdStdin: true });
       assert.equal(
         r.outcome, OUTCOME.EXITED,
