@@ -756,7 +756,7 @@ function hasQuickTaskRow(stateContent: string, quickId: string, dirName?: string
     for (const row of parsed.value.rows) {
       if (row['#'] !== quickId) continue;
       if (dirName === undefined) return true;
-      if (String(row['Directory'] ?? '').split(/[^0-9a-z-]+/i).includes(dirName)) return true;
+      if (String(row['Directory'] ?? '').split(/[^0-9a-z-]+/).includes(dirName)) return true;
     }
   }
   return false;
