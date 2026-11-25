@@ -1616,6 +1616,14 @@ function stripJsonComments(text) {
   let i = 0;
   let inString = false;
   let stringChar = '';
+  // #5989: a comma seen outside a string is held, not emitted. It is dropped
+  // only when the next emitted non-whitespace char is `}` or `]` (a JSONC
+  // trailing comma) and flushed before any other emitted char. Comments are
+  // skipped by this same pass, so `, /*c*/ }` collapses exactly as the old
+  // post-strip regex `,\s*([}\]])` did — but that regex ran on stripped text,
+  // where a `,}` inside a string was indistinguishable from structure and
+  // rewrote values like "x,}y".
+  let pendingComma = false;
   while (i < text.length) {
     // Handle string literals — don't strip comments inside strings
     if (inString) {
@@ -1633,6 +1641,10 @@ function stripJsonComments(text) {
     }
     // Start of string
     if (text[i] === '"' || text[i] === "'") {
+      if (pendingComma) {
+        result += ',';
+        pendingComma = false;
+      }
       inString = true;
       stringChar = text[i];
       result += text[i];
@@ -1652,11 +1664,32 @@ function stripJsonComments(text) {
       i += 2; // skip closing */
       continue;
     }
+    if (text[i] === ',') {
+      // Consecutive commas keep failing exactly as before: the held comma is
+      // flushed and this one takes its place.
+      if (pendingComma) result += ',';
+      pendingComma = true;
+      i++;
+      continue;
+    }
+    if (/\s/.test(text[i])) {
+      result += text[i];
+      i++;
+      continue;
+    }
+    if (text[i] === '}' || text[i] === ']') {
+      pendingComma = false;
+    } else if (pendingComma) {
+      result += ',';
+      pendingComma = false;
+    }
     result += text[i];
     i++;
   }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
+  // EOF flush: nothing followed the comma to drop it, so the text keeps the
+  // same malformed shape the old regex left behind ({"a":1, still fails).
+  if (pendingComma) result += ',';
+  return result;
 }
 
 /**
