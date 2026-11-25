@@ -17,6 +17,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -75,7 +76,7 @@ function stageOpencode(home, version) {
 function run(args, home, bin) {
   const PATH = bin ? `${bin}${path.delimiter}${process.env.PATH}` : process.env.PATH;
   const result = runNode([INSTALL_SCRIPT, ...args], {
-    env: installerEnv({ HOME: home, USERPROFILE: home, PATH }),
+    env: installerEnv(isolatedEnv({ home, path: PATH })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `installer failed: ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);

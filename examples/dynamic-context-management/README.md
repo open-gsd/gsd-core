@@ -38,7 +38,7 @@ During research this slice was validated with 42 behavioral tests — predicate
 forms, fenced-code / prose skipping, duplicate-id detection, the selector, a
 deterministic index, and a fast-check property test. The production
 implementation has since landed, with `tests/context-predicates.test.cjs` and
-`tests/context-index-sync.test.cjs` as its behavioral tests under `tests/`,
+the `context-index-sync` text contract as its behavioral checks,
 and `scripts/lint-example-parser-parity.cjs` (wired into `npm run lint:ci`)
 asserting this example and production agree.
 

@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const HOST_MODEL = 'HOSTMODEL-6303-XYZ';
 const TARGET_MODEL = 'target-model-6303';
@@ -41,10 +42,10 @@ function recordPath() {
 
 /** Run `query dispatch-isolation --json` for the fixture plan; `present` says whether the foreign binaries are on PATH. */
 function dispatch(host, { present = true, argv = null } = {}) {
-  const env = {
-    HOME: project, USERPROFILE: project, GSD_HOME: project, GSD_RUNTIME: host, GSD_OPENCODE_GENERATION: '1',
-    PATH: present ? `${binWithRuntimes}${path.delimiter}${process.env.PATH}` : binEmpty,
-  };
+  const env = isolatedEnv({
+    home: project, base: {}, path: present ? `${binWithRuntimes}${path.delimiter}${process.env.PATH}` : binEmpty,
+    override: { GSD_HOME: project, GSD_RUNTIME: host, GSD_OPENCODE_GENERATION: '1' },
+  });
   cleanup(recordPath());
   // #4904: a plain query holds a caller's fresh `none`, so a `--force-isolation none` an earlier row
   // recorded (in the legacy slot too) would hold this row's query; each row starts with no record.
@@ -82,9 +83,9 @@ after(() => { cleanup(project); });
 describe('#4904 a query that holds a caller `none` still answers a foreign dispatch and records nothing', () => {
   const gateOn = { runtime: 'claude', workflow: { cross_runtime_execution: true } };
   const legacyPath = () => path.join(project, '.gsd', 'dispatch-isolation-sentinel.json');
-  const env = () => ({
-    HOME: project, USERPROFILE: project, GSD_HOME: project, GSD_RUNTIME: 'claude', GSD_OPENCODE_GENERATION: '1',
-    PATH: `${binWithRuntimes}${path.delimiter}${process.env.PATH}`,
+  const env = () => isolatedEnv({
+    home: project, base: {}, path: `${binWithRuntimes}${path.delimiter}${process.env.PATH}`,
+    override: { GSD_HOME: project, GSD_RUNTIME: 'claude', GSD_OPENCODE_GENERATION: '1' },
   });
   const run = (extra) => {
     const result = runGsdTools(['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, ...extra], project, env());

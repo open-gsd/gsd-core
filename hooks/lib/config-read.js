@@ -8,6 +8,8 @@
 // runs inside the user's session on every tool call. The file is opened non-blocking and
 // checked through its own descriptor (O_NONBLOCK is absent on Windows, hence `|| 0`).
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const CONFIG_MAX_BYTES = 1024 * 1024;
 
@@ -46,4 +48,23 @@ function readConfigFileBounded(file, options) {
   }
 }
 
-module.exports = { CONFIG_MAX_BYTES, readConfigFileBounded };
+// The hook-side owner of the configuration layer file locations (#6032, ADR-1411 Decision 5).
+// Hooks cannot require the built library, so these mirror src/config-loader.cts `projectConfigPath`
+// and `globalDefaultsPath`; tests/layer-path-helpers.test.cjs pins the two.
+// `local/no-adhoc-config-merge` exempts this file as part of the resolver boundary and flags every
+// other hook that builds one of these paths by hand.
+
+/** `<root>/.planning/config.json` — the project's own config for a hook's workspace root. */
+function projectConfigPath(root) {
+  return path.join(root, '.planning', 'config.json');
+}
+
+/**
+ * The global defaults file. The store root is GSD_HOME when set and non-blank, else the home
+ * directory — the loader's rule (src/runtime-homes.cts resolveGsdHome, #5017).
+ */
+function globalDefaultsPath(env = process.env, home = os.homedir()) {
+  return path.join(env.GSD_HOME || home, '.gsd', 'defaults.json');
+}
+
+module.exports = { CONFIG_MAX_BYTES, readConfigFileBounded, projectConfigPath, globalDefaultsPath };

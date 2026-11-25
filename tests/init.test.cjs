@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
@@ -72,7 +73,7 @@ describe('init commands', () => {
       model_overrides: { 'gsd-executor': 'openai/o4-mini' },
     }));
 
-    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -89,7 +90,7 @@ describe('init commands', () => {
       model_overrides: { 'gsd-executor': 'openai/o4-mini' },
     }));
 
-    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2120,7 +2121,7 @@ describe('cmdInitQuick', () => {
       model_overrides: { 'gsd-phase-researcher': 'openai/o4-mini' },
     }));
 
-    const result = runGsdTools('init quick "Fix login bug" --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init quick "Fix login bug" --raw', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2758,7 +2759,7 @@ describe('withProjectRoot project identity', () => {
       JSON.stringify({ project_code: 'CK' })
     );
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2775,7 +2776,7 @@ describe('withProjectRoot project identity', () => {
       '# CareKit\n\nA care management platform.\n'
     );
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2788,7 +2789,7 @@ describe('withProjectRoot project identity', () => {
       JSON.stringify({})
     );
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2807,7 +2808,7 @@ describe('withProjectRoot project identity', () => {
     const projectMdPath = path.join(tmpDir, '.planning', 'PROJECT.md');
     if (fs.existsSync(projectMdPath)) fs.unlinkSync(projectMdPath);
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);

@@ -15,6 +15,7 @@ const path = require('path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { installerEnv } = require('./helpers/install-shared.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -443,11 +444,10 @@ describe('checkAgentsInstalled: Kimi agents/subagents layout', () => {
     const tmpDir = createTempProject('gsd-kimi-agent-status-project-');
     const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-agent-status-config-'));
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-agent-status-home-'));
-    const env = installerEnv({
-      HOME: tmpHome,
-      USERPROFILE: tmpHome,
-      KIMI_CONFIG_DIR: tmpConfig,
-    });
+    const env = installerEnv(isolatedEnv({
+      home: tmpHome,
+      override: { KIMI_CONFIG_DIR: tmpConfig },
+    }));
 
     try {
       const installResult = runNode(

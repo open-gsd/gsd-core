@@ -330,6 +330,7 @@ Execute all plans in a phase with wave-based parallelization, or run a specific 
 | `--wave N` | No | Execute only Wave `N` in the phase |
 | `--cross-ai` | No | Delegate execution to an external AI CLI (uses `workflow.cross_ai_command`) |
 | `--no-cross-ai` | No | Force local execution even if cross-AI is enabled in config |
+| `--force-mvp-gate "<reason>"` | No | Record an attributed acceptance for the phase's TDD review violations (reason required) and re-run the review |
 
 **Prerequisites:** Phase has PLAN.md files
 **Produces:** per-plan `{phase}-{N}-SUMMARY.md`, git commits, and `{phase}-VERIFICATION.md` when the phase is fully complete

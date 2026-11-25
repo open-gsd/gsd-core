@@ -54,12 +54,11 @@ import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot, resolveEnvWorkstream, resolvePhaseIdConvention } = planningWorkspace;
+const { planningDir, planningRoot, resolvePhaseIdConvention } = planningWorkspace;
 // Naming readers and writers share the loader's scoped-key precedence and defaults.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue, loadConfig, readConfigFileBounded } = configLoaderModule;
-import { resolveGsdHome } from './runtime-homes.cjs';
+const { CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue, loadConfig } = configLoaderModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterModule = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterModule;
@@ -347,31 +346,12 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   let naming = config;
   let configError: {path: string; message: string} | undefined;
   if (naming === undefined) {
-    const readConfig = (file: string): Record<string, unknown> | null => {
-      try {
-        // Bounded read (#5759): null is an absent file (no configError); a FIFO/device/oversized
-        // file throws and is reported through configError like any other unreadable config.
-        const raw = readConfigFileBounded(file);
-        if (raw === null) return null;
-        const value: unknown = JSON.parse(raw);
-        if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-        configError = {path: file, message: 'configuration must be a JSON object'};
-        return null;
-      } catch (cause) {
-        if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') configError = {path: file, message: (cause as Error).message};
-        return null;
-      }
-    };
-    const activeWs = ws === undefined ? resolveEnvWorkstream() : ws?.trim() || null;
-    const root = activeWs ? readConfig(path.join(planningRoot(cwd), 'config.json')) : null;
-    const scoped = readConfig(path.join(planningDir(cwd, activeWs), 'config.json'));
-    // A missing/broken workstream with a usable root recurses with ws:null in
-    // loadConfig, including GSD_PROJECT's own config rather than the flat root.
-    const parsed = scoped ? (root ? _deepMergeConfig(root, scoped) : scoped)
-      : root ? readConfig(path.join(planningDir(cwd, null), 'config.json')) : null;
+    // The loader owns file selection (#6032); this asks it without warnings or write-back.
+    const read = configLoaderModule.readConfigFilesQuiet(cwd, ws);
+    configError = read.configError;
     naming = {
-      phase_naming: _getConfigValue(parsed ?? {}, 'phase_naming') ?? CONFIG_DEFAULTS.phase_naming,
-      project_code: _getConfigValue(parsed ?? {}, 'project_code') ?? CONFIG_DEFAULTS.project_code,
+      phase_naming: _getConfigValue(read.config ?? {}, 'phase_naming') ?? CONFIG_DEFAULTS.phase_naming,
+      project_code: _getConfigValue(read.config ?? {}, 'project_code') ?? CONFIG_DEFAULTS.project_code,
     };
   }
   const context = phaseDirectoryContext(naming, roadmap ?? '');
@@ -448,9 +428,9 @@ function customPhaseNamingUsage(cwd: string, context: PhaseDirectoryContext): st
   if (context.configError) return `Cannot read phase naming from ${context.configError.path}: ${context.configError.message}. Repair the project config before using a custom ID`;
   let message = 'phase_naming is not custom for this project; configure phase_naming as "custom" before using a custom ID';
   try {
-    const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
+    const defaultsPath = configLoaderModule.globalDefaultsPath();
     const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')) as Record<string, unknown>;
-    if (typeof defaults.phase_naming === 'string' && defaults.phase_naming.toLowerCase() === 'custom' && fs.existsSync(path.join(planningDir(cwd), 'config.json'))) {
+    if (typeof defaults.phase_naming === 'string' && defaults.phase_naming.toLowerCase() === 'custom' && fs.existsSync(planningWorkspace.projectConfigPath(cwd))) {
       message += `; project config shadows phase_naming from ${defaultsPath}`;
     }
   } catch { /* Missing/unusable defaults do not change effective naming. */ }
