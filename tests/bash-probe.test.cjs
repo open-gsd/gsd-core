@@ -2,7 +2,7 @@
 
 /**
  * #6677: tests/helpers/bash-probe.cjs decides whether a bash-block behavior test runs, skips or
- * fails at load. Eleven files lean on it, and a skip on a host without curl or jq left no trace
+ * fails at load. Every suite that runs a documented bash block leans on it, and a skip on a host without curl or jq left no trace
  * (the gsd-test tester image has neither). The contract tested here: a tool present means the
  * suite runs; a tool missing under CI, or under GSD_REQUIRE_BASH_TOOLS, fails the file at load; a
  * tool missing anywhere else skips, and the skip is announced as a named skipped test.
@@ -44,6 +44,12 @@ describe('skipUnless: a tool is present', () => {
   test('a tool present under CI is still not a skip', () => {
     const { skipUnless } = hostWith(['bash'], { CI: 'true' });
     assert.strictEqual(skipUnless('bash'), false);
+  });
+
+  test('a tool present under GSD_REQUIRE_BASH_TOOLS is not a skip either', () => {
+    const { skipUnless, announced } = hostWith(['bash', 'jq'], { GSD_REQUIRE_BASH_TOOLS: '1' });
+    assert.strictEqual(skipUnless('bash', 'jq'), false);
+    assert.deepStrictEqual(announced, []);
   });
 
   test('no tools asked for: nothing to be missing', () => {
@@ -193,6 +199,13 @@ describe('a guarded suite, run for real (fixture under node --test)', () => {
     const r = runFixture(t, MISSING, { CI: 'true' });
     assert.notStrictEqual(r.exitCode, 0);
     assert.match(r.stdout + r.stderr, /under CI/);
+  });
+
+  test('a present tool under the switch still runs the suite', (t) => {
+    const r = runFixture(t, 'bash', { GSD_REQUIRE_BASH_TOOLS: '1' });
+    assert.strictEqual(r.exitCode, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /^# skipped 0$/m);
+    assert.match(r.stdout, /^# pass 1$/m);
   });
 
   test('a present tool runs the suite: nothing skipped', (t) => {

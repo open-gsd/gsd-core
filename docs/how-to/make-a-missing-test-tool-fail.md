@@ -8,7 +8,7 @@
 
 ## Why a skip can hide a gap
 
-Tests that run a documented bash block gate on `skipUnless` in `tests/helpers/bash-probe.cjs`. With a tool missing and `CI` unset, the suite skips. A skipped `describe` registers none of its tests, so a host without `curl` and `jq` reported `skipped 0` while ten files' bash-block tests did not run. The gsd-test tester image is such a host.
+Tests that run a documented bash block gate on `skipUnless` in `tests/helpers/bash-probe.cjs`. With a tool missing and `CI` unset, the suite skips. A skipped `describe` registers none of its tests, so a host without `curl` and `jq` reported `skipped 0` while every guarded suite's bash-block tests did not run. The gsd-test tester image is such a host.
 
 Since #6677 each skip is announced as a named skipped test, `bash-block behavior tests skipped on this host: <tools> are required`, so it shows in the run summary (`# skipped N`) and in the reporter events.
 
