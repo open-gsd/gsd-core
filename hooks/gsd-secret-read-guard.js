@@ -2652,7 +2652,9 @@ function skipWrapperArgs(pending, spec) {
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
 // `timeout -s KILL 5`, `nice -n 5`, `env -S 'cmd …'`, …), or null when nothing
 // but prefixes remain. Linear in the words read: a split string is pushed onto
-// the pending stack rather than spliced into a copy of the list.
+// the pending stack rather than spliced into a copy of the list. `word` is the
+// command word as written: after a split string it can be one of that string's
+// words, which `words` does not hold.
 function resolveCommand(words) {
   const pending = words.slice().reverse();
   while (pending.length && ASSIGNMENT_RE.test(pending[pending.length - 1].text)) pending.pop();
@@ -2664,7 +2666,7 @@ function resolveCommand(words) {
   }
   if (!pending.length) return null;
   const head = pending.pop();
-  return { base: lastSegment(head.text).toLowerCase(), operands: pending.reverse() };
+  return { base: lastSegment(head.text).toLowerCase(), operands: pending.reverse(), word: head.text };
 }
 
 /**
@@ -3565,7 +3567,7 @@ function scanCommand(command, depth, reading) {
 
     // The command word holds a default (`${x:-cat} .env`, `time ${x:-cat .env}`): the segment is read as the script it
     // becomes when each default is expanded (#6132).
-    const rawBase = words[words.length - operands.length - 1].text;
+    const rawBase = cmd.word;
     if (rawBase.includes('${')) {
       const named = paramVariants(rawBase);
       if (named.overflow) return secretRead(rawBase);

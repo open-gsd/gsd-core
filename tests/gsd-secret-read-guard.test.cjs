@@ -2276,6 +2276,20 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     assertBlocked(runHook(bash(`A=1 B=2 ${LAUNCH}`)), 'launch', { code: 'debugger-cli-spawn' });
   });
 
+  // Each string splits into a command and at least as many operands as the command
+  // line has words.
+  test('blocks: a read in a string of at least as many operands as the line has words', () => {
+    for (const cmd of ["env -S 'cat a b .env'", "env -S 'cat a b c .env'", "env -i -S 'grep -r KEY a b .env'"]) {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    }
+  });
+
+  // bash expands the default inside the double quotes, and env then runs `bash -c`.
+  test('blocks: a ${…} default as the command word of an env -S string', () => {
+    const cmd = 'env -S "${x:-bash} -c \'cat .env\'"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash' });
+  });
+
   test('four env -S strings in a row reach the launch', () => {
     assertBlocked(runHook(bash(`env -S 'env' -S 'env' -S 'env' -S '${LAUNCH}'`)), 'four', { code: 'debugger-cli-spawn' });
   });
