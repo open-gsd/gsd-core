@@ -152,7 +152,9 @@ function resolveQuickResume(cwd: string, slug: string): QuickResumeResult {
     resume: {
       has_plan: hasPlanFile(taskDir),
       has_summary: resolveQuickTaskSummaryFile(taskDir, match.name) !== null,
-      state_row: quickId !== null && hasQuickTaskRow(readStateContent(cwd), quickId),
+      // The STATE.md row is keyed by the id prefix: the quick id, or a legacy
+      // directory's date prefix (gsd-core/workflows/quick.md Step 2).
+      state_row: hasQuickTaskRow(readStateContent(cwd), match.prefix),
     },
   };
 }
