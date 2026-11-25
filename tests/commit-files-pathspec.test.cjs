@@ -1731,8 +1731,9 @@ describe('workflow call sites declare --files (#2269)', () => {
       // unscoped default path.
       'gsd_run query commit "docs: plan" --files',
       // --files followed by ANOTHER FLAG is the same unscoped default, because
-      // routeCommit filters `--`-prefixed tokens out of the scope list:
-      // args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) === [].
+      // collectListValues (src/command-arg-projection.cts:480-499) collects
+      // only non-flag tokens in a list run — every `--`-prefixed token is
+      // stepped over, so files=[] and the unscoped default stands.
       // Two live sites are one token-deletion from this shape —
       // gsd-core/references/git-planning-commit.md and
       // gsd-core/workflows/execute-plan.md both run
@@ -1930,8 +1931,10 @@ describe('workflow call sites declare --files (#2269)', () => {
       'an escaped space outside quotes must not manufacture a scope: the bare --files is still valueless',
     );
 
-    // --files=x stays UNSCOPED without a special case: routeCommit does
-    // args.indexOf('--files'), which the fused token cannot satisfy.
+    // --files=x stays UNSCOPED without a special case: the fused token is not
+    // the declared list flag (the commit spec declares no eqFlags), so it opens
+    // no run; walkTokens rejects it as an unknown flag before any scope
+    // decision, and the guard likewise reads it as flag-shaped.
     assert.strictEqual(hasScopedFiles('gsd_run query commit "docs: plan" --files=.planning/PLAN.md'), false);
     // And a flag BEFORE a real value is still scoped, because the runtime
     // filters the whole tail rather than inspecting only the next token.
@@ -1997,6 +2000,10 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.strictEqual(
       hasScopedFiles('gsd_run query commit plan --files-removed --files a.md'), true,
       'a non-empty second list scopes the call even when the first is empty',
+    );
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit plan --files a.md --files'), true,
+      'a repeated list flag restarts the run; the first run\'s value still scopes',
     );
     // The --files readings the corpus already pins are deliberately NOT
     // re-pinned here: same-spelling duplicates drift together and prove
@@ -2825,9 +2832,10 @@ describe('workflow call sites declare --files (#2269)', () => {
       return fc.string({ maxLength: 60 }).map((s) => s.replace(/[\r\n]/g, '').split(d).join('').split('\\').join(''));
     };
     // A path the shell passes through as a VALUE. The `--` exclusion is not
-    // cosmetic: routeCommit drops every `--`-prefixed token after --files, so
-    // such a token is not a path at all and the invocation is unscoped — which
-    // is the flag property below, not this one. Without the exclusion this
+    // cosmetic: collectListValues collects only non-flag tokens inside a list
+    // run, so a flag-shaped token is never a path — a line whose every run is
+    // valueless is unscoped, which is the flag property below, not this one.
+    // Without the exclusion this
     // generator reaches that input space roughly once per 7,700 draws
     // (measured: 26 hits in 200,000), i.e. ~1 CI run in 77 at fast-check's
     // default 100 runs — a property that fails rarely and looks like a flake.
@@ -2869,10 +2877,10 @@ describe('workflow call sites declare --files (#2269)', () => {
     });
 
     test('a --files with no non-flag token after it is never a scope', () => {
-      // The scanner must agree with routeCommit for EVERY flag spelling, not
-      // just the --amend instance found in review: args.slice(i+1).filter(a =>
-      // !a.startsWith('--')) discards them all, leaving files=[] and the
-      // unscoped default.
+      // The scanner must agree with the runtime's list rule for EVERY flag
+      // spelling, not just the --amend instance found in review: collectListValues
+      // steps over every `--`-prefixed token inside a run, leaving files=[] and
+      // the unscoped default.
       fc.assert(
         fc.property(
           anyDelimiter.chain((d) => fc.tuple(fc.constant(d), messageFor(d), flagArg)),
@@ -2889,19 +2897,35 @@ describe('workflow call sites declare --files (#2269)', () => {
 
     test('the scanner agrees with routeCommit on the tokens, for any delimiter', () => {
       // The properties above assert against hand-derived expectations. This
-      // one asserts against the RUNTIME's own predicate, re-implemented from
-      // routeCommit over the same tokens — so a future divergence fails here
-      // even if nobody thought to write a case for its shape.
-      const runtimeScoped = (tokens) => {
-        const i = tokens.indexOf('--files');
-        return i !== -1 && tokens.slice(i + 1).some((t) => !t.startsWith('--'));
-      };
+      // one asserts against the RUNTIME's own predicate — the list-run rule of
+      // collectListValues (src/command-arg-projection.cts:480-499) re-implemented
+      // over the same tokens — so a future divergence fails here even if nobody
+      // thought to write a case for its shape. Run-based is load-bearing: the
+      // retired indexOf('--files')-and-slice-to-end form scored identically to
+      // the run rule whenever only one list-flag spelling can occur in the
+      // domain, so it could not fail for the #5817 defect class (maintainer
+      // review). Unknown `--`-prefixed tokens are skipped on both sides: the
+      // real walkTokens rejects them before any scope decision, so the oracle
+      // models the collection rule only, exactly as the guard does.
+      const RUNTIME_LIST_FLAGS = specFor('commit').listFlags.map((f) => `--${f}`);
+      const runtimeScoped = (tokens) =>
+        RUNTIME_LIST_FLAGS.some((flag) => {
+          const starts = [];
+          tokens.forEach((t, i) => { if (t === flag) starts.push(i); });
+          return starts.some((start) => {
+            for (let j = start + 1; j < tokens.length; j++) {
+              if (RUNTIME_LIST_FLAGS.includes(tokens[j])) break;
+              if (!tokens[j].startsWith('--')) return true;
+            }
+            return false;
+          });
+        });
       fc.assert(
         fc.property(
           anyDelimiter.chain((d) => fc.tuple(
             fc.constant(d),
             messageFor(d),
-            fc.array(fc.oneof(arg, flagArg, fc.constant('--files')), { maxLength: 4 }),
+            fc.array(fc.oneof(arg, flagArg, fc.constant('--files'), fc.constant('--files-removed')), { maxLength: 4 }),
           )),
           ([d, message, tail]) => {
             const line = `gsd_run query commit ${d}${embedFor(d, message)}${d} ${tail.join(' ')}`;
@@ -2972,7 +2996,7 @@ describe('workflow call sites declare --files (#2269)', () => {
         fc.property(
           anyDelimiter.chain((d) => (d === '' ? wrapper : fc.constant('')).chain((wrap) => fc.tuple(
             fc.constant(d), contextFor(wrap), binary, preCommand, commandToken, bodyFor(d),
-            fc.array(fc.oneof(arg, flagArg, fc.constant('--files')), { maxLength: 3 }),
+            fc.array(fc.oneof(arg, flagArg, fc.constant('--files'), fc.constant('--files-removed')), { maxLength: 3 }),
             fc.constant(wrap),
           ))),
           ([d, ctx, bin, pre, cmd, body, tail, wrap]) => {
@@ -2987,10 +3011,21 @@ describe('workflow call sites declare --files (#2269)', () => {
             // …and recognizing it is only useful if the verdict survives the
             // slicing. The candidate the scan will score must agree with the
             // argv the shell would have delivered.
-            const runtimeScoped = (tokens) => {
-              const i = tokens.indexOf('--files');
-              return i !== -1 && tokens.slice(i + 1).some((t) => !t.startsWith('--'));
-            };
+            // Run-based mirror of collectListValues' list-run rule — see the
+            // first oracle for why the old indexOf form was vacuous (#5817).
+            const RUNTIME_LIST_FLAGS = specFor('commit').listFlags.map((f) => `--${f}`);
+            const runtimeScoped = (tokens) =>
+              RUNTIME_LIST_FLAGS.some((flag) => {
+                const starts = [];
+                tokens.forEach((t, i) => { if (t === flag) starts.push(i); });
+                return starts.some((start) => {
+                  for (let j = start + 1; j < tokens.length; j++) {
+                    if (RUNTIME_LIST_FLAGS.includes(tokens[j])) break;
+                    if (!tokens[j].startsWith('--')) return true;
+                  }
+                  return false;
+                });
+              });
             const argv = [cmd, body, ...tail];
             assert.ok(
               cands.some((c) => hasScopedFiles(c) === runtimeScoped(argv)),
