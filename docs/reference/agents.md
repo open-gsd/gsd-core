@@ -877,7 +877,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 |----------|-------|
 | **Spawned by** | MemPalace capability at `ship:post` (when `mempalace.enabled = true`); diary/tunnels/KG-mirror are then refined by their own toggles |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Bash, Grep, Glob |
+| **Tools** | Read, Bash, Grep, Glob, mcp__mempalace__* |
 | **Model (balanced)** | Sonnet |
 | **Produces** | Diary entry in MemPalace, wing tunnel proposals, KG provenance records |
 

@@ -1150,6 +1150,8 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 
 MemPalace is an opt-in, default-resilient memory capability. Every hook is `onError: skip` — a missing or unreachable MemPalace installation never halts or fails the loop. Enable with `mempalace.enabled: true` after installing MemPalace (`pip install mempalace`).
 
+The shipped `gsd-mempalace-curator` agent carries the tool grant `mcp__mempalace__*`: MemPalace's MCP server registers under the name `mempalace`, and the grant follows that registration, so on tool-allowlist runtimes the curator can call the `mempalace_*` MCP tools its instructions name. When the server is unreachable the agent falls back to the `mempalace` CLI, and every capability hook stays `onError: skip` — a missing MemPalace never fails `ship:post`. The `agent_tools` override path (above) keeps working for per-host adjustments.
+
 `mempalace.enabled` is the **master gate**: all five loop hooks (discuss, plan, execute-wave, verify, ship) and both curator contributions are gated on this key. When it is `false` (the default), nothing fires and the GSD loop is byte-for-byte unchanged. The remaining keys only refine behavior when `mempalace.enabled` is `true`; they are honored at runtime by the skills, curator, and fragments — they do not add independent hook gating.
 
 | Setting | Type | Default | Description |
