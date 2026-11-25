@@ -99,8 +99,8 @@ Canonical form — a markdown table (human-editable, diff-friendly):
 
 Rules enforced at seal time: the matrix must be non-empty; every capability name
 must be non-empty and unique; every decision must be `INTEGRATE` or `OPT-OUT`;
-every `OPT-OUT` must have a reason. Violations block the seal with a precise
-error.
+every `OPT-OUT` must have a reason of at most 200 characters. Violations block
+the seal with a precise error.
 
 ### Declaring "no external API integration" (#2365)
 
@@ -112,8 +112,8 @@ declares it instead of fabricating a row:
 No external API integration: UI-only phase, no third-party surface.
 ```
 
-The reason is **required**, exactly like an `OPT-OUT` reason — the declaration
-is a reasoned decision, not a bypass. A `COVERAGE.md` containing both the
+The reason is **required** and at most 200 characters, exactly like an
+`OPT-OUT` reason — the declaration is a reasoned decision, not a bypass. A `COVERAGE.md` containing both the
 declaration and coverage rows is contradictory and blocks the seal. When the
 detector still finds integration signals in the phase scope, the declaration
 wins (it is the human overrule for a fallible detector) but the gate output
@@ -144,7 +144,8 @@ zero — the matrix is the durable subtraction record.
 ## Detector CLI
 
 ```bash
-echo "$PHASE_SCOPE" | node gsd-core/bin/lib/api-coverage.cjs --json
+echo "$PHASE_SCOPE" | node "${GSD_TOOLS%/*}/lib/api-coverage.cjs" --json
+# $GSD_TOOLS = the shipped gsd-tools.cjs, resolved by the workflow preamble
 # exit 0 = integration detected, 1 = none (real input, examined, no signal)
 # NO_INPUT = stdin was empty or whitespace-only (registry code — ADR-3889 Phase 3, #3907)
 # UNAVAILABLE = stdin read failed (registry code)
