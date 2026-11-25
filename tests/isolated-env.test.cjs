@@ -224,6 +224,12 @@ describe('withHome (#6639)', () => {
       else process.env.GSD_6639_UNSET_PROBE = saved;
     });
     process.env.GSD_6639_UNSET_PROBE = 'set';
+    const goodSaved = process.env.GSD_6639_GOOD_PROBE;
+    t.after(() => {
+      if (goodSaved === undefined) delete process.env.GSD_6639_GOOD_PROBE;
+      else process.env.GSD_6639_GOOD_PROBE = goodSaved;
+    });
+    delete process.env.GSD_6639_GOOD_PROBE;
     const hooks = [];
     const ctx = { after: (fn) => hooks.push(fn) };
 
@@ -242,6 +248,8 @@ describe('withHome (#6639)', () => {
       assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'x', [name]: 'y' }), TypeError, JSON.stringify(name));
       assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
     }
+    assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'a\0b' }), TypeError);
+    assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
     assert.equal(process.env.GSD_6639_UNSET_PROBE, 'set');
     assert.equal(hooks.length, 0, 'a rejected call registers no hook');
   });

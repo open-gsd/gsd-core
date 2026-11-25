@@ -284,7 +284,7 @@ const ENV_BEFORE = new WeakMap();
  * it if it was unset. Calls on one `t` stack: the restore is to the value from before the first.
  * A value of `undefined` unsets the variable for the test; any other non-string is a TypeError
  * (process.env would store the string "undefined", or "[object Object]"), and so is a name that
- * is empty or holds `=` or NUL. The whole object is validated before any variable changes.
+ * is empty or holds `=` or NUL, or a value that holds NUL. The whole object is validated before any variable changes.
  *
  * The test-context counterpart of `isolatedEnv`, for a test that calls the product in-process.
  * Several test files keep their own callback-scoped `withEnv(vars, fn)`; this one is scoped to
@@ -301,6 +301,9 @@ function setEnvForTest(t, vars) {
     }
     if (value !== undefined && typeof value !== 'string') {
       throw new TypeError(`setEnvForTest: ${name} must be a string or undefined, got ${typeof value}`);
+    }
+    if (typeof value === 'string' && value.includes('\0')) {
+      throw new TypeError(`setEnvForTest: the value of ${name} holds a NUL, which the environment truncates`);
     }
   }
   let before = ENV_BEFORE.get(t);
