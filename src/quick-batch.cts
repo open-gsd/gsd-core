@@ -522,7 +522,7 @@ function validateBatchModes(value: unknown): Result<string[]> {
 /** A JSON object: not null, not an array, and no prototype other than Object's (or none). */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const proto = Object.getPrototypeOf(value);
+  const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
 }
 
