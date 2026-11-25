@@ -2481,19 +2481,20 @@ When `/gsd-new-project` creates a new `config.json`, it reads global defaults an
 
 ### What a global file can and cannot set at runtime
 
-Two different rules apply, and the difference is deliberate ([#3532](https://github.com/open-gsd/gsd-core/issues/3532)):
+The global file is the lowest file layer of the precedence ladder, and it merges **per key** ([#4071](https://github.com/open-gsd/gsd-core/issues/4071)):
 
 - **In a directory with no `.planning/` at all**, `$GSD_HOME/.gsd/defaults.json` is the active
   configuration — model resolution reads it directly.
-- **In a real project (`.planning/config.json` present, even if empty)**, the global file is
-  **not read for model resolution** — every model-side key it sets (`model_profile`,
-  `model_overrides`, `models`, `dynamic_routing`, `runtime`, and the rest of the resolution
-  set) is inert there. GSD prints a one-time stderr warning naming the shadowed keys when it
-  detects this, instead of failing silently. To apply a global model setting to a project,
-  put it in that project's `.planning/config.json`.
-- **`effort` is the exception**: the install-time effort channel always merges
-  the global defaults store with the project config (that is how `effort sync` works), so a
-  global `effort` block keeps working in projects and does not trigger the warning.
+- **In a real project (`.planning/config.json` present, even if empty)**, each key the global file
+  sets is honored unless the project config sets that key itself. A key the project sets wins on
+  collision; an object such as `effort` or `model_overrides` merges field by field; a project
+  section that is present but not an object (`null`, a string) still blocks the global value
+  beneath it. The keys covered are the model-resolution set (`model_profile`, `model_overrides`,
+  `models`, `dynamic_routing`, `granularity`, `effort`, and the rest of that set). `runtime` is the
+  exception: the installer stamps it with whichever runtime installed first, so it names an
+  install and never fills in under a project.
+- **The install-time effort, model and tool channels** (`effort sync`, the agent installers) merge the
+  global defaults store with the project config in the same way, per key.
 - **The whole `git.*` namespace is project-scoped and never resolves from the global file**,
   in either directory shape — not `git.base_branch`, not `git.protected_branches`, not
   `git.allow_default_branch_commits`, not
@@ -2501,8 +2502,7 @@ Two different rules apply, and the difference is deliberate ([#3532](https://git
   repository, not of the machine, so it is read only from that project's
   `.planning/config.json`. A `git` block in `$GSD_HOME/.gsd/defaults.json` still seeds new projects
   (`/gsd-new-project` copies globals into the new `config.json`), but it never takes effect
-  at runtime on its own. It is outside the shadowed-key warning above, which covers the
-  model-resolution set only.
+  at runtime on its own. It is outside the model-resolution set above.
 
 ---
 

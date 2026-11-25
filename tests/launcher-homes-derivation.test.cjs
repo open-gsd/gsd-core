@@ -25,6 +25,7 @@ const { spawnSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const LIB = path.join(ROOT, 'gsd-core', 'bin', 'lib');
@@ -184,7 +185,7 @@ describe('the launcher finds the install the JS resolver resolves, for every run
       timeout: PROBE_TIMEOUT_MS,
       // A minimal environment: no *_CONFIG_DIR / *_HOME override, so the
       // descriptor defaults (`$HOME/.<dir>`) are what is probed.
-      env: { HOME: home, USERPROFILE: home, PATH: process.env.PATH || '/usr/bin:/bin' },
+      env: isolatedEnv({ home, path: process.env.PATH || '/usr/bin:/bin', base: {} }),
     });
   }
 
@@ -265,7 +266,7 @@ describe('the launcher finds the install the JS resolver resolves, for every run
         cwd: home,
         encoding: 'utf8',
         timeout: PROBE_TIMEOUT_MS,
-        env: { HOME: home, USERPROFILE: home, PATH: process.env.PATH || '/usr/bin:/bin', CLAUDE_CONFIG_DIR: custom },
+        env: isolatedEnv({ home, path: process.env.PATH || '/usr/bin:/bin', claudeConfigDir: custom, base: {} }),
       });
       assert.equal(result.status, 0, result.stderr);
       assert.equal(fs.realpathSync(result.stdout), fs.realpathSync(path.join(custom, 'gsd-core', 'bin', 'gsd-tools.cjs')));

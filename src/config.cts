@@ -21,13 +21,16 @@ const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
+const { planningDir, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import schemaDefaults = require('./config-schema-defaults.cjs');
 const { resolveSchemaDefault } = schemaDefaults;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configValueResolver = require('./config-value-resolver.cjs');
+const { resolveConfigValue } = configValueResolver;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
@@ -327,7 +330,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   const hasJina = !!(process.env['JINA_API_KEY'] || fs.existsSync(jinaKeyFile));
 
   // Load user-level defaults from $GSD_HOME/.gsd/defaults.json if available
-  const globalDefaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+  const globalDefaultsPath = configLoader.globalDefaultsPath(gsdHome);
   let userDefaults: Record<string, unknown> = {};
   try {
     if (fs.existsSync(globalDefaultsPath)) {
@@ -846,7 +849,7 @@ function _unsetNestedValue(
  * drift apart).
  */
 function loadConfigJson(cwd: string): Record<string, unknown> {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
   let config: Record<string, unknown> = {};
   try {
     // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws.
@@ -861,7 +864,7 @@ function loadConfigJson(cwd: string): Record<string, unknown> {
 }
 
 function unsetConfigValue(cwd: string, keyPath: string): UnsetConfigValueResult {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
@@ -905,7 +908,7 @@ function isNoopFlagClear(config: Record<string, unknown>, keyPath: string, parse
  * the happy path. But note that `error()` will still `exit(1)` out of the process.
  */
 function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): SetConfigValueResult {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
@@ -973,7 +976,7 @@ function setConfigValues(
     return { updated: false, results: [] };
   }
 
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
@@ -1453,7 +1456,7 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
 }
 
 function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: string | undefined): void {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   if (!keyPath) {
     error('Usage: config-get <key.path> [--default <value>]');
@@ -1467,7 +1470,7 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
    * schema default. With none of them, fail with the caller's reason.
    */
   const emitAbsentKey = (message: string, reason: Parameters<typeof error>[1]): void => {
-    const rootVal = resolveFromRootConfig(cwd, kp);
+    const rootVal = resolveInheritedValue(cwd, kp);
     if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
     if (defaultValue !== undefined) { emitConfigValue(kp, parseConfigArgValue(defaultValue), raw, defaultValue); return; }
     const sd = resolveSchemaDefault(cwd, kp);
@@ -1583,39 +1586,39 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
  * active, because `planningDir === planningRoot` and the caller already read
  * that file directly.
  */
-function resolveFromRootConfig(cwd: string, kp: string): { found: boolean; value: unknown } {
-  // Only meaningful when a workstream is active (GSD_WORKSTREAM set) — that is what
-  // redirects planningDir away from root AND what loadConfigResolved gates root-reading
-  // on. Gating on `process.env.GSD_WORKSTREAM` (not on a planningDir !== planningRoot
-  // path inequality) avoids a false trigger under GSD_PROJECT alone, where planningDir
-  // diverges from planningRoot without a workstream and loadConfigResolved does NOT
-  // inherit root — matching the runtime's own `if (ws)` gate keeps the two surfaces
-  // from diverging on the project-scoped (non-workstream) case.
+function resolveUndeclaredFromRoot(cwd: string, kp: string): { found: boolean; value: unknown } {
   if (!resolveEnvWorkstream()) return { found: false, value: undefined };
-  const root = planningRoot(cwd);
-  const rootConfigPath = path.join(root, 'config.json');
-  let rootConfig: Record<string, unknown>;
+  let current: unknown;
   try {
     // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
-    const rawRoot = configLoader.readConfigFileBounded(rootConfigPath);
+    const rawRoot = configLoader.readConfigFileBounded(planningWorkspace.rootConfigPath(cwd));
     if (rawRoot === null) return { found: false, value: undefined };
-    rootConfig = JSON.parse(rawRoot) as Record<string, unknown>;
+    current = JSON.parse(rawRoot) as unknown;
   } catch {
-    // Unparseable root config → don't inherit (do not let a corrupt root file
-    // change config-get's verdict). Fall through to schema default / error.
+    // An unusable root config is not inherited: it must not change config-get's verdict.
     return { found: false, value: undefined };
   }
-  let current: unknown = rootConfig;
   for (const key of kp.split('.')) {
-    if (current === undefined || current === null || typeof current !== 'object') {
-      return { found: false, value: undefined };
-    }
-    current = Object.prototype.hasOwnProperty.call(current, key)
-      ? (current as Record<string, unknown>)[key]
-      : undefined;
+    if (current === undefined || current === null || typeof current !== 'object') return { found: false, value: undefined };
+    current = Object.prototype.hasOwnProperty.call(current, key) ? (current as Record<string, unknown>)[key] : undefined;
   }
-  if (current === undefined) return { found: false, value: undefined };
-  return { found: true, value: current };
+  return current === undefined ? { found: false, value: undefined } : { found: true, value: current };
+}
+
+function resolveInheritedValue(cwd: string, kp: string): { found: boolean; value: unknown } {
+  // #6030 (ADR-1411 Decision 5): the resolver owns the walk; this rung keeps only the layers
+  // below the file `cmdConfigGet` already read. The root layer counts only when a workstream is
+  // active (GSD_WORKSTREAM set): under GSD_PROJECT alone the loader does not inherit root, so
+  // neither does config-get. The global defaults layer counts everywhere, as the documented
+  // precedence says (#4071). An ineligible key reports not-configured, as before this rung read it.
+  const resolved = resolveConfigValue(kp, { cwd, family: 'A', honorGlobal: configLoader.honorsGlobalDefaults });
+  if (!resolved.found && resolved.reason === configLoader.CONFIG_REASON.NOT_CONFIGURED) {
+    // A key the resolver does not declare keeps the root-config walk this rung always had.
+    return resolveUndeclaredFromRoot(cwd, kp);
+  }
+  if (!resolved.found) return { found: false, value: undefined };
+  const inherited = resolved.layer === 'global-defaults' || (resolved.layer === 'root' && Boolean(resolveEnvWorkstream()));
+  return inherited ? { found: true, value: resolved.value } : { found: false, value: undefined };
 }
 
 /**
@@ -1691,7 +1694,7 @@ function cmdConfigPath(cwd: string, _raw: boolean, workstreamContext: Workstream
   // never consumed as JSON. Passing raw=true forces plain-text output.
   const configPath = workstreamContext && workstreamContext.configPath
     ? workstreamContext.configPath
-    : path.join(planningDir(cwd), 'config.json');
+    : planningWorkspace.projectConfigPath(cwd);
   output(configPath, true, configPath);
 }
 
@@ -1716,14 +1719,14 @@ function cmdMigrateConfig(cwd: string, raw: boolean): void {
   // #3749: resolve the migration target through the project-aware resolver so
   // GSD_PROJECT scopes the write; migrateOnDisk itself cannot (see its
   // configPathOverride note).
-  const scopedConfigPath = path.join(planningDir(cwd, ws || undefined), 'config.json');
-  const report = migrateOnDisk(cwd, ws || undefined, scopedConfigPath);
+  const scopedConfigPath = planningWorkspace.projectConfigPath(cwd, ws || undefined);
+  const report = migrateOnDisk(cwd, scopedConfigPath);
 
   // #3760: deduplicated on (path, reason), so a repeated invocation stays quiet.
   if (report.skipped.length > 0) {
     warnUnusableInput({
       reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT,
-      source: path.join(planningDir(cwd, ws || undefined), 'config.json'),
+      source: planningWorkspace.projectConfigPath(cwd, ws || undefined),
     });
   }
 

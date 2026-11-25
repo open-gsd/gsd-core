@@ -7,6 +7,7 @@ const path = require('node:path');
 const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 // #6005: full gsd-tools subcommands on a fresh install, not probes; a cold one hit 15 s on Windows.
 const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -26,7 +27,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.match(before, /^effort: (?!low$)\S+/m, 'the installed agent starts with a different effort');
 
     const cli = path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
-    const env = { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, CLAUDE_CONFIG_DIR: globalDir };
+    const env = isolatedEnv({ home: root, claudeConfigDir: globalDir, override: { GSD_HOME: root } });
     function run(args) {
       const result = runNode([cli, ...args], { cwd: root, env, timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS });
       assert.equal(result.exitCode, 0, `${args.join(' ')} failed (${result.summary}):\n${result.stderr}`);

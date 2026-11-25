@@ -335,6 +335,7 @@ const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { createTempGitProject, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { createFixture, seedPhase, seedWorkstream } = require('./fixtures/index.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const GSD_TOOLS_BIN = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const SKIP_WIN32 = process.platform === 'win32'
@@ -403,7 +404,7 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
     // against the old grep's direct-stdout shape) keeps working unchanged against the new
     // CLI-subcommand shape. `${COMMITS-}` is unset-safe for fence sets that never assign it.
     const script = [seed, GSD_RUN, ...fences, 'printf \'%s\\n\' "${COMMITS-}"', tail].join('\n');
-    const env = { ...process.env, GSD_TOOLS_BIN, HOME: cwd };
+    const env = isolatedEnv({ home: cwd, override: { GSD_TOOLS_BIN } });
     // A developer's active workstream must not leak into the fixture; a test that wants
     // one names it through `extraEnv`, applied after the scrub.
     delete env.GSD_WORKSTREAM;
@@ -723,7 +724,7 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
       'printf \'%s\\n\' "${COMMITS-}"',
       'echo "ARCHIVED=[${PHASE_DIR_ARCHIVED}]"',
     ].join('\n');
-    const env = { ...process.env, GSD_TOOLS_BIN, HOME: cwd, GSD_WORKSTREAM: 'milestones' };
+    const env = isolatedEnv({ home: cwd, override: { GSD_TOOLS_BIN, GSD_WORKSTREAM: 'milestones' } });
     delete env.GSD_PROJECT;
     const r = runHookSeam('-c', [script], { interpreter: 'bash', cwd, env, timeoutMs: PROBE_TIMEOUT_MS });
     throwIfFailed(r, 'bash <undo.md fences>');
@@ -977,7 +978,7 @@ describe('#4465: undo commit selection — executed against a git fixture', { sk
     // HOME off the parent, so the sub_repos branch of findProjectRoot is the one that resolves.
     const home = createFixture({ prefix: 'gsd-4465-home-', planning: false, git: false });
     t.after(() => cleanup(home));
-    return { parent, child, env: { HOME: home } };
+    return { parent, child, env: isolatedEnv({ home }) };
   }
 
   test('negative control: the pre-hardening root-commit arm widened a foreign anchor to all of HEAD', (t) => {

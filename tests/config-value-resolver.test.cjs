@@ -897,3 +897,38 @@ describe('Config Value Resolution Module (#5096)', () => {
     });
   });
 });
+
+describe('family B per-call options (#6031)', () => {
+  test('valueType "string" skips a layer whose value is not a string and lets a lower layer win', () => {
+    withLayers((cwd) => {
+      for (const bad of [null, 7, true, {}, []]) {
+        writeLayer(cwd, 'runtime-local', { worktree: { baseRef: bad } });
+        writeLayer(cwd, 'runtime-user', { worktree: { baseRef: 'head' } });
+        const plain = resolveConfigValue('worktree.baseRef', { cwd, family: 'B' });
+        assert.deepEqual([plain.found, plain.layer], [true, 'runtime-local'], `default ladder keeps ${JSON.stringify(bad)}`);
+        const typed = resolveConfigValue('worktree.baseRef', { cwd, family: 'B', valueType: 'string' });
+        assert.deepEqual([typed.found, typed.value, typed.layer], [true, 'head', 'runtime-user'], JSON.stringify(bad));
+      }
+    });
+  });
+
+  test('valueType "string" with no string anywhere reports config_type_mismatch', () => {
+    withLayers((cwd) => {
+      writeLayer(cwd, 'runtime-local', { worktree: { baseRef: 7 } });
+      const typed = resolveConfigValue('worktree.baseRef', { cwd, family: 'B', valueType: 'string' });
+      assert.deepEqual([typed.found, typed.layer, typed.reason], [false, null, 'config_type_mismatch']);
+    });
+  });
+
+  test('io.readFile and io.userDir replace the filesystem reads of the family B ladder', () => {
+    const user = path.join(path.sep, 'nowhere', 'user-claude');
+    const reads = [];
+    const files = { [path.join(user, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }) };
+    const io = { userDir: user, readFile: (file) => { reads.push(file); return Object.hasOwn(files, file) ? files[file] : null; } };
+    const found = resolveConfigValue('worktree.baseRef', { cwd: path.join(path.sep, 'nowhere', 'repo'), family: 'B', io });
+    assert.deepEqual([found.found, found.value, found.layer], [true, 'head', 'runtime-user']);
+    assert.equal(reads.length, 3);
+    const skipped = resolveConfigValue('worktree.baseRef', { cwd: path.join(path.sep, 'nowhere', 'repo'), family: 'B', io: { ...io, userDir: null } });
+    assert.equal(skipped.found, false);
+  });
+});

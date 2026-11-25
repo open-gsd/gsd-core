@@ -2,7 +2,7 @@
 
 // Producer-half of the async external-job contract (#1164 / #1105).
 // The CORE consumer half (external_job_waiting) is covered by
-// external-job-waiting.test.cjs. These tests assert the scheduler-adapter
+// the external-job-waiting text contract. These tests assert the scheduler-adapter
 // Capability's pure module: SLURM state mapping, manifest build/validate,
 // sbatch/squeue/sacct parsers, and the fail-closed manifest writer that
 // mirrors the consumer's duplicate-execution guard

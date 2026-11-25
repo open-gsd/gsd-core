@@ -1543,7 +1543,7 @@ describe('update workflow wires the restore step (#1854)', () => {
   });
 
   // The update-context jq guard lives with the rest of the #2589 sweep in
-  // tests/fix-2589-workflow-jq-dependency.test.cjs (update.md was added to its
+  // the workflow-jq-dependency text contract (update.md was added to its
   // AUDITED list) rather than being duplicated here.
 });
 

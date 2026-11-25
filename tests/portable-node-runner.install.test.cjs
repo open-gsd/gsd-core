@@ -12,6 +12,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { BUILD_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
@@ -134,7 +135,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: `${posixRealNodeDir()}:/usr/bin:/bin` },
+        env: isolatedEnv({ home, path: `${posixRealNodeDir()}:/usr/bin:/bin` }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${foreign}\nstderr: ${result.stderr}`);
@@ -154,7 +155,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: `${posixRealNodeDir()}:/usr/bin:/bin` },
+        env: isolatedEnv({ home, path: `${posixRealNodeDir()}:/usr/bin:/bin` }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${foreign}\nstderr: ${result.stderr}`);
@@ -175,7 +176,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: `${posixRealNodeDir()}:/usr/bin:/bin` },
+        env: isolatedEnv({ home, path: `${posixRealNodeDir()}:/usr/bin:/bin` }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${emitted}\nstderr: ${result.stderr}`);
@@ -197,7 +198,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: `${posixRealNodeDir()}:/usr/bin:/bin` },
+        env: isolatedEnv({ home, path: `${posixRealNodeDir()}:/usr/bin:/bin` }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${emitted}\nstderr: ${result.stderr}`);
@@ -216,7 +217,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin' },
+        env: isolatedEnv({ home, path: '/usr/bin:/bin' }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${emitted}\nstderr: ${result.stderr}`);
@@ -413,12 +414,11 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(resolver, [FOREIGN_NODE, path.join(configDir, 'hooks', 'gsd-statusline.js')], {
         interpreter: 'bash',
         cwd: home,
-        env: {
-          ...process.env,
-          HOME: home,
-          PATH: `${emptyBin}:/usr/bin:/bin`,
-          GSD_NODE_RUNNER_NO_FALLBACKS: '1',
-        },
+        env: isolatedEnv({
+          home,
+          path: `${emptyBin}:/usr/bin:/bin`,
+          override: { GSD_NODE_RUNNER_NO_FALLBACKS: '1' },
+        }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.notEqual(result.exitCode, 0, 'resolver silently succeeded with no node anywhere');
@@ -468,7 +468,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: `${posixRealNodeDir()}:/usr/bin:/bin` },
+        env: isolatedEnv({ home, path: `${posixRealNodeDir()}:/usr/bin:/bin` }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${emitted}\nstderr: ${result.stderr}`);
@@ -493,7 +493,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       t.after(() => cleanup(dir));
       const result = runHook(checker, [file], {
         interpreter: 'bash',
-        env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin' },
+        env: isolatedEnv({ home, path: '/usr/bin:/bin' }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `bash -n rejected the emitted command (${foreign}): ${result.stderr}`);
@@ -557,7 +557,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       const result = runHook(file, [], {
         interpreter: 'bash',
         cwd: home,
-        env: { ...process.env, HOME: home, PATH: `${posixRealNodeDir()}:/usr/bin:/bin` },
+        env: isolatedEnv({ home, path: `${posixRealNodeDir()}:/usr/bin:/bin` }),
         timeoutMs: RUN_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, `command: ${foreign}\nstderr: ${result.stderr}`);
