@@ -355,14 +355,18 @@ describe('process-seam', () => {
   test('holdStdin keeps stdin open: the bound kills a stdin-reading child before EOF', async () => {
     // #5837: the hold path's whole contract in one child — it announces on
     // fd 1 via a synchronous write (survives the bound kill on every
-    // platform), reports EOF on stdin's end and exits there, and otherwise
-    // holds the event loop open. With holdStdin the end handler can never
-    // fire, so the only way out is the seam's bound; the SAME fixture on the
-    // sync path with no option must still see EOF at once — the default the
-    // pre-#5837 C4 rows wrongly relied on.
+    // platform), carries a no-op data listener so the paused stdin stream is
+    // resumed and 'end' can fire at all (an 'end' listener alone never
+    // resumes it — bench run 5ad5e6c3 proved the unresumed child idles to the
+    // bound on both paths), reports EOF on that end and exits there, and
+    // otherwise holds the event loop open. With holdStdin the end handler can
+    // never fire, so the only way out is the seam's bound; the SAME fixture
+    // on the sync path with no option must still see EOF at once — the
+    // default the pre-#5837 C4 rows wrongly relied on.
     const src = [
       "const fs = require('fs');",
       "fs.writeSync(1, 'listening\\n');",
+      "process.stdin.on('data', () => {});",
       "process.stdin.on('end', () => {",
       "  fs.writeSync(1, 'eof\\n');",
       '  process.exit(0);',
