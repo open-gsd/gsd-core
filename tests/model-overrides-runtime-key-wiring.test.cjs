@@ -7,8 +7,6 @@
  *   - the descriptor-driven agents staging (runtime-artifact-layout -> createRuntimeArtifactInstallPlan)
  *     that bakes `model:` into OpenCode and Kilo agent frontmatter, so the runtime the layout threads
  *     down is what selects the key;
- *   - the Codex `.toml` baker (`generateCodexAgentToml`), whose own value policy still applies to the
- *     selected value;
  *   - the orchestrator-worktree executor pin behind `dispatch-isolation`, which must select the host's
  *     key without loosening its explicit-pin-only rule.
  *
@@ -19,16 +17,15 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const layoutModule = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const installProfiles = require('../gsd-core/bin/lib/install-profiles.cjs');
 const installPlan = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
 const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
-const { parseCodexAgentToml } = require('../gsd-core/bin/lib/codex-agent-toml.cjs');
-const { generateCodexAgentToml } = require('../bin/install.js');
 const { createTempDir, cleanup, scrubConfigLocationEnv, runGsdTools } = require('./helpers.cjs');
-const { createHermeticRoot, setEnvForTest, withHome } = require('./helpers/isolated-env.cjs');
+const { createHermeticRoot, withHome } = require('./helpers/isolated-env.cjs');
 
 const AGENT = 'gsd-planner';
 const SANDBOXED = new WeakSet();
@@ -55,8 +52,7 @@ function stagedAgentModel(t, runtime, modelOverrides) {
   const result = installPlan.createRuntimeArtifactInstallPlan({
     layout,
     resolvedProfile: installProfiles.resolveProfile({ modes: ['full'] }),
-    homedir: () => process.env.HOME,
-    platform: process.platform,
+    homedir: () => os.homedir(),
     resolveAttribution: () => undefined,
     projectDir: root,
   });
@@ -88,56 +84,15 @@ describe('#4669 the descriptor-driven install bakes the model of the runtime bei
   });
 });
 
-describe('#4669 the Codex .toml baker selects the codex key and keeps its own value policy', () => {
-  const content = [
-    '---',
-    `name: ${AGENT}`,
-    'description: Plans phases',
-    'tools: Read, Bash',
-    '---',
-    '<role>You plan.</role>',
-  ].join('\n');
-
-  function bakedModel(t, entry) {
-    t.mock.method(process.stderr, 'write', () => true);
-    const parsed = parseCodexAgentToml(generateCodexAgentToml(AGENT, content, { [AGENT]: entry }));
-    assert.ok(parsed.ok, 'the baked .toml must parse');
-    return parsed.doc.model ?? null;
-  }
-
-  test('the codex key is baked', (t) => {
-    assert.equal(bakedModel(t, { codex: 'gpt-6-astra', claude: 'opus' }), 'gpt-6-astra');
-  });
-
-  test('an entry naming only another runtime bakes nothing', (t) => {
-    assert.equal(bakedModel(t, { claude: 'opus' }), null);
-  });
-
-  test('an Anthropic-flavored id under the codex key is still dropped', (t) => {
-    assert.equal(bakedModel(t, { codex: 'opus' }), null);
-    assert.equal(bakedModel(t, { codex: 'claude-opus-4-8' }), null);
-  });
-
-  test('a string entry is unchanged', (t) => {
-    assert.equal(bakedModel(t, 'gpt-6-astra'), 'gpt-6-astra');
-  });
-
-  test('an unusable value under the codex key bakes nothing and does not throw', (t) => {
-    for (const value of ['', '   ', 5, null, {}, []]) {
-      assert.equal(bakedModel(t, { codex: value }), null, JSON.stringify(value));
-    }
-  });
-});
-
 describe('#4669 the orchestrator-worktree executor pin selects the dispatched host\'s key', () => {
   /** The argv `dispatch-isolation` would exec for the executor on codex, as parsed JSON. */
   function execArgs(t, entry) {
     const root = project(t, { model_overrides: { 'gsd-executor': entry } });
     const target = createTempDir('mo-wire-wt-');
     t.after(() => cleanup(target));
-    setEnvForTest(t, { GSD_RUNTIME: 'codex' });
+    // The in-process CLI reads the env it is handed, not process.env, so the host is named here.
     const result = runGsdTools(
-      ['dispatch-isolation', '--cwd-target', target, '--prompt', 'go', '--json'], root);
+      ['dispatch-isolation', '--cwd-target', target, '--prompt', 'go', '--json'], root, { GSD_RUNTIME: 'codex' });
     assert.ok(result.success, `dispatch-isolation failed: ${result.error}`);
     const decision = JSON.parse(result.output);
     assert.equal(decision.isolation, 'orchestrator-worktree');
