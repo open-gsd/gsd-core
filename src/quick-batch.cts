@@ -739,13 +739,8 @@ const QUICK_TASKS_HEADING_RE = /^quick tasks completed\b/i;
  * Mirrors `appendQuickTaskRow`'s own section/table resolution (heading match
  * -> parseMarkdownTable -> matchTableSchema) without modifying it, so the two
  * can never silently diverge on what counts as "the" Quick Tasks table.
- *
- * With `dirName`, the row must also name that task directory in its
- * `Directory` cell (as a whole `[0-9a-z-]` run, so `x-fix` never matches
- * `x-fix-login`). A legacy `YYYYMMDD-<slug>` task's `#` is only its date, which
- * two tasks from the same day share (#6530).
  */
-function hasQuickTaskRow(stateContent: string, quickId: string, dirName?: string): boolean {
+function hasQuickTaskRow(stateContent: string, quickId: string): boolean {
   if (!stateContent) return false;
   const sections = collectSections(stateContent, (h: HeadingToken) => QUICK_TASKS_HEADING_RE.test(h.text.trim()));
   for (const section of sections) {
@@ -754,9 +749,7 @@ function hasQuickTaskRow(stateContent: string, quickId: string, dirName?: string
     const match = matchTableSchema(parsed.value.columns);
     if (!match || match.id !== 'QuickTasks') continue;
     for (const row of parsed.value.rows) {
-      if (row['#'] !== quickId) continue;
-      if (dirName === undefined) return true;
-      if (String(row['Directory'] ?? '').split(/[^0-9a-z-]+/).includes(dirName)) return true;
+      if (row['#'] === quickId) return true;
     }
   }
   return false;

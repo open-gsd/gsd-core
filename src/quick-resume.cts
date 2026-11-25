@@ -14,6 +14,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isFlagToken } from './command-arg-projection.cjs';
+import { collectSections } from './markdown-sectionizer.cjs';
+import type { HeadingToken } from './markdown-sectionizer.cjs';
+import { parseMarkdownTable, matchTableSchema } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6530 CJS interop import, as in the sibling modules
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6530 CJS interop import, as in the sibling modules
@@ -100,6 +103,31 @@ function hasPlanFile(taskDir: string): boolean {
   }
 }
 
+const QUICK_TASKS_HEADING_RE = /^quick tasks completed\b/i;
+
+/**
+ * `hasQuickTaskRow` (src/quick-batch.cts) for a legacy directory: the same
+ * section and table resolution, and the row must also name `dirName` in its
+ * `Directory` cell, as a whole `[0-9a-z-]` run (so `x-fix` never matches
+ * `x-fix-login`). A legacy row's `#` is only its date, which two tasks from
+ * the same day share. A `—` or empty cell is no answer, so false.
+ */
+function hasLegacyQuickTaskRow(stateContent: string, datePrefix: string, dirName: string): boolean {
+  if (!stateContent) return false;
+  const sections = collectSections(stateContent, (h: HeadingToken) => QUICK_TASKS_HEADING_RE.test(h.text.trim()));
+  for (const section of sections) {
+    const parsed = parseMarkdownTable(section.body);
+    if (!parsed.ok) continue;
+    const schema = matchTableSchema(parsed.value.columns);
+    if (!schema || schema.id !== 'QuickTasks') continue;
+    for (const row of parsed.value.rows) {
+      if (row['#'] !== datePrefix) continue;
+      if (String(row['Directory'] ?? '').split(/[^0-9a-z-]+/).includes(dirName)) return true;
+    }
+  }
+  return false;
+}
+
 function readStateContent(cwd: string): string {
   try {
     return fs.readFileSync(path.join(planningDir(cwd), 'STATE.md'), 'utf-8');
@@ -156,7 +184,9 @@ function resolveQuickResume(cwd: string, slug: string): QuickResumeResult {
       // directory's date prefix (gsd-core/workflows/quick.md Step 2). Two
       // legacy tasks of one day share that date, so a legacy row must also
       // name this directory.
-      state_row: hasQuickTaskRow(readStateContent(cwd), match.prefix, match.legacy ? match.name : undefined),
+      state_row: match.legacy
+        ? hasLegacyQuickTaskRow(readStateContent(cwd), match.prefix, match.name)
+        : hasQuickTaskRow(readStateContent(cwd), match.prefix),
     },
   };
 }
