@@ -250,7 +250,8 @@ describe('execute-phase completion reconciliation (#4217 — split A of #3754)',
     test('host stays under the frozen ADR-857 Phase 6 ceiling (#1168)', () => {
       const { lfByteCount } = require('../scripts/workflow-size.cjs');
       const bytes = lfByteCount(WORKFLOW_PATH);
-      assert.ok(bytes < 93600, `execute-phase.md must stay below the frozen pre-phase-6 ceiling (93600); got ${bytes}`);
+      // #6451: raised from 93600 to accommodate the --force-mvp-gate parse_args entry — same rationale as #1298/#3771.
+      assert.ok(bytes < 93700, `execute-phase.md must stay below the frozen pre-phase-6 ceiling (93700); got ${bytes}`);
     });
 
     test('fragment keeps the #4003 anchored commit-scope probe and dispatch bound', () => {
