@@ -743,7 +743,7 @@ prohibition recall in the planner). Pass `$COVERAGE` and `$SPECLESS_FALLBACK_DIS
 
 Read+execute `gsd-core/workflows/plan-phase/steps/stall-detection-helpers.md` (defines
 watch helpers; pre-dispatch, `{receipt}` = `gsd_receipt_path "${PHASE_DIR}" <spawn> "${PROJECT_ROOT}"`;
-on `marker_received`, `gsd_return_marker "{receipt}" <markers>` names the marker that routes;
+on `marker_received`, the return is `gsd_return_body "{receipt}"`, no completion-result wait;
 independent of the teams-status guard above, AC2).
 
 ## 8. Spawn gsd-planner Agent

@@ -966,11 +966,21 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 <structured_returns>
 
 **Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
-your LAST action is to write the marker line you are about to return to PATH with one Bash call,
-e.g. `printf '%s\n' '## ISSUES FOUND' > 'PATH'` (its directory already exists). This is your only
-write; never touch a plan or any other file. If the write fails or is refused (a read-only
-sandbox), note that in your return and continue: the orchestrator's bounded wait then ends on
-your completion result.
+your LAST action is to write your complete return (the marker line first, e.g. `## ISSUES FOUND`,
+then everything else you are about to return, word for word) to PATH with one Bash call. It writes
+a `.part` file and renames it, so the orchestrator never reads half of it (the directory already
+exists):
+
+```bash
+cat > 'PATH.part' <<'GSD_RETURN_EOF'
+<your complete return, marker line first>
+GSD_RETURN_EOF
+mv -f 'PATH.part' 'PATH'
+```
+
+Your final message then carries the same return. This is your only write; never touch a plan or
+any other file. If the write fails or is refused (a read-only sandbox), note that in your return
+and continue: the orchestrator's bounded wait then ends on your completion result.
 
 ## VERIFICATION PASSED
 

@@ -33,10 +33,12 @@ input outside its stated contract or a symlinked phase dir, naming the reason on
 and pass `""` as the watch's second argument; the wait then ends on the runtime's
 completion result or as `stalled`. Like `$TS`, it is a literal the orchestrator carries
 across tool calls; nothing persists across fences, so never pass an unexpanded
-`$RECEIPT`/`$TS` expression. The agent's LAST action is to write the marker line it
-returns to that path (`agents/gsd-planner.md`, `agents/gsd-plan-checker.md`).
-On `marker_received`, the marker that routes (step 11's `## VERIFICATION PASSED`
-vs `## ISSUES FOUND`, the revision's COMPLETE vs CONFLICT) is
+`$RECEIPT`/`$TS` expression. The agent's LAST action is to write its complete return
+(the marker line first, then the rest of what it returns, word for word) to that path
+with one atomic Bash call, a `.part` file renamed into place (`agents/gsd-planner.md`,
+`agents/gsd-plan-checker.md`). On `marker_received` the receipt IS the return:
+`gsd_return_body "{receipt}"` prints it, and the marker that routes (step 11's
+`## VERIFICATION PASSED` vs `## ISSUES FOUND`, the revision's COMPLETE vs CONFLICT) is
 `gsd_return_marker "{receipt}" <that call's markers>`; never re-grep anything else.
 
 The watch never reads a host output file (`{outputFile}`). On Claude Code that file is
@@ -50,25 +52,18 @@ is `""` and the rm is a no-op. With the toggle `false`, the
 prompt still carries the receipt line and the agent still writes it; the orchestrator
 consumes the real returned result and removes the receipt the same way.
 
-**The runtime's completion result ends the wait:** the receipt bounds the wait; it does
-not replace the runtime's own completion. If the spawned agent's real completion
-result reaches the orchestrator between cycles, stop the watch and route that
-result's recognized marker exactly as the `false` path does. Precedence: whichever
-of the two ends the wait routes it.
-
-**A fresh receipt is waited out, not reported:** the agent writes it as its last tool
-action, before its final message, so when the watch finds one younger than
-`RECEIPT_SETTLE_SECONDS` (120), or than one poll interval when that is shorter, it sleeps out the
-rest of that window in the same call and then reports `marker_received` (an unreadable
-or future modification time counts at once). Every route below therefore sees a receipt
-only after its body had that long to arrive; a settled receipt with no body is a real
-gap, not a race.
-
-The receipt carries only the marker; the full
-return (the checker's issue list, the planner's plan count or checkpoint) always
-comes from the completion result. If both are present and name different markers,
-treat the return as unrecognized (9a/11a). A route that needs the body when it never
-arrives fails closed: a receipt-routed `## ISSUES FOUND` with no issue list is
+**The receipt is the complete return; the completion result is the fallback:** the agent
+writes its whole return to the receipt as its last tool action, atomically, so a receipt
+that exists is complete and `marker_received` means the return has arrived. Route on
+`gsd_return_body "{receipt}"` without waiting for the completion result; the same text is
+also the agent's final message. If the spawned agent's real completion result reaches the
+orchestrator between cycles, stop the watch and route that result's recognized marker
+exactly as the `false` path does. Precedence: whichever
+of the two ends the wait routes it. If both are present and name different markers,
+treat the return as unrecognized (9a/11a). A receipt that holds only the marker (an
+agent definition installed before the body was added, or a refused body write) leaves
+the body to the completion result, and a route that needs the body when neither has it
+fails closed: a receipt-routed `## ISSUES FOUND` with no issue list is
 never counted as 0 issues; use 11a and offer Retry checker before Accept. A
 receipt-routed `## VERIFICATION PASSED` whose body has not arrived when the watch ends
 never proceeds to step 13 on the receipt alone, since step 11 reads that body for
@@ -110,8 +105,7 @@ before its first `PLAN.md`, so its watch can only end on the completion result o
 as `stalled` at the threshold. There is no heartbeat protocol.
 
 **Single-cycle by design, not one long-lived loop:** `gsd_stall_watch` sleeps
-for one `PLANNER_STALL_INTERVAL_MINUTES` (plus, only for a receipt it finds younger than
-the settle window, the rest of that window, never more than one more interval) and returns — it does NOT
+for exactly one `PLANNER_STALL_INTERVAL_MINUTES` and returns — it does NOT
 loop internally for the full `PLANNER_STALL_THRESHOLD_MINUTES`. A single Bash
 tool call blocking for `threshold + interval` minutes (up to 15 min at
 defaults) risks the *host tool's own* timeout killing the call before it ever
@@ -350,48 +344,28 @@ gsd_return_marker() {
   return 0
 }
 
-# A receipt is written as the agent's LAST TOOL action, i.e. BEFORE its final message
-# (the body step 11/9/12 reads), so a receipt that exists is not yet a return that
-# arrived (#5182). When gsd_stall_watch finds a receipt younger than
-# RECEIPT_SETTLE_SECONDS it sleeps out the rest of that window inside the same call and
-# only then reports it, so the final message has had that long to land; the completion
-# result, when it lands, still ends the wait first. This is the ONE place that rule
-# lives: every route that says "when the watch ends" sees a receipt only after it
-# settled, so "receipt, no body" there is a real gap (9a/11a), not a race. The extra
-# wait ends at most RECEIPT_SETTLE_SECONDS after the receipt was written, or at the next
-# poll interval when that is shorter, so a finished agent is still reported within one
-# poll interval. A constant, not a config key.
-RECEIPT_SETTLE_SECONDS=120
-
-# _gsd_mtime FILE — print FILE's mtime as epoch seconds: GNU `stat -c %Y` (Linux, Git
-# Bash), then BSD `stat -f %m` (macOS). Prints nothing when neither works.
-_gsd_mtime() {
-  local t
-  t=$(stat -c %Y -- "$1" 2>/dev/null) || t=$(stat -f %m -- "$1" 2>/dev/null) || return 0
-  [[ "$t" =~ ^[0-9]{1,15}$ ]] || return 0
-  t="${t#"${t%%[!0]*}"}"   # no leading zeros: $(( )) would read 08 as octal
-  printf '%s\n' "${t:-0}"
-}
-
-# _gsd_receipt_settle_wait FILE NOW — print the seconds left until FILE is as old as the
-# settle window (1..window), or 0 when it already is. The window is
-# RECEIPT_SETTLE_SECONDS, or one poll interval when that is shorter, so the wait never
-# stretches a report past the interval it was due in. An unreadable mtime or one in the
-# future (clock skew) prints 0: the receipt then counts at once, as before, so a bogus
-# timestamp can never stretch the wait.
-_gsd_receipt_settle_wait() {
-  local m age win="$RECEIPT_SETTLE_SECONDS"
-  [ "$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))" -lt "$win" ] && win=$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))
-  m=$(_gsd_mtime "$1"); [ -n "$m" ] || { echo 0; return 0; }
-  age=$(( $2 - m ))
-  if [ "$age" -ge 0 ] && [ "$age" -lt "$win" ]; then echo $(( win - age )); else echo 0; fi
+# gsd_return_body FILE — print the agent's complete return from its receipt: the whole
+# file, cut at 65536 bytes (a return is a short report; the cap keeps one runaway write
+# from flooding the orchestrator). Nothing is printed for a symlink, a directory or a
+# missing or unreadable file, or one with a NUL byte in its first 4097 bytes (bash and
+# zsh read a NUL differently), or an empty one. Call it only after `marker_received`; the
+# first line is the marker (`gsd_return_marker` names it) and a receipt that holds only
+# that line is a marker-only receipt, which routes through the 9a/11a body-less cases.
+gsd_return_body() {
+  local file="$1" size
+  [ -L "$file" ] && return 0
+  [ -f "$file" ] && [ -r "$file" ] || return 0
+  size=$(( $(head -c 4097 -- "$file" 2>/dev/null | wc -c) ))
+  [ "$size" -gt 0 ] || return 0
+  [ "$(( $(head -c 4097 -- "$file" 2>/dev/null | LC_ALL=C tr -d '\000' | wc -c) ))" -eq "$size" ] || return 0
+  head -c 65536 -- "$file" 2>/dev/null
+  return 0
 }
 
 # gsd_stall_watch — ONE bounded, real (non-LLM-side) sleep-and-check cycle, not
 # a long-lived loop (see "Single-cycle by design" above — a single Bash tool
 # call spanning the full threshold risks the host tool's own timeout killing
-# it first). Sleeps one PLANNER_STALL_INTERVAL_MINUTES (plus the rest of
-# the settle window when the receipt it finds is younger than that), then checks for
+# it first). Sleeps exactly one PLANNER_STALL_INTERVAL_MINUTES, then checks for
 # a completion marker in $2 (the spawn's {receipt}, via gsd_return_marker) or
 # fresh mtime activity under $3 (an artifact glob), against
 # elapsed time since $1 (an epoch-seconds dispatch_ts the CALLER records once,
@@ -404,17 +378,11 @@ gsd_stall_watch() {
   local markers=("$@")
   [[ "$dispatch_ts" =~ ^[0-9]+$ ]] || dispatch_ts=$(date +%s)
   sleep "$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))"
-  local now elapsed marker_found artifact_fresh settle_wait
+  local now elapsed marker_found artifact_fresh
   now=$(date +%s)
   elapsed=$(( now - dispatch_ts ))
   marker_found="false"
   if [ -n "$(gsd_return_marker "$receipt" "${markers[@]}")" ]; then marker_found="true"; fi
-  # A receipt younger than the settle window: its final message may not have
-  # arrived. Wait out the rest of the window here, then report it.
-  if [ "$marker_found" = "true" ]; then
-    settle_wait=$(_gsd_receipt_settle_wait "$receipt" "$now")
-    [[ "$settle_wait" =~ ^[0-9]{1,3}$ ]] && [ "$settle_wait" -gt 0 ] && sleep "$settle_wait"
-  fi
   # -mmin -N ("modified less than N minutes ago"), not -newermt "@<epoch>":
   # -newermt's "@<epoch>" shorthand is a GNU-date convenience the shipped
   # BSD find(1) on macOS does NOT understand ("Can't parse date/time:
