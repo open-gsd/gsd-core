@@ -24,20 +24,32 @@ const os = require('node:os');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { homePair } = require('./helpers/isolated-env.cjs');
 const { runGit } = require('./helpers/process-seam.cjs');
 const projectContext = require('../gsd-core/bin/lib/project-context.cjs');
 const shellCommandProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const { runCli } = require('../gsd-core/bin/gsd-tools.cjs');
 
 const { resolveProjectContext, parseGitConfig } = projectContext;
-const { homePair } = require('./helpers/isolated-env.cjs');
 
-const IDENTITY =['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
+const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
 
 function git(cwd, args, env) {
   const result = runGit([...IDENTITY, ...args], { cwd, ...(env ? { env: { ...process.env, ...env } } : {}) });
   assert.equal(result.exitCode, 0, `git ${args.join(' ')} failed in ${cwd}: ${result.stderr}`);
   return result.stdout;
+}
+
+/** Set `vars` on process.env for the life of the test `t`, then restore each (or delete it if it was unset). */
+function withEnv(t, vars) {
+  const saved = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, vars);
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
 }
 
 /** One tree holding every layout. Built once: the rows only read it. */
@@ -50,15 +62,7 @@ function buildFixtures(t) {
   // home (ownedByThisUser, src/project-context.cts). The fixtures are the home's contents, so the
   // test declares that home instead of relying on os.tmpdir() sitting inside the runner's real
   // one, which the runner's sandbox HOME/USERPROFILE (#4635) no longer guarantees.
-  const homeKeys = Object.keys(homePair(root));
-  const savedHome = Object.fromEntries(homeKeys.map((name) => [name, process.env[name]]));
-  Object.assign(process.env, homePair(root));
-  t.after(() => {
-    for (const [name, value] of Object.entries(savedHome)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  });
+  withEnv(t, homePair(root));
 
   fs.mkdirSync(at('main', 'sub', 'deep'), { recursive: true });
   git(at('main'), ['init', '-q']);
@@ -275,16 +279,6 @@ test('property: parseGitConfig accepts what git accepts and reads the values git
 
 test('environment variables that concern git (#6355)', async (t) => {
   const { at } = buildFixtures(t);
-  const withEnv = (t2, vars) => {
-    const saved = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
-    Object.assign(process.env, vars);
-    t2.after(() => {
-      for (const [name, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-    });
-  };
   const both = (...parts) => ({
     byDefault: resolveProjectContext(at(...parts)),
     throughGit: resolveProjectContext(at(...parts), { deps: { readGitLayout: () => null } }),
