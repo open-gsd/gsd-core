@@ -19,7 +19,8 @@ const path = require('node:path');
 
 const { createTempGitProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const TOOLS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -27,8 +28,9 @@ const POST_MERGE_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase'
 
 const STEP_A = '**Step A — Build gate:**';
 const STEP_B = '**Step B — Test gate:**';
-const BUILD_SKIP = 'Post-merge build gate skipped (workflow.post_merge_gate=on_merge): serial mode (workflow.use_worktrees=false)';
-const TEST_SKIP = 'Post-merge test gate skipped (workflow.post_merge_gate=on_merge): serial mode (workflow.use_worktrees=false)';
+const SKIP_REASON = '(workflow.post_merge_gate=on_merge): serial mode (workflow.use_worktrees=false), so this wave merged no worktree branch';
+const BUILD_SKIP = `○ Post-merge build gate skipped ${SKIP_REASON}\n`;
+const TEST_SKIP = `○ Post-merge test gate skipped ${SKIP_REASON}\n`;
 
 function bashFenceAfter(content, startAnchor, stopAnchor) {
   const start = content.indexOf(startAnchor);
@@ -50,6 +52,18 @@ function configPath(dir) {
 function writeWorkflowConfig(dir, workflow) {
   const config = { workflow: { build_command: 'touch build.ran', test_command: 'touch test.ran', ...workflow } };
   fs.writeFileSync(configPath(dir), JSON.stringify(config, null, 2));
+}
+
+// Leaves HEAD at a two-parent merge, the shape step 5.5's `--no-ff` merge of a worktree branch produces.
+function mergeABranch(dir) {
+  const git = (args) => gitOrThrow(args, { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+  const base = git(['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  git(['checkout', '-q', '-b', 'executor-branch']);
+  fs.writeFileSync(path.join(dir, 'executor-work.txt'), 'work\n');
+  git(['add', 'executor-work.txt']);
+  git(['commit', '-q', '-m', 'executor work']);
+  git(['checkout', '-q', base]);
+  git(['merge', '-q', '--no-ff', '-m', 'merge executor-branch', 'executor-branch']);
 }
 
 function gateEnv(dir) {
@@ -97,6 +111,16 @@ describe('#5822: post-merge gate cadence, run from the shipped step file', () =>
     assert.ok(r.build.includes('GATE-RESULT BUILD_EXIT=0'), r.build);
     assert.ok(r.test.includes('GATE-RESULT TEST_EXIT=0'), r.test);
     assert.equal(fs.existsSync(path.join(tmpDir, '.git', 'gsd-handoff', 'wave-failures')), false, 'a skip records no wave failure');
+  });
+
+  test('on_merge with use_worktrees false runs both gates when HEAD is a merge commit', () => {
+    writeWorkflowConfig(tmpDir, { post_merge_gate: 'on_merge', use_worktrees: false });
+    mergeABranch(tmpDir);
+    const r = runGate(tmpDir);
+    assert.equal(r.built, true, `the build command must run:\n${r.build}`);
+    assert.equal(r.tested, true, `the test command must run:\n${r.test}`);
+    assert.ok(!r.build.includes('gate skipped'), r.build);
+    assert.ok(!r.test.includes('gate skipped'), r.test);
   });
 
   for (const [label, workflow] of [
