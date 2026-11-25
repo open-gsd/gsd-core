@@ -409,7 +409,17 @@ Once you've parked a few, audit them on demand instead of waiting for the next m
 /gsd-capture --list-seeds dormant    # Narrow to one status
 ```
 
-This is read-only — it renders an audit table (ID, status, scope, trigger, title) and a per-status summary, and never modifies a seed. Filter by `dormant`, `active`, or `triggered` when you only want to see seeds in one state.
+This is read-only — it renders an audit table (ID, status, scope, trigger, title) and a per-status summary, and never modifies a seed. Filter by `dormant`, `active`, `triggered`, or `closed` when you only want to see seeds in one state.
+
+**Closing a seed.** A seed is open while its `status` is `dormant`, `active` or `triggered`. Once its idea has been acted on, close it, so it stops coming back at every `/gsd-new-milestone` and in every milestone-close audit:
+
+```bash
+/gsd-capture --seed --close SEED-260315-k3x --promoted PLAT-17    # it became requirement PLAT-17
+/gsd-capture --seed --close SEED-260315-k3x --built 3             # it was built in phase 3
+/gsd-capture --seed --close SEED-260315-k3x --dropped "superseded by the sync engine"
+```
+
+Give exactly one outcome flag. The seed keeps its file and its reasoning; its frontmatter gains `status: closed` and three fields that say what it became: `outcome_kind` (`promoted`, `built` or `dropped`), `outcome_ref` (the requirement id or phase number; absent for a dropped seed) and `outcome` (one line of prose). `/gsd-capture --list-seeds closed` still lists it, with those fields. Closing is not undone by a command: to reopen a seed, set its `status` back to `dormant` by hand.
 
 ### Persistent Context Threads
 

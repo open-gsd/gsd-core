@@ -1528,7 +1528,12 @@ node gsd-tools.cjs current-timestamp [full|date|filename]
 # Count and list pending todos
 node gsd-tools.cjs list-todos [area]
 
-# List captured seeds (optionally filter by status: dormant|active|triggered)
+# List captured seeds (optionally filter by status: dormant|active|triggered|closed)
+# `dormant`, `active` and `triggered` are the open statuses; `closed` is the one value that takes a
+# seed out of `audit-open` and out of `/gsd-new-milestone`'s candidates (#4647). Each seed object carries
+# seed_id, slug, status, scope, trigger_when, planted, title, path, and the outcome fields outcome_kind
+# (promoted|built|dropped), outcome_ref (requirement id or phase number; empty when dropped) and
+# outcome (one line), which are empty strings on a seed that is not closed.
 node gsd-tools.cjs list-seeds [status]
 
 # Check file/directory existence
