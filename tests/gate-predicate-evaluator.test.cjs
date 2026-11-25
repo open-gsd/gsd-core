@@ -79,7 +79,6 @@ function phaseContextVariableNames() {
   return Object.keys(shell.calls[0].env).map((name) => name.slice('GSD_GATE_'.length));
 }
 
-
 // ─── command-exit-zero: exit-code boundary (0 / 1 / 2) ─────────────────────────
 
 describe('evaluatePredicate — command-exit-zero exit mapping', () => {
@@ -221,13 +220,13 @@ describe('evaluatePredicate — phase context environment', () => {
   test('each retired context spelling is rejected before execution, including quoted forms', () => {
     for (const name of phaseContextVariableNames()) {
       for (const spelling of [
-        [`\${${name}}`, ''],
-        [`$${name}`, ''],
-        [`\${${name}:-fallback}`, ''],
-        [`\${${name}%/*}`, ''],
-        [`\${#${name}}`, ''],
-        [`\${!${name}}`, ''],
-      ].map(([value]) => value)) {
+        `\${${name}}`,
+        `$${name}`,
+        `\${${name}:-fallback}`,
+        `\${${name}%/*}`,
+        `\${#${name}}`,
+        `\${!${name}}`,
+      ]) {
         for (const quote of ['', "'", '"']) {
           const shell = fakeShell({ exitCode: 0 });
           assert.throws(
