@@ -26,14 +26,16 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const helpers = require('../helpers.cjs');
 
-const { cleanup } = helpers;
+// helpers.cjs requires THIS module at load (it builds its own HOME/USERPROFILE pairs with
+// homePair, #6639), so helpers.cjs is read at call time, never at module scope: a
+// top-level require here would cycle and hand back a half-built exports object.
+const helpers = () => require('../helpers.cjs');
 
 // helpers.cjs exports the derived set as a LAZY getter (TEST_ENV_BASE), not as the
 // testEnvBase() function: reading it at module scope would make an unbuilt tree
 // throw during require. Read it only when an env is actually built.
-const testEnvBase = () => helpers.TEST_ENV_BASE;
+const testEnvBase = () => helpers().TEST_ENV_BASE;
 
 // Variables stripped by PREFIX (case-insensitive). GSD_* is the product's own
 // namespace; RUN_TESTS_* are the runner's control variables (#4070's
@@ -64,9 +66,19 @@ function isStripped(key) {
  * -> overlay home / path / claudeConfigDir -> overlay `override` -> canonicalize
  * key casing.
  *
+ * The stripping holds only when the result reaches the child verbatim (runNode,
+ * runHook, spawn). runGsdTools*, installSpawnEnv and installerEnv start from
+ * `{ ...process.env, ...testEnvBase() }` and spread what they are handed over it,
+ * so a stripped key (ambient GSD_*, BASH_ENV, CLAUDE_ENV_FILE, ...) returns there.
+ * Through them the result still sets home, path, `override` and the blanks.
+ *
  * @param {object} opts
  * @param {string} opts.home Absolute dir written to BOTH `HOME` and `USERPROFILE`.
  *   Missing or relative throws `TypeError`.
+ * @param {string} [opts.userProfile] Absolute dir written to `USERPROFILE` instead of
+ *   `home`. Only for a test whose subject is `HOME` and `USERPROFILE` pointing at
+ *   different directories (a HOME-only seed that leaks through USERPROFILE on win32,
+ *   #5276). Omitted: `USERPROFILE` is `home`. Relative throws `TypeError`.
  * @param {string} [opts.path] Written to `PATH` verbatim. Omitted: the inherited
  *   PATH is kept (inheriting PATH is allowed; hand-filtering it is not).
  * @param {string} [opts.claudeConfigDir] Written to `CLAUDE_CONFIG_DIR`; omitted:
@@ -78,11 +90,16 @@ function isStripped(key) {
  * @returns {Record<string, string>}
  */
 function isolatedEnv(opts) {
-  const { home, path: pathValue, claudeConfigDir, override, base = process.env } = opts ?? {};
+  const { home, userProfile, path: pathValue, claudeConfigDir, override, base = process.env } = opts ?? {};
   if (typeof home !== 'string' || !path.isAbsolute(home)) {
     throw new TypeError(
       `isolatedEnv: home must be an absolute path (received ${JSON.stringify(home)}). ` +
         'A helper that inherits the real home isolates nothing.',
+    );
+  }
+  if (userProfile !== undefined && (typeof userProfile !== 'string' || !path.isAbsolute(userProfile))) {
+    throw new TypeError(
+      `isolatedEnv: userProfile must be an absolute path when given (received ${JSON.stringify(userProfile)}).`,
     );
   }
 
@@ -92,7 +109,7 @@ function isolatedEnv(opts) {
   }
   Object.assign(env, testEnvBase());
 
-  const set = { HOME: home, USERPROFILE: home };
+  const set = { HOME: home, USERPROFILE: userProfile ?? home };
   if (pathValue !== undefined) set.PATH = pathValue;
   if (claudeConfigDir !== undefined) set.CLAUDE_CONFIG_DIR = claudeConfigDir;
   Object.assign(env, set, override);
@@ -211,7 +228,7 @@ function isolatedPath(opts) {
   try {
     linkExecutable(nodeBinDir, NODE_BIN);
   } catch (err) {
-    cleanup(nodeBinDir);
+    helpers().cleanup(nodeBinDir);
     throw err;
   }
 
@@ -239,4 +256,88 @@ function createHermeticRoot(prefix, { parent } = {}) {
   return root;
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable };
+/**
+ * The HOME / USERPROFILE pair that points a process at `dir`, as a NEW object each call.
+ *
+ * The one place a test spells the pair. `isolatedEnv({ home })` is the route for an env handed
+ * to a child; `homePair` is for the sites that cannot build a full env: the in-process route
+ * (`homeSandboxEnv`, `withEnv`), the spawn helpers in tests/helpers.cjs that sit below
+ * `isolatedEnv` (`installSpawnEnv`, the npm envs), an env object handed to code in-process,
+ * and a deliberately hostile env that must keep ambient keys `isolatedEnv` would strip.
+ * Spread it into the larger literal. `os.homedir()` reads HOME on POSIX and USERPROFILE on
+ * Windows, so a `{ HOME }` alone is not hermetic there.
+ *
+ * @param {string} dir directory to use as the home; used as given (not required to be absolute).
+ * @returns {{ HOME: string, USERPROFILE: string }}
+ */
+function homePair(dir) {
+  return { HOME: dir, USERPROFILE: dir };
+}
+
+// Per test context: the value each variable had before the FIRST setEnvForTest call on that
+// context. A second call on the same context must not snapshot what the first call set, or the
+// restore hooks (run in whatever order the runner picks) would leave the first call's value behind.
+const ENV_BEFORE = new WeakMap();
+
+/**
+ * Set `vars` on process.env for the life of the test `t`, then put each variable back, or delete
+ * it if it was unset. Calls on one `t` stack: the restore is to the value from before the first.
+ * A value of `undefined` unsets the variable for the test; any other non-string is a TypeError
+ * (process.env would store the string "undefined", or "[object Object]"), and so is a name that
+ * is empty or holds `=` or NUL, or a value that holds NUL. The whole object is validated before any variable changes.
+ *
+ * The test-context counterpart of `isolatedEnv`, for a test that calls the product in-process.
+ * Several test files keep their own callback-scoped `withEnv(vars, fn)`; this one is scoped to
+ * the test's lifetime instead, so it carries a different name.
+ *
+ * @param {{ after: (fn: () => void) => void }} t node:test context (anything with `after`).
+ * @param {Record<string, string | undefined>} vars
+ */
+function setEnvForTest(t, vars) {
+  // Validate every entry before the first mutation, so a rejected call changes nothing.
+  for (const [name, value] of Object.entries(vars)) {
+    if (name === '' || /[=\0]/.test(name)) {
+      throw new TypeError(`setEnvForTest: ${JSON.stringify(name)} is not a variable name`);
+    }
+    if (value !== undefined && typeof value !== 'string') {
+      throw new TypeError(`setEnvForTest: ${name} must be a string or undefined, got ${typeof value}`);
+    }
+    if (typeof value === 'string' && value.includes('\0')) {
+      throw new TypeError(`setEnvForTest: the value of ${name} holds a NUL, which the environment truncates`);
+    }
+  }
+  let before = ENV_BEFORE.get(t);
+  if (!before) {
+    before = new Map();
+    ENV_BEFORE.set(t, before);
+    t.after(() => {
+      for (const [name, value] of before) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      ENV_BEFORE.delete(t);
+    });
+  }
+  for (const [name, value] of Object.entries(vars)) {
+    if (!before.has(name)) before.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+}
+
+/**
+ * Make `dir` this process's home for the life of the test `t` (see setEnvForTest).
+ *
+ * The runner's sandbox HOME/USERPROFILE (#4635) no longer sits above `os.tmpdir()`, and on
+ * Windows the filesystem git-layout reader answers only for a repository inside the home
+ * (`ownedByThisUser`, src/project-context.cts). A test whose fixtures are such repositories
+ * declares them as the home with this.
+ *
+ * @param {{ after: (fn: () => void) => void }} t node:test context (anything with `after`).
+ * @param {string} dir directory to use as the home.
+ */
+function withHome(t, dir) {
+  setEnvForTest(t, homePair(dir));
+}
+
+module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, setEnvForTest, withHome };

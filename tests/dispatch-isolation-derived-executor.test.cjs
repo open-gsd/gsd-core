@@ -9,15 +9,15 @@
 
 process.env.GSD_TEST_MODE = '1';
 
-const { describe, test, before, after } = require('node:test');
+const { describe, test, before, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const { runGsdTools, createTempProject, createTempGitProject, homeSandboxEnv, cleanup, TOOLS_PATH } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { runNode, formatSeamResult, OUTCOME } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode, runGit, formatSeamResult, OUTCOME } = require('./helpers/process-seam.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_MAX_BYTES, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
 const { REASON_CODE } = require('../hooks/lib/isolation-deny-reason.js');
 const guard = require('../hooks/gsd-agent-isolation-guard.js');
@@ -44,6 +44,13 @@ describe('#6213 dispatch-isolation derives the recorded executor from the plan',
     }
     env = { ...homeSandboxEnv(root), GSD_AGENTS_DIR: agentsDir, GSD_NOW_MS: String(WRITTEN_AT) };
     fs.mkdirSync(path.join(root, '.planning', 'phases', '02-api'), { recursive: true });
+  });
+  // The tests share one fixture, and one of them records a forced `none`: a caller's decision that a later
+  // plain query at the same scope holds for ten minutes instead of overwriting (#4561). Each test reads the
+  // record its own query writes, so each starts from no record.
+  beforeEach(() => {
+    cleanup(path.join(root, SENTINEL_RELATIVE_PATH));
+    cleanup(path.join(root, '.gsd', 'dispatch-isolation'));
   });
   after(() => { cleanup(root); cleanup(agentsDir); });
 
@@ -185,6 +192,11 @@ describe('#6213 a phase-level record, and a plan given without its phase, still 
 
   before(() => {
     root = createTempGitProject('gsd-phase-level-exec-');
+    // This branch re-derives the #683 base-check degrade on a query with no --plan (#4222): a git fixture
+    // with no fork base reads `fork-ref-unknown` and records `none`. Give it a fork base at HEAD, so the
+    // phase-level records stay on the natural capability these tests are about.
+    const forkBase = runGit(['update-ref', 'refs/remotes/origin/HEAD', 'HEAD'], { cwd: root, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    assert.equal(forkBase.exitCode, 0, forkBase.stderr);
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-phase-level-exec-agents-'));
     for (const name of [HINTED, OTHER, 'gsd-verifier', 'gsd-executor']) {
       fs.writeFileSync(path.join(agentsDir, `${name}.md`), `---\nname: ${name}\n---\nbody\n`);
@@ -366,6 +378,11 @@ describe('#6213 an executor_types list that cannot fit the record is truncated v
 
   before(() => {
     root = createTempGitProject('gsd-phase-level-trunc-');
+    // This branch re-derives the #683 base-check degrade on a query with no --plan (#4222): a git fixture
+    // with no fork base reads `fork-ref-unknown` and records `none`. Give it a fork base at HEAD, so the
+    // phase-level records stay on the natural capability these tests are about.
+    const forkBase = runGit(['update-ref', 'refs/remotes/origin/HEAD', 'HEAD'], { cwd: root, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    assert.equal(forkBase.exitCode, 0, forkBase.stderr);
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-phase-level-trunc-agents-'));
     fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
     const phaseDir = path.join(root, '.planning', 'phases', '02-api');

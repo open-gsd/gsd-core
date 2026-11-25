@@ -8,7 +8,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { runGsdTools, createTempDir, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, cleanup, TOOLS_PATH } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { MODEL_ALIAS_MAP, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const {
@@ -18,6 +18,7 @@ const {
 } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('#2840 — runtime from defaults.json must not poison project config', () => {
   let tmpDir;
@@ -39,10 +40,7 @@ describe('#2840 — runtime from defaults.json must not poison project config', 
       JSON.stringify({ runtime: 'codex', model_profile: 'opus' }),
     );
 
-    const result = runGsdTools('config-ensure-section', tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = JSON.parse(
@@ -68,10 +66,7 @@ describe('#2840 — runtime from defaults.json must not poison project config', 
       JSON.stringify({ model_profile: 'haiku' }),
     );
 
-    const result = runGsdTools('config-ensure-section', tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = JSON.parse(
@@ -96,7 +91,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     store = path.join(root, 'store');
     project = path.join(root, 'project');
     for (const dir of [home, project, path.join(store, '.gsd')]) fs.mkdirSync(dir, { recursive: true });
-    env = { HOME: home, USERPROFILE: home, GSD_HOME: store, GSD_RUNTIME: 'claude' };
+    env = isolatedEnv({ home, override: { GSD_HOME: store, GSD_RUNTIME: 'claude' } });
     iteration = 0;
   });
   afterEach(() => cleanup(root));
@@ -119,9 +114,11 @@ describe('#5329 — shared omit must not become explicit project model intent', 
         else process.env[key] = original[key];
       }
     });
-    Object.assign(process.env, env);
-    delete process.env.GSD_WORKSTREAM;
-    delete process.env.GSD_PROJECT;
+    // Copy only the snapshotted keys: the isolated env is a whole environment.
+    for (const key of ENV_KEYS) {
+      if (env[key] === undefined) delete process.env[key];
+      else process.env[key] = env[key];
+    }
     if (runtime === null) delete process.env.GSD_RUNTIME;
     else process.env.GSD_RUNTIME = runtime;
     _setInstallRuntimeMarkerForTests(null);
@@ -283,7 +280,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
       assert.deepEqual(fs.readFileSync(configPath), bytes);
     }
     const result = runNode([TOOLS_PATH, 'query', 'resolve-model', 'gsd-executor'], {
-      cwd: project, env: { ...process.env, ...TEST_ENV_BASE, ...env }, timeoutMs: PROBE_TIMEOUT_MS,
+      cwd: project, env, timeoutMs: PROBE_TIMEOUT_MS,
     });
     assert.equal(result.outcome, OUTCOME.EXITED);
     assert.equal(result.exitCode, 0);

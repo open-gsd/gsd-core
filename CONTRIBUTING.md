@@ -724,6 +724,70 @@ on purpose. Without the fixture, the result depends on which runtimes the develo
 If the code under test also searches upward for `.planning/config.json`, start it inside a
 `createHermeticRoot()` directory as well (#4613).
 
+#### The lint rule that enforces child-env isolation
+
+`local/no-adhoc-env-isolation` (`eslint-rules/no-adhoc-env-isolation.cjs`) fails two hand-written
+copies under `tests/`:
+
+- a split of `process.env.PATH`, or any `X.split(path.delimiter).filter(...)`, which is the copy
+  `isolatedPath()` replaces;
+- an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` or
+  `env.USERPROFILE` on any object other than `process.env`, which is the copy `isolatedEnv()`
+  replaces.
+
+A value that cannot be a per-test sandbox is not a copy, so the rule skips it: a string literal
+(`{ HOME: '/h' }`, a fixture handed to a pure function or compared against), a read of the same key
+off `process.env` (`{ HOME: process.env.HOME }`, saving the ambient value; `HOME:
+process.env.USERPROFILE` is another key and is flagged), and a PATH split read only for `.length`.
+A fixed string is skipped even in an env handed to a child, but it is not hermetic: use
+`isolatedEnv()` whenever the test writes under its home.
+
+The rule and the count below read `tests/**/*.cjs` files only. A copy in a `.mjs`, `.js` or
+`.cts` test file, or in a file outside `tests/`, is neither flagged nor counted.
+
+An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
+`sandboxHome()`, above. Three other spellings of it are flagged:
+`globalThis.process.env.HOME = …`, `const env = process.env; env.HOME = …` and
+`Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt
+file. [docs/contributing/no-adhoc-env-isolation.md](docs/contributing/no-adhoc-env-isolation.md)
+states the forms each arm recognises. Every other spelling, such as a `HOME=` inside a shell
+script string, is out of scope; the page gives examples.
+
+`isolatedEnv()` covers the env a test hands to a child. A test that calls the product in-process,
+or a helper that spreads `process.env` (`runGsdTools`, `installSpawnEnv`), reads the env the runner
+passed down instead, so `scripts/run-tests.cjs` closes that case once for every chunk
+(`setupRunHermeticEnv`, #4635): it deletes every config-location variable in the registry-derived
+list (`CONFIG_LOCATION_ENV_KEYS` in `tests/helpers.cjs`, so `CODEX_HOME`, `KILO_CONFIG`,
+`ANTIGRAVITY_CONFIG_DIR` and the rest follow the registry, never a hand-written list) and sets
+`HOME` and `USERPROFILE` to a `gsd-test-userhome-*` directory under the run temp root, shared by every chunk of the run, and leaves the real-home guard
+marker unset so a test that forgot `sandboxHome()` still fails loudly. A real
+`~/.gsd/defaults.json` or `~/.claude` is not there for a chunk to read, and an exported
+`CLAUDE_CONFIG_DIR` does not reach one. The one variable kept is a `GSD_HOME` that is already a run
+sandbox. The step runs after the live-config guard has snapshotted the real config roots, so the
+guard still watches them. A test file run outside the runner (`node` on one file) does not get the
+step; use `isolatedEnv()` or `sandboxHome()` there.
+
+There is no allowlist: the rule takes no options, and every file under `tests/` except the helper
+holds zero copies. `tests/helpers/isolated-env.cjs` is the only
+route. `tests/no-adhoc-env-isolation.rule.test.cjs` lints every `tests/**/*.cjs` file with the rule
+on and inline config off, and fails on any site. It also fails when ESLint skips a `.cjs` file
+under `tests/`, so an ESLint ignore over a `tests/` subtree cannot hide that subtree's copies, and
+when the allowlist file reappears or the rule is given an option. An `eslint-disable` comment for
+this rule exempts nothing: the count runs with inline config off and still sees the site, and an
+unused directive fails `npm run lint`.
+
+[docs/how-to/replace-a-hand-written-env-isolation-copy.md](docs/how-to/replace-a-hand-written-env-isolation-copy.md)
+shows each replacement. Build a child env with `isolatedEnv()` instead of a copy: `home` sets `HOME` and `USERPROFILE`
+(`userProfile` sets `USERPROFILE` to another directory, only for a test whose subject is the two
+diverging), `claudeConfigDir` sets `CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries
+every other key the test needs the helper to set or keep. A `HOME` or `USERPROFILE` key in
+`override` is an object-literal copy, so the rule flags it. Build a filtered PATH with
+`isolatedPath()`. Where a full env is not what the site needs, the same module has the two
+narrower routes: `homePair(dir)` is the one spelling of the `HOME` / `USERPROFILE` pair to spread
+into a larger literal, and `setEnvForTest(t, vars)` / `withHome(t, dir)` set variables on
+`process.env` for one test and restore them. If none of these can build it, change the helper in
+the same PR so the next site can use it; there is no per-file exemption to add.
+
 ### Test Structure
 
 ```javascript

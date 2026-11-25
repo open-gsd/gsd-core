@@ -11,7 +11,7 @@ name: Reviewed or Maintainer
 # every PR-controlled value to an env var. On `pull_request_target` the workflow
 # FILE itself is loaded from the default branch. On `pull_request_review` it is
 # loaded from the PR's merge ref (see BEFORE PROMOTING below).
-# tests/reviewed-or-maintainer-workflow.test.cjs pins the rest.
+# The reviewed-or-maintainer-workflow text contract (scripts/static-checks/text-contracts/) pins the rest.
 #
 # `pull_request_review` is here so a new approval or a dismissal re-evaluates the
 # check. Whether a check run created by that event attaches to the PR head the

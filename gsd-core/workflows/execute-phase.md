@@ -77,6 +77,7 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--gaps-only` → `GAPS_ONLY=true`
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
+- Optional `--force-mvp-gate "<reason>"` → `FORCE_MVP_GATE_REASON` (required value; see `execute-phase/steps/verify-phase-goal.md`)
 
 If `--wave` is absent, preserve the current behavior of executing all incomplete waves in the phase.
 </step>
@@ -248,7 +249,7 @@ if [ "$TDD_MODE" = "true" ]; then
     # the gate pass on any in-scope commit. Trade-offs and the Rust gap:
     # references/tdd.md § Create first test file.
 
-    RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec "*.test.*" --pathspec "*.spec.*" --pathspec "tests/" --pathspec "__tests__/" --pathspec "*_test.go" --pathspec "test_*.py" --pathspec "*_test.py" --pathspec "*_test.exs" --pathspec "*_spec.rb" --pathspec "*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
+    RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec ":(icase)*.test.*" --pathspec ":(icase)*.spec.*" --pathspec ":(icase)tests/" --pathspec ":(icase)__tests__/" --pathspec ":(icase)*_test.go" --pathspec ":(icase)test_*.py" --pathspec ":(icase)*_test.py" --pathspec ":(icase)*_test.exs" --pathspec ":(icase)*_spec.rb" --pathspec ":(icase)*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
     # Exit 69 (UNAVAILABLE) = the scope could not be resolved: that is not "missing RED commit" (#5170).
     if [ "$RED_SCOPE_RC" -ne 0 ]; then echo "TDD GATE UNAVAILABLE: could not resolve the plan's commits for ${PLAN_ID}/${TASK_ID} (evaluation-scope exit ${RED_SCOPE_RC})"; exit 1; fi
     RED_COMMIT=$(printf '%s' "$RED_COMMIT" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const c=JSON.parse(s).commits;process.stdout.write(c.length?c[0].sha.slice(0,10)+' '+c[0].subject:'')}catch{}})")
@@ -636,7 +637,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Substitute `{plan_id}` in the prompt below with this plan's `id` field** from the `phase-plan-index` JSON loaded in step 1 (the same field referred to elsewhere in this workflow as `plan.id`) — unmodified and un-truncated, never a paraphrase. The guard hooks compare this value verbatim against the sentinel the per-plan gate wrote (`per-plan-worktree-gate.md`'s `plan_id`); a paraphrase or an omission costs the dispatch its recorded isolation decision.
 
-   **Record this plan's isolation immediately before its dispatch (#5516).** Restore the dispatched plan's **stored decision** from step 2.5 (`plan_id` := this plan's `id`, `USE_WORKTREES_FOR_PLAN` := the value stored for that plan, and `PLAN_FILES` / `PLAN_DELETIONS` re-extracted from this plan's JSON, since the later plans' decisions overwrote them) and run **Part 2** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`, so the single-slot sentinel names the plan being dispatched. Do not run it for any other plan, and do not batch it ahead of the dispatches.
+   **Record this plan's isolation immediately before its dispatch (#5516).** Restore the dispatched plan's **stored decision** from step 2.5 (every value **Part 2** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md` lists, `_RENEW_HELD` included) and run that Part 2, so the single-slot sentinel names the plan being dispatched. Do not run it for any other plan, and do not batch it ahead of the dispatches.
 
    **Executor routing (#1689/#3370).** Per plan, run `gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md` to set `EXECUTOR_TYPE`, `EXECUTOR_MODEL` for `subagent_type="{EXECUTOR_TYPE}"`.
 
@@ -682,7 +683,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
      # Claude Code inherits the orchestrator model automatically.
      model="{executor_model}",  # omit this line when executor_model == "inherit"
      # The host's OWN declared isolation flag (`harnessFlag` from
-     # `dispatch-isolation --json`; see the isolation-dispatch fragment).
+     # `inspect-dispatch-isolation --json`; see the isolation-dispatch fragment).
      # Emit the declared token — do NOT hardcode a runtime's flag.
      {harnessFlag},
      prompt="

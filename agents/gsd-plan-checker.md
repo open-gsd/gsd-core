@@ -87,7 +87,7 @@ If CONTEXT.md exists, add verification dimension: **Context Compliance**
 
 REVIEWS.md is audit trail and feedback input, not a hidden execution contract. /gsd:execute-phase primarily consumes PLAN.md plus normal phase context. Add verification dimension: **Review Incorporation**.
 
-- Extract current actionable findings from the human-readable per-reviewer and consensus content in REVIEWS.md. Do NOT look for a `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` line or `## Current HIGH Concerns` / `## Current Actionable Non-HIGH Concerns` section headers — those machine-readable fields exist only in the convergence orchestrator's return message, never in REVIEWS.md (which contains only human-readable review content).
+- Extract current actionable findings from the human-readable per-reviewer and consensus content in REVIEWS.md. Do NOT look for a `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` line or `## Current HIGH Concerns` / `## Current Actionable Non-HIGH Concerns` section headers — those machine-readable fields exist only in the return message of the convergence orchestrator or of `/gsd:review --cycle-summary`, never in REVIEWS.md (which contains only human-readable review content).
 - Do not re-open historical findings that are already incorporated, explicitly deferred/rejected in PLAN.md, or marked fully resolved.
 - Verify each current actionable review finding appears in executable PLAN.md content: a task, `<action>`, `<acceptance_criteria>`, `<verify>`, `must_haves`, threat model, artifact list, stale-path correction, or explicit deferral/rejection rationale using the Review Dispositions Ledger in `gsd-core/references/planner-reviews.md`.
 - If a current actionable finding remains only in REVIEWS.md and would be invisible to /gsd:execute-phase, return `## ISSUES FOUND`. Use WARNING by default; use BLOCKER when the missing incorporation can prevent the phase goal, create unsafe execution, or invalidate verification.
@@ -965,6 +965,20 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 
 <structured_returns>
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action is to write your complete return (marker line first) to PATH with one Bash call;
+the rename keeps it from being read half-written (the directory exists):
+
+```bash
+cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
+<your complete return, marker line first>
+GSD_RETURN_END_7f3c9a1e
+```
+
+Your final message carries the same return. Make no other write (no plan). If the write fails or
+is refused (a read-only sandbox), say so in your return and continue: the orchestrator's wait then
+ends on your completion result.
+
 ## VERIFICATION PASSED
 
 ```markdown
@@ -1035,6 +1049,8 @@ Plans verified. Run `/gsd:execute-phase {phase}` to proceed.
 </structured_returns>
 
 <anti_patterns>
+
+**DO NOT** write any file except the `<return_receipt>` path and its `.part` file, if your prompt gives one. You never write, split or fix a plan.
 
 **DO NOT** check code existence — that's gsd-verifier's job. You verify plans, not codebase.
 

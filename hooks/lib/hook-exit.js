@@ -56,14 +56,17 @@ function deny(payload, stderrPayload) {
  *
  * @param {'allow'|'deny'} onCrash - one of HOOK_ON_CRASH's two values.
  * @param {*} payload - JSON-serializable value forwarded to terminateNow.
+ * @param {*} [stderrPayload] - optional distinct value for fd 2, forwarded to
+ *   deny() on the DENY branch only (see deny()). ALLOW writes nothing to fd 2
+ *   and ignores it.
  */
-function crash(onCrash, payload) {
+function crash(onCrash, payload, stderrPayload) {
   if (onCrash === HOOK_ON_CRASH.ALLOW) {
     allow(payload);
     return;
   }
   if (onCrash === HOOK_ON_CRASH.DENY) {
-    deny(payload);
+    deny(payload, stderrPayload);
     return;
   }
   // Never guess a policy and never throw (a throw would unwind into the
