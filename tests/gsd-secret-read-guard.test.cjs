@@ -901,6 +901,23 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assertFailOpen(runErrorAfterScans({}), 'error after the scans, unset');
   });
 
+  // scanBashReadings catches an error inside a scan so that the scans after it
+  // still run (#5514), and main() gives it the crash policy the outer catch
+  // gives. This fixture makes each scan of the command throw a TypeError at
+  // its command word.
+  const THROWING_SCAN = path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-scan.cjs');
+  const runErrorInScans = (extraEnv) => runHook(bash('SCANFAULT x; ls'),
+    { env: { NODE_OPTIONS: `--require ${THROWING_SCAN}`, ...extraEnv } });
+
+  test('opted in: an error inside the scans that is not an overflow blocks as guard-error, cause hook-error', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runErrorInScans(DENY_ENV), 'error inside the scans, opted in', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('unset: the same error inside the scans is allowed, with nothing on stdout or stderr', () => {
+    assertFailOpen(runErrorInScans({}), 'error inside the scans, unset');
+  });
+
   // command-too-complex is a verdict on a Bash command, so an overflow on any
   // other tool is a hook error like the rest. This fixture makes a Read
   // payload's `tool_input` overflow the stack when main() reads it.
