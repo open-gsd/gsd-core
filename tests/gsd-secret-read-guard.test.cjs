@@ -1451,8 +1451,9 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     assert.deepEqual(grammarScan(nestedCase(1001)).verdict, { code: 'command-too-complex', text: '' });
   });
 
-  // The size cap on the same scan: a read in a case arm is found up to
-  // MAX_COMMAND_LENGTH characters, and one character more is refused unread.
+  // The size cap on the same scan: a case-arm read padded with a plain word is
+  // found at MAX_COMMAND_LENGTH - 1 and MAX_COMMAND_LENGTH characters, and one
+  // character more is refused unread.
   const atLength = (n) => {
     const cmd = 'echo "$(case x in x) cat .env;; esac)" ';
     return cmd + 'x'.repeat(n - cmd.length);
@@ -1472,7 +1473,7 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
 
   // A command that made a scan give up leaves nothing for the next one. The grammar
   // scan gives up on `deep` (paren counting never enters it), and since #5285 a scan
-  // that cannot finish is `command-too-complex`, never an allow.
+  // that gives up on its budget, its depth limit or the stack is `command-too-complex`.
   test('a scan that gave up leaves the readings as they were', () => {
     const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
     const deep = `echo $(echo # )'\n) ${'"$('.repeat(9000)}`;
