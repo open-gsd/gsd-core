@@ -55,13 +55,16 @@ function span(doc, startHeading, endPattern) {
 const DIM11_REF = 'gsd-core/references/plan-checker-research-resolution.md';
 const DIM11_READ = `Read \`~/.claude/${DIM11_REF}\``;
 const dim11Section = once(() => span(checker(), '## Dimension 11: Research Resolution', /\n## Dimension 12\b/));
-const dim11Ref = once(() => read(DIM11_REF));
+// An absent reference reads as empty, so a tree without it (the base) fails the rows on their content;
+// the Read row below asserts the file exists.
+const dim11Ref = once(() => (fs.existsSync(path.join(ROOT, DIM11_REF)) ? read(DIM11_REF) : ''));
 const dim11 = once(() => `${dim11Section()}\n${dim11Ref()}`);
-// The numbered Process steps, from **Process:** to the reference's first worked example, each with its
-// whitespace collapsed so a wrap cannot split one step. The checker's steps are matched by
-// invariant tokens; prompt and doc text whose wording is the contract is pinned as whole sentences.
+// The numbered Process steps, from **Process:** (in the reference; the section carries none) to the
+// next worked example, each with its whitespace collapsed so a wrap cannot split one step. The
+// checker's steps are matched by invariant tokens; prompt and doc text whose wording is the contract
+// is pinned as whole sentences.
 const steps = once(() =>
-  span(dim11Ref(), '**Process:**', /\n\*\*Example\b/)
+  span(dim11(), '**Process:**', /\n\*\*Example\b/)
     .split(/\n(?=\d+\.\s)/)
     .filter((s) => /^\d+\.\s/.test(s))
     .map((s) => s.replace(/\s+/g, ' ').trim()),
@@ -78,6 +81,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     const plain = stripFencedCode(dim11Section()).text;
     const reads = splitLines(plain).filter((l) => l.includes(DIM11_READ));
     assert.equal(reads.length, 1, `the Dimension 11 section must Read ${DIM11_REF} once, as prose`);
+    assert.ok(fs.existsSync(path.join(ROOT, DIM11_REF)), `${DIM11_REF}, which the section reads, exists`);
     const at = plain.indexOf(DIM11_READ);
     assert.ok(plain.indexOf('**Skip if:**') !== -1 && plain.indexOf('**Skip if:**') < at, 'the Read follows the Skip-if line');
     const firstExample = plain.search(/^\*\*Example\b/m);
