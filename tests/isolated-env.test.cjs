@@ -234,9 +234,32 @@ describe('withHome (#6639)', () => {
 
     for (const bad of [null, 1, true, {}]) {
       assert.throws(() => setEnvForTest(ctx, { GSD_6639_UNSET_PROBE: bad }), TypeError);
+      // A valid entry ahead of the bad one must not be applied: the whole call is validated first.
+      assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'x', GSD_6639_UNSET_PROBE: bad }), TypeError);
+      assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
+    }
+    for (const name of ['', 'A=B', 'A\0B']) {
+      assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'x', [name]: 'y' }), TypeError, JSON.stringify(name));
+      assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
     }
     assert.equal(process.env.GSD_6639_UNSET_PROBE, 'set');
     assert.equal(hooks.length, 0, 'a rejected call registers no hook');
+  });
+
+  test('undefined for a variable that was never set leaves it unset after the restore', (t) => {
+    const saved = process.env.GSD_6639_ABSENT_PROBE;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_6639_ABSENT_PROBE;
+      else process.env.GSD_6639_ABSENT_PROBE = saved;
+    });
+    delete process.env.GSD_6639_ABSENT_PROBE;
+    const hooks = [];
+    const ctx = { after: (fn) => hooks.push(fn) };
+
+    setEnvForTest(ctx, { GSD_6639_ABSENT_PROBE: undefined });
+    assert.equal('GSD_6639_ABSENT_PROBE' in process.env, false);
+    hooks.splice(0).forEach((fn) => fn());
+    assert.equal('GSD_6639_ABSENT_PROBE' in process.env, false);
   });
 });
 

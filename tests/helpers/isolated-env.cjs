@@ -283,7 +283,8 @@ const ENV_BEFORE = new WeakMap();
  * Set `vars` on process.env for the life of the test `t`, then put each variable back, or delete
  * it if it was unset. Calls on one `t` stack: the restore is to the value from before the first.
  * A value of `undefined` unsets the variable for the test; any other non-string is a TypeError
- * (process.env would store the string "undefined", or "[object Object]").
+ * (process.env would store the string "undefined", or "[object Object]"), and so is a name that
+ * is empty or holds `=` or NUL. The whole object is validated before any variable changes.
  *
  * The test-context counterpart of `isolatedEnv`, for a test that calls the product in-process.
  * Several test files keep their own callback-scoped `withEnv(vars, fn)`; this one is scoped to
@@ -293,7 +294,11 @@ const ENV_BEFORE = new WeakMap();
  * @param {Record<string, string | undefined>} vars
  */
 function setEnvForTest(t, vars) {
+  // Validate every entry before the first mutation, so a rejected call changes nothing.
   for (const [name, value] of Object.entries(vars)) {
+    if (name === '' || /[=\0]/.test(name)) {
+      throw new TypeError(`setEnvForTest: ${JSON.stringify(name)} is not a variable name`);
+    }
     if (value !== undefined && typeof value !== 'string') {
       throw new TypeError(`setEnvForTest: ${name} must be a string or undefined, got ${typeof value}`);
     }
