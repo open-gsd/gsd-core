@@ -276,6 +276,25 @@ describe('appendQuickTaskRow (#2133)', () => {
     'None',
   ].join('\n');
 
+  // Review of #6561 (Major 1, the same class): the row goes right after the table parseMarkdownTable read, never
+  // after a later pipe line in the section (a second table, a one-pipe note), where it would leave the table.
+  for (const [label, before, after] of [
+    ['a second table later in the section', [], ['', '| Note | Value |', '|---|---|', '| keep | me |']],
+    ['a one-pipe note after a blank line', [], ['', '| see the archive']],
+    ['a one-pipe line before the table and a note after it', ['| note', ''], ['', '| see the archive']],
+  ]) {
+    test(`${label}: the row is appended to the Quick Tasks table`, () => {
+      const head = ['# STATE', '', '### Quick Tasks Completed', '', ...before,
+        '| # | Description | Date | Commit | Directory |', '|---|-------------|------|--------|-----------|',
+        '| 1 | fix typo | 2026-01-01 | abc1234 | — |'];
+      const tail = [...after, '', '### Blockers/Concerns', 'None'];
+      const row = '| 2 | add import | 2026-07-13 | a574966 | — |';
+      assert.deepEqual(appendQuickTaskRow([...head, ...tail].join('\n'), { description: 'add import', date: '2026-07-13', commit: 'a574966' }), {
+        ok: true, value: { content: [...head, row, ...tail].join('\n'), row, variant: 'no-status', warnings: [] },
+      });
+    });
+  }
+
   test('5-col no-status table: appends a 5-cell row, content contains it, variant is no-status', () => {
     const result = appendQuickTaskRow(noStatusState, {
       description: 'add missing import',

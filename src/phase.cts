@@ -154,7 +154,7 @@ import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from 
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, updateTraceabilityCell, leadingRequirementStatus, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { updateTableCell, updateTraceabilityCell, leadingRequirementStatus, deleteTableRow, escapeCell, splitTableRow, insertTableRow, isTableHeaderLine } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
@@ -3347,14 +3347,7 @@ function decrementRoadmapPaddedPhaseNumber(raw: string, removedInt: number): str
  */
 function findDataRowLine(sectionText: string, dataRowIndex: number): string | null {
   const lines = sectionText.split(/\r?\n/);
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
-      headerIdx = i;
-      break;
-    }
-  }
+  const headerIdx = lines.findIndex(isTableHeaderLine);
   if (headerIdx === -1) return null;
 
   let seen = -1;

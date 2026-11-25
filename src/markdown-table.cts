@@ -135,11 +135,12 @@ export function isDelimiterRow(cells: string[]): boolean {
 
 /**
  * True when `line` can be a table's header row: it starts with `|` and has a second `|` (whitespace around it
- * ignored). The ONE header test: `parseMarkdownTable` takes the first such line as the header, and every writer that
- * splices the table it parsed (`resetQuickTaskRows`, `migrateQuickTasksTable`, `pruneQuickTaskRows`) finds the header
- * with it too, so a one-pipe prose line before the table (`| note`, a lone `|`) is prose to all of them (review of
- * #6561). Data rows are a different test: any line starting with `|` continues the table, so a one-pipe line after
- * the header is a ragged row, not the end of the table.
+ * ignored). The ONE header test: `parseMarkdownTable` takes the first such line as the header, and every reader and
+ * writer that locates a table (the Quick Tasks writers `appendQuickTaskRow`, `resetQuickTaskRows`,
+ * `migrateQuickTasksTable` and `pruneQuickTaskRows`, the cell and row editors, phase.cts's row lookup) finds the
+ * header with it too, so a one-pipe prose line before the table (`| note`, a lone `|`) is prose to all of them
+ * (review of #6561). Data rows are a different test: any line starting with `|` continues the table, so a one-pipe
+ * line after the header is a ragged row, not the end of the table.
  */
 export function isTableHeaderLine(line: string): boolean {
   const trimmed = line.trim();
@@ -351,7 +352,7 @@ export function updateTableCell(
   };
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].line.trim();
-    if (!trimmed.startsWith('|') || trimmed.indexOf('|', 1) === -1) continue;
+    if (!isTableHeaderLine(trimmed)) continue;
     const delimiterLine = lines[i + 1]?.line;
     if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
       recordMalformed('missing delimiter row');
@@ -454,14 +455,7 @@ export function deleteTableRow(
 ): Result<string> {
   const lines = splitLinesWithOffsets(tableText);
 
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].line.trim();
-    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
-      headerIdx = i;
-      break;
-    }
-  }
+  const headerIdx = lines.findIndex((l) => isTableHeaderLine(l.line));
   if (headerIdx === -1) {
     return { ok: false, reason: 'no table found' };
   }
@@ -583,14 +577,7 @@ export function insertTableRow(
 ): Result<string> {
   const lines = splitLinesWithOffsets(tableText);
 
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].line.trim();
-    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
-      headerIdx = i;
-      break;
-    }
-  }
+  const headerIdx = lines.findIndex((l) => isTableHeaderLine(l.line));
   if (headerIdx === -1) {
     return { ok: false, reason: 'no table found' };
   }
@@ -655,7 +642,7 @@ export function findTableBySchema(text: string, schemaId: string): MarkdownTable
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
-    if (!t.startsWith('|') || t.indexOf('|', 1) === -1) continue;
+    if (!isTableHeaderLine(t)) continue;
     const cols = splitTableRow(lines[i]);
     const m = matchTableSchema(cols);
     if (m && m.id === schemaId) {
@@ -684,7 +671,7 @@ export function findTableWithColumns(text: string, required: string[]): Markdown
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
-    if (!t.startsWith('|') || t.indexOf('|', 1) === -1) continue;
+    if (!isTableHeaderLine(t)) continue;
     const cols = splitTableRow(lines[i]);
     if (required.every((rq) => cols.includes(rq))) {
       const parsed = parseMarkdownTable(lines.slice(i).join('\n'));
@@ -909,12 +896,15 @@ export function appendQuickTaskRow(
   // mixed EOL (the inserted `row` itself never contains a newline).
   const eol = /\r\n/.test(section.body) ? '\r\n' : '\n';
   const lines = section.body.split(/\r?\n/);
-  let lastTableLineIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim().startsWith('|')) lastTableLineIdx = i;
+  // The row goes after the table parseMarkdownTable read: its header (same
+  // predicate, same `section.body`, so always found and followed by the
+  // delimiter) and the contiguous run of pipe lines below it. A later pipe line
+  // in the section (a second table, a one-pipe note) is not this table (review
+  // of #6561).
+  let lastTableLineIdx = lines.findIndex(isTableHeaderLine) + 1;
+  while (lastTableLineIdx + 1 < lines.length && lines[lastTableLineIdx + 1].trim().startsWith('|')) {
+    lastTableLineIdx++;
   }
-  // lastTableLineIdx is always >= 0 here — parseMarkdownTable already
-  // confirmed a header + delimiter row exist in this same `section.body`.
   const newLines = [
     ...lines.slice(0, lastTableLineIdx + 1),
     row,
