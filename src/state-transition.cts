@@ -2749,22 +2749,22 @@ function plannedPhaseCore(
 // own before the reset, then re-home it under `## Accumulated Context`.
 
 /**
- * The fields the state commands own in `## Current Position`: every label
- * `buildStateFrontmatter` (src/state.cts) reads with `stateExtractField`, plus
- * `Plan`, the one template field it does not read. Matched as that reader
- * matches them (case-insensitive; `**Label:**`, `Label:` or a two-cell table
- * row), so `Last activity` and `Stopped at` are covered.
+ * The fields the state commands own in `## Current Position`, lower-cased: every
+ * body label `STATE_FIELD_SCHEMA` declares as a frontmatter source, plus the
+ * labels `buildStateFrontmatter` (src/state.cts) reads with `stateExtractField`
+ * outside the schema (`Total Phases`, `Total Plans in Phase`, `Progress`) and
+ * the template's `Phase` and `Plan`. Matched as that reader matches them
+ * (case-insensitive; `**Label:**`, `Label:` or a two-cell table row).
  */
-const CURRENT_POSITION_OWNED_LABELS = [
-  'Phase', 'Plan', 'Status', 'Last Activity', 'Last Activity Description',
-  'Current Phase', 'Current Phase Name', 'Current Plan', 'Total Phases',
-  'Total Plans in Phase', 'Progress', 'Stopped At', 'Paused At',
-];
+const CURRENT_POSITION_OWNED_LABELS: readonly string[] = [...new Set([
+  ...Object.values(STATE_FIELD_SCHEMA).flatMap((row) => row.bodySource ?? []),
+  'Total Phases', 'Total Plans in Phase', 'Progress', 'Phase', 'Plan',
+].map((label) => label.toLowerCase()))];
 
 /** The owned label `line` reads as, lower-cased, or null. */
 function ownedLabelOf(line: string): string | null {
   for (const label of CURRENT_POSITION_OWNED_LABELS) {
-    if (stateExtractField(line, label) !== null) return label.toLowerCase();
+    if (stateExtractField(line, label) !== null) return label;
   }
   return null;
 }
