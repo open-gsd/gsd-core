@@ -274,4 +274,29 @@ function homePair(dir) {
   return { HOME: dir, USERPROFILE: dir };
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair };
+/**
+ * Make `dir` this process's home for the life of the test `t`, then put each variable back (or
+ * delete it if it was unset). The in-process counterpart of `isolatedEnv({ home })`: for a test
+ * that calls the product in-process and needs `os.homedir()` to be a directory it chose.
+ *
+ * The runner's sandbox HOME/USERPROFILE (#4635) no longer sits above `os.tmpdir()`, and on
+ * Windows the filesystem git-layout reader answers only for a repository inside the home
+ * (`ownedByThisUser`, src/project-context.cts). A test whose fixtures are such repositories
+ * declares them as the home with this.
+ *
+ * @param {{ after: (fn: () => void) => void }} t node:test context (anything with `after`).
+ * @param {string} dir directory to use as the home.
+ */
+function withHome(t, dir) {
+  const pair = homePair(dir);
+  const saved = Object.fromEntries(Object.keys(pair).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, pair);
+  t.after(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+}
+
+module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withHome };

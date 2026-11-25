@@ -24,7 +24,7 @@ const os = require('node:os');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { homePair } = require('./helpers/isolated-env.cjs');
+const { withHome } = require('./helpers/isolated-env.cjs');
 const { runGit } = require('./helpers/process-seam.cjs');
 const projectContext = require('../gsd-core/bin/lib/project-context.cjs');
 const shellCommandProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -62,7 +62,7 @@ function buildFixtures(t) {
   // home (ownedByThisUser, src/project-context.cts). The fixtures are the home's contents, so the
   // test declares that home instead of relying on os.tmpdir() sitting inside the runner's real
   // one, which the runner's sandbox HOME/USERPROFILE (#4635) no longer guarantees.
-  withEnv(t, homePair(root));
+  withHome(t, root);
 
   fs.mkdirSync(at('main', 'sub', 'deep'), { recursive: true });
   git(at('main'), ['init', '-q']);

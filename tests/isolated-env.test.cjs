@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withHome } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -115,6 +115,57 @@ describe('homePair (#6639)', () => {
       assert.equal(out.sandbox.USERPROFILE, '/y');
       assert.equal(out.built, true, 'isolatedEnv builds an env after both modules loaded');
     }
+  });
+});
+
+describe('withHome (#6639)', () => {
+  /** A stand-in for the node:test context: collects the after-hooks so the test runs them itself. */
+  const fakeContext = () => {
+    const hooks = [];
+    return { after: (fn) => hooks.push(fn), finish: () => hooks.splice(0).forEach((fn) => fn()) };
+  };
+
+  test('os.homedir() follows the directory while the test lives, and each variable is put back after', (t) => {
+    const names = Object.keys(homePair('x'));
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+    const dir = tmp(t, 'gsd-6639-withhome-');
+    const ctx = fakeContext();
+
+    withHome(ctx, dir);
+    assert.equal(process.env.HOME, dir);
+    assert.equal(process.env.USERPROFILE, dir);
+    assert.equal(os.homedir(), dir);
+
+    ctx.finish();
+    assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before);
+  });
+
+  test('a variable that was unset is deleted again, not left as the string "undefined"', (t) => {
+    const saved = process.env.USERPROFILE;
+    t.after(() => {
+      if (saved === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = saved;
+    });
+    delete process.env.USERPROFILE;
+    const homeBefore = process.env.HOME;
+    t.after(() => {
+      if (homeBefore === undefined) delete process.env.HOME;
+      else process.env.HOME = homeBefore;
+    });
+    const ctx = fakeContext();
+
+    withHome(ctx, '/h/two');
+    assert.equal(process.env.USERPROFILE, '/h/two');
+    ctx.finish();
+
+    assert.equal('USERPROFILE' in process.env, false);
+    assert.equal(process.env.HOME, homeBefore);
   });
 });
 
