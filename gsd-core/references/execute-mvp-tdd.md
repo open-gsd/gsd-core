@@ -62,7 +62,7 @@ Under TDD mode, escalate this to **blocking**:
 - The user is shown the same review table, but the verdict line reads:
   > "Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD. Resolve and re-run /gsd:execute-phase, or record an acceptance with `/gsd:execute-phase {phase} --force-mvp-gate "<reason>"` to proceed anyway."
 
-The `--force-mvp-gate "<reason>"` flag is implemented: it records one attributed, durable deviation acceptance per violating plan in `<phase-dir>/TDD-DEVIATIONS.md` frontmatter `deviations:` (fields `plan`, `violation`, `reason`, `accepted_by`, `accepted_at` — the `overrides:` shape of `references/verification-overrides.md`), then re-runs the review. The gate honors only attributed acceptances (non-empty `reason` and `accepted_by`), annotates each released FAIL row `deviationAccepted`, and fails closed on an unreadable record — there is no unrecorded bypass.
+The `--force-mvp-gate "<reason>"` flag is implemented: it records one attributed, durable deviation acceptance per violating plan in `<phase-dir>/TDD-DEVIATIONS.md` frontmatter `deviations:` (fields `plan`, `violation`, `reason`, `accepted_by`, `accepted_at` — the `overrides:` shape of `gsd-core/references/verification-overrides.md`), then re-runs the review. The gate honors only attributed acceptances (non-empty `reason` and `accepted_by`), annotates each released FAIL row `deviationAccepted`, and reports an unreadable record as the `unreadable` verdict (never a pass); execute-phase under TDD mode STOPS on that verdict instead of proceeding — there is no unrecorded bypass.
 
 ## What this gate does NOT do
 

@@ -237,6 +237,8 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   // an unparseable frontmatter block = fail-closed `unreadable` verdict (an unreadable
   // acceptance is never an acceptance — #5170); entries lacking a specific reason or an
   // author are NOT acceptances and change nothing (no unrecorded bypass).
+  // Keyed by plan id: an acceptance releases that plan's FAIL row whatever its violation shape (the issue
+  // words the criterion "for each violating plan"); the entry's violation field is recorded context, not a match key.
   const acceptedDeviations = new Map<string, { reason: string; acceptedBy: string }>();
   if (phaseDir) {
     const recordPath = path.join(phaseDir, 'TDD-DEVIATIONS.md');
@@ -261,6 +263,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
           const reason = typeof e.reason === 'string' ? e.reason.trim() : '';
           const acceptedBy = typeof e.accepted_by === 'string' ? e.accepted_by.trim() : '';
           if (plan === '' || reason === '' || acceptedBy === '') continue;
+          // One acceptance per plan: the first attributed entry wins; later entries for the same plan add nothing.
           if (!acceptedDeviations.has(plan)) acceptedDeviations.set(plan, { reason, acceptedBy });
         }
       }
@@ -337,8 +340,8 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   }
 
   for (const r of rows.filter((row) => row.deviationAccepted)) {
-    const a = acceptedDeviations.get(r.planId) as { reason: string; acceptedBy: string };
-    table += `\n\nPlan ${r.planId} FAIL accepted as a recorded deviation (accepted_by ${a.acceptedBy}: "${a.reason}").`;
+    const a = acceptedDeviations.get(r.planId);
+    if (a) table += `\n\nPlan ${r.planId} FAIL accepted as a recorded deviation (accepted_by ${a.acceptedBy}: "${a.reason}").`;
   }
 
   if (violations > 0) {

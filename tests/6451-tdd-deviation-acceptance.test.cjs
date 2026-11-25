@@ -17,6 +17,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('fast-check');
 const { execFileSync } = require('node:child_process');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
@@ -61,7 +62,8 @@ const plan = (planNo) => `---\nphase: 1\nplan: ${planNo}\ntype: tdd\n---\n# Plan
 function review(dir) {
   const result = evaluateTddReviewCheckpoint({ projectDir: dir, args: ['1'] });
   assert.equal(result.failure, undefined, 'not a usage failure');
-  return result.payload;
+  // The `unreadable` verdict lives on the GateVerdict wrapper; surface it beside the payload fields.
+  return { ...result.payload, outcome: result.outcome };
 }
 
 function writeDeviations(dir, body) {
@@ -123,6 +125,7 @@ describe('6451 recorded TDD deviations release the review', () => {
       writeDeviations(dir, '---\ndeviations: [ this is not : valid yaml\n---\n');
       const out = review(dir);
       assert.equal(out.passed, false);
+      assert.equal(out.outcome, 'unreadable');
       assert.ok(Array.isArray(out.unreadable) && out.unreadable.length > 0, 'the unreadable envelope names the record');
     });
   });
@@ -134,6 +137,80 @@ describe('6451 recorded TDD deviations release the review', () => {
       assert.equal(out.block, true);
       assert.equal(out.rows[0].deviationAccepted, undefined);
       assert.equal(out.passed, true);
+    });
+  });
+
+  test('a green_before_red FAIL is releasable by an attributed acceptance', () => {
+    withProject({ '01-01-PLAN.md': plan('1') }, ['feat(01-01): impl', 'test(01-01): spec'], (dir) => {
+      const before = review(dir);
+      assert.equal(before.rows[0].status, 'FAIL');
+      assert.equal(before.rows[0].reason, 'green_before_red');
+      assert.deepStrictEqual(before.rows[0].missing, []);
+      writeDeviations(dir, '---\ndeviations:\n  - plan: 01-01\n    violation: green_before_red\n    reason: "scaffold landed before the harness"\n    accepted_by: "dave"\n    accepted_at: "2026-11-25T12:00:00Z"\n---\n');
+      const out = review(dir);
+      assert.equal(out.violations, 0);
+      assert.equal(out.block, false);
+      assert.equal(out.rows[0].deviationAccepted, true);
+    });
+  });
+
+  test('duplicate entries for one plan: the first attributed entry wins', () => {
+    withProject({ '01-01-PLAN.md': plan('1') }, [], (dir) => {
+      writeDeviations(dir, '---\ndeviations:\n  - plan: 01-01\n    reason: "first reason"\n    accepted_by: "dave"\n  - plan: 01-01\n    reason: "second reason"\n    accepted_by: "erin"\n---\n');
+      const out = review(dir);
+      assert.equal(out.violations, 0);
+      assert.ok(out.table.includes('first reason'), 'the first attributed entry is recorded');
+      assert.ok(!out.table.includes('second reason'), 'a later entry for the same plan adds nothing');
+    });
+  });
+
+  test('a deviations key that is not a list fails closed', () => {
+    withProject({ '01-01-PLAN.md': plan('1') }, [], (dir) => {
+      writeDeviations(dir, '---\ndeviations: 5\n---\n');
+      const out = review(dir);
+      assert.equal(out.outcome, 'unreadable');
+      assert.equal(out.passed, false);
+    });
+  });
+
+  test('a record with no frontmatter fence fails closed', () => {
+    withProject({ '01-01-PLAN.md': plan('1') }, [], (dir) => {
+      writeDeviations(dir, 'These deviations were accepted informally.\n');
+      const out = review(dir);
+      assert.equal(out.outcome, 'unreadable');
+      assert.equal(out.passed, false);
+    });
+  });
+
+  test('a whitespace-only reason is not an acceptance', () => {
+    withProject({ '01-01-PLAN.md': plan('1') }, [], (dir) => {
+      writeDeviations(dir, '---\ndeviations:\n  - plan: 01-01\n    reason: "   "\n    accepted_by: "dave"\n---\n');
+      const out = review(dir);
+      assert.equal(out.violations, 1);
+      assert.equal(out.block, true);
+    });
+  });
+
+  test('only a fully-attributed entry releases, for any drawn entry shape', () => {
+    withProject({ '01-01-PLAN.md': plan('1') }, [], (dir) => {
+      // Bounded on purpose: each iteration writes one file and re-reads one project; no git churn per draw.
+      fc.assert(
+        fc.property(
+          fc.constantFrom('', ' ', '01-01', '01-01-PLAN', '01-01-PLAN.md', '02-02'),
+          fc.constantFrom('', ' ', 'why', '  noted  '),
+          fc.constantFrom('', ' ', 'dave'),
+          (drawnPlan, drawnReason, drawnBy) => {
+            writeDeviations(dir, `---\ndeviations:\n  - plan: ${JSON.stringify(drawnPlan)}\n    reason: ${JSON.stringify(drawnReason)}\n    accepted_by: ${JSON.stringify(drawnBy)}\n---\n`);
+            const out = review(dir);
+            const expectedRelease = drawnPlan.trim() !== ''
+              && drawnPlan.trim().replace(/-PLAN(?:\.md)?$/i, '') === '01-01'
+              && drawnReason.trim() !== ''
+              && drawnBy.trim() !== '';
+            assert.equal(out.block, !expectedRelease);
+          },
+        ),
+        { numRuns: 60, seed: 6451 },
+      );
     });
   });
 });
@@ -162,5 +239,31 @@ describe('6451 the Phase blocked message names only real flags', () => {
     for (const flag of flags) {
       assert.ok(surface.includes(flag), `${flag} is named in the block message but parsed nowhere in execute-phase`);
     }
+  });
+
+  test('the TDD Proceed rule fails closed on an unreadable record', () => {
+    // allow-test-rule: runtime-contract-is-the-product see #6451
+    const rule = splitLines(fs.readFileSync(WORKFLOW_STEP, 'utf8'))
+      .find((line) => line.startsWith('**Proceed rule:**'));
+    assert.ok(rule !== undefined, 'the Proceed rule exists in verify-phase-goal.md');
+    assert.ok(rule.includes('unreadable'), 'the Proceed rule must name the unreadable verdict');
+    assert.ok(rule.includes('STOP'), 'the Proceed rule must STOP on an unreadable verdict under TDD');
+  });
+
+  test('the blocked message in execute-mvp-tdd.md names the same flags as the step message', () => {
+    // allow-test-rule: runtime-contract-is-the-product see #6451
+    const stepLines = splitLines(fs.readFileSync(WORKFLOW_STEP, 'utf8'));
+    let stepBody = '';
+    for (let i = 0; i + 1 < stepLines.length; i++) {
+      if (stepLines[i].trim() === '```' && stepLines[i + 1].startsWith('Phase blocked')) {
+        for (let j = i + 2; j < stepLines.length && stepLines[j].trim() !== '```'; j++) stepBody += stepLines[j];
+        break;
+      }
+    }
+    const ref = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'execute-mvp-tdd.md'), 'utf8');
+    const refLine = splitLines(ref).find((line) => line.includes('"Phase blocked:'));
+    assert.ok(refLine !== undefined, 'execute-mvp-tdd.md must carry the Phase blocked message');
+    const tokens = (s) => [...new Set((s.match(/--[a-z][a-z-]+/g) || []))].sort();
+    assert.deepEqual(tokens(refLine), tokens(stepBody), 'the two shipped copies of the blocked message must name the same flags');
   });
 });
