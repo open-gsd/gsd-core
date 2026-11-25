@@ -175,8 +175,10 @@ function ungrantedServers(content, lib) {
 }
 
 // The tool names a body calls bare as `mempalace_<name>(`: the walk of /\bmempalace_([a-z_]+)\s*\(/g. The word boundary
-// means a longer identifier (xmempalace_foo() is not a call; the run needs one character, so a bare `mempalace_(` is not
-// one either; what precedes `(` is the pattern's `\s*`.
+// means a longer identifier (xmempalace_foo() is not a call); the run needs one character, so a bare `mempalace_(` is not
+// one either; what precedes `(` is the pattern's `\s*`. An underscore-spelled config word in parentheses (e.g.
+// `mempalace_enabled(true)`) counts as a call: accepted, none exists in the shipped agents (real keys are dotted,
+// `mempalace.enabled`) and the failure message names the remedy (#6455 review note).
 function bareMempalaceCalls(text) {
   const names = new Set();
   for (let at = text.indexOf('mempalace_'); at !== -1; at = text.indexOf('mempalace_', at + 1)) {

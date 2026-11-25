@@ -1,3 +1,4 @@
+// docs-guard-exempt: 'docs/reference/agents.md' is read as shipped product data by the parity row, intentionally (#6455).
 'use strict';
 
 /**
@@ -14,11 +15,12 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('fast-check');
 
 const { walkers } = require('../scripts/static-checks/text-contracts/mcp-tool-inheritance.cjs');
 const frontmatter = require('../gsd-core/bin/lib/frontmatter.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { convertClaudeAgentToQwenAgent, convertClaudeAgentToPiAgent } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+const { convertClaudeAgentToCodexAgent, convertClaudeAgentToQwenAgent, convertClaudeAgentToPiAgent } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const GRANT = 'mcp__mempalace__*';
@@ -97,4 +99,25 @@ describe('#6455 the converters treat the grant per runtime', () => {
     assert.equal(toolsLine, 'tools: read, bash');
     assert.ok(pi.includes(`# tools with no Pi equivalent, dropped: ${GRANT}`));
   });
+  test('the Codex converter passes the grant verbatim into the role header tools listing', () => {
+    assert.ok(convertClaudeAgentToCodexAgent(granted).includes(`tools: Read, Bash, ${GRANT}\n`));
+  });
+});
+
+test('the bare-call walk equals the documented regex oracle over generated strings (#6455)', () => {
+  // Differential property: the linear walk in bareMempalaceCalls must agree with the /\bmempalace_([a-z_]+)\s*\(/g
+  // it mirrors, on every generated string — the parser-parity rule from CLAUDE.md test conventions.
+  const oracle = (text) => {
+    const names = new Set();
+    for (const m of text.matchAll(/\bmempalace_([a-z_]+)\s*\(/g)) names.add(m[1]);
+    return [...names].sort();
+  };
+  const word = fc.constantFrom('mempalace_', 'mempalace_kg_add', 'mempalace_diary_read', 'mempalace_', '(', ')', ' ', '\n', 'x', '_', 'xmempalace_kg_add', 'MEMPALACE_FOO', 'mempalace_enabled', '.', '`', 'mempalace_find_tunnels');
+  fc.assert(
+    fc.property(fc.array(word, { minLength: 0, maxLength: 14 }), (parts) => {
+      const text = parts.join('');
+      assert.deepEqual(walkers.bareMempalaceCalls(text), oracle(text), `walk diverges on ${JSON.stringify(text)}`);
+    }),
+    { seed: 6455, numRuns: 200 }
+  );
 });
