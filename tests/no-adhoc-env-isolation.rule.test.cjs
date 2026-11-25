@@ -3,9 +3,8 @@
 /**
  * no-adhoc-env-isolation.rule.test.cjs
  *
- * #6035 (epic #4635 Phase 3) and #6040 (Phase 8): tests for the local/no-adhoc-env-isolation
- * ESLint rule: arm 1 (an inline PATH split or filter), arm 2 (a hand-built HOME / USERPROFILE
- * env), the boundary the rule's reference page documents (the rule header links it), a red
+ * #6035 (epic #4635 Phase 3): tests for the local/no-adhoc-env-isolation ESLint rule: arm 1
+ * (an inline PATH split or filter), arm 2 (a hand-built HOME / USERPROFILE env), the boundary the rule's reference page documents (the rule header links it), a red
  * demonstration through the repository's own eslint.config.mjs, and the guards that the rule
  * has no exemption surface (#3148's shape): no allowlist file, no rule option, and every file
  * under tests/ lints to zero sites with inline config off, so an `eslint-disable` comment
@@ -477,24 +476,23 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
   });
 
   test('the rule takes no options: an allowlist cannot be wired back in through config', async () => {
-    const withAllowlist = new ESLint({
+    const filePath = path.join(REPO_ROOT, 'tests/adhoc-env-isolation-option-6040.test.cjs');
+    const withRule = (options) => new ESLint({
       cwd: REPO_ROOT,
-      overrideConfig: { files: ['tests/**/*.cjs'], rules: { [RULE_ID]: ['error', { allowlist: ['tests/legacy.test.cjs'] }] } },
+      overrideConfig: { files: ['tests/**/*.cjs'], rules: { [RULE_ID]: ['error', ...options] } },
     });
-    await assert.rejects(
-      () => withAllowlist.lintText(CLEAN, { filePath: path.join(REPO_ROOT, 'tests/adhoc-env-isolation-option-6040.test.cjs') }),
-      /should NOT have more than 0 items/,
-    );
+    // Control: the same config without the option lints, so the rejection below is the option's.
+    await withRule([]).lintText(CLEAN, { filePath });
+    await assert.rejects(() => withRule([{ allowlist: ['tests/legacy.test.cjs'] }]).lintText(CLEAN, { filePath }));
   });
 
   test('eslint.config.mjs wires the rule at error severity with no options', async () => {
     eslint ??= new ESLint({ cwd: REPO_ROOT });
     const config = await eslint.calculateConfigForFile(path.join(REPO_ROOT, 'tests/adhoc-env-isolation-config-6040.test.cjs'));
     assert.deepStrictEqual(config.rules[RULE_ID], [2]);
-    // An unused `eslint-disable` for this rule is caught by ESLint's unused-directive warning
-    // (lint runs with --max-warnings 0), which is what makes a rule-specific disable fail with the
-    // count above covering a used one. Pin the setting so turning it off breaks this row.
-    assert.ok(config.linterOptions.reportUnusedDisableDirectives >= 1, 'unused eslint-disable directives must be reported');
+    // An unused `eslint-disable` for this rule is an error, so a rule-specific disable has no form
+    // that passes: a used one is counted below with inline config off, an unused one fails lint.
+    assert.strictEqual(config.linterOptions.reportUnusedDisableDirectives, 2);
   });
 });
 
@@ -502,7 +500,7 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
 
 describe('no-adhoc-env-isolation: no allowlist', () => {
   test('the allowlist file does not exist', () => {
-    assert.strictEqual(fs.existsSync(ALLOWLIST_PATH), false, `${ALLOWLIST_PATH} was retired by #6040; do not bring it back`);
+    assert.strictEqual(fs.existsSync(ALLOWLIST_PATH), false, `${ALLOWLIST_PATH} exists: the rule has no allowlist`);
   });
 });
 

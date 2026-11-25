@@ -112,6 +112,11 @@ const localPlugin = {
 };
 
 export default tseslint.config(
+  // An `eslint-disable` that silences nothing is an error, not a warning that only
+  // `--max-warnings 0` turns into one: a rule-specific disable has no unused form that passes
+  // (tests/no-adhoc-env-isolation.rule.test.cjs pins this).
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
+
   // ── Global ignores ─────────────────────────────────────────────────────────
   {
     ignores: [
@@ -869,11 +874,9 @@ export default tseslint.config(
     },
   },
 
-  // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635; allowlist retired by #6040) ───
+  // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635) ─────────────────
   // Its own block so the one exempt file can be excluded by exact path:
-  // tests/helpers/isolated-env.cjs IS the implementation the rule points to. The rule takes no
-  // options and the migration reached zero sites, so it runs with no exemption surface;
-  // tests/no-adhoc-env-isolation.rule.test.cjs holds every file to zero with inline config off.
+  // tests/helpers/isolated-env.cjs IS the implementation the rule points to.
   {
     files: ['tests/**/*.cjs'],
     ignores: ['tests/helpers/isolated-env.cjs'],
