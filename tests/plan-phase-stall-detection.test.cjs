@@ -1239,120 +1239,119 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(watch(NOW, f.transcript, f.noPlans, planner.markers), 'waiting');
   });
 
-  // #5182 hand-back (2026-11-22): the agent writes its receipt as its LAST tool action, before
-  // its final message, so a receipt that exists is not yet a return that arrived. When the watch
-  // finds a receipt younger than the settle window it sleeps out the rest of the window in the
-  // same call, then reports it. The window is stated once, in the helper doc, and every route
-  // that reads "when the watch ends" inherits it. Ages are set on the receipt's mtime against the
-  // injected NOW and `sleep` records its arguments; no wall clock is read.
-  const SETTLE_SECONDS = 120;
-  const INTERVAL_SECONDS = 5 * 60;
+  // #5182 hand-back (2026-11-22) and the owner's 2026-11-24 decision: the agent writes its receipt
+  // as its LAST tool action, before its final message, so a receipt that held only the marker told
+  // the watch an agent was finishing, not what it returned. The receipt now holds the agent's
+  // COMPLETE return (marker line first), written atomically, and `gsd_return_body` prints it; the
+  // orchestrator routes on it without waiting for the host's completion result.
   const CHECKER_MARKERS = ['## VERIFICATION PASSED', '## ISSUES FOUND'];
+  const BODY_CAP_BYTES = 65536;
+  // A realistic checker return: a marker line, prose and a YAML issue list, with the characters a
+  // shell would mangle (quotes, $, backticks) and a line that looks like a heredoc delimiter.
+  const RETURN_BODY = [
+    '## ISSUES FOUND',
+    '',
+    'Phase 1: 2 plans checked. It\'s "not done": $HOME `date` $(echo injected) \\n stay literal.',
+    'EOF',
+    '```yaml',
+    'issues:',
+    ...Array.from({ length: 17 }, (_, i) => `  - {plan: "01-0${i % 3}", severity: warning, description: "finding ${i}: it's \\"quoted\\""}`),
+    '```',
+    'Plans: /tmp/p/01-01-PLAN.md',
+  ];
 
-  function receiptAged(f, age, marker = '## VERIFICATION PASSED') {
-    fs.writeFileSync(f.receipt, `${marker}\n`);
-    fs.utimesSync(f.receipt, NOW - age, NOW - age);
+  function writeReceipt(f, text) {
+    fs.writeFileSync(f.receipt, text);
   }
 
-  // Run the watch with `sleep` recording every argument; returns the verdict and the sleeps.
-  function watchSleeps(f, dispatchTs, markers, prelude = '', interval = 5) {
-    const log = `${f.fwd}/sleeps.log`;
-    fs.writeFileSync(log, '');
-    const out = watch(dispatchTs, f.receipt, f.noPlans, markers, { interval, prelude: `${prelude}\nsleep() { printf '%s\\n' "$1" >> ${q(log)}; }` });
-    return { out, sleeps: splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean).map(Number) };
+  // The fenced snippet under "**Return receipt (#5182):**" in an agent definition.
+  function receiptSnippetOf(rel) {
+    const md = readFileNormalized(path.join(REPO_ROOT, rel));
+    const at = md.indexOf('**Return receipt (#5182):**');
+    assert.notEqual(at, -1, `${rel}: has the return receipt rule`);
+    const open = md.indexOf('```bash\n', at);
+    assert.notEqual(open, -1, `${rel}: the rule carries a bash snippet`);
+    return md.slice(open + '```bash\n'.length, md.indexOf('\n```', open));
   }
 
-  test('a receipt younger than the settle window is waited out in the same call, then reported; at the window it is not (#5182)', (t) => {
+  const RECEIPT_AGENT_FILES = ['agents/gsd-planner.md', 'agents/gsd-plan-checker.md', 'pi/package-agents/gsd-planner.md', 'pi/package-agents/gsd-plan-checker.md'];
+
+  test('gsd_return_body prints the complete return the agent wrote, and the watch reports it (#5182)', (t) => {
     const f = fixture(t);
-    // limit-1 / limit / limit+1, and the instant after the write.
-    for (const age of [0, 1, SETTLE_SECONDS - 1]) {
-      receiptAged(f, age);
-      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS, SETTLE_SECONDS - age] }, `receipt age ${age}s: the rest of the window is slept`);
-    }
-    for (const age of [SETTLE_SECONDS, SETTLE_SECONDS + 1]) {
-      receiptAged(f, age);
-      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `receipt age ${age}s: settled, no extra sleep`);
+    writeReceipt(f, `${RETURN_BODY.join('\n')}\n`);
+    assert.equal(runHelpers(`gsd_return_body ${q(f.receipt)}`), RETURN_BODY.join('\n'), 'the body is printed byte for byte');
+    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'marker_received');
+    assert.equal(runHelpers(`gsd_return_marker ${q(f.receipt)} ${CHECKER_MARKERS.map(q).join(' ')}`), '## ISSUES FOUND');
+  });
+
+  test('the documented receipt write is atomic and complete, in the agents and their Pi copies (#5182)', (t) => {
+    for (const rel of RECEIPT_AGENT_FILES) {
+      const f = fixture(t);
+      const snippet = receiptSnippetOf(rel);
+      assert.ok(snippet.includes("'PATH.part'") && snippet.includes("mv -f 'PATH.part' 'PATH'"), `${rel}: writes PATH.part then renames it`);
+      const placeholder = '<your complete return, marker line first>';
+      assert.ok(snippet.includes(placeholder), `${rel}: the snippet marks where the return goes`);
+      const target = f.receipt.replace(/\\/g, '/');
+      const script = `${snippet.replace(placeholder, () => RETURN_BODY.join('\n')).replace(/PATH/g, () => target)}\n`;
+      const r = runBashScript(script, []);
+      assert.equal(r.status, 0, `${rel}: ${r.stderr}`);
+      assert.equal(fs.readFileSync(f.receipt, 'utf8'), `${RETURN_BODY.join('\n')}\n`, `${rel}: the receipt is the return, byte for byte`);
+      assert.ok(!fs.existsSync(`${f.receipt}.part`), `${rel}: no .part file is left`);
     }
   });
 
-  // AC3 ("a finished revision yields a success result within one poll interval"): the window
-  // is capped at one interval, so a short interval never stretches a report past it.
-  test('the settle window never exceeds one poll interval (#5182 AC3)', (t) => {
+  test('planner, checker and their Pi copies carry the same receipt snippet (#5182)', () => {
+    const [first, ...rest] = RECEIPT_AGENT_FILES.map(receiptSnippetOf);
+    for (const [i, snippet] of rest.entries()) assert.equal(snippet, first, `${RECEIPT_AGENT_FILES[i + 1]} matches ${RECEIPT_AGENT_FILES[0]}`);
+  });
+
+  test('gsd_return_body caps the body at 64 KiB: limit-1 and limit whole, limit+1 cut (#5182)', (t) => {
     const f = fixture(t);
-    // interval 1 minute: window = 60 s. limit-1 / limit / limit+1 around it.
-    for (const [age, extra] of [[0, 60], [59, 1], [60, null], [61, null]]) {
-      receiptAged(f, age);
-      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, '', 1), { out: 'marker_received', sleeps: extra === null ? [60] : [60, extra] }, `interval 1 min, receipt age ${age}s`);
-    }
-    // interval 2 minutes equals the window: the full 120 s applies.
-    receiptAged(f, 0);
-    assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, '', 2), { out: 'marker_received', sleeps: [120, 120] }, 'interval 2 min');
-    // The reported delay after the write is max(age at the check, window), never more than one interval.
-    for (const interval of [1, 2, 5]) {
-      for (const age of [0, 30, 59, 60, 119, 120, 121, 299]) {
-        if (age > interval * 60) continue;
-        receiptAged(f, age);
-        const { sleeps } = watchSleeps(f, NOW, CHECKER_MARKERS, '', interval);
-        assert.ok(sleeps.slice(1).reduce((a, b) => a + b, 0) + age <= Math.max(age, interval * 60), `interval ${interval} min, age ${age}s: reported by ${age + sleeps.slice(1).reduce((a, b) => a + b, 0)}s`);
-      }
+    for (const [size, want] of [[BODY_CAP_BYTES - 1, BODY_CAP_BYTES - 1], [BODY_CAP_BYTES, BODY_CAP_BYTES], [BODY_CAP_BYTES + 1, BODY_CAP_BYTES]]) {
+      writeReceipt(f, `## ISSUES FOUND\n${'a'.repeat(size - '## ISSUES FOUND\n'.length)}`);
+      assert.equal(runHelpers(`gsd_return_body ${q(f.receipt)}`).length, want, `a ${size}-byte receipt prints ${want} bytes`);
     }
   });
 
-  test('a settling receipt past the stall threshold is reported, not stalled (#5182)', (t) => {
+  test('gsd_return_body prints nothing for a link, a NUL, a directory, a missing or an empty receipt (#5182)', (t) => {
     const f = fixture(t);
-    receiptAged(f, 5);
-    // dispatched 11 minutes ago against a 10-minute threshold: with no receipt this is `stalled`.
-    assert.deepEqual(watchSleeps(f, NOW - 11 * 60, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS, SETTLE_SECONDS - 5] });
+    const body = (file) => runHelpers(`gsd_return_body ${q(file)}`);
+    assert.equal(body(f.receipt), '', 'missing');
+    writeReceipt(f, '');
+    assert.equal(body(f.receipt), '', 'empty');
+    writeReceipt(f, '## ISSUES FOUND\nbefore\0after\n');
+    assert.equal(body(f.receipt), '', 'a NUL byte in the first 4097 bytes');
+    assert.equal(body(f.dir.replace(/\\/g, '/')), '', 'a directory');
+    const target = path.join(f.dir, 'real-return.md');
+    fs.writeFileSync(target, '## ISSUES FOUND\nreal\n');
     fs.unlinkSync(f.receipt);
-    assert.deepEqual(watchSleeps(f, NOW - 11 * 60, CHECKER_MARKERS), { out: 'stalled', sleeps: [INTERVAL_SECONDS] }, 'control: no receipt, same clock');
+    try { fs.symlinkSync(target, f.receipt); } catch { return; /* no symlink right on this OS: the other cases ran */ }
+    assert.equal(body(f.receipt), '', 'a symlink is never read');
   });
 
-  test('a receipt dated in the future, or with an unreadable or odd mtime, counts at once (#5182)', (t) => {
+  test('a half-written .part file is not a receipt (#5182)', (t) => {
     const f = fixture(t);
-    for (const age of [-1, -86400]) {
-      receiptAged(f, age);
-      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `receipt age ${age}s (future mtime)`);
-    }
-    receiptAged(f, 0);
-    // No stat form works / stat prints a non-number: the old behavior, no extra sleep.
-    for (const stub of ['stat() { return 1; }', 'stat() { echo not-a-number; }']) {
-      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, stub), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, stub);
-    }
-    // A leading zero is not octal: `08`/`09` are valid (long past) mtimes, not an arithmetic error.
-    for (const mtime of ['08', '09', '0000001']) {
-      assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS, `stat() { echo ${mtime}; }`), { out: 'marker_received', sleeps: [INTERVAL_SECONDS] }, `mtime ${mtime}`);
-    }
+    writeReceipt({ receipt: `${f.receipt}.part` }, '## VERIFICATION PASSED\nhalf of the retu');
+    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'waiting');
   });
 
-  test('a fresh receipt without a watched marker is not activity and is not waited on (#5182)', (t) => {
+  test('a marker-only receipt (an agent definition that predates the body) still reports its marker and carries no body (#5182)', (t) => {
     const f = fixture(t);
-    receiptAged(f, 0, '## PLANNING COMPLETE');
-    assert.deepEqual(watchSleeps(f, NOW, CHECKER_MARKERS), { out: 'waiting', sleeps: [INTERVAL_SECONDS] });
+    writeReceipt(f, '## ISSUES FOUND\n');
+    assert.equal(watch(NOW, f.receipt, f.noPlans, CHECKER_MARKERS), 'marker_received');
+    assert.equal(runHelpers(`gsd_return_body ${q(f.receipt)}`), '## ISSUES FOUND', 'the marker line is all there is');
   });
 
-  test('the settle sleep matches its oracle for any receipt age (#5182)', (t) => {
-    const f = fixture(t);
-    fc.assert(fc.property(fc.integer({ min: -5, max: 400 }), (age) => {
-      receiptAged(f, age);
-      const want = age >= 0 && age < SETTLE_SECONDS ? [INTERVAL_SECONDS, SETTLE_SECONDS - age] : [INTERVAL_SECONDS];
-      const got = watchSleeps(f, NOW, CHECKER_MARKERS);
-      return got.out === 'marker_received' && JSON.stringify(got.sleeps) === JSON.stringify(want);
-    }), { seed: 5182, numRuns: 10, examples: [[-1], [0], [SETTLE_SECONDS - 1], [SETTLE_SECONDS], [SETTLE_SECONDS + 1]] });
+  test('step 7.99 routes on the receipt body without waiting for the completion result (#5182)', () => {
+    const step = sectionOf(readPlanPhase(), ['## 7.99.', '## 8. ']);
+    inOrder(step, ['complete return', 'gsd_return_body "{receipt}"', 'without waiting for the completion result'], 'the binding paragraph says where the return comes from');
   });
 
-  test('the settle window in the helper constant, the prose, the docs, the changeset and this suite agree (#5182)', () => {
-    const doc = readStallHelpersDoc();
-    const constant = doc.match(/^RECEIPT_SETTLE_SECONDS=(\d+)$/m);
-    assert.ok(constant, 'the helper fence defines RECEIPT_SETTLE_SECONDS=<n>');
-    const prose = doc.match(/`RECEIPT_SETTLE_SECONDS` \((\d+)\)/);
-    assert.ok(prose, 'the prose states the window as `RECEIPT_SETTLE_SECONDS` (<n>)');
-    assert.equal(Number(constant[1]), Number(prose[1]), 'constant and prose name the same number');
-    assert.equal(Number(constant[1]), SETTLE_SECONDS, 'this suite pins the same number');
-    // The user-facing copies state it in words: seconds in the changeset, minutes in the docs.
+  test('the docs, the changeset, CONTEXT.md and the agent contracts describe the receipt as the complete return (#5182)', () => {
     const changeset = fs.readFileSync(path.join(REPO_ROOT, '.changeset', 'lively-sloths-forage.md'), 'utf8');
-    assert.ok(changeset.includes(`${SETTLE_SECONDS} seconds old`), 'the changeset states the window in seconds');
-    for (const rel of ['docs/FEATURES.md', 'docs/features/planner-stall-watchdog.md']) {
-      assert.ok(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8').includes(`younger than ${SETTLE_SECONDS / 60 === 2 ? 'two' : SETTLE_SECONDS / 60} minutes`), `${rel} states the window in minutes`);
+    assert.ok(changeset.includes('complete return'), 'the changeset says the receipt holds the complete return');
+    for (const rel of ['docs/FEATURES.md', 'docs/features/planner-stall-watchdog.md', 'CONTEXT.md', 'gsd-core/references/agent-contracts.md']) {
+      assert.ok(readFileNormalized(path.join(REPO_ROOT, rel)).includes('complete return'), `${rel} says the receipt holds the complete return`);
     }
   });
 
