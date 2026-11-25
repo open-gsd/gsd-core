@@ -1293,10 +1293,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.ok(snippet.includes(placeholder), `${rel}: the snippet marks where the return goes`);
       const target = f.receipt.replace(/\\/g, '/');
       const script = `${snippet.replace(placeholder, () => RETURN_BODY.join('\n')).replace(/PATH/g, () => target)}\n`;
-      const r = runBashScript(script, []);
-      assert.equal(r.status, 0, `${rel}: ${r.stderr}`);
-      assert.equal(fs.readFileSync(f.receipt, 'utf8'), `${RETURN_BODY.join('\n')}\n`, `${rel}: the receipt is the return, byte for byte`);
-      assert.ok(!fs.existsSync(`${f.receipt}.part`), `${rel}: no .part file is left`);
+      for (const interpreter of [undefined, zshOnPath()].filter((x, i) => i === 0 || x)) {
+        if (fs.existsSync(f.receipt)) fs.unlinkSync(f.receipt);
+        const r = runBashScript(script, [], interpreter ? { interpreter } : {});
+        const shell = interpreter ? 'zsh' : 'bash';
+        assert.equal(r.status, 0, `${rel} (${shell}): ${r.stderr}`);
+        assert.equal(fs.readFileSync(f.receipt, 'utf8'), `${RETURN_BODY.join('\n')}\n`, `${rel} (${shell}): the receipt is the return, byte for byte`);
+        assert.ok(!fs.existsSync(`${f.receipt}.part`), `${rel} (${shell}): no .part file is left`);
+      }
+      // A failed write publishes nothing: cat fails (the directory is missing), so mv never runs.
+      const lost = runBashScript(snippet.replace(placeholder, () => RETURN_BODY.join('\n')).replace(/PATH/g, () => `${target}-missing-dir/r.receipt`) + '\n', []);
+      assert.notEqual(lost.status, 0, `${rel}: a failed write exits non-zero`);
+      assert.ok(!fs.existsSync(`${f.receipt}-missing-dir`), `${rel}: nothing is created for a failed write`);
     }
   });
 
@@ -1305,9 +1313,9 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     for (const [i, snippet] of rest.entries()) assert.equal(snippet, first, `${RECEIPT_AGENT_FILES[i + 1]} matches ${RECEIPT_AGENT_FILES[0]}`);
   });
 
-  test('gsd_return_body caps the body at 64 KiB: limit-1 and limit whole, limit+1 cut (#5182)', (t) => {
+  test('gsd_return_body caps the body at 64 KiB: limit-1 and limit whole, limit+1 is no body (a cut body could drop a finding) (#5182)', (t) => {
     const f = fixture(t);
-    for (const [size, want] of [[BODY_CAP_BYTES - 1, BODY_CAP_BYTES - 1], [BODY_CAP_BYTES, BODY_CAP_BYTES], [BODY_CAP_BYTES + 1, BODY_CAP_BYTES]]) {
+    for (const [size, want] of [[BODY_CAP_BYTES - 1, BODY_CAP_BYTES - 1], [BODY_CAP_BYTES, BODY_CAP_BYTES], [BODY_CAP_BYTES + 1, 0]]) {
       writeReceipt(f, `## ISSUES FOUND\n${'a'.repeat(size - '## ISSUES FOUND\n'.length)}`);
       assert.equal(runHelpers(`gsd_return_body ${q(f.receipt)}`).length, want, `a ${size}-byte receipt prints ${want} bytes`);
     }
@@ -1321,6 +1329,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(body(f.receipt), '', 'empty');
     writeReceipt(f, '## ISSUES FOUND\nbefore\0after\n');
     assert.equal(body(f.receipt), '', 'a NUL byte in the first 4097 bytes');
+    writeReceipt(f, `## ISSUES FOUND\n${'a'.repeat(5000)}\0b\n`);
+    assert.equal(body(f.receipt), '', 'a NUL byte after the first 4097 bytes');
     assert.equal(body(f.dir.replace(/\\/g, '/')), '', 'a directory');
     const target = path.join(f.dir, 'real-return.md');
     fs.writeFileSync(target, '## ISSUES FOUND\nreal\n');
