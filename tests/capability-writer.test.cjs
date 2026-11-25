@@ -459,6 +459,36 @@ describe('capability-writer: setCapabilityState', () => {
     }
   });
 
+  // ── #6331: a layout module that fails to load is a materialize error, not a throw ──
+  test('#6331: a runtime-artifact-layout load failure is a materialize error, not an uncaught throw', (t) => {
+    const Module = require('node:module');
+    const { MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE } = require('../gsd-core/bin/lib/capability-writer.cjs');
+    const { rcd, cwd } = makeTempDirs();
+    t.after(() => { cleanup(rcd); cleanup(cwd); });
+    const realLoad = Module._load;
+    let injected = 0;
+    t.mock.method(Module, '_load', function load(request, parent, isMain) {
+      if (request === './runtime-artifact-layout.cjs' && /capability-writer\.cjs$/.test(parent?.filename ?? '')) {
+        injected += 1;
+        throw new Error('injected: runtime-artifact-layout failed to load');
+      }
+      return realLoad.call(this, request, parent, isMain);
+    });
+    let result;
+    assert.doesNotThrow(() => {
+      result = setCapabilityState(
+        cwd, rcd,
+        [{ id: 'ui', enabled: false }],
+        { materialize: { runtime: 'claude', scope: 'global' } },
+      );
+    }, 'the load failure must not escape setCapabilityState after the config writes');
+    assert.equal(injected, 1, 'precondition: the layout module load was attempted and failed');
+    assert.ok(result.errors.length > 0, `the failed materialization is reported, got: ${JSON.stringify(result.errors)}`);
+    assert.equal(result.warnings.includes(MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE), false,
+      'a load failure is not the unverified-source skip');
+    assert.equal(readSurface(rcd), null, 'a failed materialization does not publish the computed surface state');
+  });
+
   // ── Test 16 (Fix D): malformed config.json → error, surface NOT written ───
   test('Fix D: malformed config.json pre-check blocks write and surface not created', () => {
     const { rcd, cwd } = makeTempDirs();
