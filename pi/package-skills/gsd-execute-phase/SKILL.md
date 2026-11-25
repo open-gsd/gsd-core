@@ -45,11 +45,13 @@ Phase: the `<arguments>` block
 - `--wave N` — Execute only Wave `N` in the phase. Use when you want to pace execution or stay inside usage limits.
 - `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
 - `--interactive` — Execute plans sequentially inline (no subagents) with user checkpoints between tasks. Lower token usage, pair-programming style. Best for small phases, bug fixes, and verification gaps.
+- `--force-mvp-gate "<reason>"` — Record an attributed TDD deviation acceptance for the phase's TDD review violations, then re-run the review: one `deviations:` entry per violating plan in `<phase-dir>/TDD-DEVIATIONS.md`. The reason value is required. See `gsd-core/workflows/execute-phase/steps/verify-phase-goal.md`.
 
 **Active flags must be derived from the `<arguments>` block:**
 - `--wave N` is active only if the literal `--wave` token is present in the `<arguments>` block
 - `--gaps-only` is active only if the literal `--gaps-only` token is present in the `<arguments>` block
 - `--interactive` is active only if the literal `--interactive` token is present in the `<arguments>` block
+- `--force-mvp-gate "<reason>"` is active only if the literal `--force-mvp-gate` token is present in the `<arguments>` block
 - If none of these tokens appear, run the standard full-phase execution flow with no flag-specific filtering
 - Do not infer that a flag is active just because it is documented in this prompt
 

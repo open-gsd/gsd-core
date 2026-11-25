@@ -24,12 +24,14 @@ const os = require('node:os');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { setEnvForTest, withHome } = require('./helpers/isolated-env.cjs');
 const { runGit } = require('./helpers/process-seam.cjs');
 const projectContext = require('../gsd-core/bin/lib/project-context.cjs');
 const shellCommandProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const { runCli } = require('../gsd-core/bin/gsd-tools.cjs');
 
 const { resolveProjectContext, parseGitConfig } = projectContext;
+
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
 
 function git(cwd, args, env) {
@@ -43,6 +45,12 @@ function buildFixtures(t) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-git-layout-')));
   t.after(() => cleanup(root));
   const at = (...parts) => path.join(root, ...parts);
+
+  // The reader answers from the filesystem on Windows only for a repository inside this user's
+  // home (ownedByThisUser, src/project-context.cts). The fixtures are the home's contents, so the
+  // test declares that home instead of relying on os.tmpdir() sitting inside the runner's real
+  // one, which the runner's sandbox HOME/USERPROFILE (#4635) no longer guarantees.
+  withHome(t, root);
 
   fs.mkdirSync(at('main', 'sub', 'deep'), { recursive: true });
   git(at('main'), ['init', '-q']);
@@ -259,16 +267,6 @@ test('property: parseGitConfig accepts what git accepts and reads the values git
 
 test('environment variables that concern git (#6355)', async (t) => {
   const { at } = buildFixtures(t);
-  const withEnv = (t2, vars) => {
-    const saved = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
-    Object.assign(process.env, vars);
-    t2.after(() => {
-      for (const [name, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-    });
-  };
   const both = (...parts) => ({
     byDefault: resolveProjectContext(at(...parts)),
     throughGit: resolveProjectContext(at(...parts), { deps: { readGitLayout: () => null } }),
@@ -278,7 +276,7 @@ test('environment variables that concern git (#6355)', async (t) => {
   // (#5548), so git discovers from the working directory regardless of them.
   // The reader does the same and still answers.
   await t.test('GIT_DIR and GIT_WORK_TREE do not redirect the answer, by either path', (t2) => {
-    withEnv(t2, { GIT_DIR: at('main', '.git'), GIT_WORK_TREE: at('main') });
+    setEnvForTest(t2, { GIT_DIR: at('main', '.git'), GIT_WORK_TREE: at('main') });
     for (const [parts, worktreeRoot] of [[['no-repo'], at('no-repo')], [['linked'], at('linked')]]) {
       const { byDefault, throughGit } = both(...parts);
       assert.equal(byDefault.provenance.layout, 'filesystem');
@@ -290,7 +288,7 @@ test('environment variables that concern git (#6355)', async (t) => {
   // A ceiling stops git below the repository it would otherwise find. The
   // reader would walk past it, so it leaves the question to git.
   await t.test('GIT_CEILING_DIRECTORIES sends the question to git', (t2) => {
-    withEnv(t2, { GIT_CEILING_DIRECTORIES: at('main', 'sub') });
+    setEnvForTest(t2, { GIT_CEILING_DIRECTORIES: at('main', 'sub') });
     const { byDefault, throughGit } = both('main', 'sub', 'deep');
 
     assert.equal(byDefault.provenance.layout, 'git');
@@ -301,7 +299,7 @@ test('environment variables that concern git (#6355)', async (t) => {
   await t.test('so does each of the others that reaches git', async (t2) => {
     for (const name of ['GIT_DISCOVERY_ACROSS_FILESYSTEM', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) {
       await t2.test(name, (t3) => {
-        withEnv(t3, { [name]: name === 'GIT_CONFIG_PARAMETERS' ? "'core.bare=false'" : '0' });
+        setEnvForTest(t3, { [name]: name === 'GIT_CONFIG_PARAMETERS' ? "'core.bare=false'" : '0' });
         const { byDefault, throughGit } = both('main');
         assert.equal(byDefault.provenance.layout, 'git');
         assert.deepEqual(facts(byDefault), facts(throughGit));

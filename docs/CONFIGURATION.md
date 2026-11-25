@@ -276,6 +276,7 @@ derived from the shipped agent declaration.
 | `ref_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Ref search API availability. When unset, GSD checks for `REF_API_KEY` env var or `$GSD_HOME/.gsd/ref_api_key` file |
 | `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `$GSD_HOME/.gsd/perplexity_api_key` file |
 | `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `$GSD_HOME/.gsd/jina_api_key` file when an explicit override is needed |
+| `serply_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Serply search availability. When unset, GSD checks for `SERPLY_API_KEY` env var or `$GSD_HOME/.gsd/serply_api_key` file. Off unless a key is present or you set it to `true`, so nothing is sent to Serply by default. Research calls go through the Serply MCP server registered as `serply` (`mcp__serply__google_search`; [setup](https://github.com/serply-inc/mcp)) |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
 ### New-project identity defaults
@@ -378,6 +379,7 @@ API key fields accept a string value (the key itself). They can also be set to t
 | `ref_search` | string \| boolean \| null | `null` | Ref search API key used in the docs-discovery waterfall. Masked in display |
 | `perplexity` | string \| boolean \| null | `null` | Perplexity API key used in the web-discovery waterfall. Masked in display |
 | `jina` | string \| boolean \| null | `null` | Jina API key (docs / scrape fallback). Masked in display |
+| `serply_search` | string \| boolean \| null | `null` | Serply API key used in the web-discovery waterfall |
 
 **Masking convention (`gsd-core/bin/lib/secrets.cjs`):** keys 8+ characters render as `****<last-4>`; shorter keys render as `****`; `null`/empty renders as `(unset)`. Plaintext is written as-is to `.planning/config.json` — that file is the security boundary — but the CLI, confirmation tables, logs, and `AskUserQuestion` descriptions never display the plaintext. This applies to the `config-set` command output itself: `config-set brave_search <key>` returns a JSON payload with the value masked.
 

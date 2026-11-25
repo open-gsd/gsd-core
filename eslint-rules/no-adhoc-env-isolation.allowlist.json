@@ -1,8 +1,0 @@
-{
-  "tests/helpers-process-isolation.test.cjs": 1,
-  "tests/helpers.cjs": 4,
-  "tests/isolated-env.test.cjs": 2,
-  "tests/kimi-agent-converter.test.cjs": 2,
-  "tests/pi-package.test.cjs": 1,
-  "tests/runtime-home-hermeticity.test.cjs": 1
-}

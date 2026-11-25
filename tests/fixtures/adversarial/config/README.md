@@ -36,3 +36,24 @@ Categories present (all three readers must agree on every case, #5989):
   regex left behind — every reader throws.
 - `comma-before-number.json` — a held comma followed by a plain char is
   flushed, not dropped: `[1, 2]` parses identically in all three readers.
+
+## Unterminated block comment boundary (#5990)
+
+Hand-authored for #5990: the block-comment skip in each reader must verify
+its closing delimiter instead of walking to the end of input. These files
+carry **no trailing newline** — the EOF boundary is the behavior under test.
+
+Unterminated forms (every reader must throw `SyntaxError`):
+
+- `unterminated-bare.json` — a bare `/*` opener with nothing after it.
+- `unterminated-slash.json` — `/*/`: one slash is not the closer.
+- `unterminated-star.json` — one char short of `*/`.
+- `unterminated-word.json` — a dangling comment body at EOF.
+
+Terminated controls (every reader must still parse the same value):
+
+- `minimal-closer.json` — `/**/`, the shortest legal comment.
+- `exact-eof-comment.json` — the closer ends exactly at EOF.
+- `star-run-closer.json` — a star run before the closer.
+- `opener-inside-string.json` — `/*` inside a string value followed by a
+  real comment; the string must survive as `/*`.
