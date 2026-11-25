@@ -85,7 +85,9 @@ test('linear scans agree with the pre-fix regexes on generated documents (#6420)
       const expectedCount = [...doc.matchAll(/<task(?=[\s>])[^>]*>/gi)].length;
       assert.equal(r.taskCount, expectedCount, `task count diverges on ${JSON.stringify(doc)}`);
       const m = doc.match(/<objective>\s*\n?\s*(.+)/);
-      assert.equal(r.objective, m ? m[1].trim() : null, `objective diverges on ${JSON.stringify(doc)}`);
+      // Public chain is `extractObjective(content) || fm.objective || null`
+      // (generated docs carry no frontmatter), so an empty trim collapses to null.
+      assert.equal(r.objective, m ? (m[1].trim() || null) : null, `objective diverges on ${JSON.stringify(doc)}`);
     }),
     { seed: SEED, numRuns: NUM_RUNS }
   );
