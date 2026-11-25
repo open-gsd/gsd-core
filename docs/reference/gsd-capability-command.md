@@ -167,7 +167,7 @@ gsd capability set <id> [--on | --enable | --off | --disable] [--gate <key>=<boo
 | `--off` / `--disable` | Unsurface the capability (deactivate its skills). Mutually exclusive with `--on`/`--enable`. |
 | `--gate <key>=<bool>` | Set one capability **gate** to `true` or `false`. Repeatable to set several gates in one call. `<bool>` must be the literal `true` or `false`; any other value is rejected. |
 | `--config-dir <path>` | Override the runtime config directory the surface state is read from and written to. |
-| `--runtime <r>` | When given, re-materialise the surface (rewrite skill files) for runtime `<r>` after the state change. |
+| `--runtime <r>` | When given, re-materialise the surface (rewrite skill files) for runtime `<r>` after the state change. On a global layout that can only stage from an installed gsd-core source it cannot verify, it re-stages nothing (see below). |
 | `--scope <s>` | The materialise scope (`global` or `project`); only meaningful together with `--runtime`. Defaults to `global`. |
 
 **Behaviour**
@@ -184,6 +184,8 @@ A **gate** is a dotted config key declared in the capability's `config` slice wh
 The command is **fail-closed on intent**: if you ask to enable a capability whose skills are not in the install profile, or whose surface/profile does not actually carry it, the operation reports an error rather than silently no-op'ing. Enabling a capability that owns no skills is an advisory warning (use gates to toggle its hooks instead). Surfacing a capability whose every hook is gated off is reported as a warning ("surfaced but every hook is gated off — did you mean `--off`?").
 
 In `--raw` mode the full `{ capabilities, warnings, errors }` envelope is emitted as JSON and the process exits non-zero when `errors` is non-empty; in human mode warnings and errors are written to stderr and a one-line summary of the target capability (`enabled`, `surfaced`, `installed`, active-hook count) is printed.
+
+**Unverified installed source (`--runtime`, global scope).** The installed gsd-core source under `<config-dir>/gsd-core/` is vouched for by `gsd-file-manifest.json`. When that manifest is missing or unparseable while the installed source directories are present, and no `.gsd-source` marker names another complete source to stage from, `set --runtime` saves the capability state, re-stages nothing and **exits 0**: `errors` is empty and `warnings` carries `materialize skipped: gsd-file-manifest.json is missing or unparseable, …`. The next gsd-core install re-stages the runtime artifacts. A `--raw` consumer that keys on the exit code alone cannot tell this from a completed re-stage; check `warnings`. When no usable source exists at all, materialization still fails with a `materialize failed: …` error and a non-zero exit.
 
 ---
 

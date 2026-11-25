@@ -823,7 +823,7 @@ Mutates one capability, re-resolves, and reports the result. Two axes:
 - `--gate <key>=<true|false>` (repeatable): toggles one of the capability's own config keys (a hook gate) within an enabled capability.
 - `--runtime` / `--scope`: materialise the surface change for that runtime's artifact layout.
 
-After writing, the command re-resolves and prints two message classes to stderr: errors (non-zero exit) — unknown capability id, a `--gate` key the capability does not own, a non-boolean gate value, or `--on` for a capability whose skills are not in the install profile; warnings (exit 0) — `--on`/`--off` on a skill-less capability, or a capability left surfaced while every hook is gated off ("present but dead"). Exit status is non-zero only when a requested change could not be applied.
+After writing, the command re-resolves and prints two message classes to stderr: errors (non-zero exit) — unknown capability id, a `--gate` key the capability does not own, a non-boolean gate value, or `--on` for a capability whose skills are not in the install profile; warnings (exit 0) — `--on`/`--off` on a skill-less capability, a capability left surfaced while every hook is gated off ("present but dead"), or `materialize skipped: …` when `--runtime` on a global layout could stage only from an installed gsd-core source it cannot verify (`gsd-file-manifest.json` missing or unparseable while the source directories are present, and no `.gsd-source` marker names another complete source): the capability state is saved, nothing is re-staged, and the next gsd-core install re-stages it. Exit status is non-zero only when a requested change could not be applied; with no usable source at all, `--runtime` still fails with `materialize failed: …`.
 
 **Examples:**
 
