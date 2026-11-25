@@ -1,18 +1,12 @@
 const { describe, test } = require('node:test');
 
-// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
-const __ORIG_GSD_HOME = process.env.GSD_HOME;
-require('node:test').afterEach(() => {
-  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
-  else process.env.GSD_HOME = __ORIG_GSD_HOME;
-});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
-const { isolatedEnv, homePair, withEnv } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, homePair, setEnvForTest } = require('./helpers/isolated-env.cjs');
 const { BUILD_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
@@ -69,7 +63,7 @@ function makeHookTree(t, homeDirName) {
 
 function withHomeAndGsdHome(t, home) {
   // #5017: the defaults store root follows HOME
-  withEnv(t, { ...homePair(home), GSD_HOME: home });
+  setEnvForTest(t, { ...homePair(home), GSD_HOME: home });
 }
 
 function makeNodeStub(t, label) {

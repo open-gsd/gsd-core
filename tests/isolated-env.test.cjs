@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withEnv, withHome } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, setEnvForTest, withHome } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -183,7 +183,7 @@ describe('withHome (#6639)', () => {
       const ctx = { after: (fn) => hooks.push(fn) };
       withHome(ctx, '/h/first');
       withHome(ctx, '/h/second');
-      withEnv(ctx, { GSD_6639_STACK_PROBE: 'on' });
+      setEnvForTest(ctx, { GSD_6639_STACK_PROBE: 'on' });
       assert.equal(process.env.HOME, '/h/second');
       assert.equal(process.env.GSD_6639_STACK_PROBE, 'on');
 
@@ -192,6 +192,51 @@ describe('withHome (#6639)', () => {
       assert.equal('GSD_6639_STACK_PROBE' in process.env, false, order);
       assert.equal(hooks.length, 1, 'one restore hook per context, however many calls');
     }
+  });
+
+  test('a context reused after its hooks ran gets a fresh snapshot and a fresh hook', (t) => {
+    const names = Object.keys(homePair('x'));
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+    const hooks = [];
+    const ctx = { after: (fn) => hooks.push(fn) };
+
+    withHome(ctx, '/h/one');
+    hooks.splice(0).forEach((fn) => fn());
+    assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before);
+
+    withHome(ctx, '/h/two');
+    assert.equal(process.env.HOME, '/h/two');
+    assert.equal(hooks.length, 1, 'the second use registers its own restore hook');
+    hooks.splice(0).forEach((fn) => fn());
+    assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before);
+  });
+
+  test('undefined unsets a variable for the test; any other non-string is a TypeError and changes nothing', (t) => {
+    const saved = process.env.GSD_6639_UNSET_PROBE;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_6639_UNSET_PROBE;
+      else process.env.GSD_6639_UNSET_PROBE = saved;
+    });
+    process.env.GSD_6639_UNSET_PROBE = 'set';
+    const hooks = [];
+    const ctx = { after: (fn) => hooks.push(fn) };
+
+    setEnvForTest(ctx, { GSD_6639_UNSET_PROBE: undefined });
+    assert.equal('GSD_6639_UNSET_PROBE' in process.env, false);
+    hooks.splice(0).forEach((fn) => fn());
+    assert.equal(process.env.GSD_6639_UNSET_PROBE, 'set');
+
+    for (const bad of [null, 1, true, {}]) {
+      assert.throws(() => setEnvForTest(ctx, { GSD_6639_UNSET_PROBE: bad }), TypeError);
+    }
+    assert.equal(process.env.GSD_6639_UNSET_PROBE, 'set');
+    assert.equal(hooks.length, 0, 'a rejected call registers no hook');
   });
 });
 

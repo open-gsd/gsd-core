@@ -274,20 +274,30 @@ function homePair(dir) {
   return { HOME: dir, USERPROFILE: dir };
 }
 
-// Per test context: the value each variable had before the FIRST withEnv call on that context. A
-// second call on the same context must not snapshot what the first call set, or the restore hooks
-// (run in whatever order the runner picks) would leave the first call's value behind.
+// Per test context: the value each variable had before the FIRST setEnvForTest call on that
+// context. A second call on the same context must not snapshot what the first call set, or the
+// restore hooks (run in whatever order the runner picks) would leave the first call's value behind.
 const ENV_BEFORE = new WeakMap();
 
 /**
  * Set `vars` on process.env for the life of the test `t`, then put each variable back, or delete
  * it if it was unset. Calls on one `t` stack: the restore is to the value from before the first.
- * The in-process counterpart of `isolatedEnv`, for a test that calls the product in-process.
+ * A value of `undefined` unsets the variable for the test; any other non-string is a TypeError
+ * (process.env would store the string "undefined", or "[object Object]").
+ *
+ * The test-context counterpart of `isolatedEnv`, for a test that calls the product in-process.
+ * Several test files keep their own callback-scoped `withEnv(vars, fn)`; this one is scoped to
+ * the test's lifetime instead, so it carries a different name.
  *
  * @param {{ after: (fn: () => void) => void }} t node:test context (anything with `after`).
- * @param {Record<string, string>} vars
+ * @param {Record<string, string | undefined>} vars
  */
-function withEnv(t, vars) {
+function setEnvForTest(t, vars) {
+  for (const [name, value] of Object.entries(vars)) {
+    if (value !== undefined && typeof value !== 'string') {
+      throw new TypeError(`setEnvForTest: ${name} must be a string or undefined, got ${typeof value}`);
+    }
+  }
   let before = ENV_BEFORE.get(t);
   if (!before) {
     before = new Map();
@@ -300,14 +310,15 @@ function withEnv(t, vars) {
       ENV_BEFORE.delete(t);
     });
   }
-  for (const name of Object.keys(vars)) {
+  for (const [name, value] of Object.entries(vars)) {
     if (!before.has(name)) before.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
   }
-  Object.assign(process.env, vars);
 }
 
 /**
- * Make `dir` this process's home for the life of the test `t` (see withEnv).
+ * Make `dir` this process's home for the life of the test `t` (see setEnvForTest).
  *
  * The runner's sandbox HOME/USERPROFILE (#4635) no longer sits above `os.tmpdir()`, and on
  * Windows the filesystem git-layout reader answers only for a repository inside the home
@@ -318,7 +329,7 @@ function withEnv(t, vars) {
  * @param {string} dir directory to use as the home.
  */
 function withHome(t, dir) {
-  withEnv(t, homePair(dir));
+  setEnvForTest(t, homePair(dir));
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withEnv, withHome };
+module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, setEnvForTest, withHome };
