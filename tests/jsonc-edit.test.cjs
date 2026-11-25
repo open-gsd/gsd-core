@@ -8,7 +8,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { setJsoncValue, removeJsoncValue, hasJsoncFeatures, isEditableJsonc } = require('../gsd-core/bin/lib/jsonc-edit.cjs');
+const { setJsoncValue, removeJsoncValue, hasJsoncFeatures, isEditableJsonc, parseJsonc } = require('../gsd-core/bin/lib/jsonc-edit.cjs');
 
 // Reference parser: strip comments/trailing commas the simple way (inputs here contain no comment-like strings
 // except where a test says so).
@@ -174,4 +174,22 @@ test('randomised edits keep the document equal to the same edit on the parsed ob
       assert.deepEqual(parse(removeJsoncValue(text, path)), ref, `remove ${path} in\n${text}`);
     }
   }
+});
+
+// ─── parseJsonc: trailing-comma cleanup must not rewrite strings (#5989) ─────
+
+test('parseJsonc keeps ",}" inside a string value (issue example, #5989)', () => {
+  assert.deepEqual(parseJsonc('{"a":"x,}y", /*c*/ "b":1}'), { a: 'x,}y', b: 1 });
+});
+
+test('parseJsonc keeps ",}" after an escaped quote inside a string (#5989)', () => {
+  assert.deepEqual(parseJsonc('{"a":"say \\"x,}\\" ok", /*c*/}'), { a: 'say "x,}" ok' });
+});
+
+test('parseJsonc still drops real trailing commas, nested (#5989)', () => {
+  assert.deepEqual(parseJsonc('{"m":{"u":{"t":1,},},}'), { m: { u: { t: 1 } } });
+});
+
+test('parseJsonc still throws like JSON.parse on malformed input (#5989)', () => {
+  assert.throws(() => parseJsonc('{"a":1,, /*c*/}'), SyntaxError);
 });

@@ -181,6 +181,7 @@ const TARGETS = Object.freeze([
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/research-only-early-exit.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/research-only-modifiers.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/reviews-prerequisite.md', kind: 'workflow' }),
+  Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/stall-detection-helpers.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/windows-troubleshooting.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-review-convergence.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plant-seed.md', kind: 'workflow' }),
