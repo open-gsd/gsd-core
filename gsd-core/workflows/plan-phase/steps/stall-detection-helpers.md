@@ -58,7 +58,7 @@ of the two ends the wait routes it.
 
 **A fresh receipt is waited out, not reported:** the agent writes it as its last tool
 action, before its final message, so when the watch finds one younger than
-`RECEIPT_SETTLE_SECONDS` (120; one poll interval when that is shorter) it sleeps out the
+`RECEIPT_SETTLE_SECONDS` (120), or than one poll interval when that is shorter, it sleeps out the
 rest of that window in the same call and then reports `marker_received` (an unreadable
 or future modification time counts at once). Every route below therefore sees a receipt
 only after its body had that long to arrive; a settled receipt with no body is a real
