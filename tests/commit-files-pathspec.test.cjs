@@ -29,6 +29,13 @@ const {
   ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration,
 } = require('./helpers/shipped-command-scan.cjs');
 
+// #5817 review (parity rule, CLAUDE.md Test conventions): the commit list-flag
+// set has ONE owner — the CLI surface registry (src/cli-surface.cts,
+// specFor('commit').listFlags) — and tests/commit-files-deletion.test.cjs
+// already derives it from there. This mirror derives the same set the same way
+// so a future #4253-shaped spec change cannot leave it behind again.
+const { specFor } = require('../gsd-core/bin/lib/cli-surface.cjs');
+
 describe('commit --files: pathspec honors declared scope (#2112)', () => {
   let tmpDir;
 
@@ -1418,12 +1425,15 @@ describe('workflow call sites declare --files (#2269)', () => {
   // LIST flags, each running from its flag to the NEXT LIST FLAG — a boolean
   // flag inside a list is skipped, not a terminator, and a repeated list flag
   // merges, so every occurrence contributes its run — and cmdCommit treats
-  // either non-empty list as explicit scope. Stops at the first control
+  // either non-empty list as explicit scope. (One known, pre-existing
+  // divergence is NOT modeled: main() splices global VALUE flags like --cwd
+  // out before routeCommit runs, so a consumed value token still reads as
+  // list content here; no scan-root prose carries that shape.) Stops at the first control
   // operator so that a later command's --files can never vouch for this one
   // even when the caller passes an unsegmented line, and drops redirection
   // tokens — they are consumed by the shell, so a list whose only successors
   // are redirections has no value at runtime.
-  const COMMIT_LIST_FLAGS = new Set(['--files', '--files-removed']);
+  const COMMIT_LIST_FLAGS = new Set(specFor('commit').listFlags.map((f) => `--${f}`));
   const hasScopedFiles = (line) => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
@@ -1988,10 +1998,9 @@ describe('workflow call sites declare --files (#2269)', () => {
       hasScopedFiles('gsd_run query commit plan --files-removed --files a.md'), true,
       'a non-empty second list scopes the call even when the first is empty',
     );
-    // The --files readings the corpus already pins, re-pinned here so the two
-    // spellings cannot drift apart again.
-    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files a.md'), true);
-    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files'), false);
+    // The --files readings the corpus already pins are deliberately NOT
+    // re-pinned here: same-spelling duplicates drift together and prove
+    // nothing — cross-spelling parity is carried by the row above.
     // End-to-end through the classifier the repo walk applies to every file:
     // a document whose only invocation is deletion-only scans clean.
     const result = scanDocument(
