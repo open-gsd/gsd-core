@@ -280,6 +280,8 @@ const RULES = [
       // existingTests() below, so gsd-core/workflows/ changes stopped re-running this
       // regression's coverage with nothing signaling it.
       'tests/slash-command-namespace.test.cjs',
+      // #6532: quick-batch-mode-gates is a text contract on two quick-batch step files; its mutation cases live here.
+      'tests/text-contracts.test.cjs',
     ],
   },
   {

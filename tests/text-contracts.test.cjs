@@ -656,6 +656,24 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     });
   }
 
+  // quick-batch-mode-gates (#6532): the wording around the variable is free, and an Agent() in prose is not the dispatch.
+  for (const [title, rel, edit] of [
+    ['a reworded $VALIDATE_MODE gate', 'gsd-core/workflows/quick-batch/steps/verification-wave.md',
+      (text) => text.replace('Skip this step entirely if NOT `$VALIDATE_MODE`.', 'Skip this step if NOT `$VALIDATE_MODE` is set.')],
+    ['a prose Agent() mention above the $RESEARCH_MODE gate', 'gsd-core/workflows/quick-batch/steps/research-phase.md',
+      (text) => text.replace('Skip this step entirely if NOT `$RESEARCH_MODE`.', 'Each item gets one `Agent()` call.\n\nSkip this step entirely if NOT `$RESEARCH_MODE`.')],
+  ]) {
+    test(`${title} still satisfies quick-batch-mode-gates`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the edit changed the file');
+      fs.writeFileSync(abs, after);
+      assert.deepEqual(runShipped(root), []);
+    });
+  }
+
   // The four autonomous-* contracts: each asserts on the command, the workflow or the smart-discuss reference.
   const SIZE_LIMIT = 40 * 1024;
   const dropLine = (line) => (text) => text.split('\n').filter((l) => l.trim() !== line).join('\n');
