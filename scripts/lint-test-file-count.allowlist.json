@@ -253,7 +253,6 @@
     "audit": {
       "files": [
         "audit-command-cutover.test.cjs",
-        "audit-fix-command.test.cjs",
         "audit-open-remainder-count.test.cjs",
         "audit-uat-acknowledged.test.cjs",
         "audit-uat-summary-segmentation.test.cjs",
