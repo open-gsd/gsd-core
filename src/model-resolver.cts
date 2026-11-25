@@ -559,9 +559,12 @@ function resolveTierInternal(cwd: string, agentType: string): string {
  */
 function resolveModelOverride(config: Record<string, unknown>, agentType: string): string | null {
   const modelOverrides = config['model_overrides'] as Record<string, unknown> | null | undefined;
-  const override = agentOverrideFor(modelOverrides, agentType, () => resolveActiveRuntime(config));
+  // Resolved at most once: only an object entry or a found override needs the runtime.
+  let runtime: string | undefined;
+  const activeRuntime = (): string => (runtime ??= resolveActiveRuntime(config));
+  const override = agentOverrideFor(modelOverrides, agentType, activeRuntime);
   if (!override) return null;
-  return mapClaudeOverrideForRuntime(override as string, resolveActiveRuntime(config), agentType);
+  return mapClaudeOverrideForRuntime(override as string, activeRuntime(), agentType);
 }
 
 function resolveModelInternal(cwd: string, agentType: string): string {
