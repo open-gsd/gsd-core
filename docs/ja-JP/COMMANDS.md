@@ -257,6 +257,7 @@ WebSearch から取得したパッケージは `[ASSUMED]`（`[VERIFIED]` では
 | `--wave N` | No | フェーズ内の波 `N` のみを実行 |
 | `--cross-ai` | No | 外部 AI CLI に実行を委任（`workflow.cross_ai_command` を使用） |
 | `--no-cross-ai` | No | 設定でクロス AI が有効な場合でもローカル実行を強制 |
+| `--force-mvp-gate "<reason>"` | No | フェーズのTDDレビュー違反に対する帰属付き許容記録を書き込み（理由必須）、レビューを再実行 |
 
 **前提条件:** フェーズに PLAN.md ファイルがあること
 **生成物:** 計画ごとの `{phase}-{N}-SUMMARY.md`、git コミット、フェーズが完全に完了すると `{phase}-VERIFICATION.md`
