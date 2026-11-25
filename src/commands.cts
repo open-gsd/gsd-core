@@ -349,6 +349,7 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
   const seeds: Array<{
     seed_id: string; slug: string; status: string; scope: string;
     trigger_when: string; planted: string; title: string; path: string;
+    outcome_kind: string; outcome_ref: string; outcome: string;
   }> = [];
   const summary: Record<string, number> = {};
 
@@ -358,6 +359,8 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
   // (`.toLowerCase()` on a non-string throws) or leak a raw object/array into the
   // JSON contract. Mirrors the existing `typeof fm.id === 'string'` guard below.
   const fmStr = (v: unknown): string => (typeof v === 'string' ? v : '');
+  // `outcome_ref` is a requirement id or a phase number; a bare number may arrive as a number.
+  const fmRef = (v: unknown): string => (typeof v === 'number' && Number.isFinite(v) ? String(v) : fmStr(v));
 
   let files: fs.Dirent[];
   try {
@@ -379,8 +382,11 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
     } catch {
       continue;
     }
-    const content = platformReadSync(safeFilePath);
-    if (content === null) continue;
+    const rawContent = platformReadSync(safeFilePath);
+    if (rawContent === null) continue;
+    // #4647: normalize at the read boundary, as `audit.scanSeeds` does. A CRLF-written seed otherwise parsed
+    // with no frontmatter here, so `list-seeds` showed a closed seed as `dormant` while `audit-open` skipped it.
+    const content = normalizeEol(rawContent);
 
     const fm = extractFrontmatter(content, safeFilePath) as Record<string, unknown>;
     const status = (fmStr(fm.status) || 'dormant').toLowerCase().trim() || 'dormant';
@@ -415,6 +421,10 @@ function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolea
       planted: sanitizeForDisplay(fmStr(fm.planted)),
       title,
       path: toPosixPath(path.relative(cwd, safeFilePath)),
+      // #4647: what a closed seed became, as fields a tool can join on. Empty for an open seed.
+      outcome_kind: sanitizeForDisplay(fmStr(fm.outcome_kind)),
+      outcome_ref: sanitizeForDisplay(fmRef(fm.outcome_ref)),
+      outcome: sanitizeForDisplay(fmStr(fm.outcome)),
     });
   }
 

@@ -124,13 +124,15 @@ describe('list-seeds returns the outcome of a closed seed (#4647)', () => {
     assert.strictEqual(s.title, 'SEED-005: odd');
   });
 
-  test('outcome text is sanitized for display', () => {
+  test('a control byte in the frontmatter makes the seed unparseable, so it reads as open and dormant', () => {
+    // The degraded verdict, pinned: the frontmatter parser rejects the whole block, so a closed seed
+    // carrying a control byte reappears as `dormant`. This is why close mode strips control characters.
     writeSeed(tmpDir, 'SEED-006-ansi.md',
-      ['id: SEED-006', 'status: closed', 'outcome_kind: dropped', 'outcome: dropped: \u001b[31mred\u001b[0m\u0007 text'], 'SEED-006: ansi');
+      ['id: SEED-006', 'status: closed', 'outcome_kind: dropped', 'outcome: dropped: \u001b[31mred\u0007 text'], 'SEED-006: ansi');
     const s = listSeeds(tmpDir).seeds[0];
-    const hasControl = [...s.outcome].some((ch) => { const c = ch.charCodeAt(0); return c < 32 || c === 127; });
-    assert.ok(!hasControl, 'no control bytes survive');
-    assert.ok(s.outcome.includes('red'), 'the readable text is kept');
+    assert.strictEqual(s.status, 'dormant');
+    assert.strictEqual(s.outcome, '');
+    assert.strictEqual(auditSeeds(tmpDir).count, 1);
   });
 
   test('a long unicode outcome is kept whole', () => {
@@ -211,6 +213,19 @@ describe('audit-open skips a seed outside the open set (#4647)', () => {
   });
 });
 
+describe('audit-open keeps its JSON contract on a bare title line (#4647)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('a bare title line is read as a missing title, never a raw object', () => {
+    writeSeed(tmpDir, 'SEED-001-a.md', ['id: SEED-001', 'status: dormant', 'title:'], 'SEED-001: heading wins');
+    const item = auditSeeds(tmpDir).items[0];
+    assert.strictEqual(typeof item.title, 'string');
+    assert.strictEqual(item.title, 'SEED-001: heading wins');
+  });
+});
+
 /** Statuses probed to derive the open set from audit-open behavior. `undefined` means no status line. */
 const PROBED_STATUSES = ['dormant', 'active', 'triggered', 'closed', 'promoted', 'implemented', 'resolved', 'dropped', undefined];
 
@@ -267,7 +282,9 @@ describe('shipped prompts and docs for closing a seed (#4647)', () => {
     const closeStep = section(t, /<step name="close-seed">/, /<\/step>/);
     assert.ok(closeStep.includes('--files'), 'the close commit must be scoped with --files');
     for (const kind of ['promoted', 'built', 'dropped']) {
-      assert.ok(closeStep.includes(`outcome_kind: ${kind}`), `close step must write outcome_kind: ${kind}`);
+      const row = closeStep.split('\n').find(l => l.startsWith(`| \`--${kind} `));
+      assert.ok(row, `close step must have an outcome table row for --${kind}`);
+      assert.ok(row.includes(`| \`${kind}\` |`), `the --${kind} row must write outcome_kind ${kind}`);
     }
   });
 
