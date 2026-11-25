@@ -141,6 +141,46 @@ describe('stripJsonComments (#1461)', () => {
   });
 });
 
+describe('stripJsonComments: trailing-comma cleanup must not rewrite strings (#5989)', () => {
+  // The cleanup regex used to run after comment stripping, where a comma
+  // inside a string is indistinguishable from a structural trailing comma.
+
+  test('keeps ",}" inside a string value (issue example)', () => {
+    const result = JSON.parse(stripJsonComments('{"a":"x,}y", /*c*/ "b":1}'));
+    assert.strictEqual(result.a, 'x,}y');
+    assert.strictEqual(result.b, 1);
+  });
+
+  test('keeps ",]" inside a string value', () => {
+    const result = JSON.parse(stripJsonComments('{"a":"p,]q" /*c*/}'));
+    assert.strictEqual(result.a, 'p,]q');
+  });
+
+  test('keeps ",}" after an escaped quote inside a string', () => {
+    const result = JSON.parse(stripJsonComments('{"a":"say \\"x,}\\" ok", /*c*/}'));
+    assert.strictEqual(result.a, 'say "x,}" ok');
+  });
+
+  test('still drops a real trailing comma after a value and inside an array', () => {
+    const result = JSON.parse(stripJsonComments('{"a":1, /*t*/ "b":[2,],}'));
+    assert.deepStrictEqual(result, { a: 1, b: [2] });
+  });
+
+  test('still drops a trailing comma before a line comment', () => {
+    const result = JSON.parse(stripJsonComments('{"a":1, // t\n}'));
+    assert.deepStrictEqual(result, { a: 1 });
+  });
+
+  test('a comma-brace pair inside a line comment changes nothing', () => {
+    const result = JSON.parse(stripJsonComments('{"a":1 // ,}\n}'));
+    assert.deepStrictEqual(result, { a: 1 });
+  });
+
+  test('a double comma still fails to parse (failure semantics unchanged)', () => {
+    assert.throws(() => JSON.parse(stripJsonComments('{"a":1,, /*c*/}')), SyntaxError);
+  });
+});
+
 describe('readSettings null return on malformed files (#1461)', () => {
   test('readSettings strips JSONC comments when reading a real file', (t) => {
     const tmpFile = path.join(os.tmpdir(), `gsd-settings-test-jsonc-${process.pid}.json`);
