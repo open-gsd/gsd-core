@@ -191,6 +191,27 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
     assert.deepEqual(open.resume, { has_plan: false, has_summary: false, state_row: false });
   });
 
+  test('a legacy directory\'s state_row looks up the STATE.md row keyed by its date prefix', () => {
+    makeTask(tmpDir, '20250101-fix-login', { 'PLAN.md': '# plan\n' });
+    makeTask(tmpDir, '20250102-other');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '# STATE',
+      '',
+      '## Quick Tasks Completed',
+      '',
+      '| # | Description | Date | Commit | Status | Directory |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| 20250101 | Fix login | 2025-01-01 | abc1234 | complete | [20250101-fix-login](./quick/20250101-fix-login/) |',
+      '',
+    ].join('\n'));
+    const done = okJson(initQuick(tmpDir, ['--resume', 'fix-login']));
+    const open = okJson(initQuick(tmpDir, ['--resume', 'other']));
+    assert.equal(done.legacy, true);
+    assert.equal(done.quick_id, null);
+    assert.deepEqual(done.resume, { has_plan: true, has_summary: false, state_row: true });
+    assert.deepEqual(open.resume, { has_plan: false, has_summary: false, state_row: false });
+  });
+
   test('mode flags still decide the section manifest, as on a first run', () => {
     makeTask(tmpDir, '260101-abc-fix-login');
     for (const flags of [[], ['--validate'], ['--full'], ['--discuss', '--research']]) {
@@ -279,10 +300,19 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
       });
     }
 
-    test('a 60-character slug is accepted', () => {
-      const slug = 'a'.repeat(60);
-      makeTask(tmpDir, `260101-abc-${slug}`);
-      assert.equal(okJson(initQuick(tmpDir, ['--resume', slug])).slug, slug);
+    // SLUG_RE is 1-60 characters: 0 (the empty rows below) and 61 are refused;
+    // 1, 2, 59 and 60 are accepted.
+    for (const length of [1, 2, 59, 60]) {
+      test(`a ${length}-character slug is accepted`, () => {
+        const slug = 'a'.repeat(length);
+        makeTask(tmpDir, `260101-abc-${slug}`);
+        assert.equal(okJson(initQuick(tmpDir, ['--resume', slug])).slug, slug);
+      });
+    }
+
+    test('the lookup itself refuses a 0-character slug', () => {
+      makeTask(tmpDir, '260101-abc-fix-login');
+      assert.deepEqual(resolveQuickResume(tmpDir, ''), { ok: false, reason: 'invalid_slug' });
     });
 
     const usage = [
