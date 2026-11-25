@@ -29,6 +29,10 @@ function timed(fn) {
 test('100k unclosed <task openings parse within budget with zero matches (#6420)', () => {
   const doc = '<task '.repeat(100000);
   const { ms, value } = timed(() => parsePlanDocument(doc));
+  // Performance budget required verbatim by #6420's acceptance criterion; the fixed
+  // bound is ~50x the expected linear time so CI variance cannot flake it, and the
+  // result assertion below keeps an early return from passing.
+  // eslint-disable-next-line local/no-elapsed-assertion -- required perf-budget boundary for #6420, not a flaky duration check
   assert.ok(ms < BUDGET_MS, `quadratic scan: ${ms.toFixed(0)}ms for 100k unclosed openings`);
   assert.equal(value.taskCount, 0);
 });
@@ -36,6 +40,7 @@ test('100k unclosed <task openings parse within budget with zero matches (#6420)
 test('100k newlines after <objective> parse within budget with no objective (#6420)', () => {
   const doc = '<objective>' + '\n'.repeat(100000);
   const { ms, value } = timed(() => parsePlanDocument(doc));
+  // eslint-disable-next-line local/no-elapsed-assertion -- required perf-budget boundary for #6420, not a flaky duration check
   assert.ok(ms < BUDGET_MS, `quadratic scan: ${ms.toFixed(0)}ms for 100k newlines`);
   assert.equal(value.objective, null);
 });
