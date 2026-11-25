@@ -443,10 +443,7 @@ issue:
 3. Compare: does the task deliver what D-XX actually says, or a reduced version?
 4. If reduced: BLOCKER — the planner must either deliver fully or propose phase split
 
-**Red flags (from real incident):**
-- CONTEXT.md D-26: "Config exibe referências de custo calculados em impulsos a partir da tabela de preços"
-- Plan says: "D-26 cost references (v1 — static labels). NOT wired to billingPrecosOriginaisModel — dynamic pricing display is a future enhancement"
-- This is a BLOCKER: the planner invented "v1/v2" versioning that doesn't exist in the user's decision
+**Real incident:** see `plan-checker-examples.md` § Scope Reduction (Dimension 7b).
 
 **Severity:** ALWAYS BLOCKER. Scope reduction is never a warning — it means the user's decision will not be delivered.
 
