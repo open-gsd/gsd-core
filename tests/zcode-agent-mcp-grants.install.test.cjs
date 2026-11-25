@@ -28,6 +28,7 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { installerEnv } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -96,7 +97,7 @@ function spawnInstall(runtime, scope, repoRoot = REPO_ROOT) {
   }
   const seamResult = runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   return { result: seamResult, root };

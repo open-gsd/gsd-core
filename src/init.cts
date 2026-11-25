@@ -19,6 +19,8 @@ import { STATE_MD_ENTRY_MAX_CHARS } from './state-md-schema.cjs';
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 config-value-resolver.cjs is an export= CommonJS module
+import configValueResolver = require('./config-value-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
 import capabilityLedger = require('./capability-ledger.cjs');
 import { findProjectRoot } from './project-root.cjs';
@@ -678,19 +680,9 @@ function detectHasPriorPhases(cwd: string, phaseInfo: Record<string, unknown> | 
  * default-ON key read here silently inverts its unset value (#4977).
  */
 function readConfigJsonBoolean(cwd: string, keyPath: readonly string[]): boolean {
-  try {
-    // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to false below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
-    if (raw === null) return false;
-    let cursor: unknown = JSON.parse(raw);
-    for (const segment of keyPath) {
-      if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return false;
-      cursor = (cursor as Record<string, unknown>)[segment];
-    }
-    return cursor === true;
-  } catch {
-    return false;
-  }
+  // #6030: the value comes from the resolver, which reports a declared default as found, so a
+  // default-ON key now reads its default here instead of inverting it (#4977).
+  return readConfigJsonValue(cwd, keyPath) === true;
 }
 
 /** Reads `filePath`; returns its content, or `null` when missing/unreadable/empty. */
@@ -716,8 +708,18 @@ function readNonEmptyFileOrNull(filePath: string): string | null {
  */
 function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
   try {
+    // #6030 (ADR-1411 Decision 5): the resolver owns the layers, so root inheritance, the global
+    // defaults and the declared defaults apply here as they do everywhere else. A quiet read: an
+    // unusable layer is "not set", as before.
+    const resolved = configValueResolver.resolveConfigValue(keyPath.join('.'), {
+      cwd, family: 'A', quiet: true, honorGlobal: configLoader.honorsGlobalDefaults,
+    });
+    if (resolved.found) return resolved.value;
+    // A key the resolver does not declare (a legacy flat spelling or a container such as
+    // review.reviewer_instances) keeps the single-file read of the workstream-aware directory.
+    if (resolved.reason !== configLoader.CONFIG_REASON.NOT_CONFIGURED) return undefined;
     // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    const raw = configLoader.readConfigFileBounded(planningWorkspace.projectConfigPath(cwd));
     if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
@@ -3797,7 +3799,7 @@ function cmdInitDocsUpdate(cwd: string, raw: boolean, options: Record<string, un
  * `state:chunked-mode`/`state:plan-strategy-converge`). This DELIBERATELY
  * does not replace `update.md`'s own `parse_update_channel` case-statement
  * (`TAG="next"`/`TAG="latest"`) — issue #815's regression test
- * (`tests/update-workflow.test.cjs`) asserts that literal
+ * (the `update-workflow` text contract) asserts that literal
  * case-statement text stays in `update.md` verbatim (the npm dist-tag
  * selection has to run in the workflow's own shell before any `gsd_run`
  * round-trip), so `next_channel` exists purely to gate the `channel-banner`

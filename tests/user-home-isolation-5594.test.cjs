@@ -17,6 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { runNode, formatSeamResult } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   createTempDir, cleanup, writeAmbientCapabilityGate, installSpawnEnv, TEST_HOME_SANDBOX_MARKER,
@@ -50,7 +51,7 @@ function makeHome({ populated }) {
 function runTargetUnderHome({ file, namePattern }, home) {
   // installSpawnEnv scrubs the config-location keys; the marker names the redirected
   // home for src/real-home-guard.cts on hosts with no readable passwd entry.
-  const env = installSpawnEnv({ HOME: home, USERPROFILE: home, [TEST_HOME_SANDBOX_MARKER]: home });
+  const env = installSpawnEnv(isolatedEnv({ home, override: { [TEST_HOME_SANDBOX_MARKER]: home } }));
   delete env.NODE_TEST_CONTEXT; // run as a root test process, not a subtest of this one
   const args = ['--test', '--test-reporter=tap'];
   if (namePattern) args.push(`--test-name-pattern=${namePattern}`);

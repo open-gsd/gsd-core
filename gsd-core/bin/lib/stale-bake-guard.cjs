@@ -26,6 +26,9 @@ const { hostBehaviorsFor } = require('./runtime-name-policy.cjs');
 const { resolveConfigHomeFromDescriptor } = require('./runtime-homes.cjs');
 const { resolveActiveRuntime } = require('./runtime-slash.cjs');
 const { readConfigFileBounded } = require('./config-file-read.cjs');
+// #6032: the owner names the layer files; this guard only stats and reads them.
+const { rootConfigPath } = require('./planning-workspace.cjs');
+const { globalDefaultsPath } = require('./config-loader.cjs');
 
 /**
  * Runtimes whose agent config is static frontmatter/TOML baked at install time,
@@ -110,27 +113,32 @@ function resolveAgentDir(runtime, { env = process.env, homedir = os.homedir } = 
  * skews the newest-config calculation — see warnIfStaleBake orchestrator).
  */
 function findNewestConfigMtime(cwd, { fsStatSync = fs.statSync, homedir = os.homedir } = {}) {
-  const candidates = [];
+  let newest = null;
   let probe = path.resolve(cwd || '.');
   for (let i = 0; i < 8; i += 1) {
-    candidates.push(path.join(probe, '.planning', 'config.json'));
-    const parent = path.dirname(probe);
-    if (parent === probe) break;
-    probe = parent;
-  }
-  candidates.push(path.join(homedir(), '.gsd', 'defaults.json'));
-
-  let newest = null;
-  for (const p of candidates) {
+    const projectFile = rootConfigPath(probe);
     try {
-      const st = fsStatSync(p);
+      const st = fsStatSync(projectFile);
       if (st && typeof st.mtimeMs === 'number' && Number.isFinite(st.mtimeMs)
           && (!newest || st.mtimeMs > newest.mtimeMs)) {
-        newest = { mtimeMs: st.mtimeMs, path: p };
+        newest = { mtimeMs: st.mtimeMs, path: projectFile };
       }
     } catch {
       // not present / unreadable — skip
     }
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  const globalFile = globalDefaultsPath(homedir());
+  try {
+    const st = fsStatSync(globalFile);
+    if (st && typeof st.mtimeMs === 'number' && Number.isFinite(st.mtimeMs)
+        && (!newest || st.mtimeMs > newest.mtimeMs)) {
+      newest = { mtimeMs: st.mtimeMs, path: globalFile };
+    }
+  } catch {
+    // not present / unreadable — skip
   }
   return newest;
 }
@@ -224,7 +232,7 @@ function warnIfStaleBake(cwd, options = {}) {
 function _readRuntimeConfig(cwd, { fsStatSync = fs.statSync } = {}) {
   let probe = path.resolve(cwd || '.');
   for (let i = 0; i < 8; i += 1) {
-    const candidate = path.join(probe, '.planning', 'config.json');
+    const candidate = rootConfigPath(probe);
     try {
       fsStatSync(candidate);
       // Bounded read (#5759): a FIFO/device/oversized config throws and is walked past like a

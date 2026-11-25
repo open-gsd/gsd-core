@@ -213,7 +213,7 @@ resolutions supplied, every applicable edge is `unresolved`:
 The `adjacency` row is the one that catches the canonical defect: `[[1,2],[2,3]]` intervals
 that only *touch* — does the spec say they merge? Resolving it `resolved`/`explicit` writes
 that assertion, and the verifier can then enforce it. This worked-example block is kept
-byte-for-byte (parsed-JSON) identical to its fixture by `edge-probe-docs-fixtures.test.cjs`,
+byte-for-byte (parsed-JSON) identical to its fixture by the `edge-probe-docs-fixtures` text contract,
 so the doc and the reference implementation cannot silently drift.
 
 ## Worked example (round-half-even)

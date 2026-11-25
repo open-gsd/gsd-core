@@ -6921,7 +6921,7 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
   // signature that separates them, so these cases document the fail-open and
   // guard against a future change that makes a malformed payload BLOCK; they do
   // not detect a revert. The gate that fails on a revert is the source-level
-  // invariant in tests/kimi-guard-typed-payload-reads.test.cjs. Asserting exit 0
+  // invariant in the kimi-guard-typed-payload-reads text contract. Asserting exit 0
   // here and calling it regression coverage would repeat, one level up, exactly
   // the false-green the review flagged in 5c.
   describe('#2595: a non-string file_path with no path key fails open explicitly', () => {

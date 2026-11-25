@@ -187,6 +187,7 @@ const XDG_HOME = path.join(os.tmpdir(), 'gsd-xdg-home-test');
 const INSTALL_SCRIPT = path.join(ROOT, 'bin', 'install.js');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   getGlobalConfigDir,
@@ -312,7 +313,7 @@ describe('Kimi runtime homes', () => {
         [INSTALL_SCRIPT, '--kimi', '--global', '--no-sdk'],
         {
           cwd: tmpProject,
-          env: installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome }),
+          env: installerEnv(isolatedEnv({ home: tmpHome })),
           timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
@@ -367,7 +368,7 @@ describe('Kimi local install guard', () => {
         [INSTALL_SCRIPT, '--kimi', '--local', '--no-sdk'],
         {
           cwd: tmpProject,
-          env: installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome }),
+          env: installerEnv(isolatedEnv({ home: tmpHome })),
           timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
@@ -400,7 +401,7 @@ describe('Kimi local install guard', () => {
         [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'],
         {
           cwd: tmpProject,
-          env: installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome }),
+          env: installerEnv(isolatedEnv({ home: tmpHome })),
           timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
@@ -475,7 +476,7 @@ describe('Kimi local install guard', () => {
     const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-project-'));
     const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-config-'));
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-home-'));
-    const env = installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome });
+    const env = installerEnv(isolatedEnv({ home: tmpHome }));
 
     try {
       const installArgs = [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'];
@@ -529,7 +530,7 @@ describe('Kimi local install guard', () => {
     const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-project-'));
     const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-config-'));
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-home-'));
-    const env = installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome });
+    const env = installerEnv(isolatedEnv({ home: tmpHome }));
 
     try {
       const installArgs = [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'];
