@@ -1166,5 +1166,6 @@ export = {
   hasQuickTaskRow,
   updateBatchItems,
   QUICK_BATCH_MODES,
+  validateBatchModes,
   resolveBatchModes,
 };

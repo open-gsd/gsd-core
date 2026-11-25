@@ -6,18 +6,20 @@
  * uses them (items 1-6 and their acceptance criteria; item 7, the completion
  * condition, waits for #6531 and is not covered here).
  *
- * The verbs run in-process through `runGsdTools`. The shipped workflow bash
- * blocks, run by a real bash, are in tests/gsd-quick-batch-modes.process.test.cjs.
+ * The verbs run in-process through `runGsdTools`, and the mode rules are
+ * checked directly as properties. The shipped workflow bash blocks, run by a
+ * real bash, are in tests/gsd-quick-batch-modes.process.test.cjs.
  *
  * Named `gsd-quick-batch-*`: the `quick-batch*` production-module buckets of
  * `scripts/lint-test-file-count.cjs` are at their 2-file cap.
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempProject, cleanup, readFileNormalized, runGsdTools } = require('./helpers.cjs');
 const {
   writeTasks,
@@ -199,6 +201,50 @@ describe('#6532 item 2: a loaded batch with an invalid options.modes fails close
       assert.deepEqual(fs.readFileSync(manifestPath(dir, batchId)), before, 'core never rewrites or drops the field');
     });
   }
+});
+
+// ─── The mode rules as properties ───────────────────────────────────────────
+
+const VALID_MODE_SETS = [[], ['research'], ['validate'], ['research', 'validate']];
+const isValidModeSet = (a) => VALID_MODE_SETS.some((set) => JSON.stringify(set) === JSON.stringify(a));
+const modeArrays = fc.array(fc.constantFrom('research', 'validate', 'bogus'), { maxLength: 5 });
+
+describe('#6532: the mode rules hold for arbitrary mode arrays', () => {
+  test('validateBatchModes accepts exactly the strictly increasing subsequences of [research, validate]', () => {
+    fc.assert(fc.property(modeArrays, (a) => {
+      const r = quickBatch.validateBatchModes(a);
+      assert.equal(r.ok, isValidModeSet(a), JSON.stringify(a));
+      if (r.ok) assert.deepEqual(r.value, a);
+    }));
+  });
+
+  describe('resolveBatchModes accepts a flag set exactly when it is empty or equal to the stored set', () => {
+    let dir;
+    const batches = [];
+
+    before(() => {
+      dir = createTempProject('gsd-6532-property-');
+      for (const stored of VALID_MODE_SETS) batches.push({ stored, batchId: createOk(dir, JSON.stringify({ modes: stored })) });
+      batches.push({ stored: null, batchId: createOk(dir, '{"note":"no modes"}') });
+    });
+
+    after(() => cleanup(dir));
+
+    test('for every stored set, and for a batch without stored modes', () => {
+      fc.assert(fc.property(fc.integer({ min: 0, max: VALID_MODE_SETS.length }), modeArrays, (i, flags) => {
+        const { stored, batchId } = batches[i];
+        const r = quickBatch.resolveBatchModes(dir, batchId, flags);
+        if (stored === null) {
+          assert.deepEqual(r, { ok: true, value: { modes: flags, stored: false } });
+          return;
+        }
+        const accept = flags.length === 0 || JSON.stringify(flags) === JSON.stringify(stored);
+        assert.equal(r.ok, accept, `stored ${JSON.stringify(stored)}, flags ${JSON.stringify(flags)}`);
+        if (accept) assert.deepEqual(r.value, { modes: stored, stored: true });
+        else assert.equal(r.field, 'options.modes');
+      }));
+    });
+  });
 });
 
 // ─── Items 3-5: init.quick-batch --resume uses the stored modes ──────────────
