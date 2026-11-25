@@ -24024,12 +24024,21 @@ describe('#6174 lines the state commands own are not moved, and nothing moved is
     });
   }
 
-  test('milestone-switch keeps a custom key\'s full-line comment and a mapping nested four levels deep', () => {
-    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', '# who owns this project', 'team_owner: ops', 'deep:', '  a:', '    b:', '      c: 1', '      d:', '        - x'];
+  test('milestone-switch keeps a custom key\'s full-line and inline comments and a mapping nested four levels deep', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', '# who owns this project', 'team_owner: ops  # on-call rota', 'deep:', '  a:', '    b:', '      c: 1', '      d:', '        - x'];
     const out = transitionCore(state({ fm }), SWITCH, deps).content;
-    assert.match(out, /^# who owns this project\nteam_owner: ops$/m);
+    assert.match(out, /^# who owns this project\nteam_owner: ops {2}# on-call rota$/m);
+    assert.match(out, /^milestone: v2\.0$/m, 'the reset keys are still written');
     const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     assert.deepStrictEqual(extractFrontmatter(out).deep, { a: { b: { c: '1', d: ['x'] } } });
+  });
+
+  test('a frontmatter block the splice refuses (a duplicate key) is still rebuilt, keeping the custom key and its full-line comment', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', 'milestone: v1.0', '# who owns this project', 'team_owner: ops'];
+    const out = transitionCore(state({ fm }), SWITCH, deps).content;
+    assert.match(out, /^# who owns this project\nteam_owner: ops$/m);
+    assert.match(out, /^milestone: v2\.0$/m);
+    assert.strictEqual((out.match(/^milestone:/gm) || []).length, 1);
   });
 });
 

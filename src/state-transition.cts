@@ -36,7 +36,7 @@ import stateMdSchemaMod = require('./state-md-schema.cjs');
 const { STATE_FIELD_SCHEMA } = stateMdSchemaMod;
 type StateFieldSchema = stateMdSchemaMod.StateFieldSchema;
 
-const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, FRONTMATTER_UNPARSEABLE, propagateCommentChannel } = frontmatter;
+const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, FRONTMATTER_UNPARSEABLE, propagateCommentChannel, spliceFrontmatter, frontmatterBlock, isFrontmatterWriteRefusal } = frontmatter;
 
 export function formatProgressMachineSegment(percent: number): string {
   // ADR-3180 Decision 7: rounding and the 100 ceiling belong to the
@@ -2950,12 +2950,21 @@ function milestoneSwitchCore(
   for (const [key, value] of Object.entries(existingFm)) {
     if (!(key in fm) && getFieldClassification(key) === null) fm[key] = value;
   }
-  // `fm` is a fresh object, so the full-line comments of the keys it keeps
-  // (a comment above `team_owner`) must be carried over explicitly.
-  propagateCommentChannel(existingFm as unknown as Frontmatter, fm as unknown as Frontmatter);
-
-  const yamlStr = reconstructFrontmatter(fm as unknown as Frontmatter);
-  const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
+  // Splice, not rebuild: a key the switch carries keeps its original lines
+  // byte for byte, so its full-line and inline comments survive (#6174), and
+  // only the reset keys are regenerated. When the splice refuses (a block it
+  // cannot match key for key), rebuild as before, carrying the full-line
+  // comments of the kept keys over to the fresh object.
+  let fmBlock: string;
+  try {
+    const spliced = spliceFrontmatter(content, fm as unknown as Frontmatter);
+    fmBlock = frontmatterBlock(spliced)?.block ?? `---\n${reconstructFrontmatter(fm as unknown as Frontmatter)}\n---`;
+  } catch (err) {
+    if (!isFrontmatterWriteRefusal(err)) throw err;
+    propagateCommentChannel(existingFm as unknown as Frontmatter, fm as unknown as Frontmatter);
+    fmBlock = `---\n${reconstructFrontmatter(fm as unknown as Frontmatter)}\n---`;
+  }
+  const assembled = `${fmBlock}\n\n${newBody.replace(/^\n+/, '')}`;
   return movedLines.length > 0
     ? { content: assembled, updated, data: { moved_current_position_lines: movedLines } }
     : { content: assembled, updated };
