@@ -342,8 +342,8 @@ function readGsdRuntimeProfileResolver(targetDir: string | null = null): Runtime
  *      (#2794 — tier-based model_profile_overrides.<runtime>.<tier>)
  *   3. null (omit — J7: the frontmatter key must not appear, not `null`/`""`)
  *
- * #4669: a runtime-keyed entry is selected for `targetRuntime` (the runtime being INSTALLED, else
- * `runtimeResolver.runtime`) via model-resolver's `selectAgentModelOverride`; no usable key falls to 2.
+ * #4669: an object entry selects by `targetRuntime` (the runtime being INSTALLED); none given selects
+ * nothing; no usable key falls to step 2.
  */
 function resolveAgentModelOverride(
   agentName: string,
@@ -356,7 +356,7 @@ function resolveAgentModelOverride(
   const entry = (modelOverrides && Object.hasOwn(modelOverrides, agentName))
     ? modelOverrides[agentName]
     : undefined;
-  const explicit = gsdSelectAgentModelOverride(entry, targetRuntime || runtimeResolver?.runtime || null);
+  const explicit = gsdSelectAgentModelOverride(entry, targetRuntime || null);
   if (explicit) return explicit as string;
   if (runtimeResolver) {
     const entry = runtimeResolver.resolve(agentName);
