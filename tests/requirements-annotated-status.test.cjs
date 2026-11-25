@@ -151,7 +151,21 @@ describe('requirements mark-complete reads the Status word (#6238)', () => {
     const out = JSON.parse(r.output);
     assert.deepEqual(out.marked_complete, []);
     assert.deepEqual(out.not_found, ['CELL-99']);
+    assert.equal(Object.hasOwn(out, 'status_refused'), false);
     assert.equal(rowOf(fs.readFileSync(reqPath(), 'utf-8'), 'CELL-01'), 'Pending');
+  });
+
+  test('mark-complete reports a refused Status separately from an unknown ID (#6651)', () => {
+    const before = requirementsText([['Blocked']]);
+    fs.writeFileSync(reqPath(), before);
+    const r = runGsdTools(['requirements', 'mark-complete', 'CELL-01', 'CELL-99'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepEqual(out.not_found, ['CELL-99']);
+    assert.deepEqual(out.status_refused, [{ requirement: 'CELL-01', status: 'Blocked' }]);
+    assert.deepEqual(out.table_unmatched, []);
+    assert.equal(out.updated, false);
+    assert.equal(fs.readFileSync(reqPath(), 'utf-8'), before);
   });
 });
 
