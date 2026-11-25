@@ -19,6 +19,7 @@ const yaml = require('js-yaml');
 const { cleanup } = require('./helpers.cjs');
 const textContracts = require('../scripts/static-checks/text-contracts.cjs');
 const SHIPPED = require('./helpers/text-contracts-batch8-ids.cjs');
+const { SKIP_TOKENS: SHIP_NOTE_SKIP_TOKENS } = require('../scripts/static-checks/text-contracts/ship-note.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -866,8 +867,13 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         ['package.json no longer valid JSON (#1852)', 'package.json', (text) => `${text}}`, 'package-manifest', /package\.json is not valid JSON/],
         // ---- ship-note
         ['the ship-note push gone from track_shipping (#2138)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', erase(/git push origin \$\{CURRENT_BRANCH\}/g)), 'ship-note', /must push the ship-note commit onto the PR branch/],
-        ['a CI skip token back on the ship-note commit (#6173)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', (step) => `${step}\ngit commit -m "docs: ship-note [skip ci]"\n`), 'ship-note', /must carry no CI skip token/],
+        // One row per alternative of the contract's token pattern, in both cases; the tokens are assembled so this file
+        // carries no literal one.
+        ...[...SHIP_NOTE_SKIP_TOKENS.map((t) => `[${t}]`), `skip-checks:${'true'}`, `skip-checks: ${'true'}`]
+          .flatMap((token) => [token, token.toUpperCase()])
+          .map((token) => [`the CI skip token ${token} back on the ship-note commit (#6173)`, 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', (step) => `${step}\ngit commit -m "docs: ship-note ${token}"\n`), 'ship-note', /must carry no CI skip token/]),
         ['the merge-state polling back in track_shipping (#6173)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', (step) => `${step}\ngh pr view --json mergeStateStatus\n`), 'ship-note', /must not poll the PR merge state or push an empty recovery commit/],
+        ['the empty recovery commit back in track_shipping (#6173)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', (step) => `${step}\ngit commit --allow-empty -m "ci: retrigger"\n`), 'ship-note', /must not poll the PR merge state or push an empty recovery commit/],
         ['the phase + PR-number ship-note gone from track_shipping (#2138)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', erase(/ship phase \$\{PHASE_NUMBER\}[^\n]{0,500}PR #\$\{PR_NUMBER\}/g)), 'ship-note', /must still commit the phase \+ PR-number ship-note into STATE/],
         ['the activity-line update gone from track_shipping (#5165)', 'gsd-core/workflows/ship.md',
           within('<step name="track_shipping">', '</step>', erase(/state\.update \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} "Last Activity" "\$\(date \+%Y-%m-%d\) -- Phase \$\{PHASE_NUMBER\} shipped as PR #\$\{PR_NUMBER\}"/g)), 'ship-note', /activity line must carry the phase \+ PR description/],

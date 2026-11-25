@@ -23,14 +23,8 @@ const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const SHIP_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
 
-// Every spelling GitHub honors (assembled so this file never carries a literal token).
-const SKIP_TOKEN_RE = new RegExp(
-  ['skip ci', 'ci skip', 'no ci', 'skip actions', 'actions skip']
-    .map((t) => `\\[${t}\\]`)
-    .concat(['skip-checks:'])
-    .join('|'),
-  'i',
-);
+// One token pattern, owned by the ship-note text contract (which checks the step text); this file runs the step.
+const { SKIP_TOKENS, SKIP_TOKEN_RE } = require('../scripts/static-checks/text-contracts/ship-note.cjs');
 
 function extractStep(name) {
   const content = readFileNormalized(SHIP_MD);
@@ -88,16 +82,14 @@ function runTrackShipping() {
 }
 
 describe('#6173 ship.md track_shipping ship-note carries no CI skip token', () => {
-  const step = extractStep('track_shipping');
-
-  test('no GitHub skip token appears anywhere in the step', () => {
-    assert.doesNotMatch(step, SKIP_TOKEN_RE,
-      'a skip token in any commit message the step creates rides a squash or rebase merge onto the default branch (#6173)');
-  });
-
-  test('the recovery commit and merge-state polling are gone (#6173 supersedes #2783)', () => {
-    assert.doesNotMatch(step, /mergeStateStatus|BLOCKED|--allow-empty|trigger CI|SHIP_NOTE_SHA/,
-      'with no skip token there is no wedge to recover from');
+  test('the contract\'s token pattern is GitHub\'s documented set and matches each spelling in any case', () => {
+    // GitHub's documented set, assembled so this file carries no literal token.
+    assert.deepStrictEqual([...SKIP_TOKENS].sort(), ['actions skip', 'ci skip', 'no ci', 'skip actions', 'skip ci']);
+    for (const token of [...SKIP_TOKENS.map((t) => `[${t}]`), `skip-checks:${'true'}`, `skip-checks: ${'true'}`]) {
+      assert.match(`docs: ship-note ${token}`, SKIP_TOKEN_RE);
+      assert.match(`docs: ship-note ${token.toUpperCase()}`, SKIP_TOKEN_RE);
+    }
+    assert.doesNotMatch('docs(07): ship phase 7 — PR #123', SKIP_TOKEN_RE);
   });
 
   test('track_shipping and the following step remain outside balanced code fences', () => {
