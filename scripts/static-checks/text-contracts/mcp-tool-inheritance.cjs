@@ -286,8 +286,9 @@ module.exports = {
         let calls;
         try {
           calls = ungrantedMempalaceCalls(text, loaded.lib);
-        } catch (err) {
-          return `the frontmatter cannot be parsed: ${err.message}`;
+        } catch {
+          // The #2526 arm above already reports this file; a second copy would double its findings.
+          return true;
         }
         return calls.length === 0 || `calls ${calls.map((name) => `mempalace_${name}()`).join(', ')}`;
       }, `${path.basename(rel)}: those calls can never dispatch, so the instruction is dead (#6455): grant mcp__mempalace__* or mcp__* in tools:, or drop the calls`);
