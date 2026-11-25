@@ -98,6 +98,9 @@ const SHIP_PR_BODY_SOURCE_RE = /^(ROADMAP|PLAN|SUMMARY|VERIFICATION|STATE|REQUIR
 /** Allowed values of `git.repo_tagging` (#5706): `single` is the default. */
 const VALID_REPO_TAGGING_MODES: readonly string[] = Object.freeze(['single', 'per_repo']);
 
+/** Allowed values of `workflow.post_merge_gate` (#5822): `always` is the default. */
+const VALID_POST_MERGE_GATE_MODES: readonly string[] = Object.freeze(['always', 'on_merge']);
+
 // ADR-612 PR-5: configuration accepts every convention the runtime can read.
 // Keep this distinct from roadmap-upgrade's supported target set: sequential
 // is valid project configuration but is not a migration destination.
@@ -1263,6 +1266,9 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
 
   // #5706 (epic #3628): per-repository milestone tagging mode, enum only.
   if (kp === 'git.repo_tagging') assertEnumValue(parsedValue, val, VALID_REPO_TAGGING_MODES, 'git.repo_tagging');
+
+  // #5822: post-merge gate cadence, enum only. A misspelt value would otherwise run the gate with no warning.
+  if (kp === 'workflow.post_merge_gate') assertEnumValue(parsedValue, val, VALID_POST_MERGE_GATE_MODES, 'workflow.post_merge_gate');
 
   if (kp === 'git.protected_branches') {
     if (!isValidProtectedBranches(parsedValue)) {
