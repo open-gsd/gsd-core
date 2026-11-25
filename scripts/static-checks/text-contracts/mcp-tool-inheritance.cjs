@@ -186,12 +186,13 @@ module.exports = {
     };
 
     for (const rel of GUIDANCE_AGENTS) docOf(rel).satisfies(mentionsMcp, `${path.basename(rel)} should mention MCP tool availability/usage`);
-    docOf(EXECUTOR).satisfies(namesMcpTools, 'gsd-executor.md should reference MCP tools (MCP or mcp__)');
+    // Naming MCP tools implies mentioning MCP, so a failed mention is the one finding of the executor's guidance.
+    docOf(EXECUTOR).satisfies((text) => namesMcpTools(text) || !mentionsMcp(text), 'gsd-executor.md should reference MCP tools (MCP or mcp__)');
 
-    // The tools: line of each researcher, read once; a missing line is one finding and skips what depends on it.
+    // The tools: line of each researcher, read once from its frontmatter (a `tools:` line in the body is not a grant); a missing line is one finding and skips what depends on it.
     const tools = new Map();
     for (const rel of new Set([...RESEARCHERS, ...STEP_C_RESEARCHERS])) {
-      docOf(rel).satisfies((text) => {
+      docOf(rel).frontmatter().satisfies((text) => {
         const line = toolsLine(text);
         if (line === null) return 'no such line';
         tools.set(rel, line);

@@ -123,14 +123,16 @@ function restatesCycleStructurally(text) {
 // `Reason: {` ... the halt reason name as a whole word before the closing brace or the line end: the walk of
 // /Reason: \{[^}\n]*\bimpl_before_test\b/.
 function namesHaltReason(text) {
-  for (let at = text.indexOf('Reason: {'); at !== -1; at = text.indexOf('Reason: {', at + 1)) {
-    const start = at + 'Reason: {'.length;
-    let end = start;
+  const opener = 'Reason: {';
+  let end = 0;
+  // Each span is scanned once: an opener inside a scanned span has a segment that is a tail of it, so the walk resumes at its end.
+  for (let at = text.indexOf(opener); at !== -1; at = text.indexOf(opener, end)) {
+    const start = at + opener.length;
+    end = start;
     while (end < text.length && text[end] !== '}' && text[end] !== '\n') end += 1;
     const segment = text.slice(start, end);
     for (let hit = segment.indexOf(HALT_REASON); hit !== -1; hit = segment.indexOf(HALT_REASON, hit + 1)) {
-      const before = hit === 0 ? text[start - 1] : segment[hit - 1];
-      if (!isWord(before) && !isWord(text[start + hit + HALT_REASON.length])) return true;
+      if (!isWord(text[start + hit - 1]) && !isWord(text[start + hit + HALT_REASON.length])) return true;
     }
   }
   return false;

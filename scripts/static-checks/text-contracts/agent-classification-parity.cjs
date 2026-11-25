@@ -170,7 +170,7 @@ function parentheticalSlugs(text) {
     const pos = close + 1;
     if (!isBlank(text[pos])) continue;
     if (text.startsWith('have concise stubs', skipBlanks(text, pos))) {
-      return text.slice(at + 1, close).split(',').map((slug) => slug.trim().toLowerCase());
+      return text.slice(at + 1, close).split(',').map((slug) => asciiLower(slug.trim()));
     }
   }
   return null;
@@ -228,13 +228,19 @@ module.exports = {
     let agents = null;
     let inventory = null;
 
+    // A missing primary or advanced section is the one finding of that cause: the checks that compare against it are skipped.
     agentsDoc
       .satisfies((text) => {
-        agents = parseAgentsMd(text);
-        return agents.primaryHeadings.length > 0 || 'no ### gsd-* headings before the Advanced section';
+        const parsed = parseAgentsMd(text);
+        if (parsed.primaryHeadings.length === 0) return 'no ### gsd-* headings before the Advanced section';
+        agents = parsed;
+        return true;
       }, `${AGENTS_MD} must list the primary agents as ### gsd-* headings before "## ${ADVANCED_TITLE}"`)
-      .satisfies(() => agents === null || agents.advancedHeadings.length > 0 || 'no ### gsd-* headings inside the Advanced section',
-        `${AGENTS_MD} must list the advanced agents as ### gsd-* headings inside "## ${ADVANCED_TITLE}"`);
+      .satisfies(() => {
+        if (agents === null || agents.advancedHeadings.length > 0) return true;
+        agents = null;
+        return 'no ### gsd-* headings inside the Advanced section';
+      }, `${AGENTS_MD} must list the advanced agents as ### gsd-* headings inside "## ${ADVANCED_TITLE}"`);
     inventoryDoc.satisfies((text) => {
       inventory = parseInventoryMd(text);
       if (inventory === null) return 'no "Primary doc" column header in the Agents table: check the ## Agents heading and the header row';
@@ -314,6 +320,12 @@ module.exports = {
       ctx.fail(AGENTS_MD, loaded.error);
       return;
     }
+    // One document per agent file, however many headings name it.
+    const agentDocs = new Map();
+    const agentDoc = (slug) => {
+      if (!agentDocs.has(slug)) agentDocs.set(slug, ctx.doc(`${AGENTS_DIR}/${slug}.md`));
+      return agentDocs.get(slug);
+    };
     let sections = null;
     agentsDoc.satisfies((text) => {
       sections = toolsSections(text);
@@ -321,7 +333,7 @@ module.exports = {
     }, 'agents.md must be readable');
     for (const section of sections || []) {
       if (!fileSet.has(section.slug)) continue; // a heading with no file is the roster check's finding
-      ctx.doc(`${AGENTS_DIR}/${section.slug}.md`).satisfies((text) => {
+      agentDoc(section.slug).satisfies((text) => {
         let fm;
         try {
           fm = loaded.lib.parseFrontmatter(text) || {};

@@ -85,11 +85,11 @@ module.exports = {
         .satisfies((text) => {
           const { sites } = scanSites(text);
           return sites.length >= MIN_SITES || `found ${sites.length}`;
-        }, `${rel}: expected at least ${MIN_SITES} frontmatter-boundary sites; if the workflow no longer uses this regex, update this contract`)
+        }, `expected at least ${MIN_SITES} frontmatter-boundary sites; if the workflow no longer uses this regex, update this contract`)
         .satisfies((text) => {
           const { unsafe } = scanSites(text);
           return unsafe.length === 0 || `line${unsafe.length === 1 ? '' : 's'} ${unsafe.join(', ')}`;
-        }, `${rel}: every frontmatter-boundary site must normalize CRLF before matching (regression of #2694)`);
+        }, `every frontmatter-boundary site must normalize CRLF before matching (regression of #2694)`);
     }
   },
 };

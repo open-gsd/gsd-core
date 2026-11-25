@@ -33,9 +33,18 @@ function testBeforeCommit(text) {
   return testAt < commitAt || '`npm test` comes after `git commit`';
 }
 
+// The first dry-run precedes the first fix-loop. No dry-run at all is reported by the assertion that asks for the flag.
+function dryRunBeforeFixLoop(text) {
+  const dryRun = text.indexOf('dry-run');
+  if (dryRun === -1) return true;
+  const fixLoop = text.indexOf('fix-loop');
+  if (fixLoop === -1) return 'no fix-loop marker';
+  return dryRun < fixLoop || 'dry-run comes after fix-loop';
+}
+
 module.exports = {
   id: 'audit-fix-command',
-  walkers: { lineHasAll, lineHasAny, testBeforeCommit },
+  walkers: { lineHasAll, lineHasAny, testBeforeCommit, dryRunBeforeFixLoop },
   check(ctx) {
     const command = ctx.doc(COMMAND);
     command.frontmatter()
@@ -46,7 +55,8 @@ module.exports = {
       .has('argument-hint:', 'the command must have an argument-hint in its frontmatter for /gsd-help discoverability')
       .has('type: prompt', 'the command must have type: prompt in its frontmatter')
       .has('--source <audit-uat>', 'the argument-hint must show --source <audit-uat> (the only currently supported value)')
-      .lacks('--source <audit|verify>', 'the argument-hint must not advertise the unsupported verify source');
+      // A hint that lost the supported value is reported once, by the line above.
+      .satisfies((hint) => !hint.includes('--source <audit-uat>') || !hint.includes('--source <audit|verify>'), 'the argument-hint must not advertise the unsupported verify source');
     command
       .has('audit-fix.md', 'the command must reference the audit-fix.md workflow')
       .has('<objective>', 'the command must have an <objective> section')
@@ -76,8 +86,8 @@ module.exports = {
       .satisfies((text) => text.includes('missing test') || text.includes('Missing test'), 'the workflow must list a missing test as an auto-fixable signal')
       .has('design decision', 'the workflow must list design decisions as a manual-only signal')
       .satisfies((text) => text.includes('architecture') || text.includes('architectural'), 'the workflow must list architecture changes as a manual-only signal')
-      .satisfies((text) => lineHasAny(text, 'dry-run', ['stop', 'exit']), 'the workflow must indicate on one line that --dry-run stops after classification')
-      .before('dry-run', 'fix-loop', 'the --dry-run stop must be documented before the fix-loop step')
+      .satisfies((text) => !text.includes('dry-run') || lineHasAny(text, 'dry-run', ['stop', 'exit']), 'the workflow must indicate on one line that --dry-run stops after classification')
+      .satisfies(dryRunBeforeFixLoop, 'the --dry-run stop must be documented before the fix-loop step')
       .satisfies((text) => lineHasAll(text, ['{ID}', 'commit']), 'the commit message template must include the {ID} placeholder for the finding ID')
       .satisfies((text) => lineHasAll(text, ['commit', 'finding']), 'the workflow must commit atomically per finding')
       .satisfies((text) => text.includes('traceability') || text.includes('finding ID'), 'the workflow must mention the finding ID for traceability')
@@ -86,7 +96,7 @@ module.exports = {
       .has('tests pass', 'the commit must be conditional on the tests passing')
       .satisfies((text) => text.includes('git checkout') || text.includes('revert'), 'the workflow must revert the changes on a test failure')
       .has('fix-failed', 'the workflow must mark failed fixes as fix-failed')
-      .satisfies((text) => lineHasAll(text, ['stop', 'fix-failed']), 'the workflow must stop the pipeline after the first test failure, on the line that marks fix-failed')
+      .satisfies((text) => !text.includes('fix-failed') || lineHasAll(text, ['stop', 'fix-failed']), 'the workflow must stop the pipeline after the first test failure, on the line that marks fix-failed')
       .has('git checkout -- {changed_files}', 'the workflow must use git checkout -- {changed_files} to clean partial changes on failure');
   },
 };

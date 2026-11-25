@@ -26,6 +26,13 @@ const MANIFEST = 'docs/INVENTORY-MANIFEST.json';
 const COMMANDS_DOC = 'docs/COMMANDS.md';
 const FORCE_WINDOW = 300;
 
+// The workflow is lower-cased once for all the rules that read it.
+let lowered = { source: null, value: '' };
+function lower(text) {
+  if (lowered.source !== text) lowered = { source: text, value: asciiLower(text) };
+  return lowered.value;
+}
+
 const isSpace = (char) => char !== undefined && /\s/.test(char);
 const isWordChar = (char) => char !== undefined && /[A-Za-z0-9_]/.test(char);
 const skipSpaces = (text, from) => {
@@ -227,7 +234,6 @@ const SCOPE_RULES = {
   capturesScopeBefore: ['write_updated_phase must run the roadmap milestone-scope probe before writing', (step) => step.includes('milestone-scope')],
   namesScopeBefore: ['the pre-write capture must be named SCOPE_BEFORE for the post-write comparison', (step) => asciiLower(step).includes('scope_before')],
   rederivesScopeAfter: ['the post-write re-derivation (SCOPE_AFTER) must be present', (step) => asciiLower(step).includes('scope_after')],
-  comparesScopeAndPhases: ['the comparison must cover the scope and the phase set', (step) => anyOf(asciiLower(step), ['scope', 'phases'])],
   rollsBack: ['a scope or phase-set mismatch must trigger a rollback', (step) => anyOf(asciiLower(step), ['rollback', 'restore', 'revert', 'rolled back'])],
   surfacesScopeError: ['the rollback path must surface an explicit milestone scope changed error', (step) => asciiLower(step).includes('scope changed')],
 };
@@ -283,10 +289,10 @@ function buildCheck(load) {
       .satisfies((text) => text.includes('--edit') || text.includes('--force'), 'the command must document the --edit flag (which supports --force)');
 
     const workflow = ctx.doc(WORKFLOW)
-      .satisfies((text) => asciiLower(text).includes('--force'), 'the workflow must handle the --force flag');
-    for (const [, [why, test]] of Object.entries(RULES)) workflow.satisfies((text) => test(asciiLower(text)), why);
+      .satisfies((text) => lower(text).includes('--force'), 'the workflow must handle the --force flag');
+    for (const [, [why, test]] of Object.entries(RULES)) workflow.satisfies((text) => test(lower(text)), why);
     workflow.satisfies((text) => {
-      const block = antiPatternsBlockRenumbering(asciiLower(text));
+      const block = antiPatternsBlockRenumbering(lower(text));
       if (block.missing) return 'no <anti_patterns> section';
       return block.ok || 'the anti_patterns section must prohibit renumbering';
     }, 'the workflow must have an <anti_patterns> section that blocks renumbering');
@@ -297,17 +303,18 @@ function buildCheck(load) {
 
     const inventory = ctx.doc(INVENTORY);
     const table = loadLib(load, 'gsd-core/bin/lib/markdown-table.cjs');
-    if (table.error) ctx.fail(INVENTORY, table.error);
-    else {
+    if (table.error) {
+      ctx.fail(INVENTORY, table.error);
+      inventory.has('edit-phase.md', 'INVENTORY.md must contain the edit-phase.md workflow row');
+    } else {
       inventory.satisfies((text) => {
         const row = editPhaseRow(text, table.lib.splitTableRow);
         if (row === null) return 'no edit-phase.md workflow row';
-        const invokedBy = row[2];
+        const invokedBy = row[2] ?? '';
         if (!citesPhaseEdit(invokedBy)) return `the Invoked by cell is "${invokedBy}"`;
         return !citesDeletedCommand(invokedBy) || `the Invoked by cell still cites the deleted /gsd-edit-phase command: "${invokedBy}"`;
       }, 'the edit-phase.md row must list "/gsd-phase --edit" as its caller and not the deleted /gsd-edit-phase (#2790)');
     }
-    inventory.has('edit-phase.md', 'INVENTORY.md must contain the edit-phase.md workflow row');
 
     ctx.doc(MANIFEST).satisfies((text) => {
       const family = manifestFamily(text, 'commands');

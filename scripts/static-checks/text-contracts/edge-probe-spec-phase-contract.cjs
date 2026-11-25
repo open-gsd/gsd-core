@@ -20,7 +20,7 @@ const { asciiLower } = require('./lib/ascii-lower.cjs');
 const { loadLib } = require('./lib/load-lib.cjs');
 const { LINE_ENDS } = require('./lib/line-ends.cjs');
 const { hasSequence } = require('./lib/has-sequence.cjs');
-const { isWordChar, includesBounded, precedesBounded, windowChain } = require('./lib/bounded-walks.cjs');
+const { isWordChar, includesBounded, precedesBounded, windowChain, libCaller } = require('./lib/bounded-walks.cjs');
 
 const SPEC_PHASE = 'gsd-core/workflows/spec-phase.md';
 const EDGE_PROBE_REF = 'gsd-core/references/edge-probe.md';
@@ -194,9 +194,12 @@ const inBlock = (predicate) => (text) => {
 function buildCheck({ loadTextLines }) {
   return function check(ctx) {
     const textLines = loadLib(loadTextLines, TEXT_LINES);
-    if (textLines.error) ctx.fail(SPEC_PHASE, textLines.error);
-    const lines = (block) => textLines.lib.splitLines(block);
-    const inLines = (predicate) => inBlock((block) => (textLines.error ? true : predicate(lines(block), block)));
+    if (textLines.error) ctx.fail(TEXT_LINES, textLines.error);
+    const withLines = libCaller(ctx, textLines, TEXT_LINES);
+    const inLines = (predicate) => inBlock((block) => {
+      const blockLines = withLines((lib) => lib.splitLines(block), null);
+      return blockLines === null ? true : predicate(blockLines, block);
+    });
 
     ctx.doc(SPEC_PHASE)
       .satisfies((text) => step55Block(text) !== null || 'neither "## Step 5.5" nor "Step 5.5" is present', 'the Step 5.5 block must be extractable from spec-phase.md')

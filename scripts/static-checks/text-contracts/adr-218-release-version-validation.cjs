@@ -56,6 +56,13 @@ function extractGrepPatterns(text) {
 // The `needs` of a job as a list: a scalar is one name, a sequence is its items.
 const needsOf = (job) => [].concat(job.needs || []);
 
+// A bounded description of a needs value: YAML anchors can make it a circular list, which JSON.stringify would throw on.
+function describeNeeds(needs) {
+  if (typeof needs === 'string') return JSON.stringify(needs);
+  if (Array.isArray(needs)) return `a list of ${needs.length} item(s)`;
+  return needs === null ? 'null' : `a ${typeof needs}`;
+}
+
 // The parsed workflow, or the reason it cannot be read.
 function parse(text, yaml) {
   let workflow;
@@ -73,22 +80,22 @@ module.exports = {
   id: 'adr-218-release-version-validation',
   issue: '#1186',
   check(ctx, load = () => require('js-yaml')) {
-    // The parser is loaded once: a module that cannot be loaded is one finding and release.yml is not read.
+    // The parser is loaded once: a module that cannot be loaded is one finding of its own, the text checks still run, and only the
+    // job wiring that needs the parsed workflow is skipped.
     const loadedYaml = loadLib(load, 'js-yaml');
-    if (loadedYaml.error) {
-      ctx.fail(WORKFLOW, loadedYaml.error);
-      return;
-    }
-    const yaml = loadedYaml.lib;
     const doc = ctx.doc(WORKFLOW);
     let jobs = null;
-    doc
-      .satisfies((text) => {
-        const parsed = parse(text, yaml);
+    if (loadedYaml.error) {
+      ctx.fail(WORKFLOW, loadedYaml.error);
+    } else {
+      doc.satisfies((text) => {
+        const parsed = parse(text, loadedYaml.lib);
         if (parsed.error) return parsed.error;
         jobs = parsed.jobs;
         return true;
-      }, 'release.yml must be a workflow with a jobs mapping')
+      }, 'release.yml must be a workflow with a jobs mapping');
+    }
+    doc
       .satisfies((text) => {
         const patterns = extractGrepPatterns(text);
         return patterns.length >= MIN_GREP_PATTERNS || `found ${patterns.length}: ${JSON.stringify(patterns)}`;
@@ -114,7 +121,7 @@ module.exports = {
       else if (!isObject(job)) problem = 'the job is not a mapping';
       doc.satisfies(() => problem === null || problem, `release.yml must have a \`${name}:\` job`);
       if (problem === null) {
-        doc.satisfies(() => needsOf(job).includes(GATE) || `needs is ${JSON.stringify(job.needs)}`,
+        doc.satisfies(() => needsOf(job).includes(GATE) || `needs is ${describeNeeds(job.needs)}`,
           `the \`${name}\` job must list ${GATE} in its \`needs:\` (ADR-218 gate must run before ${name})`);
       }
       if (hasGate && names.includes(name)) {

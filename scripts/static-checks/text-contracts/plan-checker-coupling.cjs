@@ -16,7 +16,7 @@ const path = require('node:path');
 const { asciiLower } = require('./lib/ascii-lower.cjs');
 const { loadLib } = require('./lib/load-lib.cjs');
 const { LINE_ENDS } = require('./lib/line-ends.cjs');
-const { precedesBounded } = require('./lib/bounded-walks.cjs');
+const { precedesBounded, libCaller } = require('./lib/bounded-walks.cjs');
 
 const AGENT = 'agents/gsd-plan-checker.md';
 const DOCS_AGENTS = 'docs/reference/agents.md';
@@ -171,10 +171,11 @@ function severityOf(line) {
 }
 
 // The severity tokens inside the span's fenced yaml blocks, in order (a block never closed runs to the end of the span).
+// Fences are found on the lines with their leading blanks trimmed, as the old loop trimmed every line (a fence under a list item counts).
 function yamlSeverityTiers(span, { splitLines, scanFencedBlocks }) {
   const lines = splitLines(span);
   const tiers = [];
-  for (const block of scanFencedBlocks(lines)) {
+  for (const block of scanFencedBlocks(lines.map((line) => line.trimStart()))) {
     if ((block.infoString || '').trim() !== 'yaml') continue;
     const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
     for (const line of lines.slice(block.openLineIdx + 1, end)) {
@@ -240,9 +241,21 @@ function armWindow(lines, prefix, size) {
 function buildCheck({ loadSectionizer, loadTextLines }) {
   return function check(ctx) {
     const sectionizer = loadLib(loadSectionizer, SECTIONIZER);
-    if (sectionizer.error) ctx.fail(AGENT, sectionizer.error);
+    if (sectionizer.error) ctx.fail(SECTIONIZER, sectionizer.error);
     const textLines = loadLib(loadTextLines, TEXT_LINES);
-    if (textLines.error) ctx.fail(PLAN_PHASE, textLines.error);
+    if (textLines.error) ctx.fail(TEXT_LINES, textLines.error);
+    const withSectionizer = libCaller(ctx, sectionizer, SECTIONIZER);
+    const withLines = libCaller(ctx, textLines, TEXT_LINES);
+    const linesOf = (text) => withLines((lib) => lib.splitLines(text), null);
+    // The tiers of a span's yaml examples, or null when a library failed (already one finding).
+    const tiersOf = (span) => {
+      if (sectionizer.error || textLines.error) return null;
+      const found = yamlSeverityTiers(span, {
+        splitLines: (text) => withLines((lib) => lib.splitLines(text), []),
+        scanFencedBlocks: (lines) => withSectionizer((lib) => lib.scanFencedBlocks(lines), []),
+      });
+      return sectionizer.error || textLines.error ? null : found;
+    };
 
     // The tier the revision loop exempts is derived from its flow, never hardcoded.
     let tier = null;
@@ -277,8 +290,9 @@ function buildCheck({ loadSectionizer, loadTextLines }) {
         return leadGapTail(span, 'severity:', tier, 0) || `no severity: ${tier}`;
       }), "Dimension 3b's example issue must carry the tier revision-loop.md exempts")
       .satisfies(inSpan(D3B, D4, (span) => {
-        if (tier === null || sectionizer.error || textLines.error) return true;
-        const found = yamlSeverityTiers(span, { ...textLines.lib, ...sectionizer.lib });
+        if (tier === null || !leadGapTail(span, 'severity:', tier, 0)) return true;
+        const found = tiersOf(span);
+        if (found === null) return true;
         if (found.length === 0) return 'no severity-tagged yaml example';
         const wrong = found.filter((one) => one !== tier);
         return wrong.length === 0 || `carries severity: ${wrong[0]}, the exempt tier is ${tier}: a non-exempt tier re-arms the revision loop`;
@@ -286,8 +300,8 @@ function buildCheck({ loadSectionizer, loadTextLines }) {
       .satisfies(inSpan(D3B, D4, (span) => neverBlocker(asciiLower(span)) || 'not found'),
         'Dimension 3b must state that the finding is never a blocker')
       .satisfies(inSpan(D3B, D4, (span) => {
-        if (sectionizer.error || textLines.error) return true;
-        return !yamlSeverityTiers(span, { ...textLines.lib, ...sectionizer.lib }).includes('blocker') || 'a blocker-severity example is present';
+        const found = tiersOf(span);
+        return found === null || !found.includes('blocker') || 'a blocker-severity example is present';
       }), 'Dimension 3b must not contain a blocker-severity example: it is advisory only')
       .satisfies(inSpan(D3, D3B, (body) => leadGapTail(body, 'severity:', 'blocker', 0) || 'not found'),
         "Dimension 3's own example issue must still be severity: blocker")
@@ -320,8 +334,9 @@ function buildCheck({ loadSectionizer, loadTextLines }) {
       .has('### Advisories (info)', 'the ISSUES FOUND template must carry an advisories section so INFO entries render')
       .has('Advisory only — no revision required', 'the recommendation must not claim a planner return for an INFO-only result')
       .satisfies((text) => {
-        if (sectionizer.error) return true;
-        agentLabels = dimensionLabels(sectionizer.lib.stripFencedCode(text).text);
+        const stripped = withSectionizer((lib) => lib.stripFencedCode(text).text, null);
+        if (stripped === null) return true;
+        agentLabels = dimensionLabels(stripped);
         const problems = [];
         if (agentLabels.length < MIN_DIMENSIONS) problems.push(`expected at least ${MIN_DIMENSIONS} numbered dimensions, found ${agentLabels.length}`);
         if (!agentLabels.includes('3b') && headingIndex(text, D3B) !== -1) problems.push('the Dimension 3b heading is inside a code fence');
@@ -351,20 +366,20 @@ function buildCheck({ loadSectionizer, loadTextLines }) {
 
     // The orchestrators' handlers of the checker return, each one line of its workflow (or the window after one).
     const onLines = (prefix, label, checks, size) => (text) => {
-      if (textLines.error) return true;
-      const lines = textLines.lib.splitLines(text);
+      const lines = linesOf(text);
+      if (lines === null) return true;
       const target = size === undefined ? findLine(lines, prefix) : armWindow(lines, prefix, size);
       if (target === null) return true;
       const missing = checks.filter(([needle]) => !target.includes(needle)).map(([needle]) => needle);
       return missing.length === 0 || `${label} lacks: ${missing.join(' | ')}`;
     };
     const hasLine = (prefix) => (text) => {
-      if (textLines.error) return true;
-      return findLine(textLines.lib.splitLines(text), prefix) !== null || `no line starts with ${JSON.stringify(prefix)}`;
+      const lines = linesOf(text);
+      return lines === null || findLine(lines, prefix) !== null || `no line starts with ${JSON.stringify(prefix)}`;
     };
     const hasArm = (text) => {
-      if (textLines.error) return true;
-      return armWindow(textLines.lib.splitLines(text), ARM_LINE, ARM_WINDOW) !== null || `no line starts with ${JSON.stringify(ARM_LINE)}`;
+      const lines = linesOf(text);
+      return lines === null || armWindow(lines, ARM_LINE, ARM_WINDOW) !== null || `no line starts with ${JSON.stringify(ARM_LINE)}`;
     };
 
     ctx.doc(PLAN_PHASE)

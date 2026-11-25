@@ -49,7 +49,8 @@ function wordsSpaced(low, first, second) {
 
 // The blockquote blocks of a chunk of markdown: runs of consecutive lines that are `^\s*>\s?(.*)$`, joined without the
 // markers. A line holding a lone CR, U+2028 or U+2029 after the marker is not a blockquote line (the dot stops there and
-// `$` is the end of the line), and the optional blank after `>` is any one whitespace character.
+// `$` is the end of the line), and the optional blank after `>` is any one whitespace character: a line terminator
+// after `>` is taken as that blank and the quote goes on with the text after it, a second terminator ends it.
 function blockquoteLine(line) {
   const open = skipSpaces(line, 0);
   if (line[open] !== '>') return null;
@@ -162,7 +163,6 @@ module.exports = {
       .satisfies((text) => {
         const section = routeSection(text, ROUTE_GAPS, ROUTE_HUMAN);
         if (section.skip) return true;
-        if (section.error) return section.error;
         return (section.text.includes('--gaps') && section.text.includes('plan-phase')) || 'Route V.gaps must route to plan-phase {phase} --gaps';
       }, 'gaps_found must route to plan-phase --gaps')
       .satisfies((text) => {
@@ -174,22 +174,17 @@ module.exports = {
       .satisfies((text) => {
         const section = routeSection(text, ROUTE_V, ROUTE_GAPS);
         if (section.skip) return true;
-        if (section.error) return section.error;
         if (!section.text.includes('VERIFICATION_NEXT_COMMAND')) return 'Route V must present the owner\'s next_command';
         const named = ['/gsd:verify-work', '/gsd-verify-work', '/gsd:execute-phase', '/gsd-execute-phase'].filter((command) => section.text.includes(command));
         return named.length === 0 || `Route V names ${named.join(', ')}`;
       }, 'a non-passed verification must present the owner\'s next_command, never a hand-named command');
 
     // #2912: the report step's context-authority blockquote.
-    workflow.step('report').satisfies((text) => {
-      const blocks = extractBlockquotes(text);
-      if (blocks.length === 0) return 'no blockquote';
-      return true;
-    }, 'the report step must contain at least one blockquote (the context-authority directive)')
+    workflow.step('report').satisfies((text) => extractBlockquotes(text).length > 0 || 'no blockquote', 'the report step must contain at least one blockquote (the context-authority directive)')
       .satisfies((text) => {
         const blocks = extractBlockquotes(text);
         if (blocks.length === 0) return true;
-        return blocks.some(namesContextAuthority) || false;
+        return blocks.some(namesContextAuthority);
       }, 'the report step must contain a blockquote whose text includes "Context authority"')
       .satisfies((text) => authority(text, (block) => block.includes('PROJECT.md')), 'the context-authority directive must name PROJECT.md as authoritative')
       .satisfies((text) => authority(text, (block) => block.includes('STATE.md')), 'the context-authority directive must name STATE.md as authoritative')

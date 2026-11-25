@@ -7,7 +7,7 @@
  * (B) Equivalence oracle: the old inline decision logic of the workflow's
  *     github-script is embedded verbatim as oracle(); every (base, head) combo must
  *     decide the same in the module and the oracle (behaviour preserved).
- * (D) MAIN_ALLOWED_PATTERNS export: the array is exported and well-formed.
+ * (C) MAIN_ALLOWED_PATTERNS export: the array is exported and well-formed.
  *
  * The structural assertions on pr-target-validator.yml (base-ref checkout, pinned
  * SHA, policy require, preserved behaviour) are the `adr-230-pr-target-policy`
@@ -254,7 +254,7 @@ describe('equivalence oracle — module agrees with original inline logic', () =
 });
 
 // ---------------------------------------------------------------------------
-// (D) MAIN_ALLOWED_PATTERNS export — verify array is exported and well-formed
+// (C) MAIN_ALLOWED_PATTERNS export — verify array is exported and well-formed
 // ---------------------------------------------------------------------------
 
 describe('MAIN_ALLOWED_PATTERNS export', () => {

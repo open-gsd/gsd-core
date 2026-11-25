@@ -52,11 +52,15 @@ function precedesBounded(text, first, second, stops, bounds = {}) {
 }
 
 // /parts[0][^stops]{0,limit}parts[1][^stops]{0,limit}.../: each part follows the previous one within `limit` characters,
-// none of them in `stops` (an empty set is `[\s\S]{0,limit}`). The search tries every placement, at most limit + 1 per part.
+// none of them in `stops` (an empty set is `[\s\S]{0,limit}`). The first part is searched over the whole text; every later part
+// only inside the limit + part length characters after the previous one, so a placement costs at most that many positions.
 function windowChain(text, parts, limit, stops) {
   const place = (index, from) => {
     const part = parts[index];
-    for (let at = text.indexOf(part, from); at !== -1; at = text.indexOf(part, at + 1)) {
+    const base = index === 0 ? 0 : from;
+    const segment = index === 0 ? text : text.slice(from, from + limit + part.length);
+    for (let k = segment.indexOf(part); k !== -1; k = segment.indexOf(part, k + 1)) {
+      const at = base + k;
       if (index > 0) {
         if (at - from > limit) return false;
         for (let i = from; i < at; i += 1) if (stops.has(text[i])) return false;
@@ -84,4 +88,19 @@ function collapseWhitespace(text) {
   return out;
 }
 
-module.exports = { isWordChar, boundaryAt, findIn, includesBounded, hasWordRun, precedesBounded, windowChain, collapseWhitespace };
+// A caller of a loaded library that never lets a throw end the contract: the first throw marks the library state failed, reports one
+// finding for the library file and returns the fallback (so the checks that need it stay quiet and the others still run).
+function libCaller(ctx, state, file) {
+  return (fn, fallback) => {
+    if (state.error) return fallback;
+    try {
+      return fn(state.lib);
+    } catch (err) {
+      state.error = `${file} threw: ${err.message}`;
+      ctx.fail(file, state.error);
+      return fallback;
+    }
+  };
+}
+
+module.exports = { libCaller, isWordChar, boundaryAt, findIn, includesBounded, hasWordRun, precedesBounded, windowChain, collapseWhitespace };

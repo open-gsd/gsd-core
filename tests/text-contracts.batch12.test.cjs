@@ -208,10 +208,10 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     ['MEMBER gone from the carve-out', '.github/workflows/pr-target-validator.yml', eraseAll('MEMBER'), 'adr-230-pr-target-policy', /the maintainer association carve-out \(OWNER, MEMBER, COLLABORATOR\) must still be present/],
     ['COLLABORATOR gone from the carve-out', '.github/workflows/pr-target-validator.yml', eraseAll('COLLABORATOR'), 'adr-230-pr-target-policy', /the maintainer association carve-out \(OWNER, MEMBER, COLLABORATOR\) must still be present/],
     // code-review-summary-parser
-    ['code-review: the first boundary site matches the raw content', 'gsd-core/workflows/code-review.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }, 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/],
-    ['code-review: only two boundary sites remain', 'gsd-core/workflows/code-review.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }, 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: expected at least 3 frontmatter-boundary sites/],
-    ['code-review-fix: the first boundary site matches the raw content', 'gsd-core/workflows/code-review-fix.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }, 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: every frontmatter-boundary site must normalize CRLF before matching/],
-    ['code-review-fix: only two boundary sites remain', 'gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }, 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/],
+    ['code-review: the first boundary site matches the raw content', 'gsd-core/workflows/code-review.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }, 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/],
+    ['code-review: only two boundary sites remain', 'gsd-core/workflows/code-review.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }, 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/],
+    ['code-review-fix: the first boundary site matches the raw content', 'gsd-core/workflows/code-review-fix.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }, 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/],
+    ['code-review-fix: only two boundary sites remain', 'gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }, 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/],
     // audit-fix-command
     ['the command renamed', 'commands/gsd/audit-fix.md', swap('name: gsd:audit-fix', 'name: gsd:fix'), 'audit-fix-command', /the command name must be gsd:audit-fix/],
     ['the description key gone', 'commands/gsd/audit-fix.md', eraseAll('description:'), 'audit-fix-command', /the command must have a description in its frontmatter/],
@@ -220,7 +220,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     ['the argument-hint key gone', 'commands/gsd/audit-fix.md', eraseAll('argument-hint:'), 'audit-fix-command', /the command must have an argument-hint in its frontmatter/],
     ['the command type changed', 'commands/gsd/audit-fix.md', swap('type: prompt', 'type: skill'), 'audit-fix-command', /the command must have type: prompt in its frontmatter/],
     ['the hint shows the generic source', 'commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit>'), 'audit-fix-command', /the argument-hint must show --source <audit-uat>/],
-    ['the hint advertises the verify source', 'commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit|verify>'), 'audit-fix-command', /the argument-hint must not advertise the unsupported verify source/],
+    ['the hint advertises the verify source', 'commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit-uat> --source <audit|verify>'), 'audit-fix-command', /the argument-hint must not advertise the unsupported verify source/],
     ['the workflow reference gone', 'commands/gsd/audit-fix.md', eraseAll('audit-fix.md'), 'audit-fix-command', /the command must reference the audit-fix\.md workflow/],
     ['the objective opening tag gone', 'commands/gsd/audit-fix.md', eraseAll('<objective>'), 'audit-fix-command', /the command must have an <objective> section/],
     ['the objective closing tag gone', 'commands/gsd/audit-fix.md', eraseAll('</objective>'), 'audit-fix-command', /the command must close its <objective> section/],
@@ -348,12 +348,11 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     ['the write step milestone-scope probe gone', 'gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', eraseAll('milestone-scope')), 'edit-phase', /write_updated_phase must run the roadmap milestone-scope probe before writing/],
     ['SCOPE_BEFORE gone from the write step', 'gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', (text) => { let out = text; for (const word of ['scope_before']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }), 'edit-phase', /the pre-write capture must be named SCOPE_BEFORE for the post-write comparison/],
     ['SCOPE_AFTER gone from the write step', 'gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', (text) => { let out = text; for (const word of ['scope_after']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }), 'edit-phase', /the post-write re-derivation \(SCOPE_AFTER\) must be present/],
-    ['scope and phases gone from the write step', 'gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', (text) => { let out = text; for (const word of ['scope','phases']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }), 'edit-phase', /the comparison must cover the scope and the phase set/],
     ['the rollback wording gone from the write step', 'gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', (text) => { let out = text; for (const word of ['rollback','restore','revert','rolled back']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }), 'edit-phase', /a scope or phase-set mismatch must trigger a rollback/],
     ['the scope changed error gone from the write step', 'gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', (text) => { let out = text; for (const word of ['scope changed']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }), 'edit-phase', /the rollback path must surface an explicit milestone scope changed error/],
     ['the milestone scope check gone from the success criteria', 'gsd-core/workflows/edit-phase.md', within('<success_criteria>', '</success_criteria>', (text) => { let out = text; for (const word of ['milestone scope']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }), 'edit-phase', /the success criteria must include the milestone-scope verification \(#3262\)/],
     ['the row cites the deleted command', 'docs/INVENTORY.md', swap('preserving number and position. | `/gsd-phase --edit` |', 'preserving number and position. | `/gsd-edit-phase` |'), 'edit-phase', /the edit-phase\.md row must list "\/gsd-phase --edit" as its caller/],
-    ['edit-phase.md gone from the inventory', 'docs/INVENTORY.md', eraseAll('edit-phase.md'), 'edit-phase', /INVENTORY\.md must contain the edit-phase\.md workflow row/],
+    ['edit-phase.md gone from the inventory', 'docs/INVENTORY.md', eraseAll('edit-phase.md'), 'edit-phase', /the edit-phase\.md row must list "\/gsd-phase --edit" as its caller/],
     ['/gsd-phase gone from the manifest commands', 'docs/INVENTORY-MANIFEST.json', (text) => { const m = JSON.parse(text); m.families.commands = m.families.commands.filter((entry) => entry !== '/gsd-phase'); return JSON.stringify(m); }, 'edit-phase', /INVENTORY-MANIFEST\.json must list \/gsd-phase in commands/],
     ['edit-phase.md gone from the manifest workflows', 'docs/INVENTORY-MANIFEST.json', (text) => { const m = JSON.parse(text); m.families.workflows = m.families.workflows.filter((entry) => entry !== 'edit-phase.md'); return JSON.stringify(m); }, 'edit-phase', /INVENTORY-MANIFEST\.json must list edit-phase\.md in workflows/],
     ['/gsd-phase gone from COMMANDS.md', 'docs/COMMANDS.md', eraseAll('/gsd-phase'), 'edit-phase', /COMMANDS\.md must document \/gsd-phase/],
@@ -653,7 +652,6 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     });
     // Edit combinators: several edits in a row, a word added at the end.
     const compose1 = (...edits) => (text) => edits.reduce((value, edit) => edit(value), text);
-    const appendWord1 = (word) => (text) => `${text} ${word} `;
     // A file that is gone or empty is exactly one finding for that path, and nothing else.
     const goneOne1 = (rel, contract, how) => test(`${rel} ${how} is exactly one finding of ${contract}`, (t) => {
       const root = copyOfRepoFiles(t);
@@ -761,29 +759,33 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     goneOne1('gsd-core/workflows/code-review.md', 'code-review-summary-parser', 'emptied');
     goneOne1('gsd-core/workflows/code-review-fix.md', 'code-review-summary-parser', 'removed');
     goneOne1('gsd-core/workflows/code-review-fix.md', 'code-review-summary-parser', 'emptied');
-    exactly1('code-review: one raw site is one finding', [['gsd-core/workflows/code-review.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }]], 'code-review-summary-parser', 1, /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    exactly1('code-review-fix: one raw site is one finding', [['gsd-core/workflows/code-review-fix.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }]], 'code-review-summary-parser', 1, /gsd-core\/workflows\/code-review-fix\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    exactly1('code-review: two sites are one finding', [['gsd-core/workflows/code-review.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', 1, /gsd-core\/workflows\/code-review\.md: expected at least 3 frontmatter-boundary sites/);
-    exactly1('code-review-fix: two sites are one finding', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', 1, /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/);
-    quiet1('code-review: three sites (the limit) are enough', [['gsd-core/workflows/code-review.md', appendWord1('note')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: expected at least 3 frontmatter-boundary sites/);
-    quiet1('code-review-fix: three sites (the limit) are enough', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 3 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/);
-    editFiles1('code-review-fix: two sites (limit - 1) are too few', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/);
-    editFiles1('code-review-fix: one site is too few', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 1 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/);
-    editFiles1('code-review-fix: no site is too few', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 0 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/);
-    quiet1('code-review-fix: four sites (limit + 1) are enough', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 4 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review-fix\.md: expected at least 3 frontmatter-boundary sites/);
-    quiet1('code-review: a fourth, normalized site is enough', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: expected at least 3 frontmatter-boundary sites/);
-    quiet1('sites: blanks between the normalize tokens are any whitespace', [['gsd-core/workflows/code-review.md', append('const m = content.replace( /\\r\\n/g , \'\\n\' ).match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    quiet1('sites: tabs and a no-break space between the normalize tokens are enough', [['gsd-core/workflows/code-review.md', append('const m = content.replace(\t/\\r\\n/g\u00a0,\t\'\\n\'\u00a0).match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    quiet1('sites: no blank at all between the normalize tokens is enough', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g,\'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    quiet1('sites: a content.match preceded by a dot on a normalized line is not raw', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = x.content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    quiet1('sites: a content.match preceded by a word character on a normalized line is not raw', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = _content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: a raw content.match on a normalized line is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: a raw content.match after an opening parenthesis is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = (content.match(/^---\\n([\\s\\S]*?)\\n---/));')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: a raw content.match with a tab before the regex is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = content.match(\t/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: the line feed written in double quotes is not the normalize', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, "\\n").match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: an extra flag on the normalize regex is not the normalize', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/gi, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: the normalize and the match on separate lines is a finding on the match line', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\')\n  .match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
-    editFiles1('sites: the normalize after the match is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.match(/^---\\n([\\s\\S]*?)\\n---/) || content.replace(/\\r\\n/g, \'\\n\');')]], 'code-review-summary-parser', /gsd-core\/workflows\/code-review\.md: every frontmatter-boundary site must normalize CRLF before matching/);
+    exactly1('code-review: one raw site is one finding', [['gsd-core/workflows/code-review.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }]], 'code-review-summary-parser', 1, /every frontmatter-boundary site must normalize CRLF before matching/);
+    exactly1('code-review-fix: one raw site is one finding', [['gsd-core/workflows/code-review-fix.md', (text) => { const at = text.indexOf('content.replace(/\\r\\n/g, \'\\n\').match('); return text.slice(0, at) + 'content.match(' + text.slice(at + 37); }]], 'code-review-summary-parser', 1, /every frontmatter-boundary site must normalize CRLF before matching/);
+    exactly1('code-review: two sites are one finding', [['gsd-core/workflows/code-review.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', 1, /expected at least 3 frontmatter-boundary sites/);
+    exactly1('code-review-fix: two sites are one finding', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', 1, /expected at least 3 frontmatter-boundary sites/);
+    editFiles1('code-review: two sites (limit - 1) are too few', [['gsd-core/workflows/code-review.md', compose1(append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);'), (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); })]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    quiet1('code-review: three sites (the limit) are enough', [['gsd-core/workflows/code-review.md', compose1(append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);'), (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 3 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); })]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    quiet1('code-review: four sites (limit + 1) are enough', [['gsd-core/workflows/code-review.md', compose1(append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);'), (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 4 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); })]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    exactly1('two raw sites in code-review are one finding that names both lines', [['gsd-core/workflows/code-review.md', compose1(append('const a = content.match(/^---\\n([\\s\\S]*?)\\n---/);'), append('const a = content.match(/^---\\n([\\s\\S]*?)\\n---/);'))]], 'code-review-summary-parser', 1, /\(lines \d+, \d+\)/);
+    exactly1('one raw site in code-review is one finding that names the line', [['gsd-core/workflows/code-review.md', append('const a = content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', 1, /\(line \d+\)/);
+    quiet1('code-review-fix: three sites (the limit) are enough', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 3 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    editFiles1('code-review-fix: two sites (limit - 1) are too few', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 2 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    editFiles1('code-review-fix: one site is too few', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 1 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    editFiles1('code-review-fix: no site is too few', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 0 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    quiet1('code-review-fix: four sites (limit + 1) are enough', [['gsd-core/workflows/code-review-fix.md', (text) => { const parts = text.split('/^---\\n([\\s\\S]*?)\\n---/)'); return parts.map((part, i) => (i === 0 ? part : (i <= 4 ? '/^---\\n([\\s\\S]*?)\\n---/)' : '/^x/)') + part)).join(''); }]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    quiet1('code-review: a fourth, normalized site added is enough', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /expected at least 3 frontmatter-boundary sites/);
+    quiet1('sites: blanks between the normalize tokens are any whitespace', [['gsd-core/workflows/code-review.md', append('const m = content.replace( /\\r\\n/g , \'\\n\' ).match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    quiet1('sites: tabs and a no-break space between the normalize tokens are enough', [['gsd-core/workflows/code-review.md', append('const m = content.replace(\t/\\r\\n/g\u00a0,\t\'\\n\'\u00a0).match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    quiet1('sites: no blank at all between the normalize tokens is enough', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g,\'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    quiet1('sites: a content.match preceded by a dot on a normalized line is not raw', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = x.content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    quiet1('sites: a content.match preceded by a word character on a normalized line is not raw', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = _content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: a raw content.match on a normalized line is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = content.match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: a raw content.match after an opening parenthesis is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = (content.match(/^---\\n([\\s\\S]*?)\\n---/));')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: a raw content.match with a tab before the regex is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/); const n = content.match(\t/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: the line feed written in double quotes is not the normalize', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, "\\n").match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: an extra flag on the normalize regex is not the normalize', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/gi, \'\\n\').match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: the normalize and the match on separate lines is a finding on the match line', [['gsd-core/workflows/code-review.md', append('const m = content.replace(/\\r\\n/g, \'\\n\')\n  .match(/^---\\n([\\s\\S]*?)\\n---/);')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
+    editFiles1('sites: the normalize after the match is a finding', [['gsd-core/workflows/code-review.md', append('const m = content.match(/^---\\n([\\s\\S]*?)\\n---/) || content.replace(/\\r\\n/g, \'\\n\');')]], 'code-review-summary-parser', /every frontmatter-boundary site must normalize CRLF before matching/);
     {
       const fc = require('./helpers/fast-check-setup.cjs');
       const parser = require('../scripts/static-checks/text-contracts/code-review-summary-parser.cjs').walkers;
@@ -864,7 +866,11 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     goneOne1('gsd-core/workflows/audit-fix.md', 'audit-fix-command', 'removed');
     goneOne1('gsd-core/workflows/audit-fix.md', 'audit-fix-command', 'emptied');
     exactly1('the command renamed is one finding', [['commands/gsd/audit-fix.md', swap('name: gsd:audit-fix', 'name: gsd:fix')]], 'audit-fix-command', 1, /the command name must be gsd:audit-fix/);
-    exactly1('the verify source advertised is one finding', [['commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit|verify>')]], 'audit-fix-command', 2, /the argument-hint must/);
+    exactly1('the hint that lost audit-uat is one finding', [['commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit|verify>')]], 'audit-fix-command', 1, /the argument-hint must show --source <audit-uat>/);
+    exactly1('the verify source advertised next to audit-uat is one finding', [['commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit-uat> --source <audit|verify>')]], 'audit-fix-command', 1, /the argument-hint must not advertise the unsupported verify source/);
+    exactly1('the dry-run flag gone is one finding', [['gsd-core/workflows/audit-fix.md', eraseAll('dry-run')]], 'audit-fix-command', 1, /the workflow must document the --dry-run flag/);
+    exactly1('fix-failed gone is one finding', [['gsd-core/workflows/audit-fix.md', eraseAll('fix-failed')]], 'audit-fix-command', 1, /the workflow must mark failed fixes as fix-failed/);
+    exactly1('no fix-loop marker is one finding', [['gsd-core/workflows/audit-fix.md', swap('fix-loop', 'fixloop')]], 'audit-fix-command', 1, /the --dry-run stop must be documented before the fix-loop step/);
     exactly1('the workflow reference gone is one finding', [['commands/gsd/audit-fix.md', eraseAll('audit-fix.md')]], 'audit-fix-command', 1, /the command must reference the audit-fix\.md workflow/);
     exactly1('npm test gone is one finding', [['gsd-core/workflows/audit-fix.md', eraseAll('npm test')]], 'audit-fix-command', 1, /the workflow must run npm test as part of the fix loop/);
     exactly1('git commit before npm test is one finding', [['gsd-core/workflows/audit-fix.md', swap('<step name="fix-loop">', '<step name="fix-loop">\ngit commit\n')]], 'audit-fix-command', 1, /npm test must appear before the commit/);
@@ -1163,8 +1169,6 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     quiet1('the write in place: section replace alone is enough', [['gsd-core/workflows/edit-phase.md', compose1((text) => { let out = text; for (const word of ['place','replace']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('section replace'))]], 'edit-phase', /the workflow must write the phase back in place \(section replacement\)/);
     quiet1('the roadmap evolution update: state.add-roadmap-evolution alone is enough', [['gsd-core/workflows/edit-phase.md', compose1((text) => { let out = text; for (const word of ['state.add-roadmap-evolution','roadmap evolution']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('state.add-roadmap-evolution'))]], 'edit-phase', /the workflow must update the STATE\.md Roadmap Evolution after an edit/);
     quiet1('the roadmap evolution update: roadmap evolution alone is enough', [['gsd-core/workflows/edit-phase.md', compose1((text) => { let out = text; for (const word of ['state.add-roadmap-evolution','roadmap evolution']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('roadmap evolution'))]], 'edit-phase', /the workflow must update the STATE\.md Roadmap Evolution after an edit/);
-    quiet1('the scope comparison: scope alone is enough', [['gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', compose1((text) => { let out = text; for (const word of ['scope','phases']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('scope')))]], 'edit-phase', /the comparison must cover the scope and the phase set/);
-    quiet1('the scope comparison: phases alone is enough', [['gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', compose1((text) => { let out = text; for (const word of ['scope','phases']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('phases')))]], 'edit-phase', /the comparison must cover the scope and the phase set/);
     quiet1('the rollback wording: rollback alone is enough', [['gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', compose1((text) => { let out = text; for (const word of ['rollback','restore','revert','rolled back']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('rollback')))]], 'edit-phase', /a scope or phase-set mismatch must trigger a rollback/);
     quiet1('the rollback wording: restore alone is enough', [['gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', compose1((text) => { let out = text; for (const word of ['rollback','restore','revert','rolled back']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('restore')))]], 'edit-phase', /a scope or phase-set mismatch must trigger a rollback/);
     quiet1('the rollback wording: revert alone is enough', [['gsd-core/workflows/edit-phase.md', within('<step name="write_updated_phase">', '</step>', compose1((text) => { let out = text; for (const word of ['rollback','restore','revert','rolled back']) { for (;;) { const at = out.toLowerCase().indexOf(word); if (at === -1) break; out = out.slice(0, at) + out.slice(at + word.length); } } return out; }, append('revert')))]], 'edit-phase', /a scope or phase-set mismatch must trigger a rollback/);
@@ -1201,6 +1205,8 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     // the --force window: the first --force and the 300 characters after it must hold the word whole (limit - 1, limit, limit + 1)
     gapCases('proceed after --force', 'gsd-core/workflows/edit-phase.md', 'edit-phase', (text, gap) => afterForce1('proceed', gap)(text), 293, FORCE_WHY);
     gapCases('allow after --force', 'gsd-core/workflows/edit-phase.md', 'edit-phase', (text, gap) => afterForce1('allow', gap)(text), 295, FORCE_WHY);
+    gapCases('continue after --force', 'gsd-core/workflows/edit-phase.md', 'edit-phase', (text, gap) => afterForce1('continue', gap)(text), 292, FORCE_WHY);
+    gapCases('override after --force', 'gsd-core/workflows/edit-phase.md', 'edit-phase', (text, gap) => afterForce1('override', gap)(text), 292, FORCE_WHY);
     for (const word of ['proceed', 'continue', 'allow', 'override', 'PROCEED', 'Override']) {
       quiet1(`the --force window: ${word} alone is enough`, [['gsd-core/workflows/edit-phase.md', afterForce1(word, 1)]], 'edit-phase', FORCE_WHY);
     }
@@ -1282,7 +1288,11 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     exactly1('the row: no blank between /gsd-phase and --edit is one finding', [['docs/INVENTORY.md', invCell1('`/gsd-phase--edit`')]], 'edit-phase', 1, INV_WHY);
     exactly1('the row with another first cell is one finding (the file still names edit-phase.md)', [['docs/INVENTORY.md', swap('| `edit-phase.md` |', '| `edit-phase.mdx` |')]], 'edit-phase', 1, INV_WHY);
     exactly1('the row without a leading pipe is one finding', [['docs/INVENTORY.md', swap('| `edit-phase.md` |', 'x `edit-phase.md` |')]], 'edit-phase', 1, INV_WHY);
-    editFiles1('edit-phase.md gone from the whole inventory is a finding for the row and for the name', [['docs/INVENTORY.md', eraseAll('edit-phase.md')]], 'edit-phase', /INVENTORY\.md must contain the edit-phase\.md workflow row/);
+    exactly1('edit-phase.md gone from the whole inventory is one finding', [['docs/INVENTORY.md', eraseAll('edit-phase.md')]], 'edit-phase', 1, INV_WHY);
+    const ONE_CELL = '| `edit-phase.md` | Edit any field of an existing phase in ROADMAP.md in place, preserving number and position. | `/gsd-phase --edit` |';
+    exactly1('a row with two cells is one finding (the caller cell is missing)', [['docs/INVENTORY.md', swap(ONE_CELL, '| `edit-phase.md` | text |')]], 'edit-phase', 1, INV_WHY);
+    exactly1('a row with one cell is one finding', [['docs/INVENTORY.md', swap(ONE_CELL, '| `edit-phase.md` |')]], 'edit-phase', 1, INV_WHY);
+    editFiles1('a row without a caller cell hides neither the manifest nor the COMMANDS.md assertion', [['docs/INVENTORY.md', swap(ONE_CELL, '| `edit-phase.md` | text |')], ['docs/COMMANDS.md', eraseAll('/gsd-phase')]], 'edit-phase', /COMMANDS\.md must document \/gsd-phase/);
     // the manifest: invalid JSON, a missing or mistyped families mapping and a mistyped list are one finding each
     exactly1('a manifest that is not JSON is one finding', [['docs/INVENTORY-MANIFEST.json', (text) => `${text}}`]], 'edit-phase', 1, /the manifest is not valid JSON/);
     exactly1('a manifest that is null is one finding', [['docs/INVENTORY-MANIFEST.json', () => 'null']], 'edit-phase', 1, /the manifest has no families mapping/);
@@ -1386,7 +1396,6 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
           capturesScopeBefore: [(c) => /milestone-scope/.test(c), ['milestone-scope', 'MILESTONE-SCOPE', 'milestone']],
           namesScopeBefore: [(c) => /SCOPE_BEFORE/i.test(c), ['SCOPE_BEFORE', 'scope_before', 'SCOPE']],
           rederivesScopeAfter: [(c) => /SCOPE_AFTER/i.test(c), ['SCOPE_AFTER', 'scope_after', 'SCOPE']],
-          comparesScopeAndPhases: [(c) => /scope|phases/i.test(c), ['scope', 'phases', 'SCOPE', 'phase']],
           rollsBack: [(c) => /rollback|restore|revert|rolled back/i.test(c), ['rollback', 'restore', 'revert', 'rolled back', 'ROLLBACK', 'roll']],
           surfacesScopeError: [(c) => /milestone scope changed|scope changed/i.test(c), ['milestone scope changed', 'scope changed', 'Scope Changed', 'scope']],
         };
@@ -1459,6 +1468,29 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         }, (expected) => expected !== null);
       });
     }
+    {
+      const fc = require('./helpers/fast-check-setup.cjs');
+      const audit = require('../scripts/static-checks/text-contracts/audit-fix-command.cjs').walkers;
+      const strings = (tokens, maxLength = 10) => fc.array(fc.constantFrom(...tokens), { maxLength }).map((parts) => parts.join(''));
+      test('property: the dry-run order agrees with the index comparison it replaced, where the flag is named', () => {
+        // No dry-run at all is the finding of the assertion that asks for the flag, so the order check is silent there.
+        const oracle = (text) => {
+          const dryRun = text.indexOf('dry-run');
+          const fixLoop = text.indexOf('fix-loop');
+          if (dryRun === -1) return true;
+          return fixLoop > -1 && dryRun < fixLoop;
+        };
+        let accepted = 0;
+        let rejected = 0;
+        fc.assert(fc.property(strings(['dry-run', 'fix-loop', 'x', '\n', ' '], 8), (s) => {
+          const expected = oracle(s);
+          assert.equal(audit.dryRunBeforeFixLoop(s) === true, expected, JSON.stringify(s));
+          if (expected) accepted += 1;
+          else rejected += 1;
+        }));
+        assert.ok(accepted > 0 && rejected > 0, `the property saw ${accepted} accepted and ${rejected} rejected strings`);
+      });
+    }
   }
 
   {
@@ -1505,8 +1537,9 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       return text.slice(0, at) + edit(text.slice(at, end)) + text.slice(end);
     };
     // A contract wrapped so its loader throws: the real check, run through the engine, with the library it loads replaced.
-    const seamRun = (t, id, factory, heavy = false) => {
+    const seamRun = (t, id, factory, heavy = false, edits = []) => {
       const root = copyOfRepoFiles(t, heavy ? HEAVY : []);
+      for (const [rel, edit] of edits) rewrite(root, rel, edit);
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-seam-'));
       t.after(() => cleanup(dir));
       const real = path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', `${id}.cjs`);
@@ -1578,6 +1611,23 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         assert.equal(findings.length, 1, messagesOf(findings));
         assert.match(findings[0].message, /js-yaml cannot be loaded: no yaml/);
       });
+      test('a js-yaml that cannot be loaded leaves the text checks of release.yml running', (t) => {
+        const findings = seamRun(t, 'adr-218-release-version-validation', "(ctx) => real.check(ctx, () => { throw new Error('no yaml'); })", false, [[RELEASE, eraseAll('Reject already-published versions')]]);
+        assert.equal(findings.length, 2, messagesOf(findings));
+        assert.ok(findings.some((f) => f.message.includes('js-yaml cannot be loaded: no yaml')), messagesOf(findings));
+        assert.ok(findings.some((f) => f.message.includes('must contain a step named "Reject already-published versions"')), messagesOf(findings));
+      });
+      test('a js-yaml that cannot be loaded and a removed release.yml are two causes and two findings', (t) => {
+        const root = copyOfRepoFiles(t);
+        fs.unlinkSync(path.join(root, ...RELEASE.split('/')));
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-seam-'));
+        t.after(() => cleanup(dir));
+        const real = path.join(REPO_ROOT, 'scripts', 'static-checks', 'text-contracts', 'adr-218-release-version-validation.cjs');
+        fs.writeFileSync(path.join(dir, 'adr-218-release-version-validation.cjs'), `const real = require(${JSON.stringify(real)});\nmodule.exports = { id: real.id, check: (ctx) => real.check(ctx, () => { throw new Error('no yaml'); }) };\n`);
+        const findings = textContracts.run({ root, dir, only: ['adr-218-release-version-validation'], minContracts: 1 });
+        assert.equal(findings.length, 2, messagesOf(findings));
+      });
+      exactlyOne('a circular needs list is one finding and does not throw', [[RELEASE, swap('  create:\n    needs: validate-version\n', '  create:\n    needs: &n [*n]\n')]], 'adr-218-release-version-validation', 'needs is a list of 1 item(s)');
       test('the grep -qE walk takes both quote forms, skips an empty pattern and an unquoted one, and continues after a miss', () => {
         assert.deepEqual(walkers.extractGrepPatterns("grep -qE '^a$' && grep -qE \"^b\" && grep -qE '' && grep -qE x && grep  -qE\t'c'"), ['^a$', '^b', 'c']);
         assert.deepEqual(walkers.extractGrepPatterns('grep -qEx "a" grep -qE "unterminated'), []);
@@ -1687,7 +1737,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         assert.equal(tdd.restatesCycleStructurally('RED\n- RED a\n- GREEN b\nREFACTOR c tdd.md'), false);
       });
 
-      test('a filler of any length never lets a citation-free, list-free restatement through', () => {
+      test('a filler of any length never lets a citation-free, list-free restatement through, and a citation counts only inside the span limit', () => {
         const fillerArb = fc.string({ maxLength: 300 }).map((s) => s
           .replace(/[\r\n]/g, ' ')
           .replace(/[-*]/g, '.')
@@ -1696,7 +1746,19 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
           .replace(/\bREFACTOR\b/gi, 'xxx')
           .replace(/tdd/gi, 'xxx')
           .replace(/canonical/gi, 'xxx'));
-        fc.assert(fc.property(fillerArb, (filler) => tdd.restatesCycleStructurally([`RED: write a failing test. ${filler}`, `GREEN: make it pass. ${filler}`, 'REFACTOR: clean it up.'].join(' ')) === true), { numRuns: 20 });
+        let withinLimit = 0;
+        let pastLimit = 0;
+        const lengths = fc.integer({ min: 0, max: 300 }).map((n) => 'x'.repeat(n));
+        fc.assert(fc.property(fc.oneof(fillerArb, lengths), (filler) => {
+          const fixture = [`RED: write a failing test. ${filler}`, `GREEN: make it pass. ${filler}`, 'REFACTOR: clean it up.'].join(' ');
+          assert.equal(tdd.restatesCycleStructurally(fixture), true, 'no citation');
+          const cited = `${fixture} tdd.md`;
+          const past = tdd.measureCycleSpan(cited).span > THRESHOLD;
+          assert.equal(tdd.restatesCycleStructurally(cited), past, 'a citation is a pointer unless the span is past the limit');
+          if (past) pastLimit += 1;
+          else withinLimit += 1;
+        }));
+        assert.ok(withinLimit > 0 && pastLimit > 0, `the property saw ${withinLimit} spans inside and ${pastLimit} past the limit`);
       });
 
       test('a citation of a later heading-bounded section is not borrowed', () => {
@@ -1746,6 +1808,9 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
 
       test('the halt reason must be a whole word on the Reason line before its closing brace', () => {
         for (const text of ['Reason: {impl_before_test}', 'Reason: {a | impl_before_test | b}', 'Reason: {impl_before_test', 'x Reason: {a}\nReason: {impl_before_test}']) assert.equal(tdd.namesHaltReason(text), true, text);
+        assert.equal(tdd.namesHaltReason('Reason: {Reason: {impl_before_test}'), true);
+        assert.equal(tdd.namesHaltReason('Reason: {Reason: {x}\nReason: {impl_before_test}'), true);
+        assert.equal(tdd.namesHaltReason('Reason: {Reason: {impl_before_test_}'), false);
         for (const text of ['Reason: {impl_before_test_x}', 'Reason: {x_impl_before_test}', 'Reason: {a\nimpl_before_test}', 'Reason: {a} impl_before_test', 'impl_before_test', 'Reason: impl_before_test']) assert.equal(tdd.namesHaltReason(text), false, text);
       });
 
@@ -1772,6 +1837,16 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       mutates('an advanced heading renamed: the additional count disagrees', AGENTS_MD, swap('\n### gsd-pattern-mapper\n', '\n### pattern-mapper\n'), 'the prose says "thirteen additional shipped agents"; 12 ### gsd-* headings');
       mutates('an advanced heading renamed: the slug list disagrees', AGENTS_MD, swap('\n### gsd-pattern-mapper\n', '\n### pattern-mapper\n'), 'extra in the prose: ["pattern-mapper"]');
       mutates('the advanced section heading renamed', AGENTS_MD, swap('\n## Advanced and Specialized Agents\n', '\n## Other Agents\n'), 'agents.md must list the advanced agents as ### gsd-* headings inside');
+      exactlyOne('an advanced section that lost its heading is exactly one finding', [[AGENTS_MD, swap('\n## Advanced and Specialized Agents\n', '\n## Other Agents\n')]], ACP, 'agents.md must list the advanced agents as ### gsd-* headings inside', true);
+      exactlyOne('a primary section with no agent headings is exactly one finding', [[AGENTS_MD, swap('\n### gsd-', '\n### ')]], ACP, 'agents.md must list the primary agents as ### gsd-* headings before', true);
+      test('an emptied agent file named by two headings is one finding for that file', (t) => {
+        const root = copyOfRepoFiles(t, HEAVY);
+        rewrite(root, AGENTS_MD, swap('\n### gsd-executor\n', '\n### gsd-executor\n\n### gsd-executor\n'));
+        fs.writeFileSync(path.join(root, EXECUTOR), '');
+        const findings = runShipped(root, [ACP]).filter((f) => f.file === EXECUTOR);
+        assert.equal(findings.length, 1, messagesOf(findings));
+        assert.match(findings[0].message, /the file is empty/);
+      });
       mutates('the primary section emptied of agent headings', AGENTS_MD, swap('\n### gsd-', '\n### '), 'agents.md must list the primary agents as ### gsd-* headings before');
       mutates('an agent listed as both primary and advanced', AGENTS_MD, swap('\n## Advanced and Specialized Agents\n', '\n## Advanced and Specialized Agents\n\n### gsd-executor\n'), 'in both the primary and the advanced sections: ["gsd-executor"]');
       mutates('an advanced agent also listed in primary: the counts no longer add up', AGENTS_MD, swap('\n## Advanced and Specialized Agents\n', '\n### gsd-pattern-mapper\n\n## Advanced and Specialized Agents\n'), 'must add up to the shipped agent files');
@@ -1904,6 +1979,9 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         assert.deepEqual(walkers.parseAgentsMd(doc), { primaryHeadings: ['gsd-a'], advancedHeadings: ['gsd-b', 'gsd-f'] });
         assert.deepEqual(walkers.parseAgentsMd('### gsd-a\r\n## Advanced and Specialized Agents\r\n### gsd-b\r\n'), { primaryHeadings: ['gsd-a'], advancedHeadings: ['gsd-b'] });
       });
+      test('the slug list is lower-cased in ASCII only: a Kelvin sign stays itself', () => {
+        assert.deepEqual(walkers.parentheticalSlugs('(\u212a, B) have concise stubs'), ['\u212a', 'b']);
+      });
       test('the INVENTORY table is read between its Agents heading and the next h2, by the Primary doc column', () => {
         const doc = ['## Agents (3 shipped)', '', '| Agent | Role | Primary doc |', '|---|---|---|', '| gsd-a | r | primary |', '| gsd-b | | advanced stub |',
           '| gsd-b.compact | r | inventory only |', '| other | r | primary |', '| gsd-c |', '## Commands', '| gsd-z | r | primary |'].join('\n');
@@ -1938,8 +2016,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       const whole = (text) => () => text;
 
       // The guidance of the executor and the planner: each alternative alone is enough, and none is a finding.
-      mutates('the executor loses every mention of MCP', EXECUTOR, stripGuidance, 'gsd-executor.md should mention MCP tool availability/usage');
-      mutates('the executor loses every mention of MCP and names none', EXECUTOR, stripGuidance, 'gsd-executor.md should reference MCP tools (MCP or mcp__)');
+      exactlyOne('an executor that loses every mention of MCP is exactly one finding', [[EXECUTOR, stripGuidance]], MCP, 'gsd-executor.md should mention MCP tool availability/usage', true);
       mutates('the planner loses every mention of MCP', PLANNER, stripGuidance, 'gsd-planner.md should mention MCP tool availability/usage');
       for (const [text, ok] of [['mcp', true], ['MCP', true], ['mCp', true], ['x context7 x', true], ['the available tools of the runtime', true], ['Context7', false], ['Available tools', false], ['m c p', false]]) {
         test(`a planner whose text is ${JSON.stringify(text)} ${ok ? 'mentions MCP' : 'does not mention MCP'}`, (t) => {
@@ -1965,6 +2042,11 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         for (const tool of REQUIRED) {
           mutates(`${rel} without ${tool}`, rel, inToolsLine((line) => line.split(tool).join('')), `missing ${tool}`);
         }
+        exactlyOne(`${rel} whose frontmatter lost tools: while its body carries the line is exactly one finding`, [[rel, (text) => {
+          const at = text.indexOf('\ntools:') + 1;
+          const end = text.indexOf('\n', at);
+          return `${text.slice(0, at)}toolz:${text.slice(at + 'tools:'.length, end)}${text.slice(end)}\n${text.slice(at, end)}\n`;
+        }]], MCP, 'must have a tools: frontmatter line', true);
         holds(`${rel} with its tools reversed and padded is accepted`, [[rel, inToolsLine((line) => `tools:      ${line.slice('tools:'.length).trim().split(', ').reverse().join(', ')}   `)]], MCP, true);
       }
       mutates('a researcher without two required tools names both', RESEARCHERS[1], inToolsLine((line) => line.split('mcp__exa__*').join('').split('mcp__jina__*').join('')), 'missing mcp__exa__*, mcp__jina__*');
@@ -2498,7 +2580,6 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     const MODEL_LIMIT = 200 - MARKER.length - 1 - ATTRIBUTE.length;
     noMessage('"explicit user selection" alone is enough for the confirmation', EXPLORE, eraseAll('Never write artifacts without'), EXPLORE_ID, /require user confirmation before writing artifacts/);
     noMessage('"Never write artifacts without" alone is enough for the confirmation', EXPLORE, eraseAll('explicit user selection'), EXPLORE_ID, /require user confirmation before writing artifacts/);
-    noMessage('"source-vs-prior" alone is enough for the conflict abstention', EXPLORE, eraseAll('conflict'), EXPLORE_ID, /abstain arm must cover a source-vs-prior conflict/);
     noMessage('"conflict-abstention" alone is enough for the conflict abstention', EXPLORE, (text) => text.replace(/source-vs-prior/g, 'srcprior').replace(/conflict(?!-abstention)/gi, 'clash'), EXPLORE_ID, /abstain arm must cover a source-vs-prior conflict/);
     noMessage('a conflict sentence naming the ledger is enough for the conflict abstention', EXPLORE, (text) => text.replace(/source-vs-prior/g, 'srcprior').replace(/conflict-abstention/gi, 'clash-abstention'), EXPLORE_ID, /abstain arm must cover a source-vs-prior conflict/);
     noMessage('conflict then ledger in one sentence alone is enough for the conflict abstention', EXPLORE, (text) => `${text.replace(/source-vs-prior/g, 'srcprior').replace(/conflict/gi, 'clash')}\nA conflict goes to the ledger.\n`, EXPLORE_ID, /abstain arm must cover a source-vs-prior conflict/);
@@ -2567,11 +2648,10 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     oneFinding('the success criteria opening erased is one finding', CHECKER, eraseAll('<success_criteria>'), COUPLING, 'marker "<success_criteria>" not found');
     oneFinding('the success criteria closing erased is one finding', CHECKER, eraseAll('</success_criteria>'), COUPLING, 'closing marker "</success_criteria>" not found');
     oneFinding('the exempt tier flow line replaced is one finding', REVISION_LOOP, swap('If PASSED or only INFO-level issues', 'If PASSED or any issues'), COUPLING, 'revision-loop.md must state its exempt severity tier in the flow');
-    test('a warning exempt tier turns every info example into a finding', (t) => {
+    test('a warning exempt tier turns the info example into one finding', (t) => {
       const findings = runEdits(t, [[REVISION_LOOP, swap('If PASSED or only INFO-level issues', 'If PASSED or only WARNING-level issues')]], COUPLING);
-      assert.equal(findings.length, 2, messagesOf(findings));
-      assert.ok(findings.some((f) => /example issue must carry the tier revision-loop\.md exempts \(no severity: warning\)/.test(f.message)), messagesOf(findings));
-      assert.ok(findings.some((f) => /carries severity: info, the exempt tier is warning/.test(f.message)), messagesOf(findings));
+      assert.equal(findings.length, 1, messagesOf(findings));
+      assert.ok(/example issue must carry the tier revision-loop\.md exempts \(no severity: warning\)/.test(findings[0].message), messagesOf(findings));
     });
     oneFinding('the plan-phase parse line missing is one finding', PLAN_PHASE, swap('Parse issue count from checker return:', 'Parse the count:'), COUPLING, 'plan-phase.md step 12 must carry the parse-issue-count paragraph');
     oneFinding('the quick-mode handler missing is one finding', QUICK_LOOP, swap('- **`## ISSUES FOUND`:**', '- **`## ISSUES`:**'), COUPLING, 'plan-checker-loop.md must carry the ISSUES FOUND handler line');
@@ -2584,9 +2664,8 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       assert.equal(findings.length, 1, messagesOf(findings));
       assert.ok(findings[0].message.includes('carries severity: warning'), messagesOf(findings));
     });
-    const DIMENSION_TWELVE = 'agents/gsd-plan-checker.md';
     test('a fenced dimension heading is not a numbered dimension', (t) => {
-      const findings = runEdits(t, [[DIMENSION_TWELVE, append('```\n## Dimension 3b: Not real\n```')]], COUPLING);
+      const findings = runEdits(t, [[CHECKER, append('```\n## Dimension 3b: Not real\n```')]], COUPLING);
       assert.deepEqual(findings, [], messagesOf(findings));
     });
 
@@ -2668,20 +2747,81 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       const findings = seamRun(t, COUPLING, `real.walkers.buildCheck({ loadSectionizer: () => { throw new Error('no build'); }, loadTextLines: () => require(${LIB('text-lines.cjs')}) })`);
       assert.equal(findings.length, 1, messagesOf(findings));
       assert.match(findings[0].message, /markdown-sectionizer\.cjs cannot be loaded: no build/);
+      assert.equal(findings[0].file, 'gsd-core/bin/lib/markdown-sectionizer.cjs');
     });
     test('a text-lines module that cannot be loaded is one finding of the plan-checker-coupling contract', (t) => {
       const findings = seamRun(t, COUPLING, `real.walkers.buildCheck({ loadSectionizer: () => require(${LIB('markdown-sectionizer.cjs')}), loadTextLines: () => { throw new Error('no lines'); } })`);
       assert.equal(findings.length, 1, messagesOf(findings));
       assert.match(findings[0].message, /text-lines\.cjs cannot be loaded: no lines/);
+      assert.equal(findings[0].file, 'gsd-core/bin/lib/text-lines.cjs');
     });
     test('both libraries failing are two findings of the plan-checker-coupling contract', (t) => {
       const findings = seamRun(t, COUPLING, "real.walkers.buildCheck({ loadSectionizer: () => { throw new Error('a'); }, loadTextLines: () => { throw new Error('b'); } })");
       assert.equal(findings.length, 2, messagesOf(findings));
+      assert.deepEqual(findings.map((f) => f.file).sort(), ['gsd-core/bin/lib/markdown-sectionizer.cjs', 'gsd-core/bin/lib/text-lines.cjs']);
     });
     test('a text-lines module that cannot be loaded is one finding of the edge-probe-spec-phase-contract contract', (t) => {
       const findings = seamRun(t, EDGE, "real.walkers.buildCheck({ loadTextLines: () => { throw new Error('no lines'); } })");
       assert.equal(findings.length, 1, messagesOf(findings));
       assert.match(findings[0].message, /text-lines\.cjs cannot be loaded: no lines/);
+      assert.equal(findings[0].file, 'gsd-core/bin/lib/text-lines.cjs');
+    });
+
+    // ---- review round 1: the bounds of the arm window and the dimension floor, one finding per cause, the guard region, indented fences, library calls that throw
+    const couplingWalkers = require('../scripts/static-checks/text-contracts/plan-checker-coupling.cjs').walkers;
+    const sectionizerLib = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+    const ARM = '**If iteration_count >= 3:**';
+    // The arm checks read the arm line and the four lines after it: with gap blank lines the carrying line is line gap + 2, so gap 3 is the fifth line.
+    gapCases('blank lines between the iteration cap arm line and the line that carries its text', PLAN_PHASE, COUPLING,
+      (text, gap) => text.split(`${ARM}\n\n`).join(`${ARM}\n${'\n'.repeat(gap)}`), 3, /the iteration cap arm lacks/);
+    // The numbered dimensions kept: the later headings lose their label (the heading text stays).
+    const keepLabels = (count) => (text) => {
+      const labels = couplingWalkers.dimensionLabels(sectionizerLib.stripFencedCode(text).text);
+      assert.ok(labels.length >= count, `the agent has ${labels.length} numbered dimensions`);
+      return labels.slice(count).reduce((out, label) => out.split(`\n## Dimension ${label}: `).join(`\n## Dimension ${label} `), text);
+    };
+    for (const [count, ok] of [[11, false], [12, true], [13, true]]) {
+      test(`${count} numbered dimensions ${ok ? 'satisfy' : 'are below the floor of'} plan-checker-coupling`, (t) => {
+        const findings = runEdits(t, [[CHECKER, keepLabels(count)]], COUPLING);
+        if (ok) {
+          assert.deepEqual(findings, [], messagesOf(findings));
+        } else {
+          assert.equal(findings.length, 1, messagesOf(findings));
+          assert.ok(findings[0].message.includes('expected at least 12 numbered dimensions, found 11'), messagesOf(findings));
+        }
+      });
+    }
+    oneFinding('the tier probe erased is one finding', EXPLORE, eraseAll('--pick tier'), EXPLORE_ID, 'the tier floor needs the resolved tier as its trigger');
+    oneFinding('RESEARCHER_TIER erased is one finding', EXPLORE, eraseAll('RESEARCHER_TIER'), EXPLORE_ID, 'the floor must reference RESEARCHER_TIER, the single signal');
+    oneFinding('a non-exempt tier in the Dimension 3b example is one finding', CHECKER, inThreeB(swap('severity: info', 'severity: warning')), COUPLING, 'example issue must carry the tier revision-loop.md exempts');
+    oneFinding('a drifted first enum copy of explore.md is one finding and blames nobody else', EXPLORE, (text) => {
+      const from = ' | non-authoritative source | ';
+      const at = text.indexOf(from);
+      return text.slice(0, at) + ' | non-authoritative sources | ' + text.slice(at + from.length);
+    }, EXPLORE_ID, 'the copies within explore.md are not byte-identical');
+    passesHeavy('the guard-list end marker at the top of the file is searched after the start marker', EXPLORE, (text) => `**Untagged findings.**\n${text}`, EXPLORE_ID);
+    oneFinding('an indented yaml fence with a warning severity is counted', CHECKER, inThreeB(append('    ```yaml\n    severity: warning\n    ```')), COUPLING, 'carries severity: warning');
+    passesHeavy('the real yaml example opened under a list-item indent still counts', CHECKER, inThreeB(swap('```yaml', '    ```yaml')), COUPLING);
+    const SECTIONIZER_PATH = 'gsd-core/bin/lib/markdown-sectionizer.cjs';
+    const TEXT_LINES_PATH = 'gsd-core/bin/lib/text-lines.cjs';
+    const throwing = (name, member) => `({ ...require(${LIB(name)}), ${member}: () => { throw new Error('boom'); } })`;
+    for (const [title, factory, file] of [
+      ['a stripFencedCode that throws', `real.walkers.buildCheck({ loadSectionizer: () => ${throwing('markdown-sectionizer.cjs', 'stripFencedCode')}, loadTextLines: () => require(${LIB('text-lines.cjs')}) })`, SECTIONIZER_PATH],
+      ['a scanFencedBlocks that throws', `real.walkers.buildCheck({ loadSectionizer: () => ${throwing('markdown-sectionizer.cjs', 'scanFencedBlocks')}, loadTextLines: () => require(${LIB('text-lines.cjs')}) })`, SECTIONIZER_PATH],
+      ['a splitLines that throws', `real.walkers.buildCheck({ loadSectionizer: () => require(${LIB('markdown-sectionizer.cjs')}), loadTextLines: () => ${throwing('text-lines.cjs', 'splitLines')} })`, TEXT_LINES_PATH],
+    ]) {
+      test(`${title} is one finding of the plan-checker-coupling contract`, (t) => {
+        const findings = seamRun(t, COUPLING, factory);
+        assert.equal(findings.length, 1, messagesOf(findings));
+        assert.equal(findings[0].file, file);
+        assert.match(findings[0].message, /threw: boom/);
+      });
+    }
+    test('a splitLines that throws is one finding of the edge-probe-spec-phase-contract contract', (t) => {
+      const findings = seamRun(t, EDGE, `real.walkers.buildCheck({ loadTextLines: () => ${throwing('text-lines.cjs', 'splitLines')} })`);
+      assert.equal(findings.length, 1, messagesOf(findings));
+      assert.equal(findings[0].file, TEXT_LINES_PATH);
+      assert.match(findings[0].message, /threw: boom/);
     });
 
     // ---- properties: each walker against the pattern or loop it replaced. The generators draw random tokens and chains of the pattern's own
@@ -2804,6 +2944,12 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
           const ok = agent !== -1 && type !== -1 && agent < type;
           return [spawn.error === undefined ? [spawn.prompt, spawn.reach] : null, ok ? [s.slice(agent, type), s.slice(agent, type + 200)] : null];
         }, (expected) => expected !== null);
+        agrees('guard region', strings(['Two guards ride with it:', '**Untagged findings.**', 'x', '\n'], 7), (s) => {
+          const start = s.indexOf('Two guards ride with it:');
+          const end = s.indexOf('**Untagged findings.**', start);
+          const valid = start !== -1 && end !== -1 && start < end;
+          return [explore.regionAfter(s, 'Two guards ride with it:', '**Untagged findings.**').text ?? null, valid ? s.slice(start, end) : null];
+        }, (expected) => expected !== null);
         const ENUM = /`?unverifiable`?(?: \| `?[^`|{}()]+`?){3} \| `?untagged — disposition not reported`?/g;
         const oldEnums = (text) => [...text.replace(/\s+/g, ' ').matchAll(ENUM)].map((m) => m[0].replace(/`/g, '').split('|').map((part) => part.trim()));
         const TAIL = 'untagged — disposition not reported';
@@ -2863,13 +3009,14 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
           return tiers;
         };
         // Well-formed fences: a bare ``` opens a block for the fence owner, where the old loop only toggled on a yaml opener, so the domain
-        // holds yaml and text blocks (the last one possibly never closed) and plain lines between them.
+        // holds yaml and text blocks (the last one possibly never closed) and plain lines between them; fence lines carry any indent (the
+        // contract trims leading blanks before scanning, as the old loop trimmed every line).
         const yamlContent = fc.array(fc.constantFrom('  severity: info', 'severity: BLOCKER', '  severity:', 'x', '', 'issue:', 'severity: warning'), { maxLength: 3 });
-        const fenced = fc.tuple(fc.array(fc.tuple(fc.constantFrom('yaml', 'text', 'plain'), yamlContent), { maxLength: 4 }), fc.boolean()).map(([blocks, closeLast]) => {
+        const fenced = fc.tuple(fc.array(fc.tuple(fc.constantFrom('yaml', 'text', 'plain'), yamlContent, fc.constantFrom('', '  ', '    ', '\t')), { maxLength: 4 }), fc.boolean()).map(([blocks, closeLast]) => {
           const lines = [];
-          blocks.forEach(([kind, content], i) => {
+          blocks.forEach(([kind, content, indent], i) => {
             if (kind === 'plain') lines.push(...content);
-            else lines.push(`\`\`\`${kind}`, ...content, ...(i === blocks.length - 1 && !closeLast ? [] : ['```']));
+            else lines.push(`${indent}\`\`\`${kind}`, ...content, ...(i === blocks.length - 1 && !closeLast ? [] : [`${indent}\`\`\``]));
           });
           return lines.join('\n');
         });

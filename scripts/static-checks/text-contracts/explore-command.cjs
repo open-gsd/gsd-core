@@ -35,6 +35,7 @@ const LEDGER_TAIL = 'untagged — disposition not reported';
 const LEDGER_EXCLUDED = new Set(['`', '|', '{', '}', '(', ')']);
 const PREAMBLE = '_GSD_SHIM_NAME="gsd-tools.cjs"';
 const TIER_PROBE = 'resolve-model gsd-phase-researcher --pick tier';
+const TIER_WORDS = ['resolve-model', 'gsd-phase-researcher', '--pick', 'tier'];
 const WINDOW = 60;
 
 // The text from the first `from` to the first `to`, which must come after it, or the reason it cannot be had.
@@ -47,12 +48,22 @@ function regionOf(text, from, to) {
   return { text: text.slice(start, end) };
 }
 
+// The text from the first `from` to the first `to` found AFTER it (the guard list's slice), or the reason it cannot be had.
+function regionAfter(text, from, to) {
+  const start = text.indexOf(from);
+  if (start === -1) return { error: `${JSON.stringify(from)} not found` };
+  const end = text.indexOf(to, start);
+  if (end === -1) return { error: `${JSON.stringify(to)} not found after ${JSON.stringify(from)}` };
+  if (start >= end) return { error: `${JSON.stringify(from)} must come before ${JSON.stringify(to)}` };
+  return { text: text.slice(start, end) };
+}
+
 // A predicate over one region: the region's own finding is made once, by `regionProblem`, so a bad region passes here.
-const inRegion = (from, to, predicate) => (text) => {
-  const region = regionOf(text, from, to);
+const inRegion = (from, to, predicate, find = regionOf) => (text) => {
+  const region = find(text, from, to);
   return region.text === undefined ? true : predicate(region.text);
 };
-const regionProblem = (from, to) => (text) => regionOf(text, from, to).error || true;
+const regionProblem = (from, to, find = regionOf) => (text) => find(text, from, to).error || true;
 
 // The Step 3, Step 4 and Step 6 headings (first occurrence of each) in that order, or what is wrong.
 function stepsProblem(text) {
@@ -202,7 +213,7 @@ function check(ctx) {
     }), 'the spawn prompt must ask the researcher for the [admit:/[refute:/[abstain: tags')
     .satisfies(inSpawn('prompt', (prompt) => hasAuthoritativeRefute(prompt) || 'no [refute: ...] (...authoritative...) qualifier'),
       "the spawn prompt's refute arm must require the contradicting source be AUTHORITATIVE for the claim")
-    .satisfies((text) => hasSequence(text, ['resolve-model', 'gsd-phase-researcher', '--pick', 'tier']) || 'not found',
+    .satisfies((text) => hasSequence(text, TIER_WORDS) || 'not found',
       'the tier floor needs the resolved tier as its trigger: a `resolve-model gsd-phase-researcher --pick tier` binding')
     .satisfies((text) => hasSequence(text, ['resolve-model', 'gsd-phase-researcher', '--pick', 'model']) || 'not found',
       'the spawn must bind the researcher model per model-profile-resolution.md')
@@ -213,7 +224,7 @@ function check(ctx) {
     .satisfies((text) => (text.includes('- **Tier floor**') ? true : 'not found'), 'the Tier floor bullet must exist')
     .satisfies(onClause((clause) => includesBounded(clause, 'RESEARCHER_TIER') || 'not found'),
       'the floor must reference RESEARCHER_TIER, the single signal')
-    .satisfies(onClause((clause) => precedesBounded(clause, 'RESEARCHER_TIER', 'haiku', DOT, { second: true }) || 'not found'),
+    .satisfies(onClause((clause) => !includesBounded(clause, 'RESEARCHER_TIER') || precedesBounded(clause, 'RESEARCHER_TIER', 'haiku', DOT, { second: true }) || 'not found'),
       'the floor must name `haiku` as the budget tier for gsd-phase-researcher')
     .satisfies(onClause((clause) => {
       const lower = asciiLower(clause);
@@ -245,7 +256,8 @@ function check(ctx) {
       const preamble = text.indexOf(PREAMBLE);
       const probe = text.indexOf(TIER_PROBE);
       if (preamble === -1) return 'the gsd_run bootstrap preamble must exist in the file';
-      if (probe === -1) return 'the research pass must call resolve-model to arm the tier floor';
+      // A probe that is absent altogether is the finding of the `--pick tier` binding assertion above.
+      if (probe === -1) return hasSequence(text, TIER_WORDS) ? 'the tier probe must be spelled with single blanks: resolve-model gsd-phase-researcher --pick tier' : true;
       return preamble < probe || 'the preamble comes after the tier-floor probe';
     }, 'gsd_run must be bootstrapped before the tier-floor probe runs')
     .satisfies(inRegion('## Step 4', '## Step 6', (region) => {
@@ -259,11 +271,11 @@ function check(ctx) {
     .satisfies(inRegion('## Step 4', '## Step 6', (region) => asciiLower(region).includes('fresh random') || asciiLower(region).includes('data_') || 'neither phrase is present'),
       'Step 4 must require a fresh/random per-wrap delimiter when fencing quoted research text')
     .lacks('Three guards', '"Three guards" must not appear: the untagged-findings rule moved out of the guard list into its own paragraph')
-    .satisfies(regionProblem('Two guards ride with it:', '**Untagged findings.**'), 'the guard-list intro must read "Two guards ride with it:" and the untagged-findings paragraph must follow it')
+    .satisfies(regionProblem('Two guards ride with it:', '**Untagged findings.**', regionAfter), 'the guard-list intro must read "Two guards ride with it:" and the untagged-findings paragraph must follow it')
     .satisfies(inRegion('Two guards ride with it:', '**Untagged findings.**', (region) => {
       const bullets = topLevelBullets(region);
       return bullets === 2 || `found ${bullets} top-level guard bullets`;
-    }), 'exactly 2 top-level guard bullets are expected')
+    }, regionAfter), 'exactly 2 top-level guard bullets are expected')
     .satisfies((text) => {
       const first = text.indexOf(PREAMBLE);
       const last = text.lastIndexOf(PREAMBLE);
@@ -313,8 +325,10 @@ function check(ctx) {
     const found = ledgerEnums(text);
     if (found.length === 0) return 'explore.md must carry at least one copy of the 5-value ledger-reason enum';
     if (found.length < 2) return `explore.md must carry at least 2 copies of the 5-value ledger-reason enum; found ${found.length}`;
-    reference = JSON.stringify(found[0]);
-    return found.every((copy) => JSON.stringify(copy) === reference) || 'the copies within explore.md are not byte-identical';
+    const first = JSON.stringify(found[0]);
+    if (!found.every((copy) => JSON.stringify(copy) === first)) return 'the copies within explore.md are not byte-identical';
+    reference = first;
+    return true;
   }, 'every ledger-enum copy within explore.md must be byte-identical to every other');
   const outside = (label) => (text) => {
     const found = ledgerEnums(text);
@@ -327,12 +341,12 @@ function check(ctx) {
 
   workflow.satisfies((text) => {
     const lower = asciiLower(text);
-    return lower.includes('source-vs-prior') || lower.includes('conflict-abstention') || conflictLedger(lower) || 'none of the three phrasings is present';
+    return lower.includes('conflict-abstention') || conflictLedger(lower) || 'neither phrasing is present';
   }, 'the abstain arm must cover a source-vs-prior conflict (conflict-abstention), routing to the ledger');
 }
 
 module.exports = {
-  walkers: { regionOf, spawnOf, ledgerEnums, tierFloorClause, hasAuthoritativeRefute, conflictLedger, topLevelBullets, check },
+  walkers: { regionOf, spawnOf, ledgerEnums, tierFloorClause, hasAuthoritativeRefute, conflictLedger, topLevelBullets, regionAfter },
   id: 'explore-command',
   issue: '#2229',
   check,
