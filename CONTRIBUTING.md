@@ -776,7 +776,8 @@ when the allowlist file reappears or the rule is given an option. An `eslint-dis
 this rule exempts nothing: the count runs with inline config off and still sees the site, and an
 unused directive fails `npm run lint`.
 
-Build a child env with `isolatedEnv()` instead of a copy: `home` sets `HOME` and `USERPROFILE`
+[docs/how-to/replace-a-hand-written-env-isolation-copy.md](docs/how-to/replace-a-hand-written-env-isolation-copy.md)
+shows each replacement. Build a child env with `isolatedEnv()` instead of a copy: `home` sets `HOME` and `USERPROFILE`
 (`userProfile` sets `USERPROFILE` to another directory, only for a test whose subject is the two
 diverging), `claudeConfigDir` sets `CLAUDE_CONFIG_DIR`, `path` sets `PATH`, and `override` carries
 every other key the test needs the helper to set or keep. A `HOME` or `USERPROFILE` key in
