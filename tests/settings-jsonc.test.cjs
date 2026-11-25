@@ -38,6 +38,7 @@ let installExports;
   }
 }
 const { readSettings, writeSettings, stripJsonComments } = installExports;
+const { parseJsonc } = require('../gsd-core/bin/lib/settings-jsonc.cjs');
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -472,5 +473,51 @@ describe('writeSettings durability (#1874 F5)', () => {
         'the settings file must be untouched when every temp path is squatted');
       for (const link of planted) fs.unlinkSync(link);
     });
+  });
+});
+
+describe('stripJsonComments: unterminated block comments are rejected (#5990)', () => {
+  // The block-comment skip used to walk to end of input without verifying the
+  // closing delimiter, so a truncated comment vanished and the file parsed.
+  const UNTERMINATED = [
+    ['a bare opener at EOF', '{"a":1} /*'],
+    ['an opener plus one slash', '{"a":1} /*/'],
+    ['one char short of the closer', '{"a":1} /* x *'],
+    ['a dangling comment body', '{"a":1} /* unterminated'],
+  ];
+
+  for (const [label, doc] of UNTERMINATED) {
+    test(`stripJsonComments throws SyntaxError on ${label}`, () => {
+      assert.throws(() => stripJsonComments(doc), { name: 'SyntaxError', message: 'Unterminated block comment' });
+    });
+    test(`parseJsonc throws SyntaxError on ${label}`, () => {
+      assert.throws(() => parseJsonc(doc), { name: 'SyntaxError', message: 'Unterminated block comment' });
+    });
+  }
+
+  // Boundary per the brief: one short (above), exact, and one over.
+  test('closer ending exactly at EOF parses', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1} /* x */')), { a: 1 });
+  });
+
+  test('content after the closer parses (one over)', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1 /* x */ }')), { a: 1 });
+  });
+
+  test('minimal closer parses', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1} /**/')), { a: 1 });
+  });
+
+  test('star run before the closer parses', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1} /* ** */')), { a: 1 });
+  });
+
+  test('opener inside a string is left alone', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":"/*"} /*c*/')), { a: '/*' });
+    assert.deepEqual(parseJsonc('{"a":"/* unterminated"}'), { a: '/* unterminated' });
+  });
+
+  test('line comment at EOF still parses (unchanged)', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1 // t\n}')), { a: 1 });
   });
 });

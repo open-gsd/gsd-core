@@ -399,6 +399,8 @@ export function parseJsonc(content: string): unknown {
     } else if (c === '/' && next === '*') {
       i += 2;
       while (i < text.length - 1 && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      // #5990: this loop can stop before EOF without ever seeing a closer.
+      if (!(text[i] === '*' && text[i + 1] === '/')) throw new SyntaxError('Unterminated block comment');
       i += 2;
     } else if (c === ',') {
       if (pendingComma) stripped += ',';
