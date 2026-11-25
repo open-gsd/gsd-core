@@ -57,7 +57,6 @@ function runTrackShipping() {
       // `query planning.inspect --pick generated_from.planning_root` returns the fixture's absolute
       // `.planning` dir (#5861); every call is recorded.
       'gsd_run() { printf "gsd_run %s\\n" "$*" >> "$CALLS"; if [ "$2" = "planning.inspect" ]; then printf "%s" "$PWD/.planning"; fi; }',
-      'sleep() { :; }',
       'git() { printf "git %s\\n" "$*" >> "$CALLS"; }',
       'gh() { printf "gh %s\\n" "$*" >> "$CALLS"; }',
     ].join('\n');
