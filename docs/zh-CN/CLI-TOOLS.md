@@ -335,6 +335,9 @@ node gsd-tools.cjs requirements mark-complete <ids>
 # 接受格式：REQ-01,REQ-02 或 REQ-01 REQ-02 或 [REQ-01, REQ-02]
 ```
 
+如果追踪表中存在对应条目，但其状态不允许标记为完成，JSON 报告会在
+`status_refused` 中列出 `requirement` 和 `status`，该条目保持原样。找不到的 ID 会列在 `not_found` 中。
+
 ---
 
 ## 代理技能

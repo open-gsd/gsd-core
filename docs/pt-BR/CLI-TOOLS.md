@@ -337,6 +337,10 @@ node gsd-tools.cjs requirements mark-complete <ids>
 # Aceita: REQ-01,REQ-02 ou REQ-01 REQ-02 ou [REQ-01, REQ-02]
 ```
 
+Quando uma linha da tabela de rastreabilidade tem um status que impede a conclusão,
+o relatório JSON inclui `requirement` e `status` em `status_refused` e mantém o
+requisito intacto. IDs sem uma entrada correspondente aparecem em `not_found`.
+
 ---
 
 ## Habilidades de Agente

@@ -335,6 +335,10 @@ node gsd-tools.cjs requirements mark-complete <ids>
 # 허용 형식: REQ-01,REQ-02 또는 REQ-01 REQ-02 또는 [REQ-01, REQ-02]
 ```
 
+추적 테이블에 해당 행이 있고 상태를 완료로 변경할 수 없으면 JSON 보고서의
+`status_refused`에 `requirement`와 `status`가 표시되며 요구사항은 그대로 유지됩니다.
+일치하는 항목이 없는 ID는 `not_found`에 표시됩니다.
+
 ---
 
 ## 에이전트 스킬

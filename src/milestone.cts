@@ -142,6 +142,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   const updated: string[] = [];
   const alreadyComplete: string[] = [];
   const notFound: string[] = [];
+  const statusRefused: Array<{ requirement: string; status: string }> = [];
   // #2140: IDs reconciled on the checkbox surface only — a traceability table
   // exists but has no row for the ID. Without this bucket the payload for a
   // partial reconcile is byte-identical to a full one, and audit-milestone (which
@@ -157,16 +158,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   // so a missing row only counts as drift when a table actually exists.
   const hasTable = /^\|\s*(?:Requirement(?:\s*ID)?|REQ[-\s]?ID)\s*\|/im.test(reqContent);
 
-  // ADR-2143 §6 per-surface write-set, tracked PER requirement ID: a
-  // multi-ID batch must not OR one ID's surface outcome into another's —
-  // that is the exact #2140 class one level up (an ID whose traceability
-  // row is absent/unmatched must not have its partial write masked by a
-  // different ID in the same invocation that fully reconciled). Reported
-  // additively as `write_set` below — it does not change the existing
-  // marked_complete/already_complete/not_found/table_unmatched/updated
-  // computation, which stays byte-for-behaviour identical (#2140's tactical
-  // fix already surfaces the checkbox-only-partial-write case via
-  // table_unmatched; this only adds the structured ADR-2143 shape on top).
+  // ADR-2143 §6: track each requirement's checkbox and traceability writes
+  // independently, so a successful ID cannot mask another ID's partial write (#2140).
   const writeSet: WriteSet = [];
 
   for (const reqId of reqIds) {
@@ -270,12 +263,11 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       // there is no table to reconcile against. (A [x] checkbox with a Pending or
       // absent row is NOT fully reconciled when a table exists — #2140.)
       alreadyComplete.push(reqId);
-    } else if (!doneCheckbox && !doneTable) {
+    } else if (rowExists) {
+      statusRefused.push({ requirement: reqId, status: currentStatusCell.trim() });
+    } else if (!doneCheckbox) {
       notFound.push(reqId);
     }
-    // else: doneCheckbox && hasTable && !doneTable — partially reconciled. It is
-    // neither updated, already_complete, nor not_found; the table_unmatched bucket
-    // below carries the truthful partial-reconcile signal.
 
     // Surface traceability drift: checkbox reconciled (this run or before) but the
     // table has no row for this ID. This is what makes a partial reconcile
@@ -291,17 +283,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     platformWriteSync(reqPath, reqContent);
   }
 
-  // ADR-2143 §6: `writeSet` above already carries one WriteOutcome per
-  // (requirement, surface) this invocation could have written to — per ID,
-  // not ORed across the batch. `write_set` and `write_set_complete` are
-  // additive: they do not replace or gate `updated` / `marked_complete` /
-  // `already_complete` / `not_found` / `table_unmatched`, which remain
-  // computed exactly as before (see #2140 note above — that fix already
-  // surfaces a checkbox-only partial write via `table_unmatched`;
-  // `write_set_complete` is a structured, ADR-2143-shaped read of the SAME
-  // per-surface, per-ID facts, `false` if ANY id's ANY required surface did
-  // not apply, since `writeSetComplete` requires EVERY entry to have
-  // applied, never an OR across surfaces OR across IDs).
+  // Write-set completeness requires every tracked write to have applied,
+  // independently of the summary buckets.
   output(
     {
       updated: updated.length > 0,
@@ -309,6 +292,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       already_complete: alreadyComplete,
       not_found: notFound,
       table_unmatched: tableUnmatched,
+      ...(statusRefused.length > 0 ? { status_refused: statusRefused } : {}),
       total: reqIds.length,
       write_set: writeSet,
       write_set_complete: writeSetComplete(writeSet),
