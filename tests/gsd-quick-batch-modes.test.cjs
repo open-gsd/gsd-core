@@ -151,10 +151,11 @@ describe('create refuses an options value that is not a JSON object and writes n
       t.after(() => cleanup(dir));
       const tasks = writeTasks(dir);
       const before = planningSnapshot(dir);
-      // The refusal may come from the router (#6655) or from createBatch; either way the call fails.
-      const r = runGsdTools(['quick-batch', 'create', '--file', tasks, '--options', raw, '--raw'], dir);
-      assert.equal(r.success, false);
-      assert.notEqual(r.exitCode, 0);
+      // The refusal comes from the router (#6655) or from createBatch: a usage error either way,
+      // with a field only from createBatch, so the field is not asserted here.
+      const r = runGsdTools(['--json-errors', 'quick-batch', 'create', '--file', tasks, '--options', raw, '--raw'], dir);
+      assert.equal(errorPayload(r).reason, 'usage');
+      assert.equal(r.exitCode, 1);
       assert.equal(fs.existsSync(batchesDir(dir)), false, 'no batch directory');
       assert.deepEqual(planningSnapshot(dir), before, 'nothing under .planning/ changed');
     });
@@ -164,15 +165,16 @@ describe('create refuses an options value that is not a JSON object and writes n
     const dir = createTempProject('gsd-6532-options-direct-');
     t.after(() => cleanup(dir));
     const before = planningSnapshot(dir);
-    for (const [, , value] of NON_OBJECT_OPTIONS) {
+    // A programmatic caller can also pass a class instance, which does not serialize to the object it holds.
+    for (const value of [...NON_OBJECT_OPTIONS.map(([, , v]) => v), new Date(0), new Map([['modes', []]])]) {
       const r = quickBatch.createBatch(dir, [{ description: 'a' }], { batchOptions: value });
-      assert.equal(r.ok, false, JSON.stringify(value));
+      assert.equal(r.ok, false, String(value));
       assert.equal(r.field, 'options');
     }
     assert.deepEqual(planningSnapshot(dir), before);
   });
 
-  test('createBatch still stores no options (undefined or null) as {}', (t) => {
+  test('createBatch still stores no options (undefined or null) as {}, and a prototype-less object as itself', (t) => {
     const dir = createTempProject('gsd-6532-options-null-');
     t.after(() => cleanup(dir));
     for (const value of [undefined, null]) {
@@ -180,6 +182,10 @@ describe('create refuses an options value that is not a JSON object and writes n
       assert.equal(r.ok, true, r.reason);
       assert.deepEqual(readManifest(dir, r.value.batchId).options, {});
     }
+    const bare = Object.assign(Object.create(null), { note: 'x' });
+    const r = quickBatch.createBatch(dir, [{ description: 'a' }], { batchOptions: bare });
+    assert.equal(r.ok, true, r.reason);
+    assert.deepEqual(readManifest(dir, r.value.batchId).options, { note: 'x' });
   });
 });
 
@@ -206,17 +212,23 @@ describe('#6532 item 2: a loaded batch with an invalid options.modes fails close
 
 // ─── The mode rules as properties ───────────────────────────────────────────
 
+const MODES = ['research', 'validate'];
 const VALID_MODE_SETS = [[], ['research'], ['validate'], ['research', 'validate']];
 const isValidModeSet = (a) => VALID_MODE_SETS.some((set) => JSON.stringify(set) === JSON.stringify(a));
+const sameSet = (a, b) => a.length === b.length && a.every((m) => b.includes(m));
 const modeArrays = fc.array(fc.constantFrom('research', 'validate', 'bogus'), { maxLength: 5 });
+// The flag sets a caller passes: init normalizes the parsed flags to canonical order (src/init.cts).
+const flagSets = fc.subarray(MODES);
 
 describe('#6532: the mode rules hold for arbitrary mode arrays', () => {
   test('validateBatchModes accepts exactly the strictly increasing subsequences of [research, validate]', () => {
+    // Every valid set and the near misses run as examples, so a seed cannot leave the accept side unexercised.
+    const examples = [...VALID_MODE_SETS, ['validate', 'research'], ['research', 'research'], ['bogus']].map((a) => [a]);
     fc.assert(fc.property(modeArrays, (a) => {
       const r = quickBatch.validateBatchModes(a);
       assert.equal(r.ok, isValidModeSet(a), JSON.stringify(a));
       if (r.ok) assert.deepEqual(r.value, a);
-    }));
+    }), { examples });
   });
 
   describe('resolveBatchModes accepts a flag set exactly when it is empty or equal to the stored set', () => {
@@ -232,18 +244,20 @@ describe('#6532: the mode rules hold for arbitrary mode arrays', () => {
     after(() => cleanup(dir));
 
     test('for every stored set, and for a batch without stored modes', () => {
-      fc.assert(fc.property(fc.integer({ min: 0, max: VALID_MODE_SETS.length }), modeArrays, (i, flags) => {
+      // Every (batch, flag set) pair runs as an example; the domain is that small.
+      const examples = batches.flatMap((_, i) => VALID_MODE_SETS.map((flags) => [i, flags]));
+      fc.assert(fc.property(fc.integer({ min: 0, max: VALID_MODE_SETS.length }), flagSets, (i, flags) => {
         const { stored, batchId } = batches[i];
         const r = quickBatch.resolveBatchModes(dir, batchId, flags);
         if (stored === null) {
           assert.deepEqual(r, { ok: true, value: { modes: flags, stored: false } });
           return;
         }
-        const accept = flags.length === 0 || JSON.stringify(flags) === JSON.stringify(stored);
+        const accept = flags.length === 0 || sameSet(flags, stored);
         assert.equal(r.ok, accept, `stored ${JSON.stringify(stored)}, flags ${JSON.stringify(flags)}`);
         if (accept) assert.deepEqual(r.value, { modes: stored, stored: true });
         else assert.equal(r.field, 'options.modes');
-      }));
+      }), { examples });
     });
   });
 });

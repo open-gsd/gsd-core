@@ -519,6 +519,13 @@ function validateBatchModes(value: unknown): Result<string[]> {
   return { ok: true, value: value as string[] };
 }
 
+/** A JSON object: not null, not an array, and no prototype other than Object's (or none). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 function hasModes(options: unknown): options is Record<string, unknown> {
   return !!options && typeof options === 'object' && !Array.isArray(options)
     && Object.prototype.hasOwnProperty.call(options, 'modes');
@@ -581,10 +588,10 @@ function createBatch(
   }
   // The loader (`validateBatchSchema`) accepts only an object `options`, so any
   // other value is refused here, before ids are allocated or BATCH.json is
-  // written. No options (undefined or null) is stored as `{}`.
+  // written. A class instance (a Date, a Map) is refused too: it does not
+  // serialize to the object it holds. No options (undefined or null) is stored as `{}`.
   const batchOptions: unknown = options.batchOptions;
-  if (batchOptions !== undefined && batchOptions !== null
-    && (typeof batchOptions !== 'object' || Array.isArray(batchOptions))) {
+  if (batchOptions !== undefined && batchOptions !== null && !isPlainObject(batchOptions)) {
     return { ok: false, reason: 'options must be a JSON object', field: OPTIONS_FIELD };
   }
   // #6532: an invalid `options.modes` is refused before anything is written.
