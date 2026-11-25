@@ -7627,10 +7627,15 @@ function renderStateArchiveAppend(plan: StateArchiveAppendPlan): string {
  * line break) and the heading that replaces it; `insertions` put rows into sections the block already has, each at
  * the end of that section's last non-blank line (before the line break that ends it, so before the blank separator:
  * the rows continue the same table), as `\n` + the added lines; `tail` is the rendering of sections the block does
- * not have yet, placed at the end after a blank line. Every other byte of the archive is kept.
+ * not have yet, placed at the end after a blank line. Every other byte of the archive is kept. `date` is the date the
+ * new heading records: the block's own (the date it was first written on), so a retry on a later day does not restamp
+ * it; the run's date only when the heading has no `## Pruned <date> (` part to read it from. The rest of the heading
+ * is the run's: a phase advance between the kill and the retry widens the cutoff the block covers. The retry matcher
+ * reads the cutoff, K and N, never the date.
  */
 interface StateArchiveExtendPlan {
   base: string;
+  date: string;
   heading: { start: number; end: number; text: string };
   insertions: Array<{ offset: number; text: string }>;
   tail: string;
@@ -7656,7 +7661,9 @@ function planStateArchiveExtend(
   }
   if (headingIdx === -1) throw new Error('state prune: no archive block to extend');
   const headingText = lines[headingIdx].text.replace(/\r$/, '');
-  const blockMeta: ArchiveBlockMeta = { date: meta.date, cutoff: meta.cutoff, keepRecent: meta.keepRecent };
+  const ownDate = /^## Pruned (\S+) \(/.exec(headingText);
+  const date = ownDate === null ? meta.date : ownDate[1];
+  const blockMeta: ArchiveBlockMeta = { date, cutoff: meta.cutoff, keepRecent: meta.keepRecent };
   if (typeof meta.keepRecentQuick === 'number') blockMeta.keepRecentQuick = meta.keepRecentQuick;
 
   // The end offset of each section's last non-blank line, within the last block.
@@ -7689,6 +7696,7 @@ function planStateArchiveExtend(
   }
   return {
     base: existing,
+    date,
     heading: { start: lines[headingIdx].start, end: lines[headingIdx].start + headingText.length, text: renderArchiveHeading(blockMeta) },
     insertions: insertions.sort((a, b) => a.offset - b.offset),
     tail,
@@ -8047,7 +8055,7 @@ function publishQuickPruneToArchive(
     text = renderStateArchiveExtend(plan);
     const inBlock = new Set((lastBlock as ParsedArchiveBlock).sections.map(s => s.section));
     block = {
-      date: meta.date, cutoff: meta.cutoff, keepRecent: meta.keepRecent, keepRecentQuick: meta.keepRecentQuick,
+      date: plan.date, cutoff: meta.cutoff, keepRecent: meta.keepRecent, keepRecentQuick: meta.keepRecentQuick,
       sections: chosen.publication.sections.map(s => ({
         section: s.section,
         lines: [...s.lines],

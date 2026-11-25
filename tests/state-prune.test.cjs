@@ -1730,15 +1730,17 @@ describe('#6389: state prune --keep-recent-quick', () => {
     const writes = archiveWrites.filter((w) => w.target === target);
     assert.ok(writes.length > 0, 'the archive was written');
     const last = writes[writes.length - 1];
-    const expectedBlock = { date: DAY, cutoff: meta.cutoff, keepRecent: meta.keepRecent, sections };
+    // `meta.date` is the date the block's heading records (an extended block keeps its own); the run's date is DAY.
+    const expectedBlock = { date: meta.date ?? DAY, cutoff: meta.cutoff, keepRecent: meta.keepRecent, sections };
     if (meta.keepRecentQuick !== undefined) expectedBlock.keepRecentQuick = meta.keepRecentQuick;
     const pubs = published.filter((p) => p.archivePath === target);
     assert.deepStrictEqual(pubs[pubs.length - 1], { archivePath: target, kind, block: expectedBlock },
       'the publication IR handed to the writer: heading fields, table head and the verbatim rows it adds');
     const added = sections.map((s) => ({ ...s, count: s.lines.length }));
+    const runMeta = { ...meta, date: DAY };
     const plan = kind === 'append'
-      ? stateLib.planStateArchiveAppend(last.prior, added, { date: DAY, ...meta })
-      : stateLib.planStateArchiveExtend(last.prior, added, { date: DAY, ...meta });
+      ? stateLib.planStateArchiveAppend(last.prior, added, runMeta)
+      : stateLib.planStateArchiveExtend(last.prior, added, runMeta);
     const rendered = kind === 'append' ? stateLib.renderStateArchiveAppend(plan) : stateLib.renderStateArchiveExtend(plan);
     assert.strictEqual(Buffer.byteLength(last.content), Buffer.byteLength(rendered), 'the writer wrote the rendering of that plan');
     return plan;
@@ -2161,6 +2163,21 @@ describe('#6389: state prune --keep-recent-quick', () => {
     assert.strictEqual(blockCount(), 1);
   });
 
+  test('a retry on a later day that extends the pending block keeps the block\'s date and records the wider cutoff', () => {
+    const KILLED_ON = '2026-11-01';
+    write(stateDoc({ table: rows(1, 30) }));
+    mock.method(realClock, 'localToday', () => KILLED_ON);
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // phase 8: cutoff 5, written on KILLED_ON
+    pinDay();
+    write(stateDoc({ phase: 11, decisions: [D1, D4, D7], table: rows(1, 30) }));
+    const out = run({ keepRecent: '3', keepRecentQuick: 20 }); // DAY, phase 11: cutoff 8 adds D7 to the block
+    assert.strictEqual(out.cutoff_phase, 8);
+    const plan = assertLastArchiveWrite({ date: KILLED_ON, cutoff: 8, keepRecent: 3, keepRecentQuick: 20 }, [ds([D7])], archivePath, 'extend');
+    assert.strictEqual(plan.date, KILLED_ON, 'the run\'s own date (DAY) does not replace the block\'s');
+    assert.strictEqual(plan.heading.text, `## Pruned ${KILLED_ON} (phases 1-8, kept recent 3; quick: kept recent 20)`);
+    assert.strictEqual(blockCount(), 1);
+  });
+
   // The legacy --keep-recent parsing (unchanged here, see #6542) can record a negative or unsafe K; the recorded K
   // is compared exactly as it was printed, so an identical retry still matches.
   // '-1000000000000000000000' parses to -1e21, which the heading prints as `-1e+21`.
@@ -2371,7 +2388,8 @@ describe('#6389: state prune --keep-recent-quick', () => {
 
   describe('planStateArchiveExtend', () => {
     const meta = { date: DAY, cutoff: null, keepRecent: null, keepRecentQuick: 20 };
-    const NEW_HEADING = `## Pruned ${DAY} (quick: kept recent 20)`;
+    // The block keeps the date it was first written on (2026-01-01), not the run's (DAY).
+    const NEW_HEADING = '## Pruned 2026-01-01 (quick: kept recent 20)';
     const added = (lines) => [{ section: QUICK, count: lines.length, lines }];
 
     for (const [label, eol, last] of [
@@ -2390,6 +2408,7 @@ describe('#6389: state prune --keep-recent-quick', () => {
         const lastRowEnd = text.lastIndexOf(row(2)) + row(2).length + (last === '\r\n' ? 1 : 0); // after the row's own CR
         assert.deepStrictEqual(plan, {
           base: text,
+          date: '2026-01-01',
           heading: { start: headingStart, end: headingStart + oldHeading.length, text: NEW_HEADING },
           insertions: [{ offset: lastRowEnd, text: `\n${row(3)}\n${row(4)}\r` }],
           tail: '',
@@ -2408,7 +2427,17 @@ describe('#6389: state prune --keep-recent-quick', () => {
           { date: DAY, cutoff: 1, keepRecent: 3, keepRecentQuick: 20 });
         assert.deepStrictEqual(plan.insertions, []);
         assert.strictEqual(plan.tail, `${'\n\n'.slice(ending.length)}### Decisions\n\n${D1}\n\n`);
-        assert.strictEqual(plan.heading.text, `## Pruned ${DAY} (phases 1-1, kept recent 3; quick: kept recent 20)`);
+        assert.strictEqual(plan.heading.text, '## Pruned 2026-01-01 (phases 1-1, kept recent 3; quick: kept recent 20)',
+          'the block\'s own date, and the cutoff it now covers');
+      }
+    });
+
+    test('a heading with no date before its options (hand-written) takes the run\'s date', () => {
+      for (const heading of ['## Pruned (quick: kept recent 20)', '## Pruned  (quick: kept recent 20)', '## Pruned 2026-01-01(quick: kept recent 20)']) {
+        const text = `# STATE Archive\n\n${heading}\n\n### ${QUICK}\n\n${HEADER}\n${DELIM}\n${row(1)}\n`;
+        const plan = stateLib.planStateArchiveExtend(text, added([row(2)]), meta);
+        assert.strictEqual(plan.date, DAY, heading);
+        assert.strictEqual(plan.heading.text, `## Pruned ${DAY} (quick: kept recent 20)`, heading);
       }
     });
 
