@@ -191,9 +191,10 @@ describe('#6530 init.quick --resume keeps the task\'s quick id and slug', () => 
     assert.deepEqual(open.resume, { has_plan: false, has_summary: false, state_row: false });
   });
 
-  test('a legacy directory\'s state_row looks up the STATE.md row keyed by its date prefix', () => {
+  test('a legacy directory\'s state_row looks up the STATE.md row keyed by its date prefix and naming its directory', () => {
     makeTask(tmpDir, '20250101-fix-login', { 'PLAN.md': '# plan\n' });
-    makeTask(tmpDir, '20250102-other');
+    // Same day, so the same date prefix: only the Directory cell tells the two rows apart.
+    makeTask(tmpDir, '20250101-other');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
       '# STATE',
       '',
