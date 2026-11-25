@@ -648,9 +648,11 @@ function isComplete(s: SmartEntrySignals): boolean {
   const normalized = normalizeStateStatus(s.status, null);
   // #6176: terminal statuses come from the shared vocabulary, so a value added
   // there (ADR-2207's `Awaiting next milestone`) cannot fall through to
-  // `unknown` here again. Bare `done` stays excluded (see above). The regex
+  // `unknown` here again. Bare `done` stays excluded (see above), in any case
+  // or spacing: it is compared on the key the vocabulary looks up. The regex
   // below stays the substring-tolerant legacy reader (#3864).
-  if (normalized === 'completed' && s.status.trim() !== 'done') return true;
+  const key = s.status.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normalized === 'completed' && key !== 'done') return true;
   return /\b(milestone\s+complete|all\s+phases\s+complete|complete(d)?)\b/i.test(s.status);
 }
 

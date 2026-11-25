@@ -1504,7 +1504,7 @@ describe('smart-entry: continued milestone numbering (#5228)', () => {
 describe('#6176 — Awaiting next milestone classifies as complete', () => {
   afterEach(removeAll);
 
-  const { normalizeStateStatus } = require('../gsd-core/bin/lib/state-document.cjs');
+  const { normalizeStateStatus, STATUS_EXACT_TOKENS } = require('../gsd-core/bin/lib/state-document.cjs');
   const { runGsdTools, createTempProject } = require('./helpers.cjs');
 
   function progressRoadmap(total, completed) {
@@ -1547,17 +1547,20 @@ describe('#6176 — Awaiting next milestone classifies as complete', () => {
     assert.equal(classifyProject(done).situation, 'complete');
   });
 
-  // PARITY (ADR-2207 "The Status lifecycle"): every TERMINAL status the
-  // lifecycle names must normalize to one token, and smart-entry must treat
-  // that token as complete. A new terminal value added to the vocabulary but
-  // not recognized here is the exact fall-through this issue reports.
-  const ADR_2207_TERMINAL_STATUSES = [
-    'All phases complete',
-    'v1.3 milestone complete',
-    'Awaiting next milestone',
-  ];
-  for (const status of ADR_2207_TERMINAL_STATUSES) {
-    test(`parity: ADR-2207 terminal status "${status}" normalizes to completed and classifies complete`, () => {
+  // PARITY (ADR-2207 "The Status lifecycle"): every status the shared
+  // vocabulary maps to `completed` must classify complete, except bare `done`
+  // (per-phase noise, see isComplete). The rows are derived from
+  // STATUS_EXACT_TOKENS, so a terminal value added there adds a row here.
+  const VOCABULARY_COMPLETED = Object.entries(STATUS_EXACT_TOKENS)
+    .filter(([key, token]) => token === 'completed' && key !== 'done')
+    .map(([key]) => key);
+  test('parity: the vocabulary still carries the ADR-2207 terminal statuses', () => {
+    for (const status of ['all phases complete', 'milestone complete', 'awaiting next milestone']) {
+      assert.ok(VOCABULARY_COMPLETED.includes(status), status);
+    }
+  });
+  for (const status of VOCABULARY_COMPLETED) {
+    test(`parity: vocabulary status "${status}" normalizes to completed and classifies complete`, () => {
       assert.equal(normalizeStateStatus(status, null), 'completed');
       const dir = track(makeProject({
         state: state({ status, current_phase: 2, total_phases: 2 }),
@@ -1566,6 +1569,18 @@ describe('#6176 — Awaiting next milestone classifies as complete', () => {
       assert.equal(classifyProject(dir).situation, 'complete');
     });
   }
+
+  test('bare done is not milestone completion in any case or spacing', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'Awaiting next milestone', current_phase: 2, total_phases: 2 }),
+      roadmap: progressRoadmap(2, 2),
+    }));
+    const base = detectSignals(dir);
+    assert.equal(classify(base), 'complete', 'the fixture is otherwise complete');
+    for (const status of ['done', 'Done', 'DONE', ' done ']) {
+      assert.notEqual(classify({ ...base, status }), 'complete', JSON.stringify(status));
+    }
+  });
 
   test('existing forms are unchanged: legacy `complete` / `completed` / `milestone complete` still classify complete', () => {
     for (const status of ['complete', 'completed', 'Milestone complete', 'v1.0 milestone complete', 'All phases complete']) {
@@ -1606,6 +1621,9 @@ describe('#6176 — Awaiting next milestone classifies as complete', () => {
     assert.ok(r.success, r.error);
     const stateMd = fs.readFileSync(path.join(planning, 'STATE.md'), 'utf-8');
     assert.match(stateMd, /Awaiting next milestone/i, 'milestone complete writes the terminal status');
+    // The frontmatter `status` is the normalized projection (buildStateFrontmatter), so it now
+    // persists `completed` where it carried the verbatim archived string before #6176.
+    assert.match(stateMd, /^status: completed$/m, 'the persisted frontmatter status is the normalized token');
     const result = classifyProject(tmpDir);
     assert.equal(result.situation, 'complete', JSON.stringify(result.signals));
     const stateJson = JSON.parse(fs.readFileSync(path.join(planning, 'state.json'), 'utf-8'));
