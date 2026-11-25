@@ -43,6 +43,7 @@ Each command declares its flags in one place, `src/cli-surface.cts` ([ADR-4909](
 - how many positional words it takes, and whether further words may appear among the flags (`freePositionals`), and whether a short flag such as `-n` is refused instead of read as a word (`rejectShortFlags`);
 - each flag and its kind;
 - the flags it requires;
+- the global value flags it refuses before they are consumed (`rejectedGlobalFlags`), for the commands that declare any;
 - whether the command reads the active workstream.
 
 Regenerate the manifest with `npm run gen:cli-surface-manifest`. `npm run lint:generated-sync` fails when it is stale.
@@ -718,6 +719,9 @@ node gsd-tools.cjs config-get <key> [--default <value>] [--raw]
 # Set model profile
 node gsd-tools.cjs config-set-model-profile <profile>
 
+# Migrate legacy config keys to their canonical names
+node gsd-tools.cjs migrate-config
+
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 ```
@@ -784,6 +788,14 @@ so a refused choice, malformed JSON included, fails even when `config.json` alre
 with valid choices and an existing `config.json`, the command reports `already_exists` and
 leaves it untouched. The user defaults file is read only to build a new config, so a problem in
 it is not reported when the config already exists.
+
+`config-ensure-section`, `config-set-model-profile`, and `migrate-config` accept
+`--raw` but do not support `--dry-run`, `--pick`, or `--default`. They reject unsupported flags with a
+usage error before writing, including `--json`, `--force`, `--workstream` (`--ws` remains supported), and
+repeated global `--cwd` / `--project-dir` flags, including flags before the
+profile argument. Extra positional arguments are refused too. The same contract
+applies with the `query` prefix. `config-set --dry-run` supports previewing an
+individual value change without writing.
 
 ---
 
@@ -1698,7 +1710,7 @@ node gsd-tools.cjs worktree base-check --observed-fork-base <sha>
 node gsd-tools.cjs worktree set-baseref
 ```
 
-**`worktree base-check`** reads `worktree.baseRef` from a three-layer cascade — `.claude/settings.local.json`, then `.claude/settings.json`, then the user/global `settings.json` under `CLAUDE_CONFIG_DIR` (or `~/.claude`) — and compares the current `HEAD` SHA against `origin/HEAD`. Project-level settings take precedence over the user/global layer, so a machine-wide `worktree.baseRef:"head"` set via `/config` is honored when no project override exists. The `shouldDegrade` field is `true` when the execute-phase orchestrator will fall back to sequential execution. `--mode` declares who creates the isolated worktree (#3659): `harness-worktree` (the default — the runtime harness forks it) or `orchestrator-worktree` (GSD itself runs `git worktree add` with an explicit start-point). `worktree.baseRef:"head"` is honored by the orchestrator by construction and by the Claude Code harness as measured from all three settings layers (#4588; the #48 finding that the harness did not read the setting predates upstream claude-code#54940); Cursor, the other `harness-worktree` host, is unmeasured. With `"head"` set the check does not compare in either mode unless `--observed-fork-base` is given (below), with one further exception under `harness-worktree` and no observation: when a Claude Code `WorktreeCreate` hook is configured in any of the same three settings files, or one of them does not parse, the hook creates the agent worktree and Claude Code does not apply `worktree.baseRef` to it, so the check compares `HEAD` against `origin/HEAD` as if the setting were absent (#4588). The #4868 prior-worktree observation is **not** consulted on that path: a worktree sitting at `HEAD` records nothing about which creator made it, so one the plain harness left there before the hook was configured would read as evidence for the hook (#4881). Pass `--observed-fork-base` for a trusted verdict on a hook host. Hooks from managed policy settings, a `--settings` file, plugins, agent frontmatter or SDK registrations are not visible to the check; the exit-42 guard remains the backstop for those. `--observed-fork-base <sha>` supplies the fork base a worktree created for a dispatch was actually measured to have (`git rev-parse HEAD` inside it, before any commit — a full 40- or 64-hex sha, case-insensitive; abbreviations are refused because the comparison is exact); when given, it replaces the `origin/HEAD` inference as the fork side of the comparison and `"head"` no longer short-circuits — the verdict then reports a measurement, and a mismatch under `"head"` means the worktree was not forked from HEAD despite the setting. Invalid values for either flag fail closed with an error. Possible `reason` values:
+**`worktree base-check`** reads `worktree.baseRef` from a three-layer cascade — `.claude/settings.local.json`, then `.claude/settings.json`, then the user/global `settings.json` under `CLAUDE_CONFIG_DIR` (or `~/.claude`) — and compares the current `HEAD` SHA against `origin/HEAD`. Project-level settings take precedence over the user/global layer, so a machine-wide `worktree.baseRef:"head"` set via `/config` is honored when no project override exists. The result names the settings layer that produced the value in `baseRefLayer` (`runtime-local`, `runtime-shared`, `runtime-user`, or `null` when `worktree.baseRef` is set nowhere); a layer whose `baseRef` is not a string is skipped. The layer is provenance only: it does not change `shouldDegrade` or `reason`. A settings layer that cannot be read or parsed is skipped, and the resolver now writes its one-time unusable-config warning to stderr for it; stdout and the verdict are unaffected. The `shouldDegrade` field is `true` when the execute-phase orchestrator will fall back to sequential execution. `--mode` declares who creates the isolated worktree (#3659): `harness-worktree` (the default — the runtime harness forks it) or `orchestrator-worktree` (GSD itself runs `git worktree add` with an explicit start-point). `worktree.baseRef:"head"` is honored by the orchestrator by construction and by the Claude Code harness as measured from all three settings layers (#4588; the #48 finding that the harness did not read the setting predates upstream claude-code#54940); Cursor, the other `harness-worktree` host, is unmeasured. With `"head"` set the check does not compare in either mode unless `--observed-fork-base` is given (below), with one further exception under `harness-worktree` and no observation: when a Claude Code `WorktreeCreate` hook is configured in any of the same three settings files, or one of them does not parse, the hook creates the agent worktree and Claude Code does not apply `worktree.baseRef` to it, so the check compares `HEAD` against `origin/HEAD` as if the setting were absent (#4588). The #4868 prior-worktree observation is **not** consulted on that path: a worktree sitting at `HEAD` records nothing about which creator made it, so one the plain harness left there before the hook was configured would read as evidence for the hook (#4881). Pass `--observed-fork-base` for a trusted verdict on a hook host. Hooks from managed policy settings, a `--settings` file, plugins, agent frontmatter or SDK registrations are not visible to the check; the exit-42 guard remains the backstop for those. `--observed-fork-base <sha>` supplies the fork base a worktree created for a dispatch was actually measured to have (`git rev-parse HEAD` inside it, before any commit — a full 40- or 64-hex sha, case-insensitive; abbreviations are refused because the comparison is exact); when given, it replaces the `origin/HEAD` inference as the fork side of the comparison and `"head"` no longer short-circuits — the verdict then reports a measurement, and a mismatch under `"head"` means the worktree was not forked from HEAD despite the setting. Invalid values for either flag fail closed with an error. Possible `reason` values:
 
 | `reason` | `shouldDegrade` | Meaning |
 |---|---|---|

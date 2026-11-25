@@ -73,7 +73,6 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'manifest-version-sync.test.cjs',
   'milestone-archive.test.cjs',
   'model-resolver.test.cjs',
-  'new-project-mvp-prompt.test.cjs',
   'onboard-command.test.cjs',
   'opencode-command-dir-plural.test.cjs',
   'phase.test.cjs',
@@ -217,7 +216,6 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'model-resolver.test.cjs': [
     'docs/TESTING-SUITES.md', 'docs/features/dynamic-routing-with-failure-tier-escalation.md',
   ],
-  'new-project-mvp-prompt.test.cjs': ['docs/CONFIGURATION.md'],
   'onboard-command.test.cjs': ['docs/adr/0001-runtime.md'],
   'opencode-command-dir-plural.test.cjs': ['docs/commands'],
   'phase.test.cjs': ['docs/adr/3524-...md', 'docs/adr/3524-cjs-sdk-hard-seam.md'],

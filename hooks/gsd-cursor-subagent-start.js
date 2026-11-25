@@ -63,9 +63,8 @@ if (require.main === module && !process.env.NODE_V8_COVERAGE) {
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { allow } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath, globalDefaultsPath } = require('./lib/config-read.js');
 
 // Workspace resolution is shared across the Cursor hooks (#2587) — see
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
@@ -466,7 +465,7 @@ function resolveFallbackIsolation(root, configPath) {
   if (!runtimeId) {
     try {
       // #5017: GSD_HOME when set and non-blank, else the home directory — the loader's rule.
-      const defaultsPath = path.join(process.env.GSD_HOME || os.homedir(), '.gsd', 'defaults.json');
+      const defaultsPath = globalDefaultsPath();
       const defaultsParsed = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
       if (defaultsParsed && typeof defaultsParsed === 'object' && 'runtime' in defaultsParsed) {
         runtimeId = resolveRuntimeNameFromCandidates(defaultsParsed.runtime) || null;
@@ -501,7 +500,7 @@ function resolveFallbackIsolation(root, configPath) {
  * workspace runs the identical check.
  */
 function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds = null, realpath = fs.realpathSync, sentinel: preRead = null } = {}) {
-  const configPath = path.join(root, '.planning', 'config.json');
+  const configPath = projectConfigPath(root);
   let isGsdProject;
   try {
     fs.accessSync(configPath, fs.constants.F_OK);

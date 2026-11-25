@@ -26,6 +26,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 
 const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // Absolute path to the built module, spawned in a child process below so the
@@ -54,7 +55,7 @@ describe('#2071: effort sync runs in an installed runtime (no package-root bin/i
       const gsdTools = path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
       const result = runNode(
         [gsdTools, 'effort', 'sync', '--config-dir', configDir],
-        { cwd: root, env: { ...process.env, HOME: root }, timeoutMs: PROBE_TIMEOUT_MS },
+        { cwd: root, env: isolatedEnv({ home: root }), timeoutMs: PROBE_TIMEOUT_MS },
       );
       const combined = `${result.stdout || ''}${result.stderr || ''}`;
 
@@ -125,7 +126,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
     ].join('\n');
     const spawned = runNode(['-e', script], {
       cwd,
-      env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+      env: isolatedEnv({ home, override: { GSD_HOME: home } }),
     });
     assert.strictEqual(
       spawned.exitCode, 0,
@@ -267,7 +268,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -611,7 +612,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
 
       const jsonRun = runNode(['-e', makeScript(false)], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         jsonRun.exitCode, 0,
@@ -629,7 +630,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
 
       const rawRun = runNode(['-e', makeScript(true)], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         rawRun.exitCode, 0,
@@ -676,7 +677,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
 
       const jsonRun = runNode(['-e', makeScript(false)], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         jsonRun.exitCode, 0,
@@ -700,7 +701,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
 
       const rawRun = runNode(['-e', makeScript(true)], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         rawRun.exitCode, 0,
@@ -751,7 +752,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
 
       const jsonRun = runNode(['-e', makeScript(false)], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         jsonRun.exitCode, 0,
@@ -766,7 +767,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
 
       const rawRun = runNode(['-e', makeScript(true)], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         rawRun.exitCode, 0,
@@ -881,7 +882,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -937,7 +938,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -987,7 +988,7 @@ describe('#3706: effort sync maintains OpenCode variant: frontmatter', () => {
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -1044,7 +1045,7 @@ describe('#3243: effort sync strips Anthropic-flavored model pins from Codex age
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -1098,7 +1099,7 @@ describe('#3243: effort sync strips Anthropic-flavored model pins from Codex age
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -1146,7 +1147,7 @@ describe('#3243: effort sync strips Anthropic-flavored model pins from Codex age
       ].join('\n');
       const spawned = runNode(['-e', script], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+        env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       });
       assert.strictEqual(
         spawned.exitCode, 0,
@@ -1191,7 +1192,7 @@ describe('#3706: frontmatter line editors are scoped to the matched block', () =
     ].join('\n');
     const spawned = runNode(['-e', script], {
       cwd,
-      env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+      env: isolatedEnv({ home, override: { GSD_HOME: home } }),
     });
     assert.strictEqual(
       spawned.exitCode, 0,

@@ -179,7 +179,7 @@ accounts for nearly all of it.
   stays consistent between the new-project workflow and the generate-claude-md path
   (CHANGELOG.md:1488). Code-level parity, not prose-level.
 - `tests/docs-parity-live-registry.test.cjs:43` (`LOCALES` constant) and
-  `tests/docs-state-md-locale-parity.test.cjs:30` (`LOCALES` constant) — these **are** the
+  the `LOCALES` constant of `scripts/static-checks/text-contracts/docs-state-md-locale-parity.cjs` — these **are** the
   repo's translation-parity guards, but (per their names and the `docs-guard-registry.cjs`
   registration table) they check *structural* parity — that a live registry-derived table
   (reviewer flags, STATE.md field reference) is present and enumerated identically across

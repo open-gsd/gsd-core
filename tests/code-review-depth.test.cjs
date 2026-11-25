@@ -31,6 +31,7 @@ const {
   normalizeRelPath,
 } = require('../gsd-core/bin/lib/code-review-depth.cjs');
 const { runGsdTools, createTempProject, cleanup, homeSandboxEnv } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─── enum lock ────────────────────────────────────────────────────────────
 
@@ -884,14 +885,14 @@ describe('workflow.code_review_depth_overrides — config registration', () => {
     const setResult = runGsdTools(
       ['config-set', 'workflow.code_review_depth_overrides', value, '--raw'],
       cwd,
-      { HOME: cwd },
+      isolatedEnv({ home: cwd }),
     );
     assert.strictEqual(setResult.success, true, `config-set failed: ${setResult.error}`);
 
     const getResult = runGsdTools(
       ['config-get', 'workflow.code_review_depth_overrides'],
       cwd,
-      { HOME: cwd },
+      isolatedEnv({ home: cwd }),
     );
     assert.strictEqual(getResult.success, true, `config-get failed: ${getResult.error}`);
     assert.deepEqual(JSON.parse(getResult.output), [{ paths: ['src/auth'], depth: 'deep' }]);
@@ -913,7 +914,7 @@ describe('workflow.code_review_depth_overrides — config registration', () => {
     const getResult = runGsdTools(
       ['config-get', 'workflow.code_review_depth_overrides'],
       cwd,
-      { HOME: cwd },
+      isolatedEnv({ home: cwd }),
     );
     assert.strictEqual(getResult.success, true, `config-get failed: ${getResult.error}`);
     assert.deepEqual(JSON.parse(getResult.output), [{ paths: ['src/billing'], depth: 'quick' }]);

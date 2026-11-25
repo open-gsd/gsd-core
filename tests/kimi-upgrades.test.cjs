@@ -40,6 +40,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { runMinimalInstall, copyRuntimeFixture, installRuntimeFixture, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
@@ -147,7 +148,7 @@ test('kimi --global: reinstalling is idempotent — the GSD [[hooks]] block is n
   // directly against that root, the way runMinimalInstall drives its own.
   const reinstall = runNode([INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', root], {
     cwd: process.cwd(),
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(reinstall.exitCode, 0,

@@ -50,6 +50,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { RUNTIME_META, installerEnv, walk } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -128,7 +129,7 @@ function spawnInstall(repoRoot, runtime, scope) {
   else args.push('--local');
   const seamResult = runNode(args, {
     cwd,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   const result = { status: seamResult.exitCode, stdout: seamResult.stdout, stderr: seamResult.stderr };

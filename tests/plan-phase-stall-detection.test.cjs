@@ -43,6 +43,7 @@ const processSeam = require('./helpers/process-seam.cjs');
 const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
 const { runNode, OUTCOME } = processSeam;
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -489,7 +490,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
 
   test('config-get defaults absent values to true; config-set false round-trips as boolean false', (t) => {
     const tmp = makeProject(t);
-    const env = { HOME: tmp, USERPROFILE: tmp };
+    const env = isolatedEnv({ home: tmp });
 
     const absent = runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, env);
     assert.equal(absent.success, true, absent.error);
@@ -500,7 +501,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     const absentFile = runGsdTools(
       ['config-get', 'planner.stall_detection_enabled', '--raw'],
       noConfig,
-      { HOME: noConfig, USERPROFILE: noConfig },
+      isolatedEnv({ home: noConfig }),
     );
     assert.equal(absentFile.success, true, absentFile.error);
     assert.equal(absentFile.output, 'true');
@@ -533,7 +534,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       const result = runGsdTools(
         ['config-set', 'planner.stall_detection_enabled', value],
         tmp,
-        { HOME: tmp, USERPROFILE: tmp },
+        isolatedEnv({ home: tmp }),
       );
       return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
     });
@@ -555,7 +556,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       const result = runGsdTools(
         ['config-set', 'planner.stall_detection_enabled', token],
         tmp,
-        { HOME: tmp, USERPROFILE: tmp },
+        isolatedEnv({ home: tmp }),
       );
       assert.equal(result.success, true, `${token} is a help request, not a config write: ${result.error}`);
       assert.match(result.output, /^Usage: gsd-tools/m, 'prints the dispatcher usage');
@@ -571,7 +572,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
       const result = runGsdTools(
         ['config-set', 'planner.stall_detection_enabled', value],
         tmp,
-        { HOME: tmp, USERPROFILE: tmp },
+        isolatedEnv({ home: tmp }),
       );
       assert.equal(result.success, false, `${JSON.stringify(value)} must be rejected`);
       assert.equal(fs.readFileSync(configPath, 'utf8'), before, 'config.json stays byte-identical');
@@ -583,7 +584,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     const result = runGsdTools(
       ['config-get', 'planner.stall_detection_enabled', '--raw'],
       tmp,
-      { HOME: tmp, USERPROFILE: tmp },
+      isolatedEnv({ home: tmp }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output, 'true', 'a string "false" must not disable the watchdog');
@@ -607,7 +608,7 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     fs.mkdirSync(workstreamDir, { recursive: true });
     fs.writeFileSync(path.join(projectDir, 'config.json'), '{"planner":{"stall_detection_enabled":true}}\n');
     fs.writeFileSync(path.join(workstreamDir, 'config.json'), '{"planner":{"stall_detection_enabled":true}}\n');
-    const home = { HOME: tmp, USERPROFILE: tmp };
+    const home = isolatedEnv({ home: tmp });
 
     assert.equal(runGsdTools(['config-get', 'planner.stall_detection_enabled', '--raw'], tmp, home).output, 'false');
     assert.equal(runGsdTools(
@@ -683,7 +684,7 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' } }),
         },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -721,7 +722,7 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' } }),
         },
       );
       assert.equal(result.status, 0, result.stderr);

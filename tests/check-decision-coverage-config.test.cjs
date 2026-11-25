@@ -344,7 +344,7 @@ describe('C5 a gate reads its config quietly: a malformed config.json is "key ab
       assert.deepStrictEqual(loud.result, { found: false, value: undefined });
       assert.equal(loud.writes.length, 1);
       assert.equal(loud.writes[0].stream, 'stderr');
-      assert.match(loud.writes[0].chunk, /failed to parse .*config\.json as JSON/);
+      assert.match(loud.writes[0].chunk, /config\.json exists but could not be read or parsed/);
       const quiet = spied(() => resolveConfigKey('workflow.context_coverage_gate', { config: {}, cwd: dir, registry: {}, quiet: true }));
       assert.deepStrictEqual(quiet.writes, []);
     });
