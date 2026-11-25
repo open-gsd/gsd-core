@@ -53,7 +53,6 @@ import noAdhocEnvIsolation from './eslint-rules/no-adhoc-env-isolation.cjs';
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 const adhocConfigMergeAllowlist = require('./eslint-rules/no-adhoc-config-merge.allowlist.json');
 const commentRatchetBaseline = require('./eslint-rules/comment-ratchet.baseline.json');
-const adhocEnvIsolationAllowlist = require('./eslint-rules/no-adhoc-env-isolation.allowlist.json');
 
 // The `no-restricted-syntax` selectors every file under tests/ is held to. The block for the six
 // in-process command suites (#6334) extends this list; a later flat-config block replaces a rule's
@@ -870,14 +869,11 @@ export default tseslint.config(
     },
   },
 
-  // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635 Phase 3) ─────────
+  // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635; allowlist retired by #6040) ───
   // Its own block so the one exempt file can be excluded by exact path:
-  // tests/helpers/isolated-env.cjs IS the implementation the rule points to. The
-  // allowlist records each file that still carries a hand-written copy and how
-  // many it carries; the rule takes only the file names. Phases 4-7 drain it in
-  // sorted order and Phase 8 deletes it. A listed file with no copy left reports
-  // its own entry as stale, and tests/no-adhoc-env-isolation.rule.test.cjs holds
-  // every file to its recorded count; CONTRIBUTING.md states the one way a count grows.
+  // tests/helpers/isolated-env.cjs IS the implementation the rule points to. The rule takes no
+  // options and the migration reached zero sites, so it runs with no exemption surface;
+  // tests/no-adhoc-env-isolation.rule.test.cjs holds every file to zero with inline config off.
   {
     files: ['tests/**/*.cjs'],
     ignores: ['tests/helpers/isolated-env.cjs'],
@@ -885,7 +881,7 @@ export default tseslint.config(
       local: localPlugin,
     },
     rules: {
-      'local/no-adhoc-env-isolation': ['error', { allowlist: Object.keys(adhocEnvIsolationAllowlist) }],
+      'local/no-adhoc-env-isolation': 'error',
     },
   },
 
