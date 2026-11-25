@@ -1060,6 +1060,32 @@ function nestedScalar(value: unknown): string {
   return sv.includes(':') || sv.includes('#') || scalarNeedsDoubleQuoting(sv) || generalScalarNeedsNumericQuoting(sv) ? `"${escapeDoubleQuotedScalar(sv)}"` : sv;
 }
 
+/**
+ * #6174: a mapping at depth four or deeper, written the way the depth-three
+ * branch of `reconstructFrontmatter` writes its values (block sequences,
+ * `nestedScalar` scalars), one indentation step per level. Comments are not
+ * re-emitted below depth three.
+ */
+function emitDeepMapping(obj: Record<string, unknown>, indent: number, lines: string[]): void {
+  const pad = ' '.repeat(indent);
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) continue;
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        lines.push(`${pad}${key}: []`);
+      } else {
+        lines.push(`${pad}${key}:`);
+        for (const item of value) lines.push(`${pad}  - ${blockSequenceItem(item)}`);
+      }
+    } else if (typeof value === 'object') {
+      lines.push(`${pad}${key}:`);
+      emitDeepMapping(value as Record<string, unknown>, indent + 2, lines);
+    } else {
+      lines.push(`${pad}${key}: ${nestedScalar(value)}`);
+    }
+  }
+}
+
 function reconstructFrontmatter(obj: Frontmatter): string {
   const lines: string[] = [];
   // #3257: read the full-line-comment channel (set by parseGuardedYamlRegion when comments
@@ -1123,6 +1149,11 @@ function reconstructFrontmatter(obj: Frontmatter): string {
                   lines.push(`      - ${blockSequenceItem(item)}`);
                 }
               }
+            } else if (typeof subsubval === 'object') {
+              // #6174: a mapping nested deeper than three levels was written as
+              // `String(object)` ("[object Object]"); write it out in full.
+              lines.push(`    ${subsubkey}:${deepInline}`);
+              emitDeepMapping(subsubval as Record<string, unknown>, 6, lines);
             } else {
               lines.push(`    ${subsubkey}: ${nestedScalar(subsubval)}${deepInline}`);
             }

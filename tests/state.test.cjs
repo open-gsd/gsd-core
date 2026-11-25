@@ -24023,6 +24023,14 @@ describe('#6174 lines the state commands own are not moved, and nothing moved is
       });
     });
   }
+
+  test('milestone-switch keeps a custom key\'s full-line comment and a mapping nested four levels deep', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', '# who owns this project', 'team_owner: ops', 'deep:', '  a:', '    b:', '      c: 1', '      d:', '        - x'];
+    const out = transitionCore(state({ fm }), SWITCH, deps).content;
+    assert.match(out, /^# who owns this project\nteam_owner: ops$/m);
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    assert.deepStrictEqual(extractFrontmatter(out).deep, { a: { b: { c: '1', d: ['x'] } } });
+  });
 });
 
 describe('#6174 the frontmatter sync never reads an old-milestone value from a moved line', () => {

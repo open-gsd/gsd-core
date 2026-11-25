@@ -36,7 +36,7 @@ import stateMdSchemaMod = require('./state-md-schema.cjs');
 const { STATE_FIELD_SCHEMA } = stateMdSchemaMod;
 type StateFieldSchema = stateMdSchemaMod.StateFieldSchema;
 
-const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, FRONTMATTER_UNPARSEABLE } = frontmatter;
+const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, FRONTMATTER_UNPARSEABLE, propagateCommentChannel } = frontmatter;
 
 export function formatProgressMachineSegment(percent: number): string {
   // ADR-3180 Decision 7: rounding and the 100 ceiling belong to the
@@ -2950,6 +2950,9 @@ function milestoneSwitchCore(
   for (const [key, value] of Object.entries(existingFm)) {
     if (!(key in fm) && getFieldClassification(key) === null) fm[key] = value;
   }
+  // `fm` is a fresh object, so the full-line comments of the keys it keeps
+  // (a comment above `team_owner`) must be carried over explicitly.
+  propagateCommentChannel(existingFm as unknown as Frontmatter, fm as unknown as Frontmatter);
 
   const yamlStr = reconstructFrontmatter(fm as unknown as Frontmatter);
   const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
