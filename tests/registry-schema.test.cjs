@@ -113,7 +113,7 @@ function validReviewerEntry() {
 // ─── Vocabulary constants ───────────────────────────────────────────────────
 
 describe('registry-schema: closed vocabulary constants', () => {
-  test('LOOP_POINTS is the 12 canonical loop points (ADR-857), in order', () => {
+  test('LOOP_POINTS is the 13 canonical loop points (ADR-857 plus review:pre, #3997), in order', () => {
     assert.deepEqual(LOOP_POINTS, [
       'discuss:pre',
       'discuss:post',
@@ -127,6 +127,7 @@ describe('registry-schema: closed vocabulary constants', () => {
       'verify:post',
       'ship:pre',
       'ship:post',
+      'review:pre',
     ]);
   });
 

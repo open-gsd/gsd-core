@@ -23,6 +23,7 @@ const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { createTempProject, cleanup, runGsdToolsAsync } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
 const {
   resolveLaneCap,
@@ -385,7 +386,7 @@ async function invoke(p, extraArgs = [], slug = 'claude') {
   const r = await runGsdToolsAsync(
     ['review-lane', 'invoke', '--slug', slug, '--run-dir', p.runDir, '--repo-root', p.dir, ...extraArgs],
     p.dir,
-    { PATH: `${p.binDir}${path.delimiter}${process.env.PATH}`, HOME: p.dir, USERPROFILE: p.dir },
+    isolatedEnv({ home: p.dir, path: `${p.binDir}${path.delimiter}${process.env.PATH}` }),
   );
   assert.ok(r.output, `review-lane invoke printed nothing: ${r.error}`);
   return JSON.parse(r.output);

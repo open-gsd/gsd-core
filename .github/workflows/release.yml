@@ -784,7 +784,7 @@ jobs:
     needs: [validate-version, install-smoke-finalize, finalize-coverage-gate]
     if: inputs.action == 'finalize'
     runs-on: ubuntu-latest
-    # >= 30 required by tests/release-backmerge-invariants.test.cjs (#2281) —
+    # >= 30 required by the release-backmerge-invariants text contract (#2281) —
     # kept even though this job no longer runs the unit suite itself (moved
     # to finalize-test/finalize-coverage-gate, #4335): the changelog/tag/
     # publish/verify/backmerge tail below still deserves real headroom
