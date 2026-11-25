@@ -311,8 +311,9 @@ function extractObjective(content: string): string | null {
   // excludes \r, U+2028 and U+2029. Stop the slice at any of them.
   let end = i;
   while (end < content.length && !/[\n\r\u2028\u2029]/.test(content[end])) end++;
-  const value = content.slice(i, end).trim();
-  return value.length > 0 ? value : null;
+  // After the whitespace skip, content[i] is non-whitespace, so the slice can never
+  // trim to '' — the all-whitespace tail already returned above.
+  return content.slice(i, end).trim();
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
