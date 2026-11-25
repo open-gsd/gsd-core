@@ -973,10 +973,9 @@ a `.part` file and renames it, so the orchestrator never reads half of it (the d
 exists):
 
 ```bash
-cat > 'PATH.part' <<'GSD_RETURN_EOF'
+cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
 <your complete return, marker line first>
-GSD_RETURN_EOF
-mv -f 'PATH.part' 'PATH'
+GSD_RETURN_END_7f3c9a1e
 ```
 
 Your final message then carries the same return. This is your only write; never touch a plan or
@@ -1054,7 +1053,7 @@ Plans verified. Run `/gsd:execute-phase {phase}` to proceed.
 
 <anti_patterns>
 
-**DO NOT** write any file except the `<return_receipt>` path, if your prompt gives one (one Bash `printf`). You never write, split or fix a plan.
+**DO NOT** write any file except the `<return_receipt>` path and its `.part` file, if your prompt gives one (one Bash call). You never write, split or fix a plan.
 
 **DO NOT** check code existence — that's gsd-verifier's job. You verify plans, not codebase.
 

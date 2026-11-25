@@ -936,10 +936,9 @@ first, e.g. `## PLANNING COMPLETE` or `## REVISION COMPLETE`) to PATH with one B
 rename keeps it from ever being read half-written (the directory exists):
 
 ```bash
-cat > 'PATH.part' <<'GSD_RETURN_EOF'
+cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
 <your complete return, marker line first>
-GSD_RETURN_EOF
-mv -f 'PATH.part' 'PATH'
+GSD_RETURN_END_7f3c9a1e
 ```
 
 Your final message carries the same return. Never write the receipt early.

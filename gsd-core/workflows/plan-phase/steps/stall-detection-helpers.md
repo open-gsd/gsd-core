@@ -61,7 +61,7 @@ orchestrator between cycles, stop the watch and route that result's recognized m
 exactly as the `false` path does. Precedence: whichever
 of the two ends the wait routes it. If both are present and name different markers,
 treat the return as unrecognized (9a/11a). A receipt that holds only the marker (an
-agent definition installed before the body was added, or a refused body write) leaves
+agent definition installed before the body was added) leaves
 the body to the completion result, and a route that needs the body when neither has it
 fails closed: a receipt-routed `## ISSUES FOUND` with no issue list is
 never counted as 0 issues; use 11a and offer Retry checker before Accept. A
@@ -84,12 +84,12 @@ either: re-run this block in every fence that calls them.
 **Plan-checker receipt:** a checker that PASSES touches no `*-PLAN.md`, so its receipt
 is its only completion signal for this watch. The checker keeps its read-only `tools:`
 line (no `Write`; #767 Group A) and writes the one receipt line through its shell, with
-one Bash `printf` (`agents/gsd-plan-checker.md`). A refused write is not fatal: the
+one Bash call (`agents/gsd-plan-checker.md`). A refused write is not fatal: the
 checker notes it in its return and continues.
 
 **Known limit, a sandbox that refuses the shell write (Codex `read-only`):** Codex derives
 the checker's `sandbox_mode` from its `tools:` line (`src/codex-agent-toml.cts`), and a
-`read-only` sandbox is expected to refuse the `printf`, so no checker receipt would be
+`read-only` sandbox is expected to refuse that write, so no checker receipt would be
 written there (derived from the installer, not measured on Codex). The wait ends on the
 completion result, as above, or as `stalled` at the threshold (#5182 ruling of 2026-11-05,
 acceptance criterion 5 as amended; the gap and its ADR are tracked in #6110).
@@ -345,20 +345,21 @@ gsd_return_marker() {
 }
 
 # gsd_return_body FILE — print the agent's complete return from its receipt: the whole
-# file, cut at 65536 bytes (a return is a short report; the cap keeps one runaway write
-# from flooding the orchestrator). Nothing is printed for a symlink, a directory or a
-# missing or unreadable file, or one with a NUL byte in its first 4097 bytes (bash and
-# zsh read a NUL differently), or an empty one. Call it only after `marker_received`; the
-# first line is the marker (`gsd_return_marker` names it) and a receipt that holds only
-# that line is a marker-only receipt, which routes through the 9a/11a body-less cases.
+# file. Nothing is printed for a symlink, a directory, a missing or unreadable file, an
+# empty one, one with a NUL byte anywhere (bash and zsh read a NUL differently), or one
+# over 65536 bytes (a return is a short report; a cut body could drop a finding, so an
+# oversize one counts as no body and the body-needing routes fail closed). Call it only
+# after `marker_received`; the first line is the marker (`gsd_return_marker` names it)
+# and a receipt that holds only that line is a marker-only receipt, which routes
+# through the 9a/11a body-less cases.
 gsd_return_body() {
   local file="$1" size
   [ -L "$file" ] && return 0
   [ -f "$file" ] && [ -r "$file" ] || return 0
-  size=$(( $(head -c 4097 -- "$file" 2>/dev/null | wc -c) ))
-  [ "$size" -gt 0 ] || return 0
-  [ "$(( $(head -c 4097 -- "$file" 2>/dev/null | LC_ALL=C tr -d '\000' | wc -c) ))" -eq "$size" ] || return 0
-  head -c 65536 -- "$file" 2>/dev/null
+  size=$(( $(wc -c < "$file" 2>/dev/null) ))
+  [ "$size" -gt 0 ] && [ "$size" -le 65536 ] || return 0
+  [ "$(( $(LC_ALL=C tr -d '\000' < "$file" 2>/dev/null | wc -c) ))" -eq "$size" ] || return 0
+  cat -- "$file" 2>/dev/null
   return 0
 }
 
