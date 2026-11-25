@@ -10,8 +10,6 @@
  * `new-milestone.md` step 2.5 filters on the SAME open set `audit-open` uses, and the docs name the
  * closed value. The parity test derives the open set from `audit-open` behavior and compares it with
  * the set step 2.5 names, so the two readers cannot drift apart.
- *
- * Matrix: .gsd/phase/feat-4647-seed-close/50-test-matrix.md
  */
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
@@ -19,7 +17,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -29,7 +29,7 @@ function seedsDir(tmpDir) {
   return dir;
 }
 
-/** `raw` entries are written verbatim as frontmatter lines, so a bare `status:` can be expressed. */
+/** `lines` are written verbatim as frontmatter lines, so a bare `status:` can be expressed. */
 function writeSeed(tmpDir, name, lines, heading, eol = '\n') {
   const body = heading ? `${eol}${eol}# ${heading}${eol}` : eol;
   fs.writeFileSync(path.join(seedsDir(tmpDir), name), `---${eol}${lines.join(eol)}${eol}---${body}`);
@@ -249,13 +249,9 @@ describe('audit-open reports exactly the open statuses (#4647 parity anchor)', (
   });
 });
 
-// Workflow and command .md text is what the runtime loads, so its text is the contract under test.
-function readPromptText(rel) {
-  return fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
-}
-
-// The reference docs must name the closed status the readers honor.
-function readDocsText(rel) {
+// Workflow and command .md text is what the runtime loads, and the reference docs must name the closed
+// status the readers honor: in both cases the shipped text is the contract under test.
+function readShippedText(rel) {
   return fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 }
 
@@ -271,7 +267,7 @@ function section(text, startRe, endRe) {
 
 describe('shipped prompts and docs for closing a seed (#4647)', () => {
   test('plant-seed documents the close mode contract', () => {
-    const t = normalize(readPromptText('gsd-core/workflows/plant-seed.md'));
+    const t = normalize(readShippedText('gsd-core/workflows/plant-seed.md'));
     for (const needle of [
       '--close', '--promoted', '--built', '--dropped',
       'status: closed', 'outcome_kind', 'outcome_ref', 'outcome:',
@@ -281,6 +277,16 @@ describe('shipped prompts and docs for closing a seed (#4647)', () => {
     }
     const closeStep = section(t, /<step name="close-seed">/, /<\/step>/);
     assert.ok(closeStep.includes('--files'), 'the close commit must be scoped with --files');
+    // Routing: close mode is tested before enrich and only when --close opens the arguments, so a value
+    // that mentions --enrich cannot reroute it. The outcome-flag count is checked mechanically in parse-idea.
+    const closeBranch = t.indexOf("grep -qE '^[[:space:]]*--close[[:space:]]+SEED-");
+    const enrichBranch = t.indexOf("grep -qE '\\-\\-enrich[[:space:]]+SEED-");
+    assert.ok(closeBranch !== -1 && enrichBranch !== -1, 'parse-idea must hold both mode branches');
+    assert.ok(closeBranch < enrichBranch, 'the anchored --close branch must be tested before --enrich');
+    assert.ok(t.includes('CLOSE_FLAGS'), 'parse-idea must count the outcome flags before touching a seed');
+    for (const rule of ['single token', 'remove every `#`', 'remove every control character']) {
+      assert.ok(closeStep.includes(rule), `the close step must state the rule ${JSON.stringify(rule)}`);
+    }
     for (const kind of ['promoted', 'built', 'dropped']) {
       const row = closeStep.split('\n').find(l => l.startsWith(`| \`--${kind} `));
       assert.ok(row, `close step must have an outcome table row for --${kind}`);
@@ -289,14 +295,14 @@ describe('shipped prompts and docs for closing a seed (#4647)', () => {
   });
 
   test('capture routes --seed --close to plant-seed', () => {
-    const t = normalize(readPromptText('commands/gsd/capture.md'));
+    const t = normalize(readShippedText('commands/gsd/capture.md'));
     const hint = t.split('\n').find(l => l.startsWith('argument-hint:'));
     assert.ok(hint && hint.includes('--close'), 'argument-hint must name --close');
     assert.ok(t.includes('--seed --close'), 'the routing text must name --seed --close');
   });
 
   test('new-milestone step 2.5 filters on the audit-open open set', () => {
-    const t = normalize(readPromptText('gsd-core/workflows/new-milestone.md'));
+    const t = normalize(readShippedText('gsd-core/workflows/new-milestone.md'));
     const step = section(t, /^## 2\.5\. Scan Planted Seeds/m, /^## 3\./m);
     const line = step.split('\n').find(l => l.startsWith('**Open seeds only:**'));
     assert.ok(line, 'step 2.5 must carry an "**Open seeds only:**" line');
@@ -308,26 +314,107 @@ describe('shipped prompts and docs for closing a seed (#4647)', () => {
   });
 
   test('list-seeds workflow names the outcome fields', () => {
-    const t = normalize(readPromptText('gsd-core/workflows/list-seeds.md'));
+    const t = normalize(readShippedText('gsd-core/workflows/list-seeds.md'));
     for (const needle of ['outcome_kind', 'outcome_ref', 'outcome', 'closed']) {
       assert.ok(t.includes(needle), `list-seeds.md must contain ${JSON.stringify(needle)}`);
     }
   });
 
   test('docs name the closed seed status', () => {
-    const cli = normalize(readDocsText('docs/CLI-TOOLS.md'));
+    const cli = normalize(readShippedText('docs/CLI-TOOLS.md'));
     assert.ok(cli.includes('dormant|active|triggered|closed'), 'CLI-TOOLS.md must list closed beside the open values');
     for (const field of ['outcome_kind', 'outcome_ref', 'outcome']) {
       assert.ok(cli.includes(field), `CLI-TOOLS.md must document ${field}`);
     }
-    const guide = normalize(readDocsText('docs/USER-GUIDE.md'));
+    const guide = normalize(readShippedText('docs/USER-GUIDE.md'));
     const seeds = section(guide, /^### Seeds/m, /^### (?!Seeds)/m);
     assert.ok(seeds.includes('closed') && seeds.includes('--close'), 'USER-GUIDE Seeds must explain closing a seed');
-    const commands = normalize(readDocsText('docs/COMMANDS.md'));
+    const commands = normalize(readShippedText('docs/COMMANDS.md'));
     const row = commands.split('\n').find(l => l.startsWith('| Seeds |'));
     assert.ok(row, 'the pre-close audit table must keep its Seeds row');
     assert.ok(row.includes('closed'), 'the Seeds row must name the closed value');
     assert.ok(!row.includes('not yet implemented'), 'the Seeds row must stop saying "not yet implemented"');
     assert.ok(commands.includes('--close'), 'COMMANDS.md must document --close');
+  });
+});
+
+/** The parse-idea block of plant-seed.md, run as the shell script it is. `$ARGUMENTS` is the template slot. */
+function parseIdeaBlock() {
+  const md = normalize(readShippedText('gsd-core/workflows/plant-seed.md'));
+  const start = md.indexOf('<step name="parse-idea">');
+  assert.ok(start !== -1, 'parse-idea step not found');
+  const open = md.indexOf('```bash\n', start) + '```bash\n'.length;
+  return md.slice(open, md.indexOf('\n```', open));
+}
+
+describe('plant-seed parse-idea routes close mode mechanically (#4647)', () => {
+  let dir;
+  beforeEach(() => {
+    dir = createTempDir('seed-close-parse-');
+    fs.mkdirSync(path.join(dir, '.planning', 'seeds'), { recursive: true });
+    for (const id of ['SEED-260315-k3x-collab', 'SEED-001-old']) {
+      fs.writeFileSync(path.join(dir, '.planning', 'seeds', `${id}.md`), `---\nid: ${id.split('-').slice(0, -1).join('-')}\nstatus: dormant\n---\n# x\n`);
+    }
+  });
+  afterEach(() => { cleanup(dir); });
+
+  function route(t, args) {
+    if (process.platform === 'win32') { t.skip('bash is not guaranteed on Windows lanes'); return null; }
+    const script = parseIdeaBlock().replace('\n$ARGUMENTS\n', `\n${args}\n`)
+      + '\nprintf "close=%s enrich=%s idea=%s\\n" "${CLOSE_TARGET:-}" "${ENRICH_TARGET:-}" "${IDEA:-}"\n';
+    const scriptPath = path.join(dir, 'parse-idea.sh');
+    fs.writeFileSync(scriptPath, script);
+    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, `the script must exit: ${r.stderr}`);
+    return r;
+  }
+
+  test('a valid close names its target and plants nothing', (t) => {
+    const r = route(t, '--close SEED-260315-k3x --promoted PLAT-17');
+    if (!r) return;
+    assert.strictEqual(r.exitCode, 0);
+    assert.strictEqual(r.stdout.trim(), 'close=SEED-260315-k3x enrich= idea=');
+  });
+
+  test('a close with no outcome flag fails closed', (t) => {
+    const r = route(t, '--close SEED-260315-k3x');
+    if (!r) return;
+    assert.strictEqual(r.exitCode, 1);
+    assert.strictEqual(r.stdout.trim(), '');
+  });
+
+  test('a close with two outcome flags fails closed', (t) => {
+    const r = route(t, '--close SEED-260315-k3x --built 3 --dropped "why"');
+    if (!r) return;
+    assert.strictEqual(r.exitCode, 1);
+    assert.strictEqual(r.stdout.trim(), '');
+  });
+
+  test('a close naming no seed fails closed', (t) => {
+    const r = route(t, '--close SEED-999 --built 2');
+    if (!r) return;
+    assert.strictEqual(r.exitCode, 1);
+  });
+
+  test('a dropped value mentioning --enrich cannot reroute the close', (t) => {
+    const r = route(t, '--close SEED-001 --dropped "see --enrich SEED-260315-k3x"');
+    if (!r) return;
+    assert.strictEqual(r.exitCode, 0);
+    assert.strictEqual(r.stdout.trim(), 'close=SEED-001 enrich= idea=');
+  });
+
+  test('an idea that merely mentions --close later is still an idea', (t) => {
+    const r = route(t, 'Revisit the --close SEED-001 --built 2 wording of the docs');
+    if (!r) return;
+    assert.strictEqual(r.exitCode, 0);
+    assert.strictEqual(r.stdout.trim(), 'close= enrich= idea=Revisit the --close SEED-001 --built 2 wording of the docs');
+  });
+
+  test('enrich and a plain idea keep routing as before', (t) => {
+    const enrich = route(t, '--enrich SEED-260315-k3x');
+    if (!enrich) return;
+    assert.strictEqual(enrich.stdout.trim(), 'close= enrich=SEED-260315-k3x idea=');
+    const idea = route(t, 'Add real-time collaboration');
+    assert.strictEqual(idea.stdout.trim(), 'close= enrich= idea=Add real-time collaboration');
   });
 });
