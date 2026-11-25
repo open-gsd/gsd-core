@@ -2,7 +2,8 @@
 
 // The quick-batch verification and research steps run only in their mode (#6532): each step file has a skip gate
 // on the variable that `quick-batch.md` sets from `init.quick-batch`'s `modes`, ahead of the step's first Agent()
-// dispatch (an `Agent(` call opening a line, not a mention in prose). The wording around the variable is free. The
+// dispatch. Pinned: a line starting "Skip this step" with "NOT `$VAR`" within 40 characters, placed before the first
+// line that opens with `Agent(` (a mention of Agent() in prose does not count). The rest of the wording is free. The
 // variables themselves are tested by running the shipped blocks (tests/gsd-quick-batch-modes.process.test.cjs).
 // Was a row of tests/gsd-quick-batch-modes.test.cjs.
 
