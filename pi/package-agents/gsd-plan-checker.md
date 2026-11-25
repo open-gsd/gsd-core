@@ -976,7 +976,7 @@ cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
 GSD_RETURN_END_7f3c9a1e
 ```
 
-Your final message carries the same return. Write nothing else (no plan). If the write fails or
+Your final message carries the same return. Make no other write (no plan). If the write fails or
 is refused (a read-only sandbox), say so in your return and continue: the orchestrator's wait then
 ends on your completion result.
 
