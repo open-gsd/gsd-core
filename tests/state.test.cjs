@@ -23782,8 +23782,10 @@ describe('state update-progress: an unscoped decline names the cause and the fix
  *   FIELD_CLASSIFICATION does not know and overwrites the reset fields.
  * - Both commands replaced the whole `## Current Position` body with the four
  *   template lines, deleting operator lines (`Blocked on:`, `Carry-over:`).
- *   Every non-template line now moves, once and in order, under
- *   `## Accumulated Context` (created when absent) and is listed in the result.
+ *   Every line that is not a field the state commands own now moves, once and
+ *   in order, under `## Accumulated Context` (created when absent) and is
+ *   listed in the result; a moved line that still reads as an owned field is
+ *   written as a list item so the frontmatter sync cannot read it back.
  */
 
 const { describe, test, afterEach } = require('node:test');
@@ -23905,7 +23907,8 @@ describe('#6174 non-template Current Position lines move under Accumulated Conte
       test('a fenced `##` inside Current Position does not end the section: the fenced block moves whole', () => {
         const fenced = ['```', '## not a heading', 'Phase: inside a fence', '```'];
         const result = transitionCore(state({ position: [TEMPLATE_LINES[0], ...fenced, ...TEMPLATE_LINES.slice(1), 'Blocked on: x'] }), intent, deps);
-        assert.deepStrictEqual(result.data.moved_current_position_lines, [...fenced, 'Blocked on: x']);
+        // the fenced `Phase:` line is written as a list item so no field reader takes it (Major 2)
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['```', '## not a heading', '- Phase: inside a fence', '```', 'Blocked on: x']);
         assert.strictEqual(positionTemplateCount(result.content), 4);
         assert.strictEqual(result.content.split('\n').filter((l) => l === '## not a heading').length, 1);
         assert.ok(result.content.includes('## Session'), 'the section after Current Position survives');
@@ -23916,7 +23919,7 @@ describe('#6174 non-template Current Position lines move under Accumulated Conte
 
 describe('#6174 property: no non-template line is lost or duplicated', () => {
   const extraLine = fc.integer({ min: 0, max: 1e6 }).chain((n) => fc.constantFrom(
-    `Blocked on: item ${n}`, `Carry-over: ${n}`, `- note ${n}`, `Progress: [####] ${n}`, `free text ${n}`,
+    `Blocked on: item ${n}`, `Carry-over: ${n}`, `- note ${n}`, `**Owner:** ${n}`, `  wrapped continuation ${n}`, `free text ${n}`,
   ));
   for (const [kind, intent] of Object.entries(INTENTS)) {
     test(`${kind}`, () => {
@@ -23946,9 +23949,104 @@ describe('#6174 parity: milestone-switch and milestone-complete treat these line
     const input = state({ position: POSITION_WITH_EXTRAS });
     const a = transitionCore(input, SWITCH, deps);
     const b = transitionCore(input, COMPLETE, deps);
+    assert.deepStrictEqual(a.data, { moved_current_position_lines: EXTRAS });
     assert.deepStrictEqual(a.data, b.data);
     assert.deepStrictEqual(sliceSection(a.content, 'Accumulated Context'), sliceSection(b.content, 'Accumulated Context'));
   });
+});
+
+describe('#6174 lines the state commands own are not moved, and nothing moved is read back as a field', () => {
+  for (const [kind, intent] of Object.entries(INTENTS)) {
+    describe(kind, () => {
+      test('a STATE.md made from the shipped template moves nothing: no data key', () => {
+        const body = readShippedStateTemplateBody([]);
+        const result = transitionCore(`---\ngsd_state_version: 1.0\nmilestone: v1.0\n---\n\n${body}`, intent, deps);
+        assert.strictEqual(result.data, undefined);
+      });
+
+      test('owned fields in any spelling (Progress, bold Current Plan, a Total Phases table row) are reset, not moved', () => {
+        const position = [...TEMPLATE_LINES, '', 'Progress: [####------] 40%', '**Current Plan:** 7', '| Total Phases | 5 |', 'Blocked on: legal'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Blocked on: legal']);
+        assert.ok(!result.content.includes('40%') && !result.content.includes('Current Plan') && !result.content.includes('Total Phases'));
+      });
+
+      test('a second line with a template label is operator content: moved as a list item, not deleted', () => {
+        const position = [...TEMPLATE_LINES, 'Status: blocked on legal', '**Plan:** 3-02 deferred'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines,
+          ['- Status: blocked on legal', '- **Plan:** 3-02 deferred']);
+      });
+
+      test('blank lines between operator lines are layout; a blank line inside a fence is kept', () => {
+        const position = [...TEMPLATE_LINES, '', 'Blocked on: a', '', '', 'Carry-over: b', '~~~', 'x', '', 'y', '~~~'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Blocked on: a', 'Carry-over: b', '~~~', 'x', '', 'y', '~~~']);
+      });
+
+      test('an unclosed fence is closed with the opener\'s delimiter, so no later heading is swallowed', () => {
+        // Accumulated Context ahead of Current Position: the moved block lands above the rewritten position heading.
+        const doc = ['---', 'milestone: v1.0', '---', '', '# Project State', '', '## Accumulated Context', '', '- ctx', '',
+          '## Current Position', '', ...TEMPLATE_LINES, '', '````text', 'Blocked on: z', ''].join('\n');
+        const result = transitionCore(doc, intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['````text', 'Blocked on: z', '````']);
+        const headings = require('../gsd-core/bin/lib/markdown-sectionizer.cjs').tokenizeHeadings(result.content)
+          .filter((h) => h.level === 2).map((h) => h.text);
+        assert.deepStrictEqual(headings.slice(0, 2), ['Accumulated Context', 'Current Position']);
+      });
+
+      test('CRLF input: the moved lines are written with CRLF and no bare LF is introduced', () => {
+        const input = state({ position: POSITION_WITH_EXTRAS, eol: '\r\n' });
+        const out = transitionCore(input, intent, deps).content;
+        // (the reset's own template lines are outside this check: that writer predates #6174)
+        const ac = out.slice(out.indexOf('## Accumulated Context'), out.indexOf('## Session'));
+        assert.ok(ac.includes(`\r\n${EXTRAS[0]}\r\n${EXTRAS[1]}\r\n`));
+        assert.ok(!/[^\r]\n/.test(ac), 'a bare LF was written into the CRLF Accumulated Context section');
+      });
+
+      test('the existing Accumulated Context content is kept byte for byte below the moved lines', () => {
+        for (const accumulated of [['### Decisions', '', '- keep it simple'], ['', '', '- two blank lines first']]) {
+          const input = state({ position: POSITION_WITH_EXTRAS, accumulated });
+          const out = transitionCore(input, intent, deps).content;
+          const original = input.slice(input.indexOf('## Accumulated Context\n') + '## Accumulated Context\n'.length, input.indexOf('## Session'));
+          assert.ok(out.includes(`## Accumulated Context\n\n${EXTRAS.join('\n')}\n${/^\n/.test(original) ? '' : '\n'}${original}`));
+        }
+      });
+
+      test('Accumulated Context heading at the end of the file, with and without a trailing newline', () => {
+        for (const tail of ['## Accumulated Context', '## Accumulated Context\n']) {
+          const doc = ['---', 'milestone: v1.0', '---', '', '# Project State', '', '## Current Position', '', ...TEMPLATE_LINES, 'Blocked on: q', '', tail].join('\n');
+          const result = transitionCore(doc, intent, deps);
+          assert.deepStrictEqual(sliceSection(result.content, 'Accumulated Context').filter((l) => l.trim()).slice(0, 1), ['Blocked on: q']);
+          assert.ok(result.content.includes('## Accumulated Context\n\nBlocked on: q\n'));
+        }
+      });
+    });
+  }
+});
+
+describe('#6174 the frontmatter sync never reads an old-milestone value from a moved line', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) cleanup(tmpDir); tmpDir = null; });
+  // Accumulated Context first, so a moved line would win the first-match read.
+  const doc = ['---', 'gsd_state_version: 1.0', 'milestone: v1.0', '---', '', '# Project State', '',
+    '## Accumulated Context', '', '- ctx', '', '## Current Position', '', ...TEMPLATE_LINES, '',
+    'Progress: [####------] 40%', '**Current Plan:** OLD-PLAN', 'Status: OLD-STATUS', 'Total Phases: 77',
+    '```', 'Current Phase Name: OLD-NAME', '```', '', '## Session', '', 'Last session: 2026-06-01', ''].join('\n');
+  for (const cmd of ['milestone complete v1.0 --name One --confirm', 'state milestone-switch --milestone v2.0 --name Two']) {
+    test(cmd, () => {
+      tmpDir = createTempProject();
+      const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, doc);
+      assert.ok(runGsdTools(cmd, tmpDir).success);
+      assert.ok(runGsdTools('state sync', tmpDir).success);
+      const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+      const fm = extractFrontmatter(fs.readFileSync(statePath, 'utf8'));
+      assert.ok(!JSON.stringify(fm).includes('OLD'), `old value in frontmatter: ${JSON.stringify(fm)}`);
+      assert.notStrictEqual(fm.progress?.total_phases, 77);
+      assert.notStrictEqual(fm.progress?.percent, 40);
+    });
+  }
 });
 
 describe('#6174 CLI results', () => {

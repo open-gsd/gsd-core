@@ -2745,20 +2745,43 @@ function plannedPhaseCore(
 // whole `## Current Position` body with the four template lines. Anything else
 // an operator kept in that section (`Blocked on:`, `Carry-over:`, ...) used to
 // be deleted silently. These two helpers are the ONE shared treatment of those
-// lines, so the two intents cannot diverge: collect every non-template line
-// before the reset, then re-home it under `## Accumulated Context`.
-
-/** The four template fields of the `## Current Position` reset (bold or plain). */
-const CURRENT_POSITION_TEMPLATE_LINE_RE = /^\s*\**(?:Phase|Plan|Status|Last activity)\**\s*:/i;
+// lines, so the two intents cannot diverge: collect every line GSD does not
+// own before the reset, then re-home it under `## Accumulated Context`.
 
 /**
- * Collect the lines of `## Current Position` that are not one of the four
- * template lines, in original order. Blank lines outside a fenced block are
- * layout, not content, and are not collected; every line inside a fenced block
- * (delimiters included) is collected verbatim so a fenced example keeps its
- * shape. Fence-aware heading location (a `##` inside a fence does not end the
- * section) via `tokenizeHeadings`. Trailing `\r` is dropped (CRLF input).
- * Returns `[]` when the section is absent.
+ * The fields the state commands own in `## Current Position`: every label
+ * `buildStateFrontmatter` (src/state.cts) reads with `stateExtractField`, plus
+ * `Plan`, the one template field it does not read. Matched as that reader
+ * matches them (case-insensitive; `**Label:**`, `Label:` or a two-cell table
+ * row), so `Last activity` and `Stopped at` are covered.
+ */
+const CURRENT_POSITION_OWNED_LABELS = [
+  'Phase', 'Plan', 'Status', 'Last Activity', 'Last Activity Description',
+  'Current Phase', 'Current Phase Name', 'Current Plan', 'Total Phases',
+  'Total Plans in Phase', 'Progress', 'Stopped At', 'Paused At',
+];
+
+/** The owned label `line` reads as, lower-cased, or null. */
+function ownedLabelOf(line: string): string | null {
+  for (const label of CURRENT_POSITION_OWNED_LABELS) {
+    if (stateExtractField(line, label) !== null) return label.toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Collect the lines of `## Current Position` GSD does not own, in order, as
+ * they are to be written under `## Accumulated Context`. The first line outside
+ * a fence reading as each owned field is that field (the reset replaces it); a
+ * later line with the same label (a second `Status:`) is operator content. A
+ * collected line `stateExtractField` would still read as an owned field (that
+ * second `Status:`, or one inside a fence) is written as a list item: the
+ * frontmatter sync reads those labels body-wide, so a verbatim move would bring
+ * an old-milestone value back. Blank lines outside a fence are layout; a fenced
+ * block moves whole, and one left unclosed gets a closing delimiter of the
+ * opener's character and length so it cannot swallow what follows. Headings
+ * are located fence-aware via `tokenizeHeadings`; a trailing `\r` is dropped
+ * (CRLF input). Returns `[]` when the section is absent.
  */
 function collectNonTemplateCurrentPositionLines(body: string): string[] {
   const hs = tokenizeHeadings(body);
@@ -2775,38 +2798,56 @@ function collectNonTemplateCurrentPositionLines(body: string): string[] {
 
   const lines = body.slice(sectionStart, sectionEnd).split('\n').map((l) => l.replace(/\r$/, ''));
   const inFence = new Array<boolean>(lines.length).fill(false);
+  let unclosedFence = '';
   for (const block of scanFencedBlocks(lines)) {
     const last = block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx;
     for (let i = block.openLineIdx; i <= last; i++) inFence[i] = true;
+    if (block.closeLineIdx === -1) unclosedFence = block.char.repeat(block.len);
   }
+  const seen = new Set<string>();
   const moved: string[] = [];
   lines.forEach((line, i) => {
-    if (inFence[i]) { moved.push(line); return; }
-    if (line.trim() === '') return;
-    if (CURRENT_POSITION_TEMPLATE_LINE_RE.test(line)) return;
-    moved.push(line);
+    const label = ownedLabelOf(line);
+    if (!inFence[i]) {
+      if (line.trim() === '') return;
+      if (label !== null && !seen.has(label)) { seen.add(label); return; }
+    }
+    moved.push(label === null ? line : `- ${line}`);
   });
+  if (unclosedFence !== '') {
+    // Blank lines at the end of the section belong to the layout, not the block.
+    while (moved.length > 0 && moved[moved.length - 1].trim() === '') moved.pop();
+    moved.push(unclosedFence);
+  }
   return moved;
 }
 
 /**
- * Insert `lines` directly under the `## Accumulated Context` heading (ahead of
- * the section's existing content, which is left byte-for-byte as it was), or
+ * Insert `lines` directly under the `## Accumulated Context` heading, or
  * append a new `## Accumulated Context` section when the document has none.
- * No-op for an empty list, so a transition with nothing to move is unchanged.
+ * Every existing byte is kept: the moved lines and the newlines around them
+ * are only added. One blank line separates the heading from the moved lines,
+ * and one more separates them from the section's existing content when that
+ * content does not already start with a blank line. Added line endings follow
+ * the document (CRLF when it contains CRLF). No-op for an empty list, so a
+ * transition with nothing to move is unchanged.
  */
 function placeUnderAccumulatedContext(body: string, lines: string[]): string {
   if (lines.length === 0) return body;
-  const block = lines.join('\n');
+  const eol = body.includes('\r\n') ? '\r\n' : '\n';
+  const block = lines.map((l) => l + eol).join('');
   const hs = tokenizeHeadings(body);
   const idx = hs.findIndex((h) => h.level === 2 && /^accumulated\s+context$/i.test(h.text));
   if (idx === -1) {
-    return `${body.trimEnd()}\n\n## Accumulated Context\n\n${block}\n`;
+    const lead = body === '' ? '' : body.endsWith('\n') ? eol : eol + eol;
+    return `${body}${lead}## Accumulated Context${eol}${eol}${block}`;
   }
   const h = hs[idx];
   const headingEnd = h.offset + body.split('\n')[h.line - 1].length + 1;
-  const rest = body.slice(headingEnd).replace(/^(?:\r?\n)+/, '');
-  return `${body.slice(0, Math.min(headingEnd, body.length))}${headingEnd > body.length ? '\n' : ''}\n${block}\n${rest === '' ? '' : `\n${rest}`}`;
+  if (headingEnd > body.length) return `${body}${eol}${eol}${block}`;
+  const rest = body.slice(headingEnd);
+  const gap = rest === '' || /^\r?\n/.test(rest) ? '' : eol;
+  return `${body.slice(0, headingEnd)}${eol}${block}${gap}${rest}`;
 }
 
 /**
