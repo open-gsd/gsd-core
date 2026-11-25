@@ -538,6 +538,7 @@ const SHIPPED = [
   'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
   'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
   'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
+  'quick-batch-mode-gates',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -573,6 +574,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/references/verify-mvp-mode.md', 'gsd-core/references/planner-human-verify-mode.md', 'gsd-core/references/checkpoints.md',
     'gsd-core/workflows/settings-advanced.md', 'gsd-core/workflows/review.md', 'gsd-core/workflows/quick.md',
     'gsd-core/references/untrusted-input-boundary.md', 'package-lock.json', '.github/workflows/test.yml',
+    // #6532.
+    'gsd-core/workflows/quick-batch/steps/verification-wave.md', 'gsd-core/workflows/quick-batch/steps/research-phase.md',
   ];
 
   function copyOfRepoFiles(t) {
@@ -592,6 +595,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     ['gsd-core/workflows/autonomous.md', '--override-gate', 'autonomous-converge'],
     ['gsd-core/workflows/next.md', 'PLAN_STRATEGY="converge"', 'adr-15-progress-converge'],
     ['commands/gsd/progress.md', '--cross-ai', 'adr-15-progress-converge'],
+    ['gsd-core/workflows/quick-batch/steps/verification-wave.md', 'Skip this step entirely if NOT `$VALIDATE_MODE`.', 'quick-batch-mode-gates'],
+    ['gsd-core/workflows/quick-batch/steps/research-phase.md', 'Skip this step entirely if NOT `$RESEARCH_MODE`.', 'quick-batch-mode-gates'],
     ['gsd-core/workflows/autonomous/steps/converge-fail-fast.md', 'OVERRIDES the `workflow.plan_review_convergence` config gate', 'autonomous-converge'],
   ]) {
     test(`removing ${JSON.stringify(phrase)} from ${rel} fails ${contract}`, (t) => {
@@ -630,6 +635,24 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       fs.writeFileSync(abs, after);
       const findings = runShipped(root);
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // quick-batch-mode-gates (#6532): a gate that moves below the step's first Agent() dispatch no longer gates it.
+  for (const [rel, variable, expected] of [
+    ['gsd-core/workflows/quick-batch/steps/verification-wave.md', 'VALIDATE_MODE', /\$VALIDATE_MODE gate must come before the first verifier Agent\(\) dispatch/],
+    ['gsd-core/workflows/quick-batch/steps/research-phase.md', 'RESEARCH_MODE', /\$RESEARCH_MODE gate must come before the first researcher Agent\(\) dispatch/],
+  ]) {
+    test(`mutation: the $${variable} gate moved to the end of ${rel} fails quick-batch-mode-gates`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const gate = `Skip this step entirely if NOT \`$${variable}\`.`;
+      const before = fs.readFileSync(abs, 'utf8');
+      assert.equal(before.split(gate).length, 2, 'the gate is present exactly once to start with');
+      fs.writeFileSync(abs, `${before.replace(gate, '')}\n${gate}\n`);
+      const findings = runShipped(root);
+      assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+      assert.match(findings[0].message, expected);
     });
   }
 

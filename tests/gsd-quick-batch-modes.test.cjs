@@ -8,7 +8,8 @@
  *
  * The verbs run in-process through `runGsdTools`, and the mode rules are
  * checked directly as properties. The shipped workflow bash blocks, run by a
- * real bash, are in tests/gsd-quick-batch-modes.process.test.cjs.
+ * real bash, are in tests/gsd-quick-batch-modes.process.test.cjs; the step
+ * files' mode gates are the `quick-batch-mode-gates` text contract.
  *
  * Named `gsd-quick-batch-*`: the `quick-batch*` production-module buckets of
  * `scripts/lint-test-file-count.cjs` are at their 2-file cap.
@@ -20,7 +21,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const fc = require('./helpers/fast-check-setup.cjs');
-const { createTempProject, cleanup, readFileNormalized, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const {
   writeTasks,
   batchesDir,
@@ -259,15 +260,6 @@ describe('#6532 items 3-5: init.quick-batch --resume builds the manifest from th
     assert.deepEqual(init.modes, ['validate']);
     assert.ok(init.section_manifest.included.includes('verification-wave'));
     assert.equal(init.section_manifest.included.includes('research-phase'), false);
-  });
-
-  test('the loaded verification-wave and research-phase steps gate only on the variables init sets', () => {
-    // The step file's gate is the shipped text the model follows.
-    const stepsDir = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick-batch', 'steps');
-    const gate = readFileNormalized(path.join(stepsDir, 'verification-wave.md')).split('\n').slice(0, 4).join('\n');
-    assert.ok(gate.includes('Skip this step entirely if NOT `$VALIDATE_MODE`.'));
-    const researchGate = readFileNormalized(path.join(stepsDir, 'research-phase.md')).split('\n').slice(0, 4).join('\n');
-    assert.ok(researchGate.includes('Skip this step entirely if NOT `$RESEARCH_MODE`.'));
   });
 
   test('flags equal to the stored set are accepted', (t) => {
