@@ -1422,7 +1422,8 @@ describe('workflow call sites declare --files (#2269)', () => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
     const tokens = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir).map((t) => t.value);
-    const filesIndex = tokens.indexOf('--files');
+    // `--files-removed` is a scope in its own right at runtime (#4208, cmdCommit `explicitFiles`).
+    const filesIndex = tokens.findIndex((t) => t === '--files' || t === '--files-removed');
     if (filesIndex === -1) return false;
     return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
   };
@@ -1880,6 +1881,9 @@ describe('workflow call sites declare --files (#2269)', () => {
     assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files"), false);
     assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files --amend"), false);
     assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: plan' --files .planning/PLAN.md"), true);
+    // `--files-removed` declares a scope at runtime (#4208), so it vouches like `--files`.
+    assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: rm' --files-removed .planning/PLAN.md"), true);
+    assert.strictEqual(hasScopedFiles("gsd_run query commit 'docs: rm' --files-removed"), false);
     // Unquoted messages reach the same cmdCommit and must behave identically.
     assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files'), false);
     assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files .planning/PLAN.md'), true);

@@ -119,7 +119,7 @@ A few things worth knowing before you rely on this:
   normalizes the phase number before lookup, the same way it does everywhere else phase numbers are
   compared.
 - **It only applies to a commit that names a phase-scoped file.** `gsd-tools query commit` resolves
-  the phase from the `--files` paths you pass it (via the `.planning/phases/<phase-dir>/…`
+  the phase from the `--files` and `--files-removed` paths you pass it (via the `.planning/phases/<phase-dir>/…`
   segment). A commit that names no phase file — e.g. a bare `ROADMAP.md` update — has no phase to
   look up, so `phase_commit_docs` never applies to it and the project-wide setting governs, same as
   before this feature existed.
