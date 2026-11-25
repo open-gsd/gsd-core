@@ -201,8 +201,16 @@ export function inferProviderId(modelId: string): string {
   return DEFAULT_CLINE_PROVIDER_ID;
 }
 
-type ModelOverrideMap = Record<string, string> | null | undefined;
+// #4669: a `model_overrides.<agent>` entry is a model-id string OR a runtime-keyed object
+// (`{ "cline": "gpt-5", "claude": "opus" }`), so the map's values are not all strings.
+type ModelOverrideMap = Record<string, unknown> | null | undefined;
 type ProfileOverrideMap = Record<string, Record<string, string>> | null | undefined;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4669 model-resolver.cjs is an export= CommonJS module
+import modelResolver = require('../model-resolver.cjs');
+const { selectAgentModelOverride } = modelResolver as {
+  selectAgentModelOverride: (entry: unknown, runtime: string | null | undefined) => unknown;
+};
 
 type AgentModelParams = { providerId: string; modelId: string };
 
@@ -234,7 +242,9 @@ export function resolveClineAgentModelParams(args: {
 
   // 1. Direct per-agent override wins.
   if (modelOverrides && typeof modelOverrides === 'object') {
-    const direct = modelOverrides[agentType];
+    // #4669: select through the one shared selector, keyed by this host. An object entry with no
+    // usable `cline` key selects nothing and falls through to step 2, like an agent with no entry.
+    const direct = selectAgentModelOverride(modelOverrides[agentType], 'cline');
     if (typeof direct === 'string' && direct.length > 0) {
       return { providerId: inferProviderId(direct), modelId: direct };
     }
