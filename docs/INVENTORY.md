@@ -425,6 +425,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `ai-frameworks.md` | AI framework decision-matrix reference for `gsd-framework-selector`. |
 | `executor-examples.md` | Worked examples for the gsd-executor agent. |
 | `plan-checker-examples.md` | Worked example for the gsd-plan-checker agent (Scope Exceeded), moved out of the inline `<examples>` block to keep worked examples structurally separate from the agent contract, matching the other agents' reference layout. `@`-inlined at load (eager), so this costs ~0.6 KB of runtime context versus keeping it inline — a readability trade, not a size-cap remedy (#3724). |
+| `plan-checker-research-resolution.md` | Dimension 11 (Research Resolution) rule line, steps and passing example for the gsd-plan-checker agent, read from that dimension's section after its Skip-if line (#5438). |
 | `doc-conflict-engine.md` | Shared conflict-detection contract for ingest/import workflows. |
 | `execute-mvp-tdd.md` | Runtime gate semantics for execute-phase under TDD mode — pre-task failing-test verification, end-of-phase blocking review. |
 | `mvp-concepts.md` | Cross-reference index for the six MVP-related reference files; maps each file to its purpose and which workflow loads it. |

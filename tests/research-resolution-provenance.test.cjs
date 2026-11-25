@@ -49,12 +49,19 @@ function span(doc, startHeading, endPattern) {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
-const dim11 = once(() => span(checker(), '## Dimension 11: Research Resolution', /\n## Dimension 12\b/));
-// The numbered Process steps, from **Process:** to the first worked example, each with its
+// Dimension 11 is split in two. The agent's section keeps the Question, the Skip-if line, one plain
+// Read of the reference, and the two BLOCKER examples; the reference holds the rule line, the four
+// Process steps and the passing example. The checker reads the reference only when RESEARCH.md exists.
+const DIM11_REF = 'gsd-core/references/plan-checker-research-resolution.md';
+const DIM11_READ = `Read \`~/.claude/${DIM11_REF}\``;
+const dim11Section = once(() => span(checker(), '## Dimension 11: Research Resolution', /\n## Dimension 12\b/));
+const dim11Ref = once(() => read(DIM11_REF));
+const dim11 = once(() => `${dim11Section()}\n${dim11Ref()}`);
+// The numbered Process steps, from **Process:** to the reference's first worked example, each with its
 // whitespace collapsed so a wrap cannot split one step. The checker's steps are matched by
 // invariant tokens; prompt and doc text whose wording is the contract is pinned as whole sentences.
 const steps = once(() =>
-  span(dim11(), '**Process:**', /\n\*\*Example\b/)
+  span(dim11Ref(), '**Process:**', /\n\*\*Example\b/)
     .split(/\n(?=\d+\.\s)/)
     .filter((s) => /^\d+\.\s/.test(s))
     .map((s) => s.replace(/\s+/g, ' ').trim()),
@@ -67,6 +74,39 @@ const rules = once(() =>
 );
 
 describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', () => {
+  test('the checker reads the Dimension 11 reference once, after Skip-if and before any example, outside a code fence', () => {
+    const plain = stripFencedCode(dim11Section()).text;
+    const reads = splitLines(plain).filter((l) => l.includes(DIM11_READ));
+    assert.equal(reads.length, 1, `the Dimension 11 section must Read ${DIM11_REF} once, as prose`);
+    const at = plain.indexOf(DIM11_READ);
+    assert.ok(plain.indexOf('**Skip if:**') !== -1 && plain.indexOf('**Skip if:**') < at, 'the Read follows the Skip-if line');
+    const firstExample = plain.search(/^\*\*Example\b/m);
+    assert.ok(firstExample === -1 || at < firstExample, 'the Read comes before anything that checks the dimension');
+    assert.doesNotMatch(dim11Section(), /\*\*Process:\*\*/, 'the steps live in one place, the reference');
+  });
+
+  test('no shipped file includes the Dimension 11 reference eagerly', () => {
+    const name = path.basename(DIM11_REF);
+    const mentions = [];
+    const eager = [];
+    for (const dir of ['agents', 'gsd-core', 'commands', 'pi/package-agents']) {
+      for (const rel of fs.readdirSync(path.join(ROOT, dir), { recursive: true })) {
+        if (!String(rel).endsWith('.md')) continue;
+        const text = read(path.join(dir, String(rel)));
+        if (!text.includes(name)) continue;
+        mentions.push(path.join(dir, String(rel)));
+        if (/@\S*plan-checker-research-resolution\.md/.test(text)) eager.push(path.join(dir, String(rel)));
+      }
+    }
+    assert.ok(mentions.includes('agents/gsd-plan-checker.md'), 'the scan must see the checker\'s own Read of the reference');
+    assert.deepEqual(eager, [], 'an @ include loads the reference whether or not RESEARCH.md exists');
+  });
+
+  test('the four Process steps end where the reference\'s first example begins', () => {
+    assert.equal(steps().length, 4, `expected four Process steps: ${steps().length}`);
+    assert.match(steps()[3], /No CONTEXT\.md: every question is a BLOCKER\.$/, `step 4 runs on past its own text: ${steps()[3]}`);
+  });
+
   test('PASS is reached only when there are no questions, and the suffix is never evidence', () => {
     const passSteps = steps().filter((s) => /\bPASS\b/.test(s));
     assert.equal(passSteps.length, 1, 'exactly one Process step may grant PASS');
