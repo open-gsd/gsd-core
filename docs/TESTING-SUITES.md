@@ -685,7 +685,7 @@ platform signal sits in a few tests can be split: those tests move to
 `tests/<name>.platform.test.cjs`, which the tier selects, and `tests/<name>.test.cjs` runs on
 Linux only. A sibling is a unit-suite file (`suiteOf` returns `null`), so Linux shards run both
 halves. `gen-platform-conformance-tier.cjs` fails with `platform split invariant violated` when a
-split base regains a platform signal (`base-has-signal`), a sibling carries none
+split base regains a platform signal (`base-has-signal`), a sibling carries none and is not declared in `ALWAYS_REAL_OS`
 (`sibling-without-signal`), or a split base is listed in `ALWAYS_REAL_OS`
 (`base-always-real-os`). Split so far: `state`, `commands`, `phase`, `config` (`init` needed no
 sibling — its residual matches were fixture idioms and comments). See

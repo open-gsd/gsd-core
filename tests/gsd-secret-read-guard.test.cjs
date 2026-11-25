@@ -23,6 +23,13 @@
  *      here-strings, commit messages and heredoc bodies pass.
  *   5. Kimi vocabulary (ReadFile / Grep / Shell, `path`) is normalized.
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
+ *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
+ *      or a reading that fails on a command no scan blocked blocks as
+ *      guard-error, while a Bash command's overflow stays command-too-complex
+ *      and a body nested past MAX_NESTING_DEPTH stays nesting-too-deep; any
+ *      other value allows. The stdin-not-closing
+ *      cells hold the hook's stdin pipe open and live in
+ *      tests/gsd-secret-read-guard-stdin-timer.test.cjs.
  *
  * Every assertion reads typed fields off the stdout JSON (code, path, tool)
  * — never a regex over the reason prose (CONTRIBUTING.md).
@@ -37,10 +44,21 @@ const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.c
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 
-function runHook(payload, { cwd } = {}) {
+// #5784: the hook reads its crash policy from its environment, so an ambient
+// GSD_SECRET_READ_GUARD_ON_CRASH in the shell running this file would flip
+// every fail-open cell. Each spawn starts from process.env without it; the
+// opt-in cells pass it back explicitly.
+const ON_CRASH_ENV = 'GSD_SECRET_READ_GUARD_ON_CRASH';
+function hookEnv(extra = {}) {
+  const env = { ...process.env };
+  delete env[ON_CRASH_ENV];
+  return { ...env, ...extra };
+}
+
+function runHook(payload, { cwd, env: extraEnv } = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
-    env: { ...process.env },
+    env: hookEnv(extraEnv),
     timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
     ...(cwd === undefined ? {} : { cwd }),
   });
@@ -745,6 +763,201 @@ describe('gsd-secret-read-guard: scope and crash policy', () => {
     const r = runHook('{not json');
     assert.equal(r.status, 0);
     assert.equal(r.stdout, '');
+    assert.equal(r.stderr, '', 'the default crash path must emit nothing on stderr (#5784)');
+  });
+});
+
+describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)', () => {
+  // Claude Code's `onFailure: "block"` denies when a hook fails to start, times
+  // out or exits with an unexpected code; it cannot see a failure this hook
+  // catches and exits 0 on. GSD_SECRET_READ_GUARD_ON_CRASH=deny lets a host
+  // route those failures, the outer catch, a failed reading and the stdin
+  // timer, through the #3911 crash() seam as DENY. Unset, or any other value,
+  // keeps ALLOW. The
+  // stdin-timer cells need a held-open pipe, a raw child process, so they live
+  // in tests/gsd-secret-read-guard-stdin-timer.test.cjs.
+  const DENY_ENV = { [ON_CRASH_ENV]: 'deny' };
+  const MALFORMED = '{not json';
+
+  // A guard-error deny writes the plain reason to stderr, as the scan's own
+  // codes do (crash() forwards the hook's stderrPayload on DENY). The payload
+  // carries no tool or path, so assertBlocked does not fit.
+  function assertGuardError(r, label, cause) {
+    assert.equal(r.status, 2, `${label}: expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block', label);
+    assert.equal(out.code, 'guard-error', `${label}: code`);
+    assert.equal(out.cause, cause, `${label}: cause`);
+    assert.equal(typeof out.reason, 'string');
+    assert.ok(out.reason.length > 0, `${label}: reason present`);
+    assert.equal(r.stderr, out.reason, `${label}: stderr must carry the plain reason string (crash stderrPayload)`);
+    return out;
+  }
+
+  test('the guard-error causes are exactly the three failure paths', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assert.ok(Object.isFrozen(GUARD_ERROR_CAUSE));
+    assert.deepEqual(Object.keys(GUARD_ERROR_CAUSE).sort(), ['HOOK_ERROR', 'READING_FAILED', 'STDIN_STALL']);
+    // The values are a public contract: the fail-closed how-to tells hosts to match on them.
+    assert.deepEqual({ ...GUARD_ERROR_CAUSE }, { HOOK_ERROR: 'hook-error', READING_FAILED: 'reading-failed', STDIN_STALL: 'stdin-stall' });
+  });
+
+  test('opted in: malformed JSON (the outer catch) blocks as guard-error', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('opted in: a command nested deep enough to overflow the stack is still command-too-complex', () => {
+    // An overflow is a limit, not a hook error (#5255): it is denied as
+    // command-too-complex whatever the host chose, never as guard-error. The
+    // last shape also overflows the debugger-spawn scan, which unwraps
+    // `timeout`; the secret scan reports the overflow first.
+    const deep = (n) => '"$('.repeat(n);
+    for (const [label, cmd] of [
+      ['a read, then 300,000 levels', `cat ${'.e' + 'nv'}; ${deep(300000)}`],
+      ['300,000 levels', `echo ${deep(300000)}`],
+      ['a debugger spawn, then 100,000 levels', `timeout 5 bash -c 'claude --agent gsd-debugger; echo ${deep(100000)}'`],
+    ]) {
+      assertBlocked(runHook(bash(cmd), { env: DENY_ENV }), label, { code: 'command-too-complex', tool: 'Bash', path: '' });
+    }
+  });
+
+  test('opted in: a body nested past MAX_NESTING_DEPTH is still nesting-too-deep', () => {
+    // nesting-too-deep (#6136) is a limit the scan reports, as an overflow is,
+    // not a hook error, so the opt-in leaves it as it is, read or not; at the
+    // limit the body is scanned as without the opt-in.
+    const layers = (inner, n) => (n === 0 ? inner : layers(`bash -c ${JSON.stringify(inner)}`, n - 1));
+    const secret = '.e' + 'nv';
+    assertBlocked(runHook(bash(layers(`cat ${secret}`, 3)), { env: DENY_ENV }), 'a read, 3 layers', { tool: 'Bash', path: secret });
+    assertAllowed(runHook(bash(layers('echo ok', 3)), { env: DENY_ENV }), 'a benign body, 3 layers');
+    for (const n of [4, 10]) {
+      assertBlocked(runHook(bash(layers(`cat ${secret}`, n)), { env: DENY_ENV }), `a read, ${n} layers`, { code: 'nesting-too-deep', tool: 'Bash' });
+      assertBlocked(runHook(bash(layers('echo ok', n)), { env: DENY_ENV }), `a benign body, ${n} layers`, { code: 'nesting-too-deep', tool: 'Bash' });
+    }
+  });
+
+  // The fixture makes the `$'…'` decoders throw on a span holding FAULT, a bug
+  // in one reading that the readings' own catch records (readingBug) rather
+  // than letting it reach the outer catch.
+  const THROWING_DECODER = path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs');
+  const FAULTY_READING = String.raw`echo $'\x41FAULT'; ls`;
+  const runFaulty = (extraEnv) => runHook(bash(FAULTY_READING), { env: { NODE_OPTIONS: `--require ${THROWING_DECODER}`, ...extraEnv } });
+
+  test('opted in: a reading that fails blocks as guard-error, after its diagnostic', () => {
+    const r = runFaulty(DENY_ENV);
+    assert.equal(r.status, 2, `expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.equal(out.code, 'guard-error');
+    const newline = r.stderr.indexOf('\n');
+    const { DIAGNOSTIC, GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assert.deepEqual(JSON.parse(r.stderr.slice(0, newline)), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
+    assert.equal(r.stderr.slice(newline + 1), out.reason, 'the diagnostic line, then the plain reason');
+    // The failed reading names its own cause, so a host can tell it from a
+    // crash, whose cause is the outer catch's.
+    assert.equal(out.cause, GUARD_ERROR_CAUSE.READING_FAILED, 'cause');
+    assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('unset: the same failed reading is allowed, and its diagnostic is still written', () => {
+    const r = runFaulty({});
+    assertAllowed(r, 'a faulty reading, no read');
+    const { DIAGNOSTIC } = require(HOOK_PATH);
+    assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
+  });
+
+  // The outer catch keeps a stack overflow on a Bash command as
+  // command-too-complex before the crash policy runs. Every overflowing
+  // command is denied by the scan first, so this fixture raises a real
+  // RangeError after both scans: the failed reading's message overflows when
+  // main() reads it for the diagnostic line.
+  const OVERFLOWING_ERROR = path.join(__dirname, 'fixtures', 'secret-read-guard-overflowing-reading-error.cjs');
+  const runOverflowAfterScans = (extraEnv) => runHook(bash(String.raw`echo $'\x41OVERFLOW'; ls`),
+    { env: { NODE_OPTIONS: `--require ${OVERFLOWING_ERROR}`, ...extraEnv } });
+
+  test('opted in: a stack overflow after the scans is still command-too-complex, not guard-error', () => {
+    assertBlocked(runOverflowAfterScans(DENY_ENV), 'overflow after the scans, opted in', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  test('unset: the same overflow after the scans is command-too-complex', () => {
+    assertBlocked(runOverflowAfterScans({}), 'overflow after the scans, unset', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  // Only a RangeError, which the hook reads as a limit such as a stack
+  // overflow, is kept as command-too-complex: any other error on a Bash
+  // command takes the host's crash policy. This fixture's failed reading has
+  // a `message` that throws a plain Error when main() reads it, after both
+  // scans, so the diagnostic line is never written.
+  const THROWING_MESSAGE = path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-reading-message.cjs');
+  const runErrorAfterScans = (extraEnv) => runHook(bash(String.raw`echo $'\x41UNREADABLE'; ls`),
+    { env: { NODE_OPTIONS: `--require ${THROWING_MESSAGE}`, ...extraEnv } });
+
+  test('opted in: an error after the scans that is not an overflow blocks as guard-error, cause hook-error', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runErrorAfterScans(DENY_ENV), 'error after the scans, opted in', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('unset: the same error after the scans is allowed, with nothing on stdout or stderr', () => {
+    assertFailOpen(runErrorAfterScans({}), 'error after the scans, unset');
+  });
+
+  // command-too-complex is a verdict on a Bash command, so an overflow on any
+  // other tool is a hook error like the rest. This fixture makes a Read
+  // payload's `tool_input` overflow the stack when main() reads it.
+  const OVERFLOWING_INPUT = path.join(__dirname, 'fixtures', 'secret-read-guard-overflowing-tool-input.cjs');
+  const runOverflowOnRead = (extraEnv) => runHook(read('/p/OVERFLOWING_INPUT.txt'),
+    { env: { NODE_OPTIONS: `--require ${OVERFLOWING_INPUT}`, ...extraEnv } });
+
+  test('opted in: a stack overflow on a Read blocks as guard-error, cause hook-error, not command-too-complex', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runOverflowOnRead(DENY_ENV), 'overflow on a Read, opted in', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('unset: the same overflow on a Read is allowed, with nothing on stdout or stderr', () => {
+    assertFailOpen(runOverflowOnRead({}), 'overflow on a Read, unset');
+  });
+
+  test('opted in: verdicts on a parsed payload are unchanged', () => {
+    assertAllowed(runHook(bash('ls -la'), { env: DENY_ENV }), 'allow');
+    assertBlocked(runHook(read('/p/.env'), { env: DENY_ENV }), 'Read', { code: 'secret-read', tool: 'Read', path: '/p/.env' });
+    // A null payload is a deliberate allow (#2595), not a crash.
+    assertAllowed(runHook('null', { env: DENY_ENV }), 'null payload');
+  });
+
+  // Any value but deny takes the default path, which stays silent on both
+  // streams, byte for byte as before the opt-in existed.
+  function assertFailOpen(r, label) {
+    assertAllowed(r, label);
+    assert.equal(r.stderr, '', `${label}: the default path must emit nothing on stderr`);
+  }
+
+  test('only the exact value deny opts in', () => {
+    for (const value of ['DENY', 'Deny', '1', 'true', '', ' deny', 'deny ', 'allow']) {
+      assertFailOpen(runHook(MALFORMED, { env: { [ON_CRASH_ENV]: value } }), `value ${JSON.stringify(value)}`);
+    }
+  });
+
+  // Near misses of `deny`, one family per looser match a mutant could make: a
+  // case-insensitive compare, a trim, a prefix or suffix test, a truthy flag.
+  // Any string at all is the last family. An environment value holds no NUL.
+  const PAD = fc.string({ unit: fc.constantFrom(' ', '\t', '\n', '\r'), maxLength: 3 });
+  const nearMissOfDeny = fc.oneof(
+    fc.array(fc.boolean(), { minLength: 4, maxLength: 4 })
+      .map((upper) => [...'deny'].map((c, i) => (upper[i] ? c.toUpperCase() : c)).join('')),
+    fc.tuple(PAD, PAD).map(([head, tail]) => `${head}deny${tail}`),
+    fc.string({ minLength: 1, maxLength: 4 }).map((tail) => `deny${tail}`),
+    fc.string({ minLength: 1, maxLength: 4 }).map((head) => `${head}deny`),
+    fc.constantFrom('1', 'true', 'yes', 'on', 'block', 'den'),
+    fc.string(),
+  ).filter((value) => value !== 'deny' && !value.includes('\0'));
+
+  test('property: any value other than exactly deny keeps a crash fail-open', () => {
+    fc.assert(fc.property(
+      nearMissOfDeny,
+      (value) => {
+        assertFailOpen(runHook(MALFORMED, { env: { [ON_CRASH_ENV]: value } }), `value ${JSON.stringify(value)}`);
+      },
+    ), { seed: 5784, numRuns: 60 });
   });
 });
 
@@ -1730,7 +1943,7 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
   test('blocks: 1 MiB of leading timeout wrappers finishes inside the hook budget', () => {
     const r = runHookSeam(HOOK_PATH, [], {
       input: JSON.stringify(bash(padded(MAX_COMMAND_BYTES - 1))),
-      env: { ...process.env },
+      env: hookEnv(),
       timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
     });
     assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, '1 MiB padded', { code: 'debugger-cli-spawn', tool: 'Bash' });
@@ -1742,7 +1955,7 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
       const base = padded(bytes);
       const r = runHookSeam(HOOK_PATH, [], {
         input: JSON.stringify(bash(base + ' '.repeat(bytes - base.length))),
-        env: { ...process.env },
+        env: hookEnv(),
         timeoutMs: LINEAR_WALK_KILL_BOUND_MS,
       });
       assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, `${bytes} bytes`, { code });
@@ -3737,7 +3950,7 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
   const faulty = (command) => {
     const r = runHookSeam(HOOK_PATH, [], {
       input: JSON.stringify(bash(command)),
-      env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs')}` },
+      env: hookEnv({ NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs')}` }),
       timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
     });
     return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };

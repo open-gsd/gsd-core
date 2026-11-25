@@ -1,22 +1,8 @@
 {
-  "tests/capability-lock-lazy-self-probe-5327.test.cjs": 1,
-  "tests/compact-content-4139.test.cjs": 4,
-  "tests/config-defaults-runtime-exclusion.test.cjs": 2,
-  "tests/config.platform.test.cjs": 17,
-  "tests/executor-policy-new-project-6211.test.cjs": 1,
   "tests/helpers-process-isolation.test.cjs": 1,
   "tests/helpers.cjs": 4,
-  "tests/in-process-cli.test.cjs": 4,
-  "tests/installer-first-install-user-skill-5522.test.cjs": 2,
   "tests/isolated-env.test.cjs": 2,
   "tests/kimi-agent-converter.test.cjs": 2,
-  "tests/opencode-command-dir-plural.test.cjs": 1,
-  "tests/pi-config-dir-env-override.test.cjs": 1,
   "tests/pi-package.test.cjs": 1,
-  "tests/profile-output.test.cjs": 6,
-  "tests/repo-layout.test.cjs": 2,
-  "tests/runtime-home-hermeticity.test.cjs": 1,
-  "tests/tdd-mode.platform.test.cjs": 1,
-  "tests/user-home-isolation-5594.test.cjs": 1,
-  "tests/worktree-baseref-layer.test.cjs": 1
+  "tests/runtime-home-hermeticity.test.cjs": 1
 }
