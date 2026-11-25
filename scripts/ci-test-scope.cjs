@@ -33,7 +33,9 @@ const WORKFLOW_LINT_TESTS = [
 // escalation and forces full_matrix=false when only CI YAML changed.
 const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-218-release-version-validation.test.cjs',
-  'tests/adr-230-pr-target-policy.test.cjs',
+  // #6654: adr-230-pr-target-policy and adr-218-release-version-validation are text contracts (the reduced
+  // adr-230 test no longer reads workflow YAML); their workflow mutation cases live in the batch 12 test.
+  'tests/text-contracts.batch12.test.cjs',
   'tests/ci-conformance-pr-gating.test.cjs',
   'tests/ci-docs-guard-registry.test.cjs',
   'tests/ci-full-lane-sharding.test.cjs',
