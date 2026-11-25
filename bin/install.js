@@ -4893,10 +4893,7 @@ function stripCodexGsdAgentSections(content) {
   );
 }
 
-/**
- * Strip GSD sections from Codex config.toml content.
- * Returns cleaned content, or null if file would be empty.
- */
+/** Standalone managed-marker lines, ignoring marker text inside multiline strings. */
 function managedCodexMarkers(content) {
   return getTomlLineRecords(content).filter((record) =>
     !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER);
@@ -4933,6 +4930,10 @@ function stripEmptyManagedCodexTables(content) {
   return removeContentRanges(content, emptySections.map(({ start, end }) => ({ start, end })));
 }
 
+/**
+ * Strip GSD sections from Codex config.toml content.
+ * Returns cleaned content, or null if file would be empty.
+ */
 function stripGsdFromCodexConfig(content) {
   const eol = detectLineEnding(content);
   const lineRecords = getTomlLineRecords(content);
