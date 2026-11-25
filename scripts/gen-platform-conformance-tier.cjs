@@ -335,7 +335,12 @@ const NOISY_FOR_SOURCE_REACHABILITY = new Set(['symlink-keyword']);
  * Adding an entry requires a recorded reason and should be rare: prefer
  * fixing the classifier (a new CATEGORIES signal) when the real-OS need IS
  * expressible as content; reach for this map only when it structurally is
- * not.
+ * not. Two kinds of need are not: one that lives in the code under test (the
+ * first entries below), and one that WAS expressible as content until the
+ * test stopped spelling it. A test that builds its env with isolatedEnv()
+ * sets HOME and USERPROFILE without a `windows-env-var` token in its text, so a
+ * file whose assertions are about the sandbox home declares itself here
+ * (#6638) rather than keeping a literal the lint rule forbids.
  *
  * Entries and their reasons live in the Map below (the single source); each
  * reason is a required value, so none can be added without one.
@@ -353,6 +358,89 @@ const ALWAYS_REAL_OS = new Map([
       '(path.isAbsolute/path.relative) with no platform injection to build repo-relative todo links ' +
       '(#4384/#4421); its win32 branch (drive letters, \\ separator) is unreachable on Linux. The test ' +
       "file's only content signal was a node-only spawnSync, which #6002 deliberately ignores.",
+  ],
+  // #6638: files whose real-OS run is the point, declared here because they build their env with
+  // isolatedEnv(), which sets HOME and USERPROFILE without the `windows-env-var` token appearing in
+  // the file. The sandbox home is what each one asserts against, so a Windows run is what proves it.
+  [
+    'tests/capability-lock-lazy-self-probe-5327.test.cjs',
+    'Runs the real process start-time probe (src capability-lock), which has a PowerShell branch only ' +
+      'a Windows run exercises; its env sets the sandbox HOME/USERPROFILE and GSD_HOME.',
+  ],
+  [
+    'tests/compact-content-4139.test.cjs',
+    'The #5039 test writes ambientHome/.gsd/defaults.json and asserts on the value the product reads ' +
+      'from it, resolved through USERPROFILE on Windows.',
+  ],
+  [
+    'tests/config-defaults-runtime-exclusion.test.cjs',
+    'Both tests write .gsd/defaults.json under the sandbox home and assert on what the product copies ' +
+      'from it; the home resolves through USERPROFILE on Windows.',
+  ],
+  [
+    'tests/config.platform.test.cjs',
+    'A .platform sibling: each test asserts that defaults, migration writes and provider keys resolve ' +
+      'through GSD_HOME or the sandbox home (USERPROFILE on Windows) and not the separate OS home. ' +
+      'Declared here so the sibling invariant does not need a HOME/USERPROFILE literal in its text.',
+  ],
+  [
+    'tests/executor-policy-new-project-6211.test.cjs',
+    'The new-project store root is an explicit GSD_HOME inside the sandbox home; a Windows run proves ' +
+      'the store path join, which no Linux run reaches.',
+  ],
+  [
+    'tests/in-process-cli.test.cjs',
+    'The learnings-store test asserts the store follows the sandbox home under USERPROFILE for the ' +
+      'in-process CLI and its async runner.',
+  ],
+  [
+    'tests/installer-first-install-user-skill-5522.test.cjs',
+    'Covers the first-install backup-and-replace of an existing file and /-separated report text ' +
+      'under an explicit --config-dir, where Windows rename and replace semantics matter.',
+  ],
+  [
+    'tests/opencode-command-dir-plural.test.cjs',
+    'The migration scenarios rename and delete a ~70-file command/ directory, where Windows rename ' +
+      'and rmdir semantics matter; its child runs through runNode, which hides the other lane token.',
+  ],
+  [
+    'tests/pi-config-dir-env-override.test.cjs',
+    'The installer places the Pi install under the sandbox home, and the test asserts tilde expansion ' +
+      'against HOME, which depends on HOME/USERPROFILE resolution on Windows.',
+  ],
+  [
+    'tests/profile-output.test.cjs',
+    'Reads files the product resolves under the sandbox home (codexHome/.agents/skills/...), checks ' +
+      'the home suffix, and covers blank config-directory cases, all resolved from HOME/USERPROFILE.',
+  ],
+  [
+    'tests/repo-layout.test.cjs',
+    'Runs the real Copilot installer for local and global scopes and asserts a file at the cwd; ' +
+      'leaving the lane would drop the only Windows run of that installer artifact check.',
+  ],
+  [
+    'tests/user-home-isolation-5594.test.cjs',
+    'Asserts home isolation itself: a sandbox home holding .gsd/defaults.json must be the one the ' +
+      'product reads, through HOME and USERPROFILE.',
+  ],
+  [
+    'tests/worktree-baseref-layer.test.cjs',
+    'The product resolves the runtime-user settings layer from <sandbox home>/.claude/settings.json ' +
+      'and .claude files under the sandbox, through HOME/USERPROFILE and the Claude config dir.',
+  ],
+  // #6639: files whose subject is the home resolution itself. They build their HOME/USERPROFILE pair
+  // with homePair() (tests/helpers/isolated-env.cjs), which leaves no `windows-env-var` token in the
+  // file, so the lane would drop them; a Windows run is what proves os.homedir() follows USERPROFILE.
+  [
+    'tests/kimi-agent-converter.test.cjs',
+    'The Kimi runtime-home tests assert getGlobalConfigDir(\'kimi\') resolves under the sandbox home ' +
+      '(~/.config/agents and the XDG variants) through HOME and USERPROFILE; os.homedir() reads ' +
+      'USERPROFILE on Windows.',
+  ],
+  [
+    'tests/runtime-home-hermeticity.test.cjs',
+    'Asserts that runtime home resolution stays inside the sandbox home while hostile ambient config ' +
+      'keys leak into the child; the home resolves through USERPROFILE on Windows.',
   ],
 ]);
 
@@ -631,9 +719,11 @@ function siblingRelForBase(baseRel) {
  *     genuine Windows signal (`classifyContent` on its own content) — the
  *     split did not actually remove the signal from the base.
  *   - `sibling-without-signal` — the sibling's OWN content carries no
- *     Windows signal, regardless of whether its base exists — a `.platform`
- *     file whose header claims a platform reason the classifier cannot see
- *     in its own text.
+ *     Windows signal and the sibling is not itself a key of `alwaysRealOs`
+ *     (#6638: a declared sibling carries its real-OS need by declaration),
+ *     regardless of whether its base exists — a `.platform` file whose
+ *     header claims a platform reason the classifier cannot see in its own
+ *     text.
  *   - `base-always-real-os` — the base is a key of `alwaysRealOs`: the
  *     escape hatch says the WHOLE base needs real-OS coverage, which
  *     contradicts splitting only some of its tests into a sibling.
@@ -663,8 +753,11 @@ function findPlatformSplitViolations(entries, alwaysRealOs = ALWAYS_REAL_OS) {
       }
     }
 
+    // A sibling declared in `alwaysRealOs` carries its real-OS need by declaration, with a
+    // recorded reason, instead of by a token in its own text (#6638): a sibling whose tests
+    // build their env with isolatedEnv() has no HOME/USERPROFILE literal left to find.
     const { signals: siblingSignals } = classifyContent(entry.content);
-    if (siblingSignals.length === 0) {
+    if (siblingSignals.length === 0 && !alwaysRealOs.has(entry.rel)) {
       violations.push({ file: entry.rel, kind: 'sibling-without-signal', signals: [] });
     }
 
@@ -732,6 +825,24 @@ function walkTestFiles(dir) {
 }
 
 /**
+ * Read one enumerated test file, or `null` when it vanished between the walk
+ * and this read (ENOENT): tests create and remove probe files under the live
+ * tests tree, so a file the walk listed may be gone by now. Any other read
+ * error still throws.
+ *
+ * @param {string} absPath
+ * @returns {string | null}
+ */
+function readTestFile(absPath) {
+  try {
+    return fs.readFileSync(absPath, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/**
  * Classify every test file under `testsDir`, returning `{ total, files }`
  * where `files` is the SORTED array of `tests/<...>.test.cjs`-relative paths
  * (POSIX-normalized, per RULESET.CONTENT-PATH-NORMALIZATION) whose content
@@ -748,9 +859,14 @@ function classifyTree(testsDir) {
   const unitFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
   const entries = [];
   const flagged = [];
+  let vanished = 0;
   for (const absPath of unitFiles) {
     const rel = 'tests/' + path.relative(testsDir, absPath).replace(/\\/g, '/');
-    const content = fs.readFileSync(absPath, 'utf8');
+    const content = readTestFile(absPath);
+    if (content === null) {
+      vanished += 1;
+      continue;
+    }
     // Read once, reused below both for this file's own flagging AND (via
     // `entries`) for the #5074 split-invariant check — a second read of the
     // same file for that check would double the I/O for no reason.
@@ -779,7 +895,7 @@ function classifyTree(testsDir) {
   }
 
   const result = [...new Set(flagged)].sort();
-  return { total: absoluteFiles.length, files: result };
+  return { total: absoluteFiles.length - vanished, files: result };
 }
 
 /**
@@ -793,8 +909,13 @@ function classifyMacosTree(testsDir) {
   const absoluteFiles = walkTestFiles(testsDir);
   const unitFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
   const flagged = [];
+  let vanished = 0;
   for (const absPath of unitFiles) {
-    const content = fs.readFileSync(absPath, 'utf8');
+    const content = readTestFile(absPath);
+    if (content === null) {
+      vanished += 1;
+      continue;
+    }
     const { needsRealOs } = classifyMacosContent(content);
     if (needsRealOs) {
       const rel = path.relative(testsDir, absPath).replace(/\\/g, '/');
@@ -802,7 +923,7 @@ function classifyMacosTree(testsDir) {
     }
   }
   flagged.sort();
-  return { total: absoluteFiles.length, files: flagged };
+  return { total: absoluteFiles.length - vanished, files: flagged };
 }
 
 /**
@@ -971,6 +1092,7 @@ module.exports = {
   NOISY_FOR_SOURCE_REACHABILITY,
   ALWAYS_REAL_OS,
   walkTestFiles,
+  readTestFile,
   classifyTree,
   renderGeneratedFile,
   classifyMacosContent,

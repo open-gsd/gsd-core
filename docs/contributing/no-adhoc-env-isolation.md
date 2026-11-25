@@ -4,9 +4,8 @@ Epic #4635 gave child-env isolation for tests one owner, `tests/helpers/isolated
 `isolatedEnv({ home })` builds the env a test hands to a child, and `isolatedPath({ without })`
 builds a PATH the named tools cannot resolve from. The rule
 (`eslint-rules/no-adhoc-env-isolation.cjs`, #6035, Phase 3) stops a new hand-written copy of either
-from being added under `tests/**` while the remaining ones are migrated (Phases 4-7) and the
-allowlist is deleted (Phase 8). How to build an env with the helper, and what to do when a count
-fails, is in CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
+from being added under `tests/**`, with no exemption surface. How to build an env with the helper is in
+CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
 
 ## What the rule recognises
 
@@ -17,7 +16,8 @@ a string key (`x['split'](…)`) or an expression-free template key (``x[`split`
 
 ### Arm 1: an inline PATH split or filter (`inlinePathFilter`)
 
-- A `.split(...)` call, with any argument, whose receiver is a process PATH read. The call may be
+- A `.split(...)` call, with any argument, whose receiver is a process PATH read, unless the call's
+  result is read only for `.length` (a count, not a filtered or rebuilt PATH). The call may be
   optional (`process.env.PATH?.split(…)`). A process PATH
   read is `process.env.PATH` or `process.env.Path` (the key Windows enumerates), where `process` is
   the bare identifier and `env` and `PATH` are identifiers or string keys
@@ -43,38 +43,55 @@ a string key (`x['split'](…)`) or an expression-free template key (``x[`split`
 
 - An object literal with a `HOME` or `USERPROFILE` key, written as an identifier (shorthand
   `{ HOME }` included), a string, or a computed string or expression-free template (`['HOME']`, ``
-  [`HOME`] ``), reported once per object.
+  [`HOME`] ``), reported once per object, unless the key's value cannot be a per-test sandbox (see
+  "Values that cannot be a sandbox" below).
 - An assignment, with any assignment operator (`=`, `+=`, `||=`, `??=`), to a member named `HOME` or
   `USERPROFILE` (`X.HOME`, `X['HOME']`, ``X[`HOME`]``) where `X` is not spelled `process.env`,
-  `process['env']` or ``process[`env`]``.
+  `process['env']` or ``process[`env`]``, unless the assigned value cannot be a per-test sandbox.
   So `globalThis.process.env.HOME = x` and `const env = process.env; env.HOME = x` are flagged.
 
-Both arms flag a form whatever it is for: a split of a process PATH read that only counts its
-entries, a `csv.delimiter` split that is filtered, an object with a `HOME` key used as a fixture.
-Both build an env by hand in the case the rule exists for: `{ ...process.env, HOME: tmp }`,
-`runNode([script], { env: { HOME: tmp } })`, `childEnv.HOME = tmp`.
+Both arms flag a form whatever else it does: a `csv.delimiter` split that is filtered, an object
+with a `HOME` key whose value is a variable. Both build an env by hand in the case the rule exists
+for: `{ ...process.env, HOME: tmp }`, `runNode([script], { env: { HOME: tmp } })`,
+`childEnv.HOME = tmp`.
 
-## Exempt file, allowlist and count
+### Values that cannot be a sandbox
 
-`tests/helpers/isolated-env.cjs` is the implementation and is excluded in `eslint.config.mjs`. The
-rule's `allowlist` option (repo-relative POSIX paths, resolved against the lint cwd, so lint runs
-from the repository root) names the files that still carry a copy: an allowlisted file's violations
-are counted but not reported, and a listed file with zero violations reports `staleAllowlistEntry`
-so its entry is deleted. `eslint.config.mjs` passes the keys of
-`eslint-rules/no-adhoc-env-isolation.allowlist.json`, which maps each listed file to its site count.
+A per-test sandbox is a directory made for that test, so its path is not known when the file is
+written. Arm 2 therefore skips a `HOME` or `USERPROFILE` property or assignment whose value is:
 
-`tests/no-adhoc-env-isolation.rule.test.cjs` lints every `.cjs` file under `tests/` with the
-allowlist emptied and inline config off, and fails when a listed file's count rises or falls, or an
-unlisted file has a site, so a count falls as copies migrate and grows only by the route
-CONTRIBUTING.md states. It also fails when ESLint lints fewer `.cjs` files under `tests/` than are
-on disk: an ESLint ignore over a `tests/` subtree would hide that subtree's copies from the rule and
-the count alike. The rule has no marker comment of its own. An `eslint-disable` comment naming it
-hides a copy from lint output, but not from that count, so it exempts nothing.
+- a string literal or an expression-free template (`{ HOME: '/h' }`, ``{ HOME: `/h` }``): a fixture
+  handed to a pure function, or the expected value in an assertion;
+- a read of the same key off `process.env` (`{ HOME: process.env.HOME }`, `saved.HOME =
+  process.env.HOME`): saving the ambient value, or passing it through unchanged. `HOME:
+  process.env.USERPROFILE` is a different key and is flagged.
 
-The rule and the count cover only the `.cjs` files under `tests/`, so the allowlist lists exactly
-the remaining sites in those files. A copy in any other file is neither flagged nor counted: a
-`.mjs`, `.js` or `.cts` file under `tests/`, or a file outside `tests/`, such as one under
-`scripts/`.
+The rule reads the value, not where the object goes, so a fixed string is skipped even in an env
+handed to a child process (`{ ...process.env, HOME: '/nonexistent' }`). That is deliberate: it
+leaves the `GSD_*` values, the config-location variables and the PATH untouched, and it names one
+directory shared by every test that uses it, so it is not the copy of `isolatedEnv()` the rule
+exists to stop. It is also not hermetic. Build a child env with `isolatedEnv()` whenever the test
+writes under its home.
+
+Arm 1 skips a split of a process PATH read whose result is read only for `.length`
+(`process.env.PATH.split(path.delimiter).length`): a count builds no PATH.
+
+## Exempt file and the zero count
+
+`tests/helpers/isolated-env.cjs` is the implementation and is excluded in `eslint.config.mjs`. It is
+the only exemption: the rule takes no options, and there is no allowlist.
+
+`tests/no-adhoc-env-isolation.rule.test.cjs` lints every `.cjs` file under `tests/` with the rule on
+and inline config off, and fails on any site. It also fails when ESLint lints fewer `.cjs` files
+under `tests/` than are on disk: an ESLint ignore over a `tests/` subtree would hide that subtree's
+copies from the rule and the count alike. It also fails if the allowlist file reappears or the
+rule is given an option. The rule has no marker comment of its own. An `eslint-disable` comment
+naming it hides a copy from lint output but not from that count, and an unused one fails
+`npm run lint` through ESLint's unused-directive warning, so it exempts nothing.
+
+The rule and the count cover only the `.cjs` files under `tests/`. A copy in any other file is
+neither flagged nor counted: a `.mjs`, `.js` or `.cts` file under `tests/`, or a file outside
+`tests/`, such as one under `scripts/`.
 
 ## Out of scope: examples
 

@@ -429,7 +429,7 @@ function runHook(sessionId, remainingPct, cwd) {
   const result = runHookSeam(HOOK_PATH, [], {
     input,
     timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS,
-    env: { ...process.env, HOME: process.env.HOME },
+    env: { ...process.env },
   });
 
   return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };

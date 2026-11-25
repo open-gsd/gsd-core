@@ -33,7 +33,9 @@ const WORKFLOW_LINT_TESTS = [
 // escalation and forces full_matrix=false when only CI YAML changed.
 const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-218-release-version-validation.test.cjs',
-  'tests/adr-230-pr-target-policy.test.cjs',
+  // #6654: adr-230-pr-target-policy and adr-218-release-version-validation are text contracts (the reduced
+  // adr-230 test no longer reads workflow YAML); their workflow mutation cases live in the batch 12 test.
+  'tests/text-contracts.batch12.test.cjs',
   'tests/ci-conformance-pr-gating.test.cjs',
   'tests/ci-docs-guard-registry.test.cjs',
   'tests/ci-full-lane-sharding.test.cjs',
@@ -60,6 +62,8 @@ const WORKFLOW_CONTRACT_TESTS = [
   // release-tarball-smoke-workflow are text contracts whose workflow mutation cases are in the batch 9 test.
   'tests/shard-spec.test.cjs',
   'tests/text-contracts.batch9.test.cjs',
+  // #6577: release-backmerge-invariants' YAML structure is a text contract; its mutation cases are in the batch 10 test.
+  'tests/text-contracts.batch10.test.cjs',
   // #6566: release-finalize-notes-5922, release-finalize-syncs-next-version, reviewed-or-maintainer-workflow,
   // workflow-token-permissions and policy-lint-shallow-checkout are text contracts; their workflow mutation cases live here.
   'tests/text-contracts.batch8.test.cjs',
@@ -287,7 +291,8 @@ const RULES = [
       'tests/agent-skills.test.cjs',
       // #6478: agent-skills-awareness is now a text contract; its mutation cases live here.
       'tests/text-contracts.test.cjs',
-      'tests/agent-required-reading-consistency.test.cjs',
+      // #6577: agent-required-reading-consistency is now a text contract; its mutation cases live here.
+      'tests/text-contracts.batch10.test.cjs',
       'tests/docs-parity-live-registry.test.cjs',
     ],
   },

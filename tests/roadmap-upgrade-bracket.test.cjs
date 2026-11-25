@@ -29,6 +29,7 @@ const helpers = require('./helpers.cjs');
 const { cleanup, TOOLS_PATH } = helpers;
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const {
   computeMigrationPlan,
@@ -133,11 +134,7 @@ function runBracketUpgrade(cwd, extraArgs = []) {
     [TOOLS_PATH, 'roadmap', 'upgrade', '--convention', 'bracket', ...extraArgs],
     {
       cwd,
-      env: {
-        ...process.env,
-        ...helpers.TEST_ENV_BASE,
-        HOME: cwd,
-      },
+      env: isolatedEnv({ home: cwd }),
       timeoutMs: COMMAND_TIMEOUT_MS,
     },
   );
@@ -2319,7 +2316,7 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(applied, 0, 'sentinel apply');
       const analyzed = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.deepEqual(
         analyzed.phases.map((p) => p.number).sort(),
@@ -2402,7 +2399,7 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(applied, 0, 'sentinel checklist bullet apply');
       const analyzed = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.deepEqual(analyzed.phases.map((p) => p.number).sort(), ['01', '02']);
       assert.equal(analyzed.missing_phase_details, null);
@@ -3558,7 +3555,7 @@ describe('roadmap upgrade --convention bracket', () => {
       const cwd = buildChecklistShapesFixture();
       const before = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.equal(before.missing_phase_details, null, 'the reader must not report any missing detail before migration');
 
@@ -3575,7 +3572,7 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(applied, 0, 'checklist-shapes apply');
       const after = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.equal(
         after.missing_phase_details,
@@ -3862,7 +3859,7 @@ describe('roadmap upgrade --convention bracket', () => {
     function runHistoryDigest(cwd) {
       return JSON.parse(runNode(
         [TOOLS_PATH, 'history-digest'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
     }
 
