@@ -128,10 +128,12 @@ The executor agent reads `<precondition>` before any other task work:
 `cmdVerifyPlanStructure` checks for the presence of required tags (`<name>`,
 `<action>`, etc.) and warns on missing recommended tags (`<verify>`, `<done>`,
 `<files>`). It does **not** reject unknown optional tags, so adding
-`<precondition>` to a plan passes validation unchanged. A future ADR may add
-structured validation if drift emerges; v1 ships prose-only to keep the surface
-minimal (Hyrum's Law: the smaller the observable surface, the less the system
-depends on by accident).
+`<precondition>` to a plan passes validation unchanged — this section's scope
+is that tag's acceptance only. The validator's full contract — the
+quantitative-criteria rules (R1-R6) and their `plan-criteria-allow` exit, and
+the `executor_runtime` / `agent_hint` frontmatter refusals — is documented in
+@~/.claude/gsd-core/references/planner-guidance.md ("What
+`verify.plan-structure` refuses in criteria and frontmatter").
 
 ## Out of scope
 
