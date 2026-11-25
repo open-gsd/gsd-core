@@ -4281,7 +4281,8 @@ describe('#5027 shipped-template round trips', () => {
     const init = query(root, ['init', 'plan-phase', fixture.arg]);
     assert.equal(init.phase_number, fixture.number, 'CLI owns the artifact and Progress identity');
     assert.equal(Object.hasOwn(init, 'display_id'), false, 'init plan-phase requires the reference fallback');
-    assert.equal(init.phase_dir, phaseDir);
+    // init emits phase_dir through toPosixPath by contract (#2376); compare posix to posix.
+    assert.equal(init.phase_dir, helpers.toPosixPath(phaseDir));
     for (const suffix of ['01-PLAN', '02-PLAN', '03-PLAN', '01-SUMMARY']) {
       fs.writeFileSync(path.join(phaseDir, `${init.phase_number}-${suffix}.md`), '# Fixture\n');
     }
