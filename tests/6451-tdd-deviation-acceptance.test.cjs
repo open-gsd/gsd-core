@@ -139,7 +139,7 @@ describe('6451 recorded TDD deviations release the review', () => {
 
 describe('6451 the Phase blocked message names only real flags', () => {
   test('every --flag in the TDD block message is parsed by execute-phase', () => {
-    // allow-test-rule: runtime-contract-is-the-product
+    // allow-test-rule: runtime-contract-is-the-product see #6451
     const step = fs.readFileSync(WORKFLOW_STEP, 'utf8');
     const block = step.match(/```\n(Phase blocked[\s\S]*?)```/);
     assert.ok(block, 'the Phase blocked message block exists in verify-phase-goal.md');
