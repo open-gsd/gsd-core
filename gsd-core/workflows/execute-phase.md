@@ -82,6 +82,7 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--gaps-only` → `GAPS_ONLY=true`
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
+- Optional `--force-mvp-gate "<reason>"` → `FORCE_MVP_GATE_REASON` (required value; see `execute-phase/steps/verify-phase-goal.md`)
 
 If `--wave` is absent, preserve the current behavior of executing all incomplete waves in the phase.
 </step>

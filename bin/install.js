@@ -1662,6 +1662,8 @@ function stripJsonComments(text) {
     if (text[i] === '/' && text[i + 1] === '*') {
       i += 2;
       while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      // #5990: the scan may stop at end of input — that is not a closed comment.
+      if (i >= text.length) throw new SyntaxError('Unterminated block comment');
       i += 2; // skip closing */
       continue;
     }
