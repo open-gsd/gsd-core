@@ -4,8 +4,7 @@ Epic #4635 gave child-env isolation for tests one owner, `tests/helpers/isolated
 `isolatedEnv({ home })` builds the env a test hands to a child, and `isolatedPath({ without })`
 builds a PATH the named tools cannot resolve from. The rule
 (`eslint-rules/no-adhoc-env-isolation.cjs`, #6035, Phase 3) stops a new hand-written copy of either
-from being added under `tests/**`. The migration reached zero sites and the allowlist was deleted
-(#6040, Phase 8), so the rule has no exemption surface. How to build an env with the helper is in
+from being added under `tests/**`, with no exemption surface. How to build an env with the helper is in
 CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
 
 ## What the rule recognises
@@ -80,8 +79,7 @@ Arm 1 skips a split of a process PATH read whose result is read only for `.lengt
 ## Exempt file and the zero count
 
 `tests/helpers/isolated-env.cjs` is the implementation and is excluded in `eslint.config.mjs`. It is
-the only exemption: the rule takes no options, and there is no allowlist (the allowlist file was
-deleted by #6040 once the migration of #4635 reached zero sites).
+the only exemption: the rule takes no options, and there is no allowlist.
 
 `tests/no-adhoc-env-isolation.rule.test.cjs` lints every `.cjs` file under `tests/` with the rule on
 and inline config off, and fails on any site. It also fails when ESLint lints fewer `.cjs` files

@@ -767,8 +767,8 @@ sandbox. The step runs after the live-config guard has snapshotted the real conf
 guard still watches them. A test file run outside the runner (`node` on one file) does not get the
 step; use `isolatedEnv()` or `sandboxHome()` there.
 
-There is no allowlist (#6040, the last phase of #4635): the rule takes no options, and every file
-under `tests/` except the helper holds zero copies. `tests/helpers/isolated-env.cjs` is the only
+There is no allowlist: the rule takes no options, and every file under `tests/` except the helper
+holds zero copies. `tests/helpers/isolated-env.cjs` is the only
 route. `tests/no-adhoc-env-isolation.rule.test.cjs` lints every `tests/**/*.cjs` file with the rule
 on and inline config off, and fails on any site. It also fails when ESLint skips a `.cjs` file
 under `tests/`, so an ESLint ignore over a `tests/` subtree cannot hide that subtree's copies, and

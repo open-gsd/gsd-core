@@ -1,15 +1,13 @@
 'use strict';
 
 /**
- * no-adhoc-env-isolation (#6035, Phase 3 of epic #4635; allowlist retired by #6040, Phase 8)
+ * no-adhoc-env-isolation (#6035, Phase 3 of epic #4635)
  *
  * Stops a new hand-written copy of the child-env isolation helper,
  * `tests/helpers/isolated-env.cjs` (#6033), from being added under `tests/`:
  * an inline PATH split or filter (`inlinePathFilter`), and a hand-built HOME /
- * USERPROFILE env (`adhocHomeConstruction`). The rule takes no options and has no
- * exemption surface: the helper file is excluded by exact path in
- * `eslint.config.mjs`, and `tests/no-adhoc-env-isolation.rule.test.cjs` holds every
- * other file under `tests/` to zero sites with inline config off.
+ * USERPROFILE env (`adhocHomeConstruction`). The rule takes no options; the helper
+ * file is excluded by exact path in `eslint.config.mjs`.
  *
  * The forms each arm recognises, and examples of what is out of scope:
  * docs/contributing/no-adhoc-env-isolation.md.
