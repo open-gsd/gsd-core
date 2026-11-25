@@ -1562,9 +1562,6 @@
   "tests/adapter-imperative.test.cjs": {
     "block": 1
   },
-  "tests/adr-218-release-version-validation.test.cjs": {
-    "block": 1
-  },
   "tests/adr-612-bracket-coherence.test.cjs": {
     "block": 1
   },
@@ -1605,10 +1602,6 @@
   "tests/adr857-predicate-boundary.test.cjs": {
     "block": 1
   },
-  "tests/agent-classification-parity.test.cjs": {
-    "directive": 2,
-    "block": 2
-  },
   "tests/agent-descriptor-parity.install.test.cjs": {
     "block": 2
   },
@@ -1642,9 +1635,6 @@
   },
   "tests/audit-command-cutover.test.cjs": {
     "block": 3
-  },
-  "tests/audit-fix-command.test.cjs": {
-    "directive": 1
   },
   "tests/backwards-compat-phase-id.test.cjs": {
     "block": 1
@@ -2009,14 +1999,8 @@
   "tests/drift-detection.test.cjs": {
     "directive": 1
   },
-  "tests/edge-probe-spec-phase-contract.test.cjs": {
-    "directive": 1
-  },
   "tests/edit-phase-milestone-scope-guard.test.cjs": {
     "block": 1
-  },
-  "tests/edit-phase.test.cjs": {
-    "directive": 5
   },
   "tests/effort-surface-axis.test.cjs": {
     "block": 1
@@ -2094,9 +2078,6 @@
   },
   "tests/exit-code-registry.test.cjs": {
     "block": 2
-  },
-  "tests/explore-command.test.cjs": {
-    "directive": 1
   },
   "tests/failing-direction.test.cjs": {
     "block": 1
@@ -2692,10 +2673,6 @@
   "tests/mcp-server-catalog.test.cjs": {
     "block": 1
   },
-  "tests/mcp-tool-inheritance.test.cjs": {
-    "directive": 1,
-    "block": 1
-  },
   "tests/milestone-archive.test.cjs": {
     "directive": 3,
     "block": 1
@@ -2820,9 +2797,6 @@
   "tests/package-name-single-source.test.cjs": {
     "block": 1
   },
-  "tests/parallel-dependent-plans.test.cjs": {
-    "directive": 3
-  },
   "tests/path-replacement.test.cjs": {
     "directive": 1,
     "block": 3
@@ -2913,9 +2887,6 @@
   "tests/plan-bounce.test.cjs": {
     "directive": 1
   },
-  "tests/plan-checker-coupling.test.cjs": {
-    "block": 1
-  },
   "tests/plan-count-single-owner.test.cjs": {
     "block": 4
   },
@@ -2997,9 +2968,6 @@
   },
   "tests/profile-pipeline.test.cjs": {
     "block": 1
-  },
-  "tests/progress-forensic.test.cjs": {
-    "directive": 1
   },
   "tests/project-instruction-file-parity.test.cjs": {
     "block": 1
@@ -3359,9 +3327,6 @@
   },
   "tests/tdd-red-evidence.test.cjs": {
     "block": 1
-  },
-  "tests/tdd-single-statement.test.cjs": {
-    "block": 2
   },
   "tests/temp-subdir.test.cjs": {
     "directive": 1
