@@ -8,8 +8,8 @@
  * grammar probe (parseCriteriaAllowMarkers) == scanner emission (corpus
  * through scanQuantitativeCriteria) == ids named in planner-guidance.md,
  * plus executor_runtime/agent_hint refusals and de-scoping the stale
- * "Plan-structure validation" section in planner-preconditions.md. A rule
- * added without a corpus trap, an allow exit, or a guidance line fails.
+ * "Plan-structure validation" section in planner-preconditions.md.
+ * A scanner rule added without a corpus trap or a guidance line fails.
  *
  * guidance/preconditions are the shipped product documents: markdown is the product.
  */
@@ -35,7 +35,7 @@ const { parseCriteriaAllowMarkers } = require('../gsd-core/bin/lib/criterion-bas
 // extending the exit without the rule) moves this set and trips parity below.
 function grammarRuleIds() {
   const accepted = new Set();
-  for (const id of ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'B1', 'B2', 'B3', 'X1']) {
+  for (const id of ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12', 'B1', 'B2', 'B3', 'B4', 'B5', 'X1']) {
     const markers = parseCriteriaAllowMarkers(`<!-- plan-criteria-allow: ${id} - probe reason -->`);
     if (markers.has(id)) accepted.add(id);
   }

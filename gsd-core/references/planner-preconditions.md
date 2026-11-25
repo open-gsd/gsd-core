@@ -129,11 +129,12 @@ The executor agent reads `<precondition>` before any other task work:
 `<action>`, etc.) and warns on missing recommended tags (`<verify>`, `<done>`,
 `<files>`). It does **not** reject unknown optional tags, so adding
 `<precondition>` to a plan passes validation unchanged — this section's scope
-is that tag's acceptance only. The validator's full contract — the
-quantitative-criteria rules (R1-R6) and their `plan-criteria-allow` exit, and
-the `executor_runtime` / `agent_hint` frontmatter refusals — is documented in
+is that tag's acceptance only. The validator's criteria and frontmatter
+contract — the quantitative-criteria rules (R1-R6, B1-B2) and their
+`plan-criteria-allow` exit, and the `executor_runtime` / `agent_hint`
+frontmatter refusals — is documented in
 @~/.claude/gsd-core/references/planner-guidance.md ("What
-`verify.plan-structure` refuses in criteria and frontmatter").
+`verify.plan-structure` flags in criteria and frontmatter").
 
 ## Out of scope
 
