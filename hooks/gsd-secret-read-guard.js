@@ -3456,9 +3456,7 @@ let scanSpent = false;
 // holding the characters it needs, so with no trigger a heredoc commit message
 // of plain lines is scanned about 10 times and denied from about 840,000
 // characters, one of `{a, b}` lines from about 600,000 and, with a backslash
-// or a CR in each line, from about 466,000; `echo ${HOME}` lines fed to bash
-// are scanned about 14 times and denied from about 600,000 (400,000 inside
-// `$( )`). The
+// or a CR in each line, from about 466,000. The
 // most any of the 1,384,856 real agent commands above needs is 20,043 (a
 // 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;

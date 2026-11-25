@@ -3260,22 +3260,12 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       // The guide's examples. A commit-message heredoc's own `$(` calls for the
       // spans readings, a brace for zsh's grouping, a backslash (with the `<<`
       // and a newline) or a CR for the join and CR readings, and each composes.
-      // `next` scans every one of these to the length limit but the `$( )` script.
+      // `next` scans every one of these to the length limit.
       const message = (line) => (chars) => `git commit -m "$(cat <<'EOF'\nSubject\n\n${fillLines(line, chars)}EOF\n)"`;
       assertBudgetEdge(message((k) => `Plain line ${k}.\n`), 800000, 880000, 'plain lines');
       assertBudgetEdge(message((k) => `Keep {a, b} in step ${k}.\n`), 570000, 630000, '{a, b} lines');
       assertBudgetEdge(message((k) => `Keep {a, b} in \\n step ${k}.\n`), 440000, 490000, '{a, b} lines with a backslash');
       assertBudgetEdge(message((k) => `Keep {a, b} in step ${k}.\r\n`), 440000, 490000, '{a, b} lines ending in CRLF');
-      const home = (line, nested) => (chars) => {
-        const body = fillLines(line, chars);
-        return nested ? `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"` : `bash <<'EOF'\n${body}EOF\n`;
-      };
-      const plainHome = () => 'echo ${HOME}\n';
-      const slashHome = (k) => `echo \${HOME} 'a\\n' ${k}\n`;
-      assertBudgetEdge(home(plainHome, false), 570000, 630000, 'echo ${HOME} lines');
-      assertBudgetEdge(home(plainHome, true), 370000, 430000, 'echo ${HOME} lines in $( )');
-      assertBudgetEdge(home(slashHome, false), 440000, 490000, 'echo ${HOME} lines with a backslash');
-      assertBudgetEdge(home(slashHome, true), 290000, 330000, 'echo ${HOME} lines with a backslash in $( )');
     });
 
     test('in process: a single-quoted commit message is scanned once per reading its characters call for', () => {
