@@ -1239,10 +1239,14 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
   function saveLocalPatches(configDir) {
     const saved = process.env.GSD_TEST_MODE;
     process.env.GSD_TEST_MODE = '1';
-    const installScript = path.join(__dirname, '..', 'bin', 'install.js');
-    delete require.cache[require.resolve(installScript)];
-    const mod = require(installScript);
-    if (saved === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = saved;
+    let mod;
+    try {
+      const installScript = path.join(__dirname, '..', 'bin', 'install.js');
+      delete require.cache[require.resolve(installScript)];
+      mod = require(installScript);
+    } finally {
+      if (saved === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = saved;
+    }
     return mod.saveLocalPatches(configDir);
   }
 
@@ -1315,6 +1319,7 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
 
   test('end to end through the real installer: install, capability update, install again backs nothing up', async () => {
     const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+    const { isolatedEnv } = require('./helpers/isolated-env.cjs');
     const root = tmpDir('cap-cli-6331-e2e-');
     const env = { GSD_HOME: root, GSD_WORKSTREAM: '', GSD_PROJECT: '' };
     const install = () => runMinimalInstall({ runtime: 'claude', scope: 'global', root, extraEnv: env });
@@ -1329,7 +1334,7 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     fs.mkdirSync(path.join(src, 'skills', STEM), { recursive: true });
     fs.writeFileSync(path.join(src, 'skills', STEM, 'SKILL.md'), SKILL_V1);
     const cli = async (args) => {
-      const r = await runGsdToolsAsync(args, cwd, { ...env, HOME: root, USERPROFILE: root });
+      const r = await runGsdToolsAsync(args, cwd, isolatedEnv({ home: root, override: env }));
       assert.equal(r.success, true, `${args.join(' ')} failed: ${r.error || r.output}`);
     };
     const set = () => cli(['capability', 'set', STEM, '--runtime', 'claude', '--scope', 'global', '--config-dir', configDir, '--raw']);

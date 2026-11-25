@@ -1919,10 +1919,14 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
   function saveLocalPatches(configDir) {
     const saved = process.env.GSD_TEST_MODE;
     process.env.GSD_TEST_MODE = '1';
-    const installScript = path.join(__dirname, '..', 'bin', 'install.js');
-    delete require.cache[require.resolve(installScript)];
-    const mod = require(installScript);
-    if (saved === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = saved;
+    let mod;
+    try {
+      const installScript = path.join(__dirname, '..', 'bin', 'install.js');
+      delete require.cache[require.resolve(installScript)];
+      mod = require(installScript);
+    } finally {
+      if (saved === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = saved;
+    }
     return mod.saveLocalPatches(configDir);
   }
 
@@ -2220,6 +2224,89 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.equal(tryFileHash(path.join(dir, 'missing')), null, 'a missing file is not hashed');
     // A character device reads like an empty file; only the type check refuses it.
     if (process.platform !== 'win32') assert.equal(tryFileHash('/dev/null'), null, 'a device is not hashed');
+  });
+
+  // Property tests (seed and run count from fast-check-setup.cjs; a failure prints the replay seed and path).
+  const fc = require('./helpers/fast-check-setup.cjs');
+
+  test('property: tryFileHash equals the sha256 of the bytes, and fileHash, for any content', (t) => {
+    const { fileHash, tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-hash-prop-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'f');
+    fc.assert(fc.property(fc.uint8Array({ maxLength: 8192 }), (bytes) => {
+      fs.writeFileSync(file, bytes);
+      const expected = sha256(bytes);
+      assert.equal(tryFileHash(file), expected);
+      assert.equal(fileHash(file), expected);
+    }));
+  });
+
+  test('property: tryFileHash equals the sha256 of the bytes, and fileHash, for sizes around its 1 MiB read chunk', (t) => {
+    const { fileHash, tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-hash-size-prop-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'f');
+    const MiB = 1024 * 1024;
+    const sizeNearChunk = fc.tuple(fc.integer({ min: 0, max: 2 }), fc.integer({ min: -2, max: 2 }))
+      .map(([chunks, delta]) => chunks * MiB + delta)
+      .filter((size) => size >= 0);
+    fc.assert(fc.property(sizeNearChunk, fc.uint8Array({ minLength: 1, maxLength: 64 }), (size, pattern) => {
+      const bytes = Buffer.alloc(size);
+      for (let i = 0; i < size; i += 1) bytes[i] = pattern[i % pattern.length];
+      fs.writeFileSync(file, bytes);
+      const expected = sha256(bytes);
+      assert.equal(tryFileHash(file), expected, `${size} bytes`);
+      assert.equal(fileHash(file), expected, `${size} bytes`);
+    }), { numRuns: 40 });
+  });
+
+  // A safe key segment: never empty, '.' or '..', no separator, NUL or ':' (so the key is never
+  // win32-absolute), and the key's first segment is not whitespace-only.
+  const SEGMENT_CHARS = ['a', 'Z', '0', '9', ' ', '.', '-', '_', 'é', '技', '🙂'];
+  const safeSegment = fc.string({ unit: fc.constantFrom(...SEGMENT_CHARS), minLength: 1, maxLength: 8 })
+    .filter((s) => s !== '.' && s !== '..');
+  const safeSegments = fc.array(safeSegment, { minLength: 1, maxLength: 6 })
+    .filter((segs) => segs[0].trim() !== '');
+  const separator = fc.constantFrom('/', '\\');
+  /** Segments joined by a separator drawn per gap. */
+  const joined = (segs, seps) => segs.reduce((acc, seg, i) => (i === 0 ? seg : acc + seps[(i - 1) % seps.length] + seg), '');
+
+  test('property: normalizeInstallRelativePath returns the "/"-joined segments of a key built from safe segments', () => {
+    fc.assert(fc.property(safeSegments, fc.array(separator, { minLength: 1, maxLength: 5 }), (segs, seps) => {
+      assert.equal(installEngine.normalizeInstallRelativePath(joined(segs, seps)), segs.join('/'));
+    }));
+  });
+
+  test('property: normalizeInstallRelativePath refuses a key with an empty, "." or ".." segment, a leading separator, or a NUL', () => {
+    const corrupt = fc.oneof(
+      fc.record({ at: fc.nat(), bad: fc.constantFrom('', '.', '..') })
+        .map(({ at, bad }) => (segs) => { const s = [...segs]; s.splice(at % (s.length + 1), 0, bad); return s.join('/'); }),
+      separator.map((sep) => (segs) => sep + segs.join('/')),
+      fc.nat().map((at) => (segs) => { const key = segs.join('/'); const i = at % (key.length + 1); return `${key.slice(0, i)}\0${key.slice(i)}`; }),
+    );
+    fc.assert(fc.property(safeSegments, corrupt, (segs, corruptKey) => {
+      const key = corruptKey(segs);
+      assert.equal(installEngine.normalizeInstallRelativePath(key), null, JSON.stringify(key));
+    }));
+  });
+
+  test('property: whatever normalizeInstallRelativePath accepts is a canonical key that stays under its base', () => {
+    const HOSTILE_CHARS = ['/', '\\', '.', '\0', ':', 'a', 'C', ' ', '\t', '技'];
+    const base = path.posix.join('/', 'base', 'dir');
+    fc.assert(fc.property(fc.string({ unit: fc.constantFrom(...HOSTILE_CHARS), maxLength: 16 }), (key) => {
+      const out = installEngine.normalizeInstallRelativePath(key);
+      if (out === null) return;
+      assert.equal(/[\\\0]/.test(out), false, `no backslash or NUL in ${JSON.stringify(out)}`);
+      assert.equal(out.split('/').some((s) => s === '' || s === '.' || s === '..'), false, `canonical segments in ${JSON.stringify(out)}`);
+      assert.equal(path.posix.isAbsolute(out) || path.win32.isAbsolute(out), false, `relative ${JSON.stringify(out)}`);
+      assert.ok(path.posix.resolve(base, out).startsWith(`${base}/`), `${JSON.stringify(out)} stays under the base`);
+      assert.equal(installEngine.normalizeInstallRelativePath(out), out, 'a fixed point');
+    }));
+    // Win32 drive-relative keys (X:foo) pass this parser; the resolver refuses them (tested above).
+    fc.assert(fc.property(fc.anything().filter((v) => typeof v !== 'string'), (value) => {
+      assert.equal(installEngine.normalizeInstallRelativePath(value), null);
+    }));
   });
 
   test('a record that cannot write (randomBytes throws) is reported, and never throws out of the apply', (t) => {
