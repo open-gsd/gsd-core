@@ -1938,9 +1938,11 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const tools = checker.match(/^tools:.*$/m)[0];
     assert.doesNotMatch(tools, /\bWrite\b/, 'the checker declares no Write');
     assert.match(tools, /\bBash\b/, 'the checker holds Bash, which writes the receipt');
-    const rule = blockAt(checker, '**Return receipt (#5182):**');
+    // The rule is the paragraph, the snippet fence and the paragraph after it (to the next heading).
+    const ruleAt = checker.indexOf('**Return receipt (#5182):**');
+    const rule = checker.slice(ruleAt, checker.indexOf('\n## ', ruleAt));
     assert.ok(rule.includes("mv -f 'PATH.part' 'PATH'"), 'the receipt is written with one Bash call that renames a .part file into place');
-    inOrder(rule, ['<return_receipt>PATH</return_receipt>', 'your LAST action', 'complete return', 'Write nothing else', 'refused', 'in your return'], 'a refused receipt write is noted in the return, never fatal');
+    inOrder(rule, ['<return_receipt>PATH</return_receipt>', 'your LAST action', 'complete return', 'Make no other write', 'refused', 'in your return'], 'a refused receipt write is noted in the return, never fatal');
     assert.ok(!rule.includes('Write tool'), 'the rule no longer names the Write tool');
     // The limit must hold on spawns that send no receipt (quick, quick-batch, import), so it
     // also lives in <anti_patterns>, outside the receipt-conditional rule.
