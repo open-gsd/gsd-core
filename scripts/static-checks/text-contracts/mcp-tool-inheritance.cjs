@@ -228,7 +228,7 @@ module.exports = {
     }
     const loaded = loadLib(load, FRONTMATTER_LIB);
     if (loaded.error) {
-      ctx.fail(AGENTS_DIR, loaded.error);
+      ctx.fail(FRONTMATTER_LIB, loaded.error);
       return;
     }
     let analyzed = 0;

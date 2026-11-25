@@ -304,7 +304,7 @@ function buildCheck(load) {
     const inventory = ctx.doc(INVENTORY);
     const table = loadLib(load, 'gsd-core/bin/lib/markdown-table.cjs');
     if (table.error) {
-      ctx.fail(INVENTORY, table.error);
+      ctx.fail('gsd-core/bin/lib/markdown-table.cjs', table.error);
       inventory.has('edit-phase.md', 'INVENTORY.md must contain the edit-phase.md workflow row');
     } else {
       inventory.satisfies((text) => {

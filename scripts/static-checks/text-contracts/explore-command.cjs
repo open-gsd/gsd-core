@@ -54,7 +54,6 @@ function regionAfter(text, from, to) {
   if (start === -1) return { error: `${JSON.stringify(from)} not found` };
   const end = text.indexOf(to, start);
   if (end === -1) return { error: `${JSON.stringify(to)} not found after ${JSON.stringify(from)}` };
-  if (start >= end) return { error: `${JSON.stringify(from)} must come before ${JSON.stringify(to)}` };
   return { text: text.slice(start, end) };
 }
 

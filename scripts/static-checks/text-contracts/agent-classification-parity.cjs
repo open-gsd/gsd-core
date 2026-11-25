@@ -317,7 +317,7 @@ module.exports = {
     // The **Tools** rows equal the tools: frontmatter verbatim (#2526).
     const loaded = loadLib(load, FRONTMATTER_LIB);
     if (loaded.error) {
-      ctx.fail(AGENTS_MD, loaded.error);
+      ctx.fail(FRONTMATTER_LIB, loaded.error);
       return;
     }
     // One document per agent file, however many headings name it.

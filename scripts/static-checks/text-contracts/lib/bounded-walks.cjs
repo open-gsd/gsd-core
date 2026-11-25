@@ -96,7 +96,7 @@ function libCaller(ctx, state, file) {
     try {
       return fn(state.lib);
     } catch (err) {
-      state.error = `${file} threw: ${err.message}`;
+      state.error = `${file} threw: ${String(err && err.message !== undefined ? err.message : err)}`;
       ctx.fail(file, state.error);
       return fallback;
     }

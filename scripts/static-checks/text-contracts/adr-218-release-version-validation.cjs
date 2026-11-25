@@ -16,6 +16,8 @@ const GATED_JOBS = ['create', 'rc', 'finalize'];
 const FORMAT_STEP = 'Validate version format';
 const DUPLICATE_STEP = 'Reject already-published versions';
 const MIN_GREP_PATTERNS = 2;
+const MAX_NEEDS_SHOWN = 8;
+const YAML_LIB_OWNER = 'package.json';
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isBlank = (ch) => ch !== undefined && /\s/.test(ch);
@@ -59,8 +61,9 @@ const needsOf = (job) => [].concat(job.needs || []);
 // A bounded description of a needs value: YAML anchors can make it a circular list, which JSON.stringify would throw on.
 function describeNeeds(needs) {
   if (typeof needs === 'string') return JSON.stringify(needs);
-  if (Array.isArray(needs)) return `a list of ${needs.length} item(s)`;
-  return needs === null ? 'null' : `a ${typeof needs}`;
+  const name = (value) => (value === null ? 'null' : typeof value === 'object' ? (Array.isArray(value) ? 'a list' : 'an object') : String(value));
+  if (Array.isArray(needs)) return `[${needs.slice(0, MAX_NEEDS_SHOWN).map(name).join(', ')}${needs.length > MAX_NEEDS_SHOWN ? `, ... ${needs.length} items` : ''}]`;
+  return name(needs);
 }
 
 // The parsed workflow, or the reason it cannot be read.
@@ -86,7 +89,7 @@ module.exports = {
     const doc = ctx.doc(WORKFLOW);
     let jobs = null;
     if (loadedYaml.error) {
-      ctx.fail(WORKFLOW, loadedYaml.error);
+      ctx.fail(YAML_LIB_OWNER, loadedYaml.error);
     } else {
       doc.satisfies((text) => {
         const parsed = parse(text, loadedYaml.lib);

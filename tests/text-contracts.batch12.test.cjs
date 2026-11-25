@@ -249,6 +249,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     ['architecture gone', 'gsd-core/workflows/audit-fix.md', (text) => text.split('architecture').join('').split('architectural').join(''), 'audit-fix-command', /the workflow must list architecture changes as a manual-only signal/],
     ['the dry-run stop gone', 'gsd-core/workflows/audit-fix.md', swap('**stop here and exit**', '**halt**'), 'audit-fix-command', /the workflow must indicate on one line that --dry-run stops after classification/],
     ['the dry-run mention moved behind the fix loop', 'gsd-core/workflows/audit-fix.md', (text) => text.split('dry-run').join('dryrun') + '\ndry-run\n', 'audit-fix-command', /the --dry-run stop must be documented before the fix-loop step/],
+    ['the fix-loop step renamed', 'gsd-core/workflows/audit-fix.md', swap('fix-loop', 'fixloop'), 'audit-fix-command', /the workflow must have a fix-loop step/],
     ['the {ID} placeholder gone from the commit', 'gsd-core/workflows/audit-fix.md', swap('resolve {ID} —', 'resolve F-01 —'), 'audit-fix-command', /the commit message template must include the \{ID\} placeholder for the finding ID/],
     ['commit and finding apart', 'gsd-core/workflows/audit-fix.md', (text) => text.split('commits atomically with finding IDs for traceability.').join('commits atomically with IDs.').split('The commit message **must** include the finding ID (e.g., F-01) for traceability.').join('The commit message **must** include the ID (e.g., F-01).').split('Every commit message contains the finding ID').join('Every commit message contains the ID'), 'audit-fix-command', /the workflow must commit atomically per finding/],
     ['the finding ID traceability gone', 'gsd-core/workflows/audit-fix.md', (text) => text.split('traceability').join('').split('finding ID').join('ID'), 'audit-fix-command', /the workflow must mention the finding ID for traceability/],
@@ -870,7 +871,8 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     exactly1('the verify source advertised next to audit-uat is one finding', [['commands/gsd/audit-fix.md', swap('--source <audit-uat>', '--source <audit-uat> --source <audit|verify>')]], 'audit-fix-command', 1, /the argument-hint must not advertise the unsupported verify source/);
     exactly1('the dry-run flag gone is one finding', [['gsd-core/workflows/audit-fix.md', eraseAll('dry-run')]], 'audit-fix-command', 1, /the workflow must document the --dry-run flag/);
     exactly1('fix-failed gone is one finding', [['gsd-core/workflows/audit-fix.md', eraseAll('fix-failed')]], 'audit-fix-command', 1, /the workflow must mark failed fixes as fix-failed/);
-    exactly1('no fix-loop marker is one finding', [['gsd-core/workflows/audit-fix.md', swap('fix-loop', 'fixloop')]], 'audit-fix-command', 1, /the --dry-run stop must be documented before the fix-loop step/);
+    exactly1('no fix-loop marker is one finding', [['gsd-core/workflows/audit-fix.md', swap('fix-loop', 'fixloop')]], 'audit-fix-command', 1, /the workflow must have a fix-loop step/);
+    exactly1('dry-run gone and fix-loop renamed are two findings, one per cause', [['gsd-core/workflows/audit-fix.md', compose1(eraseAll('dry-run'), swap('fix-loop', 'fixloop'))]], 'audit-fix-command', 2, /the workflow must (document the --dry-run flag|have a fix-loop step)/);
     exactly1('the workflow reference gone is one finding', [['commands/gsd/audit-fix.md', eraseAll('audit-fix.md')]], 'audit-fix-command', 1, /the command must reference the audit-fix\.md workflow/);
     exactly1('npm test gone is one finding', [['gsd-core/workflows/audit-fix.md', eraseAll('npm test')]], 'audit-fix-command', 1, /the workflow must run npm test as part of the fix loop/);
     exactly1('git commit before npm test is one finding', [['gsd-core/workflows/audit-fix.md', swap('<step name="fix-loop">', '<step name="fix-loop">\ngit commit\n')]], 'audit-fix-command', 1, /npm test must appear before the commit/);
@@ -1310,7 +1312,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
     test('a table splitter that cannot be loaded is one finding', (t) => {
       const findings = seamRun1(t, copyOfRepoFiles(t), throwingTable1);
       assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
-      assert.equal(findings[0].file, 'docs/INVENTORY.md');
+      assert.equal(findings[0].file, 'gsd-core/bin/lib/markdown-table.cjs');
       assert.match(findings[0].message, /gsd-core\/bin\/lib\/markdown-table\.cjs cannot be loaded: no module/);
     });
     test('a table splitter that cannot be loaded does not hide a failing text check', (t) => {
@@ -1473,12 +1475,12 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       const audit = require('../scripts/static-checks/text-contracts/audit-fix-command.cjs').walkers;
       const strings = (tokens, maxLength = 10) => fc.array(fc.constantFrom(...tokens), { maxLength }).map((parts) => parts.join(''));
       test('property: the dry-run order agrees with the index comparison it replaced, where the flag is named', () => {
-        // No dry-run at all is the finding of the assertion that asks for the flag, so the order check is silent there.
+        // No dry-run, or no fix-loop, is the finding of the assertion that asks for it, so the order check is silent there.
         const oracle = (text) => {
           const dryRun = text.indexOf('dry-run');
           const fixLoop = text.indexOf('fix-loop');
-          if (dryRun === -1) return true;
-          return fixLoop > -1 && dryRun < fixLoop;
+          if (dryRun === -1 || fixLoop === -1) return true;
+          return dryRun < fixLoop;
         };
         let accepted = 0;
         let rejected = 0;
@@ -1609,6 +1611,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       test('a js-yaml that cannot be loaded is one finding of the adr-218 contract', (t) => {
         const findings = seamRun(t, 'adr-218-release-version-validation', "(ctx) => real.check(ctx, () => { throw new Error('no yaml'); })");
         assert.equal(findings.length, 1, messagesOf(findings));
+        assert.equal(findings[0].file, 'package.json');
         assert.match(findings[0].message, /js-yaml cannot be loaded: no yaml/);
       });
       test('a js-yaml that cannot be loaded leaves the text checks of release.yml running', (t) => {
@@ -1627,7 +1630,9 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         const findings = textContracts.run({ root, dir, only: ['adr-218-release-version-validation'], minContracts: 1 });
         assert.equal(findings.length, 2, messagesOf(findings));
       });
-      exactlyOne('a circular needs list is one finding and does not throw', [[RELEASE, swap('  create:\n    needs: validate-version\n', '  create:\n    needs: &n [*n]\n')]], 'adr-218-release-version-validation', 'needs is a list of 1 item(s)');
+      exactlyOne('a needs list without the gate names its items', [[RELEASE, yamlEdit((w) => { w.jobs.create.needs = ['x', 'y']; })]], 'adr-218-release-version-validation', 'needs is [x, y]');
+      exactlyOne('a needs mapping is described as an object', [[RELEASE, yamlEdit((w) => { w.jobs.create.needs = { a: 1 }; })]], 'adr-218-release-version-validation', 'needs is an object');
+      exactlyOne('a circular needs list is one finding and does not throw', [[RELEASE, swap('  create:\n    needs: validate-version\n', '  create:\n    needs: &n [*n]\n')]], 'adr-218-release-version-validation', 'needs is [a list]');
       test('the grep -qE walk takes both quote forms, skips an empty pattern and an unquoted one, and continues after a miss', () => {
         assert.deepEqual(walkers.extractGrepPatterns("grep -qE '^a$' && grep -qE \"^b\" && grep -qE '' && grep -qE x && grep  -qE\t'c'"), ['^a$', '^b', 'c']);
         assert.deepEqual(walkers.extractGrepPatterns('grep -qEx "a" grep -qE "unterminated'), []);
@@ -1940,6 +1945,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       test('a frontmatter library that cannot be loaded is one finding of the agent-classification-parity contract', (t) => {
         const findings = seamRun(t, ACP, "(ctx) => real.check(ctx, () => { throw new Error('no build'); })", true);
         assert.equal(findings.length, 1, messagesOf(findings));
+        assert.equal(findings[0].file, 'gsd-core/bin/lib/frontmatter.cjs');
         assert.match(findings[0].message, /frontmatter\.cjs cannot be loaded: no build/);
       });
       test('a frontmatter parser that throws is one finding for each agent section it reads', (t) => {
@@ -2110,6 +2116,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
       test('a frontmatter library that cannot be loaded is one finding of the mcp-tool-inheritance contract', (t) => {
         const findings = seamRun(t, MCP, "(ctx) => real.check(ctx, () => { throw new Error('no build'); })", true);
         assert.equal(findings.length, 1, messagesOf(findings));
+        assert.equal(findings[0].file, 'gsd-core/bin/lib/frontmatter.cjs');
         assert.match(findings[0].message, /frontmatter\.cjs cannot be loaded: no build/);
       });
       test('a frontmatter parser that throws is one finding for each agent', (t) => {
@@ -2264,7 +2271,7 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         agrees('structural restatement', cycleText, (s) => [tdd.restatesCycleStructurally(s), oldStructural(s)]);
         const listShaped = lineChain(['RED', '- RED a', '- GREEN b', '- REFACTOR c tdd.md'], ['', '- x', 'text', '1. RED', '2) GREEN']);
         agrees('structural restatement over list-shaped text', listShaped, (s) => [tdd.restatesCycleStructurally(s), oldStructural(s)]);
-        agrees('halt reason', fc.oneof(strings(['Reason: {', 'impl_before_test', '}', '\n', ' ', '|', 'x', '_', 'impl_before_tes', '-'], 9), chain(['Reason: {', 'impl_before_test', '}'], ['', ' ', '|', '_', 'x', '\n', '}'], 3)),
+        agrees('halt reason', fc.oneof(strings(['Reason: {', 'impl_before_test', '}', '\n', ' ', '|', 'x', '_', 'impl_before_tes', '-'], 9), chain(['Reason: {', 'impl_before_test', '}'], ['', ' ', '|', '_', 'x', '\n', '}'], 3), chain(['Reason: {', 'Reason: {', 'impl_before_test', '}'], ['', ' ', '|', '_', 'x', '\n', '}'], 260), chain(['Reason: {', 'x', 'impl_before_test'], ['', ' ', '|', '_', '\n'], 260)),
           (s) => [tdd.namesHaltReason(s), /Reason: \{[^}\n]*\bimpl_before_test\b/.test(s)]);
         const oldEmbed = (text) => {
           const line = text.split('\n').find((l) => /tdd\.md/.test(l) && /TDD_APPLICABLE/.test(l));
@@ -2817,6 +2824,17 @@ describe('the batch 12 contracts hold on the real files, and fail when a contrac
         assert.match(findings[0].message, /threw: boom/);
       });
     }
+    test('a library that throws null is one finding on the library path', (t) => {
+      const findings = seamRun(t, COUPLING, `real.walkers.buildCheck({ loadSectionizer: () => ({ ...require(${LIB('markdown-sectionizer.cjs')}), stripFencedCode: () => { throw null; } }), loadTextLines: () => require(${LIB('text-lines.cjs')}) })`);
+      assert.equal(findings.length, 1, messagesOf(findings));
+      assert.equal(findings[0].file, SECTIONIZER_PATH);
+      assert.match(findings[0].message, /threw: null/);
+    });
+    // Fence shapes where the owner's grammar and the old exact-line loop differ: a tilde or four-backtick yaml fence counts for the owner (stricter,
+    // harmless), and a yaml-looking line inside a text block is not an example for the owner (the old loop counted it).
+    oneFinding('a tilde yaml fence with a warning severity is counted', CHECKER, inThreeB(append('~~~yaml\nseverity: warning\n~~~')), COUPLING, 'carries severity: warning');
+    oneFinding('a four-backtick yaml fence with a warning severity is counted', CHECKER, inThreeB(append('````yaml\nseverity: warning\n````')), COUPLING, 'carries severity: warning');
+    passesHeavy('a yaml-looking line inside a text block is not an example', CHECKER, inThreeB(append('```text\n```yaml\nseverity: warning\n```')), COUPLING);
     test('a splitLines that throws is one finding of the edge-probe-spec-phase-contract contract', (t) => {
       const findings = seamRun(t, EDGE, `real.walkers.buildCheck({ loadTextLines: () => ${throwing('text-lines.cjs', 'splitLines')} })`);
       assert.equal(findings.length, 1, messagesOf(findings));

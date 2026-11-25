@@ -33,12 +33,12 @@ function testBeforeCommit(text) {
   return testAt < commitAt || '`npm test` comes after `git commit`';
 }
 
-// The first dry-run precedes the first fix-loop. No dry-run at all is reported by the assertion that asks for the flag.
+// The first dry-run precedes the first fix-loop. No dry-run, or no fix-loop, is reported by the assertion that asks for it.
 function dryRunBeforeFixLoop(text) {
   const dryRun = text.indexOf('dry-run');
   if (dryRun === -1) return true;
   const fixLoop = text.indexOf('fix-loop');
-  if (fixLoop === -1) return 'no fix-loop marker';
+  if (fixLoop === -1) return true;
   return dryRun < fixLoop || 'dry-run comes after fix-loop';
 }
 
@@ -87,6 +87,7 @@ module.exports = {
       .has('design decision', 'the workflow must list design decisions as a manual-only signal')
       .satisfies((text) => text.includes('architecture') || text.includes('architectural'), 'the workflow must list architecture changes as a manual-only signal')
       .satisfies((text) => !text.includes('dry-run') || lineHasAny(text, 'dry-run', ['stop', 'exit']), 'the workflow must indicate on one line that --dry-run stops after classification')
+      .has('fix-loop', 'the workflow must have a fix-loop step')
       .satisfies(dryRunBeforeFixLoop, 'the --dry-run stop must be documented before the fix-loop step')
       .satisfies((text) => lineHasAll(text, ['{ID}', 'commit']), 'the commit message template must include the {ID} placeholder for the finding ID')
       .satisfies((text) => lineHasAll(text, ['commit', 'finding']), 'the workflow must commit atomically per finding')
