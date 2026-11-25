@@ -1112,10 +1112,9 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     });
   }
 
-  // The review's row. Its `cat` reads what `echo` prints, which no scan follows (`next`
-  // allows `cat "$(echo .env)"`). Unquoted, the scans that count parens end the
-  // substitution at `x)`, so `echo` and `$'\x2e'env` are read as more words of the `cat`:
-  // it was blocked before this PR too, and stays blocked.
+  // The review's row. Unquoted, the scans that count parens end the substitution at
+  // `x)`, so `echo` and `$'\x2e'env` are read as more words of the `cat`: it was
+  // blocked before this PR too, and stays blocked.
   // A heredoc tag's `$'` after an even run of `$`: bash pairs the run, so `$$'\''` is the
   // PID and a plain quote, and the tag runs on to the next line's `'`. Read as a `$'…'`,
   // the tag ended on the first line, and the `echo` line was taken for the body. bash
