@@ -352,6 +352,45 @@ describe('process-seam', () => {
     });
   });
 
+  test('holdStdin keeps stdin open: the bound kills a stdin-reading child before EOF', async () => {
+    // #5837: the hold path's whole contract in one child — it announces on
+    // fd 1 via a synchronous write (survives the bound kill on every
+    // platform), reports EOF on stdin's end and exits there, and otherwise
+    // holds the event loop open. With holdStdin the end handler can never
+    // fire, so the only way out is the seam's bound; the SAME fixture on the
+    // sync path with no option must still see EOF at once — the default the
+    // pre-#5837 C4 rows wrongly relied on.
+    const src = [
+      "const fs = require('fs');",
+      "fs.writeSync(1, 'listening\\n');",
+      "process.stdin.on('end', () => {",
+      "  fs.writeSync(1, 'eof\\n');",
+      '  process.exit(0);',
+      '});',
+      'setTimeout(() => {}, 60000);',
+    ].join('\n');
+    const fixture = writeFixture(tmpDir, 'hold-stdin.cjs', src);
+    const held = await runNode([fixture], { holdStdin: true, timeoutMs: SEAM_STARTUP_CLEARING_TIMEOUT_MS });
+    assert.equal(held.outcome, OUTCOME.TIMED_OUT, held.summary);
+    assert.equal(held.timedOut, true);
+    assert.equal(held.exitCode, null);
+    assert.equal(typeof held.summary, 'string');
+    assert.match(held.summary, /outcome=timed_out/);
+    assert.match(held.stdout, /listening/, 'streamed stdout survives the bound kill');
+    assert.doesNotMatch(held.stdout, /eof/, 'stdin must not have been closed');
+    const closed = runNode([fixture]);
+    assert.equal(closed.outcome, OUTCOME.EXITED, closed.summary);
+    assert.match(closed.stdout, /eof/, 'omitted input still means unwritten-then-closed');
+  });
+
+  test('holdStdin combined with input is a seam contract violation', () => {
+    const fixture = writeFixture(tmpDir, 'echo-stdin.cjs', FIXTURE_ECHO_STDIN);
+    assert.throws(
+      () => runNode([fixture], { holdStdin: true, input: 'x' }),
+      (e) => e instanceof TypeError && /cannot be combined with input/.test(e.message),
+    );
+  });
+
   test('caller cannot override encoding into Buffers', () => {
     const fixture = writeFixture(tmpDir, 'exit.cjs', FIXTURE_EXIT);
     const result = runNode([fixture, '0', 'marker'], { encoding: 'buffer' });

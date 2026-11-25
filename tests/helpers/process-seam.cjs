@@ -70,7 +70,7 @@
  *     would have implied ENOENT gets special handling it does not need.
  */
 
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -277,6 +277,90 @@ function finishSeamResult(result, timing) {
 }
 
 /**
+ * #5837: the `holdStdin` path. spawnSync cannot hold a pipe open — with no
+ * `input` it closes the child's stdin at once — so holding stdin open for the
+ * whole run requires async `spawn`. The child's stdin is never written to and
+ * never ended; the run settles when the child exits on its own or when the
+ * same `timeoutMs` bound fires and kills it. The raw result is synthesized in
+ * the spawnSync shape so BOTH paths classify through finishSeamResult and are
+ * observed by recordSpawnIfNoteworthy — one OUTCOME contract, one metrics
+ * path. Differences from the sync path, by necessity: the return is a
+ * Promise; stdout/stderr stream in, so output written before a kill survives
+ * on every platform (spawnSync discards partial output on Linux); and there
+ * is no maxBuffer, so BUFFER_OVERFLOW cannot occur on this path.
+ */
+function spawnSeamHeld(command, args, options, timeoutMs) {
+  return new Promise((resolve) => {
+    const startedAtMs = Date.now();
+    const t0 = process.hrtime.bigint();
+    let child;
+    try {
+      child = spawn(command, args, {
+        ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+        ...(options.env !== undefined ? { env: options.env } : {}),
+        ...(options.killSignal !== undefined ? { killSignal: options.killSignal } : {}),
+        stdio: 'pipe', // stdin exists and stays open: never written, never ended
+      });
+    } catch (syncSpawnError) {
+      const timing = {
+        startedAtMs,
+        endedAtMs: Date.now(),
+        durationMs: Math.round(Number(process.hrtime.bigint() - t0) / 1e6),
+      };
+      const seamResult = finishSeamResult(
+        { error: syncSpawnError, status: null, signal: null, stdout: '', stderr: '' },
+        timing,
+      );
+      recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult);
+      resolve(seamResult);
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let streamError = null;
+    child.stdout.setEncoding('utf-8');
+    child.stderr.setEncoding('utf-8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (err) => { streamError = err; });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      // killSignal already forwarded to spawn(); an undefined killSignal
+      // lands on SIGTERM, spawnSync's default too.
+      child.kill(options.killSignal);
+    }, timeoutMs);
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      const timing = {
+        startedAtMs,
+        endedAtMs: Date.now(),
+        durationMs: Math.round(Number(process.hrtime.bigint() - t0) / 1e6),
+      };
+      let error = streamError;
+      if (timedOut && code === null) {
+        // Match the shape spawnSync produces at its own bound so
+        // toSeamResult classifies this TIMED_OUT, not KILLED.
+        error = Object.assign(new Error(`${command} ETIMEDOUT`), { code: 'ETIMEDOUT' });
+      }
+      const seamResult = finishSeamResult(
+        {
+          error: error ?? undefined,
+          status: code,
+          signal: signal ?? null,
+          stdout,
+          stderr,
+          pid: child.pid,
+        },
+        timing,
+      );
+      recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult);
+      resolve(seamResult);
+    });
+  });
+}
+
+/**
  * Core seam primitive: spawn `command` with argv `args` and return the
  * typed OUTCOME-discriminated result. Never throws on a child's exit code,
  * a timeout, a buffer overflow, or a spawn failure — those are all data.
@@ -294,6 +378,12 @@ function finishSeamResult(result, timing) {
  * @param {number} [options.timeoutMs] - bounded; see resolveTimeoutMs.
  * @param {string} [options.killSignal] - forwarded to spawnSync verbatim;
  *   the seam asserts nothing about which signal is used.
+ * @param {boolean} [options.holdStdin] - #5837: spawn with async `spawn` and
+ *   leave stdin unwritten-then-OPEN for the whole run (EOF impossible). With
+ *   this option the return is a Promise of the same result shape, and the
+ *   bound kills the child. Mutually exclusive with `input` (TypeError).
+ *   Omitting it keeps the documented default exactly: omitted input =
+ *   unwritten-then-closed.
  * @returns {{outcome:string, exitCode:number|null, stdout:string,
  *   stderr:string, timedOut:boolean, signal:string|null, killed:boolean,
  *   code:string|null, durationMs:number, pid:number|null, startedAt:string|null,
@@ -304,6 +394,20 @@ function spawnSeam(command, args, options = {}) {
     throw new TypeError('process-seam: args must be an argv array, not a shell string');
   }
   const timeoutMs = resolveTimeoutMs(options.timeoutMs);
+
+  // #5837: holdStdin opts into the async hold path (see spawnSeamHeld). The
+  // sync spawnSync path cannot hold a pipe open, so this option must branch
+  // before any spawnOptions are built. Combining it with `input` is a seam
+  // contract violation: one says "write nothing, close nothing", the other
+  // says "write this, then close".
+  if (options.holdStdin) {
+    if (options.input !== undefined) {
+      throw new TypeError(
+        'process-seam: holdStdin leaves stdin unwritten-then-open; it cannot be combined with input',
+      );
+    }
+    return spawnSeamHeld(command, args, options, timeoutMs);
+  }
 
   const spawnOptions = {
     encoding: 'utf-8', // Never caller-controlled — the seam always forces string output.
