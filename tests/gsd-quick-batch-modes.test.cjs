@@ -32,6 +32,7 @@ const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const quickBatch = require('../gsd-core/bin/lib/quick-batch.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'quick-batch.md');
@@ -265,6 +266,65 @@ describe('#6532 item 2: create refuses an invalid options.modes and creates noth
     t.after(() => cleanup(dir));
     const batchId = createOk(dir, undefined);
     assert.equal(Object.prototype.hasOwnProperty.call(readManifest(dir, batchId).options, 'modes'), false);
+  });
+});
+
+// ─── A non-object options value (review of #6653, Minor 1) ──────────────────
+
+/** Every path under `.planning/`, with each file's bytes, so a row can show that nothing was written. */
+function planningSnapshot(dir) {
+  const root = path.join(dir, '.planning');
+  const entries = [];
+  for (const rel of fs.readdirSync(root, { recursive: true }).map(String).sort()) {
+    const abs = path.join(root, rel);
+    entries.push([rel, fs.statSync(abs).isFile() ? fs.readFileSync(abs).toString('base64') : 'dir']);
+  }
+  return entries;
+}
+
+const NON_OBJECT_OPTIONS = [
+  ['an array', '[1]', [1]],
+  ['a string', '"x"', 'x'],
+  ['a number', '5', 5],
+  ['a boolean', 'true', true],
+];
+
+describe('create refuses an options value that is not a JSON object and writes nothing', () => {
+  for (const [label, raw] of NON_OBJECT_OPTIONS) {
+    test(`quick-batch create --options ${raw} (${label}) fails, with no batch and no quick id allocated`, (t) => {
+      const dir = createTempProject('gsd-6532-options-shape-');
+      t.after(() => cleanup(dir));
+      const tasks = writeTasks(dir);
+      const before = planningSnapshot(dir);
+      // The refusal may come from the router (#6655) or from createBatch; either way the call fails.
+      const r = runGsdTools(['quick-batch', 'create', '--file', tasks, '--options', raw, '--raw'], dir);
+      assert.equal(r.success, false);
+      assert.notEqual(r.exitCode, 0);
+      assert.equal(fs.existsSync(batchesDir(dir)), false, 'no batch directory');
+      assert.deepEqual(planningSnapshot(dir), before, 'nothing under .planning/ changed');
+    });
+  }
+
+  test('createBatch itself refuses a non-object batchOptions, naming options, before any write', (t) => {
+    const dir = createTempProject('gsd-6532-options-direct-');
+    t.after(() => cleanup(dir));
+    const before = planningSnapshot(dir);
+    for (const [, , value] of NON_OBJECT_OPTIONS) {
+      const r = quickBatch.createBatch(dir, [{ description: 'a' }], { batchOptions: value });
+      assert.equal(r.ok, false, JSON.stringify(value));
+      assert.equal(r.field, 'options');
+    }
+    assert.deepEqual(planningSnapshot(dir), before);
+  });
+
+  test('createBatch still stores no options (undefined or null) as {}', (t) => {
+    const dir = createTempProject('gsd-6532-options-null-');
+    t.after(() => cleanup(dir));
+    for (const value of [undefined, null]) {
+      const r = quickBatch.createBatch(dir, [{ description: 'a' }], { batchOptions: value });
+      assert.equal(r.ok, true, r.reason);
+      assert.deepEqual(readManifest(dir, r.value.batchId).options, {});
+    }
   });
 });
 
