@@ -189,6 +189,7 @@ module.exports = {
   "tests/milestone-window-single-owner.test.cjs",
   "tests/milestone.test.cjs",
   "tests/model-omit-tier-alias.test.cjs",
+  "tests/model-overrides-runtime-key-wiring.test.cjs",
   "tests/model-resolver-attempt-parity.test.cjs",
   "tests/model-resolver.test.cjs",
   "tests/mutation-workflow-base-ref.test.cjs",
