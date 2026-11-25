@@ -526,6 +526,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+/**
+ * The `options` a new BATCH.json holds: `{}` for none (undefined or null),
+ * otherwise the JSON round trip of a plain object, which must itself be an
+ * object. Anything else fails naming `options`.
+ */
+function storedBatchOptions(value: unknown): Result<Record<string, unknown>> | FieldFailure {
+  if (value === undefined || value === null) return { ok: true, value: {} };
+  const refused: FieldFailure = { ok: false, reason: 'options must be a JSON object', field: OPTIONS_FIELD };
+  if (!isPlainObject(value)) return refused;
+  let copy: unknown;
+  try {
+    copy = JSON.parse(JSON.stringify(value));
+  } catch {
+    return refused; // a BigInt or a cycle: not JSON
+  }
+  return isPlainObject(copy) ? { ok: true, value: copy } : refused;
+}
+
 function hasModes(options: unknown): options is Record<string, unknown> {
   return !!options && typeof options === 'object' && !Array.isArray(options)
     && Object.prototype.hasOwnProperty.call(options, 'modes');
@@ -588,15 +606,15 @@ function createBatch(
   }
   // The loader (`validateBatchSchema`) accepts only an object `options`, so any
   // other value is refused here, before ids are allocated or BATCH.json is
-  // written. A class instance (a Date, a Map) is refused too: it does not
+  // written. The value is judged as BATCH.json would hold it (a JSON round
+  // trip, so a `toJSON` cannot change it after the check) and that copy is what
+  // gets written. A class instance (a Date, a Map) is refused too: it does not
   // serialize to the object it holds. No options (undefined or null) is stored as `{}`.
-  const batchOptions: unknown = options.batchOptions;
-  if (batchOptions !== undefined && batchOptions !== null && !isPlainObject(batchOptions)) {
-    return { ok: false, reason: 'options must be a JSON object', field: OPTIONS_FIELD };
-  }
+  const stored = storedBatchOptions(options.batchOptions);
+  if (!stored.ok) return stored;
   // #6532: an invalid `options.modes` is refused before anything is written.
-  if (hasModes(options.batchOptions)) {
-    const modes = validateBatchModes(options.batchOptions.modes);
+  if (hasModes(stored.value)) {
+    const modes = validateBatchModes(stored.value.modes);
     if (!modes.ok) return { ok: false, reason: modes.reason, field: MODES_FIELD };
   }
   const dagResult = validateDag(itemsInput);
@@ -646,7 +664,7 @@ function createBatch(
         schema_version: 1,
         batch_id: batchId,
         created_at: clock.nowIso(),
-        options: options.batchOptions ?? {},
+        options: stored.value,
         base_revision: options.baseRevision ?? null,
         head_revision: null,
         items,

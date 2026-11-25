@@ -174,6 +174,28 @@ describe('create refuses an options value that is not a JSON object and writes n
     assert.deepEqual(planningSnapshot(dir), before);
   });
 
+  test('createBatch judges options by what BATCH.json would hold, so a toJSON or an unserializable value cannot slip through', (t) => {
+    const dir = createTempProject('gsd-6532-options-tojson-');
+    t.after(() => cleanup(dir));
+    const before = planningSnapshot(dir);
+    for (const [value, field] of [
+      [{ toJSON: () => [1] }, 'options'],
+      [{ note: 1n }, 'options'],
+      [{ modes: Object.assign(['validate'], { toJSON: () => 'x' }) }, 'options.modes'],
+    ]) {
+      const r = quickBatch.createBatch(dir, [{ description: 'a' }], { batchOptions: value });
+      assert.equal(r.ok, false);
+      assert.equal(r.field, field);
+    }
+    assert.deepEqual(planningSnapshot(dir), before);
+
+    // What is written is what was judged: a value JSON drops (undefined) is not kept, and the batch loads.
+    const r = quickBatch.createBatch(dir, [{ description: 'a' }], { batchOptions: { note: 'x', gone: undefined } });
+    assert.equal(r.ok, true, r.reason);
+    assert.deepEqual(r.value.manifest.options, { note: 'x' });
+    assert.equal(quickBatch.loadBatch(dir, r.value.batchId).ok, true);
+  });
+
   test('createBatch still stores no options (undefined or null) as {}, and a prototype-less object as itself', (t) => {
     const dir = createTempProject('gsd-6532-options-null-');
     t.after(() => cleanup(dir));
@@ -243,8 +265,9 @@ describe('#6532: the mode rules hold for arbitrary mode arrays', () => {
 
     after(() => cleanup(dir));
 
-    test('for every stored set, and for a batch without stored modes', () => {
-      // Every (batch, flag set) pair runs as an example; the domain is that small.
+    test('every stored set against every flag set, and a batch without stored modes (exhaustive)', () => {
+      // The domain is 5 batches x 4 flag sets, and every pair runs as an example. The flag sets are canonical
+      // because init normalizes the parsed flags; the 'flags equal to the stored set' row passes them reversed.
       const examples = batches.flatMap((_, i) => VALID_MODE_SETS.map((flags) => [i, flags]));
       fc.assert(fc.property(fc.integer({ min: 0, max: VALID_MODE_SETS.length }), flagSets, (i, flags) => {
         const { stored, batchId } = batches[i];
