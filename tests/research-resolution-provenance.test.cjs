@@ -9,7 +9,7 @@
  *
  * What it cannot prove: that a model acts on the text. The subject is an LLM prompt; no
  * test here can run the checker. The #5438 PR body records the before/after model runs
- * on the issue's fixture.
+ * on a fixture modelled on the issue.
  */
 
 const { describe, test } = require('node:test');

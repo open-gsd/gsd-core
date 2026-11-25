@@ -342,7 +342,7 @@ Read and execute: `$HOME/.claude/gsd-core/references/autonomous-ui-design-contra
 FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
 ```
 
-- **If `FLATTEN` is `false`:** Dispatch plan as a background agent to keep the main context lean; meanwhile, discuss the next phase (step 4).
+- **If `FLATTEN` is `false`:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
 
   <!-- gsd:section id="converge-dispatch-bg" when="state:plan-strategy-converge" -->
   If `section_manifest` is `null` or `"converge-dispatch-bg"` is in its `included` list: read and execute `gsd-core/workflows/autonomous/steps/converge-dispatch-bg.md`. Otherwise skip — do not read the file.
@@ -360,7 +360,7 @@ FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true"
 
   Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
 
-- **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here.
+- **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
 
   <!-- gsd:section id="converge-dispatch-inline" when="state:plan-strategy-converge" -->
   If `section_manifest` is `null` or `"converge-dispatch-inline"` is in its `included` list: read and execute `gsd-core/workflows/autonomous/steps/converge-dispatch-inline.md`. Otherwise skip — do not read the file.
