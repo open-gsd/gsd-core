@@ -22,6 +22,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) — exempt one committed file, such as a placeholder `.env.production`, from the secret-read guard while every other secret file stays blocked
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
+- [Enable Serply for web research](how-to/enable-serply-web-research.md) — set the key, register the Serply MCP server, and confirm the researcher agents pick it over the built-in `websearch`
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
 - [Run a plan on another runtime](how-to/run-a-plan-on-another-runtime.md) — declare `executor_runtime` on a plan so a different runtime's CLI executes it, with the gate, the model source and every fallback reason
