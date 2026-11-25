@@ -189,7 +189,8 @@
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
 //         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
-//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
+//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn, and
+//         guard-error when the host opted in to deny-on-crash (#5784)
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
@@ -197,6 +198,11 @@
 //        overflow the parser's stack, or one that needs more than the scan's
 //        work budget, is denied as `command-too-complex` (#5255), because
 //        failing open there allows a read the scan had not yet reached.
+//        A host may opt in to failing closed instead with
+//        GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): a hook error, a shell
+//        reading that fails on a command no scan blocked (its
+//        DIAGNOSTIC.READING_FAILED line is written in both modes), or a stdin
+//        that does not close within 3 s then blocks with code guard-error.
 
 'use strict';
 
@@ -204,8 +210,38 @@ const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 const { finalExtension, normalizeWindowsBasename, lastSegment } = require('./lib/filename-classification.js');
 
 // Fail open on a hook-internal error (see header). Declared ONCE so the
-// outer catch states its policy explicitly (#3911).
-const ON_CRASH = HOOK_ON_CRASH.ALLOW;
+// outer catch states its policy explicitly (#3911). A host that registers this
+// guard with Claude Code's `onFailure: "block"` can opt in to DENY with
+// GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): `onFailure` cannot see a failure
+// the hook catches itself and exits 0 on, so without this a crash, a shell
+// reading that fails on a command no scan blocked, or a stalled stdin still
+// allows. Any other value, or none, keeps ALLOW. Read once, before stdin, so
+// the policy is settled before any failure it governs.
+const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
+  ? HOOK_ON_CRASH.DENY
+  : HOOK_ON_CRASH.ALLOW;
+
+// Which failure a guard-error block is for, as its payload's `cause` field
+// (#5784): a host or a test reads this, never the reason's prose.
+const GUARD_ERROR_CAUSE = Object.freeze({
+  HOOK_ERROR: 'hook-error',
+  READING_FAILED: 'reading-failed',
+  STDIN_STALL: 'stdin-stall',
+});
+
+// Ends the hook through the declared crash policy. On DENY the payload names
+// the cause and stderr carries its plain reason, as emitBlock's denials do:
+// Kimi's hook bus reads stderr back to the model verbatim. On ALLOW both stay
+// undefined, so the default path is crash(ALLOW, undefined) and emits nothing,
+// exactly as before.
+function crashFor(cause, why) {
+  if (ON_CRASH !== HOOK_ON_CRASH.DENY) {
+    crash(ON_CRASH, undefined);
+    return;
+  }
+  const reason = `gsd-secret-read-guard: ${why}; denied because GSD_SECRET_READ_GUARD_ON_CRASH=deny`;
+  crash(ON_CRASH, { decision: 'block', code: 'guard-error', cause, reason }, reason);
+}
 
 // Commands longer than this are denied rather than scanned (see header).
 const MAX_COMMAND_LENGTH = 1024 * 1024;
@@ -3984,11 +4020,22 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
+// How long the hook waits for its stdin to close (#5784). Exported so the
+// stdin-timer tests build their cells from it rather than repeat it.
+const STDIN_TIMEOUT_MS = 3000;
+
 // The PreToolUse entry. Tests load the scanners in-process (module.exports
 // below); the hook body runs only when the file is executed as the hook.
 function main() {
   let input = '';
-  const stdinTimeout = setTimeout(() => allow(undefined), 3000);
+  // A stdin that has not closed within STDIN_TIMEOUT_MS is a hook failure, not
+  // a verdict on the payload, so it takes the declared crash policy (#5784)
+  // rather than an unconditional allow. The timer is not reset by `data`: a
+  // payload written in full whose stdin stays open is caught here too.
+  const stdinTimeout = setTimeout(
+    () => crashFor(GUARD_ERROR_CAUSE.STDIN_STALL, `stdin did not close within ${STDIN_TIMEOUT_MS / 1000} s`),
+    STDIN_TIMEOUT_MS,
+  );
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => input += chunk);
   process.stdin.on('end', () => {
@@ -4048,6 +4095,10 @@ function main() {
       if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
+        // A reading that failed is a hook error the catch below never sees, so
+        // it takes the host's crash policy too (#5784): the allow above by
+        // default, a guard-error block when the host opted in.
+        crashFor(GUARD_ERROR_CAUSE.READING_FAILED, 'a shell reading failed');
       }
       allow(undefined);
     } catch (e) {
@@ -4056,17 +4107,17 @@ function main() {
       // `command-too-complex`; the debugger-spawn scan unwraps `timeout`,
       // which the secret scan does not, so its tokenizer can overflow on a
       // body the secret scan never read. Any other error fails open — never
-      // block valid tool calls due to hook errors.
+      // block valid tool calls due to hook errors — unless the host opted in
+      // to DENY; ON_CRASH is declared at module top (#3911, #5784).
       if (e instanceof RangeError && tool === 'Bash') emitBlock('command-too-complex', tool, '');
-      // ON_CRASH is declared ALLOW at module top (#3911).
-      crash(ON_CRASH, undefined);
+      crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
     }
   });
 }
 
 module.exports = {
   DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  MAX_SCAN_CHARACTERS,
+  GUARD_ERROR_CAUSE, MAX_SCAN_CHARACTERS, STDIN_TIMEOUT_MS,
 };
 
 if (require.main === module) main();
