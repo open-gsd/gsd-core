@@ -224,9 +224,9 @@ function collapseWhitespace(value: string | null): string | null {
 function parseXmlTasks(content: string): PlanTask[] {
   const openings = xmlTaskOpenings(content);
   return openings.map((match, i) => {
-    const start = match.index ?? 0;
+    const start = match.index;
     const openTag = match[0];
-    const nextStart = i + 1 < openings.length ? (openings[i + 1].index ?? content.length) : content.length;
+    const nextStart = i + 1 < openings.length ? openings[i + 1].index : content.length;
     const window = content.slice(start, nextStart);
     const closeIdx = window.search(/<\/task\s*>/i);
     const block = closeIdx === -1 ? window : window.slice(0, closeIdx);
