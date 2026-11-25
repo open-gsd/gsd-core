@@ -56,7 +56,7 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 // The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
 // swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
 const WINDOWS_TIER_SIZE_BASELINE = 357; // +1 (#6719): tests/project-skills-manifest.test.cjs joins the tier: it lists a skill directory that is a symlink or junction, a behavior only a real Windows lane can prove; +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1 (#4647): tests/seed-close.test.cjs runs the shipped plant-seed parse-idea block under a real `bash` (runHook interpreter), the signal the tier exists for; +1: tests/6451-tdd-deviation-acceptance.test.cjs joins the tier (#6451); -2 (#6039): wave 4 moved 2 files off the lane (env literal only); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip; +1 (#5249): tests/health-diagnostic-rules/project-skills-budget.test.cjs joins the tier: its symlinked-skill-directory case is real Windows signal (symlink creation needs privilege there and the case skips itself when it fails)
-const MACOS_TIER_SIZE_BASELINE = 303; // +1 (#6719): tests/project-skills-manifest.test.cjs joins the tier: it lists a symlinked skill directory on the macOS lane; +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1: tests/6420-plan-document-linear.test.cjs joins the tier (#6420); -2: contributor-standards and verification-overrides became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip; +1 (#5249): tests/health-diagnostic-rules/project-skills-budget.test.cjs joins the tier: its symlinked-skill-directory case is real Windows signal (symlink creation needs privilege there and the case skips itself when it fails)
+const MACOS_TIER_SIZE_BASELINE = 307; // +4 (#5798): canonical-tmpdir routes decisions, effort-local-install, gsd-mcp-server, and host-integration to the real macOS tier; +1 (#6719): tests/project-skills-manifest.test.cjs joins the tier: it lists a symlinked skill directory on the macOS lane; +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1: tests/6420-plan-document-linear.test.cjs joins the tier (#6420); -2: contributor-standards and verification-overrides became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip; +1 (#5249): tests/health-diagnostic-rules/project-skills-budget.test.cjs joins the tier: its symlinked-skill-directory case is real Windows signal (symlink creation needs privilege there and the case skips itself when it fails)
 
 // A tier of `count` files against its committed baseline: nonzero, not above, not below.
 function assertTierAtBaseline(count, baseline, label, constantName) {
@@ -1388,12 +1388,15 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.equal(classifyMacosContent('const x = notcanonicalizePath(a);').needsRealOs, false);
   });
 
-  test('aliased canonicalizing helper calls are not a macOS signal', () => {
+  // Documented static-classifier limits (#5798): the regex matches direct calls to the exported
+  // helper names, so destructured aliases and uninvoked callback references are known misses rather
+  // than required exclusions; tightening the classifier to catch them is an improvement, not a regression.
+  test('known limit: aliased canonicalizing helper calls are missed by the static classifier', () => {
     const source = 'const { runGateWithStatFailure: invoke } = require("./helpers/fs-failure.cjs"); invoke(t, dir, "g", "EACCES", opts);';
     assert.equal(classifyMacosContent(source).needsRealOs, false);
   });
 
-  test('canonicalizing helper callback references are not a macOS signal', () => {
+  test('known limit: canonicalizing helper callback references are missed by the static classifier', () => {
     assert.equal(classifyMacosContent('values.map(canonicalizePath);').needsRealOs, false);
   });
 

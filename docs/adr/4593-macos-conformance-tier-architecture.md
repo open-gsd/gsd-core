@@ -50,6 +50,7 @@ genuinely Unix-relevant rather than Windows-motivated:
 | `case-sensitivity` | `/case.?insensitiv\|case.?sensitiv/i` | Directly names the issue's own "case-sensitivity" surface (macOS's default case-insensitive-but-preserving filesystem). | 74 |
 | `chmod-mode-bit` | reused verbatim from the general tier's `CATEGORIES` | Unix permission-bit semantics — genuinely macOS/Linux-relevant, not a Windows category (Windows has no chmod). | 73 |
 | `symlink-keyword` | reused verbatim from the general tier's `CATEGORIES` | Symlink handling differs materially on macOS (case-insensitive-but-preserving FS, different default symlink permissions) — not Windows-motivated the way `windows-shell-token` etc. are. | 86 |
+| `canonical-tmpdir` | `/\b(?:canonicalizePath\|createCanonicalTempDir\|runGateWithStatFailure)\s*\(/` | Added in #5798 alongside `realpath` (#6002): tests calling the shared canonicalizing tmpdir helpers depend on macOS `/var` -> `/private/var` symlink normalization without naming `realpath` directly. | added post-ADR |
 
 Applied to the real `tests/` unit-suite tree (930 files eligible under the same `suiteOf(f) === null`
 gate the general tier uses), the union is **196 files** (21% of eligible files, vs. the general

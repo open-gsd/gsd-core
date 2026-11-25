@@ -590,6 +590,9 @@ function createTempDir(prefix = 'gsd-test-') {
 }
 
 // Resolve existing fixture paths through the same native filesystem seam on all platforms.
+// New tests should prefer canonicalizePath() (or createCanonicalTempDir() for fresh temp dirs)
+// over bare fs.realpathSync() / fs.realpathSync.native() so macOS /var symlinks and Windows
+// 8.3 short paths are normalized consistently and matched by the macOS conformance classifier.
 function canonicalizePath(p) {
   return fs.realpathSync.native(p);
 }

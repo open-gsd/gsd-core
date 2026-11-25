@@ -454,7 +454,9 @@ const ALWAYS_REAL_OS = new Map([
  * `symlink-keyword` ARE deliberately duplicated verbatim from CATEGORIES:
  * both are genuinely Unix-relevant (chmod bits and symlink semantics differ
  * materially on macOS), not Windows-motivated the way the rest of CATEGORIES
- * is. A standalone CRLF/`autocrlf` signal was considered and rejected: even
+ * is. Later additions: `realpath` (#6002) and `canonical-tmpdir` (#5798) cover
+ * tests that normalize the macOS `/var` -> `/private/var` tmpdir symlink
+ * directly or via the shared canonicalizing test helpers. A standalone CRLF/`autocrlf` signal was considered and rejected: even
  * narrowed to `/\bCRLF\b|autocrlf/i` it still hit 143/930 files (15%) — CRLF
  * is primarily a Windows checkout concern in this codebase (ADR-1703's
  * `no-crlf-fragile-split` files it under DEFECT.WINDOWS-TEST-PORTABILITY),
