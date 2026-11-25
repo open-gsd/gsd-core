@@ -34,6 +34,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 
 const {
@@ -613,7 +614,7 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
       // config.toml (both under targetDir), so the sandbox has no effect on intent.
       const result = runNode(
         [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', targetDir, '--minimal'],
-        { env: installerEnv({ HOME: targetDir, USERPROFILE: targetDir }), timeoutMs: INSTALL_TIMEOUT_MS },
+        { env: installerEnv(isolatedEnv({ home: targetDir })), timeoutMs: INSTALL_TIMEOUT_MS },
       );
       assert.ok(result.stdout || result.stderr);
 
@@ -3030,7 +3031,7 @@ describe('#4087 regression: Codex install stages the hook helpers its hooks requ
     throwIfFailed(
       runNode([INSTALL_SCRIPT, '--codex', '--global', '--yes', '--no-sdk', '--config-dir', configDir], {
         timeoutMs: INSTALL_TIMEOUT_MS,
-        env: { ...process.env, HOME: configDir, USERPROFILE: configDir, GSD_HOME: configDir },
+        env: isolatedEnv({ home: configDir, override: { GSD_HOME: configDir } }),
       }),
       `node ${INSTALL_SCRIPT} --codex --global --config-dir ${configDir}`,
     );
@@ -3284,7 +3285,7 @@ describe('#4087 review: Windsurf install stages the hook helpers its hooks requi
     throwIfFailed(
       runNode([INSTALL_SCRIPT, '--windsurf', '--global', '--yes', '--config-dir', configDir], {
         timeoutMs: INSTALL_TIMEOUT_MS,
-        env: { ...process.env, HOME: configDir, USERPROFILE: configDir, GSD_HOME: configDir },
+        env: isolatedEnv({ home: configDir, override: { GSD_HOME: configDir } }),
       }),
       `node ${INSTALL_SCRIPT} --windsurf --global --config-dir ${configDir}`,
     );

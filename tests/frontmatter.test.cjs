@@ -2590,6 +2590,7 @@ test('extractFrontmatter handles large frontmatter blocks without body bleed', (
         '# Project State',
         '',
         '**Current Phase:** 1',
+        '**Total Plans in Phase:** 0',
         '**Status:** Ready to execute',
         '**Last Activity:** 2026-07-01',
         '',

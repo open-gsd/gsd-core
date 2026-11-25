@@ -379,6 +379,7 @@
   "gsd-core/references/planner-revision.md",
   "gsd-core/references/planner-source-audit.md",
   "gsd-core/references/planner-verify-command-grounding.md",
+  "gsd-core/references/planner-verify-command-validation.md",
   "gsd-core/references/planning-config.md",
   "gsd-core/references/prohibition-probe-fixtures/01-streak-reminder/expected.json",
   "gsd-core/references/prohibition-probe-fixtures/02-clean-utility/expected.json",

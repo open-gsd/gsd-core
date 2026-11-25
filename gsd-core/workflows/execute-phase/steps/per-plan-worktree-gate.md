@@ -119,7 +119,7 @@ After running this for the plan, the dispatch branches in `execute_waves` step 3
 
 ## Part 2 — Re-record the dispatch-isolation sentinel, scoped to THIS plan (#3045 BLOCKER 1, #5516)
 
-Run this in `execute_waves` step 3, **immediately before dispatching THIS plan**, after restoring that plan's **stored decision** from Part 1 (`plan_id` := this plan's `id`, `USE_WORKTREES_FOR_PLAN` := the value stored for it, and `PLAN_FILES` / `PLAN_DELETIONS` re-extracted from this plan's JSON). Never run it at step 2.5 and never for a plan other than the one about to dispatch: the sentinel is a single slot, so recording every plan up front leaves only the wave's last plan in it, and every earlier plan is dispatched against a record naming a different plan (the isolation guard discards it and its registry fallback denies a sequential dispatch the plan's own decision allowed, #5516).
+Run this in `execute_waves` step 3, **immediately before dispatching THIS plan**, after restoring that plan's **stored decision** from Part 1 (`plan_id` := this plan's `id`, `USE_WORKTREES_FOR_PLAN` := the value stored for it, `PLAN_FILES` / `PLAN_DELETIONS` re-extracted from this plan's JSON, and `_RENEW_HELD` := the value the "Resolve ISOLATION" block set, which its held warning prints as `_RENEW_HELD=<ms>`; empty when no hold was followed). Never run it at step 2.5 and never for a plan other than the one about to dispatch: the sentinel is a single slot, so recording every plan up front leaves only the wave's last plan in it, and every earlier plan is dispatched against a record naming a different plan (the isolation guard discards it and its registry fallback denies a sequential dispatch the plan's own decision allowed, #5516).
 
 The phase-level sentinel (written by the "Resolve ISOLATION" step, before any per-plan decision exists) authorizes/denies at the PHASE level. The per-plan decision can override that (submodule intersection forcing `USE_WORKTREES_FOR_PLAN=false` on an otherwise harness-worktree phase) — without a fresh, plan-scoped record at dispatch time, the isolation guard hooks would still be reading the STALE phase-level `harness-worktree` sentinel when this plan's dispatch omits the isolation kwarg (correctly, since it isn't worktree-isolated), producing a false DENY; or, symmetrically, a plan-level degrade elsewhere in the wave could leave a stale `none` sentinel that a LATER, genuinely harness-worktree plan's own dispatch could be misread against. Running it right before the dispatch keeps the sentinel always fresh and always keyed to the plan it authorizes. The record also names the plan's routed executor (`executor_type`): `dispatch-isolation` derives it itself from this plan's own `agent_hint` (`--phase`/`--plan`) under the same resolution `resolve-agent` applies, so no `EXECUTOR_TYPE` needs to be restored here and the order relative to `per-plan-executor-routing.md` does not matter (#6213):
 
@@ -129,8 +129,12 @@ if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then
   # Submodule intersection (or an inherited USE_WORKTREES=false) forces
   # sequential dispatch for this plan specifically — force the resolver's
   # single write path to record `none`, scoped to this plan, even though the
-  # phase/registry would otherwise resolve harness-worktree.
-  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation none >/dev/null 2>&1 || true
+  # phase/registry would otherwise resolve harness-worktree. When the inherited
+  # false came from a held `none`, the resolve block set `_RENEW_HELD` to that
+  # answer's `decidedAt`, and `--renew-held` keeps it so this plan's record does
+  # not restart the hold; the intersection only runs when USE_WORKTREES was not
+  # already false, so its own degrade is always a new decision.
+  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation none ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # No plan-level override — re-resolve normally, still scoped to this plan,
   # so the sentinel's `plan` field always matches the plan about to dispatch.
@@ -139,7 +143,26 @@ elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # `executorRuntime` and a null `fallback`; the orchestrator then dispatches THIS plan through the
   # orchestrator-worktree block of executor-isolation-dispatch.md (see cross-runtime-executor-dispatch.md)
   # whatever the phase-level ISOLATION is. Otherwise the plan's isolation is the host's, unchanged.
-  PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" --plan "$plan_id" 2>/dev/null) || PLAN_DISPATCH_JSON=""
+  # Read only `executorRuntime` and `fallback` from PLAN_DISPATCH: its `isolation` can be a held `none`
+  # (#4904) that the force below replaces in the record the guard enforces.
+  PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" --plan "$plan_id") || PLAN_DISPATCH_JSON=""
+  # #4904: this plan decided `true`, so an earlier `none` of its own must not stand: the plain
+  # query above holds it, and the guard would then allow a dispatch that omits the flag, past the
+  # hold's ten minutes too (an aged `none` governs its own plan). Re-record with the host's declared
+  # capability, read from `inspect-dispatch-isolation`, which no hold reaches, for a plan that goes to
+  # another runtime as well: PLAN_DISPATCH stays the plain answer, so that plan still dispatches to
+  # its runtime, and the exec read of executor-isolation-dispatch.md, which a non-`none` record does
+  # not hold, records the foreign decision. Only with a plan id: an empty one records at phase level,
+  # where the override would reach every plan of the phase. A failed read, or a host that declares
+  # `none`, keeps the plain record.
+  _PLAN_CAPABILITY=""
+  if [ -n "${plan_id:-}" ]; then
+    _PLAN_CAPABILITY=$(gsd_run query inspect-dispatch-isolation --raw 2>/dev/null) || _PLAN_CAPABILITY=""
+    [ "$_PLAN_CAPABILITY" = "none" ] && _PLAN_CAPABILITY=""
+  fi
+  if [ -n "$_PLAN_CAPABILITY" ]; then
+    gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation "$_PLAN_CAPABILITY" >/dev/null 2>&1 || true
+  fi
   printf 'PLAN_DISPATCH=%s\n' "$PLAN_DISPATCH_JSON"
 fi
 # An EMPTY value (the plan state was lost with an earlier tool call's shell) writes

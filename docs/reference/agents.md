@@ -8,7 +8,7 @@
 
 GSD uses a multi-agent architecture where thin orchestrators (workflow files) spawn specialized agents with fresh context windows. Each agent has a focused role, limited tool access, and produces specific artifacts.
 
-**Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by `tests/agent-required-reading-consistency.test.cjs`, because a mismatched pair silently disarms the enforcement clause.
+**Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by the `agent-required-reading-consistency` text contract (`scripts/static-checks/text-contracts/agent-required-reading-consistency.cjs`), because a mismatched pair silently disarms the enforcement clause.
 
 ### Agent Categories
 
@@ -178,6 +178,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Creates 2-3 atomic task plans sized for single context windows
 - Uses XML structure with `<task>` elements
 - Emits a `<fails_when>` sibling for every runnable `<automated>` verify command, naming what output constitutes failure (#3172)
+- Runs a validate-only mode (`bash -n`, `node --check`, `ast.parse`, `SET PARSEONLY ON`, `cargo metadata --no-deps`) against each authored `<automated>` body where one exists and records `[VALIDATED: …]` or `[UNVALIDATABLE: <reason>]` in the task's `<verify>` (#4586)
 - Includes `read_first` and `acceptance_criteria` sections
 - Groups plans into dependency waves
 - Applies an ordered minimum-solution check after preserving locked decisions and requirement coverage, preferring existing project behavior, standard-library or native-platform capability, and already-installed dependencies before new implementation (#4089)
@@ -260,7 +261,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | 7 | Context compliance (when CONTEXT.md exists) |
 | 7b | Scope reduction detection |
 | 7c | Architectural tier compliance (when RESEARCH.md defines a responsibility map) |
-| 8 | Nyquist compliance (when enabled) — checks 8a-8e cover automated-verify presence, feedback latency, sampling continuity and Wave 0 completeness; check 8f blocks a runnable `<automated>` command with no stated `<fails_when>` failing direction (#3172) |
+| 8 | Nyquist compliance (when enabled) — checks 8a-8e cover automated-verify presence, feedback latency, sampling continuity and Wave 0 completeness; check 8f blocks a runnable `<automated>` command with no stated `<fails_when>` failing direction (#3172); check 8g warns on a runnable `<automated>` command with no validate-only record and blocks a record that does not hold up (#4586) |
 | 9 | Cross-plan data contracts |
 | 10 | CLAUDE.md compliance |
 | 11 | Research resolution |

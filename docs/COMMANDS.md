@@ -277,6 +277,9 @@ Cross-AI plan convergence loop — replan with review feedback until no HIGH con
 | Reviewer flags | No | Pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
 | `--all` | No | Run every configured reviewer. Lanes are dispatched **sequentially by default**; set `review.parallel_lanes` to `true` to dispatch them concurrently within a single review pass |
 | `--max-cycles N` | No | Override cycle cap (default 3) |
+| `--on-escalation ask\|exit` | No | What happens when cycles run out without converging. `ask` (default) shows the Proceed anyway / Manual review question. `exit` asks nothing, writes no state, prints the final `CYCLE_SUMMARY` line and both concern sections, and ends with `CONVERGENCE_STATUS: <status> cycles=<n> current_high=<N> current_actionable=<M> open_conflicts=<K>` where `<status>` is `open_conflicts`, `stalled` or `max_cycles` (a converged run ends with `converged`). Any other value is refused before cycle 1. See [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md) |
+
+`/gsd-review --cycle-summary` returns the same `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` counters and concern sections for callers that assemble review and replanning themselves; the loop's counting rules live there once. Absent when no review ran.
 
 **Exit behavior:** Loop exits when `current_high` and `current_actionable` hit zero; open `## Plan-Revision Conflicts` entries in REVIEWS.md must also be zero. Stall detection warns when the total unresolved review count is not decreasing across cycles. At `--max-cycles`, the escalation gate offers proceed-or-review-manually for HIGH or actionable non-HIGH concerns, but only manual review when a plan-revision conflict is still open — "Proceed anyway" is never offered over an unresolved conflict.
 
