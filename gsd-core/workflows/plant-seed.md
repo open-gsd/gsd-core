@@ -29,15 +29,13 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-# Close mode (#4647) is tested FIRST and only when `--close` opens the arguments, so a `--dropped` value
+# Close mode (#4647) is decided FIRST, and only when `--close` opens the first line, so a `--dropped` value
 # that happens to contain "--enrich" or "--close" can neither reroute the command nor start another mode.
-GSD_FIRST_LINE=${GSD_ARGS%%$'\n'*}
-if printf '%s\n' "$GSD_FIRST_LINE" | grep -qE '^[[:space:]]*--close[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?'; then
-  # Same complete-id anchoring as --enrich (#4378 review).
-  CLOSE_MATCH=$(printf '%s\n' "$GSD_FIRST_LINE" | grep -oE '^[[:space:]]*--close[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?' | head -1)
-  CLOSE_TARGET=${CLOSE_MATCH##*[[:space:]]}
+# The complete id is captured the same way --enrich captures it (#4378 review); empty means not close mode.
+CLOSE_TARGET=$(printf '%s\n' "$GSD_ARGS" | head -n 1 | sed -nE 's/^[[:space:]]*--close[[:space:]]+(SEED-[0-9]+(-[a-zA-Z0-9]{3})?).*/\1/p')
+if [ -n "$CLOSE_TARGET" ]; then
   # Exactly one outcome flag: two or none fails closed here, before any seed file is touched.
-  CLOSE_FLAGS=$(printf '%s\n' "$GSD_ARGS" | grep -oE '(^|[[:space:]])--(promoted|built|dropped)([[:space:]]|$)' | wc -l | tr -d ' ')
+  CLOSE_FLAGS=$(printf '%s\n' "$GSD_ARGS" | grep -Eo '(^|[[:space:]])--(promoted|built|dropped)([[:space:]]|$)' | wc -l | tr -d ' ')
   if [ "$CLOSE_FLAGS" -ne 1 ]; then
     echo "ERROR: --close needs exactly one of --promoted <REQ-ID>, --built <PHASE>, --dropped \"<why>\" (found $CLOSE_FLAGS)." >&2
     exit 1
@@ -53,7 +51,9 @@ if printf '%s\n' "$GSD_FIRST_LINE" | grep -qE '^[[:space:]]*--close[[:space:]]+S
     exit 1
   fi
   # Skip to close-seed step — do not prompt for $IDEA
-elif echo "$GSD_ARGS" | grep -qE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?'; then
+fi
+if [ -z "$CLOSE_TARGET" ]; then
+if echo "$GSD_ARGS" | grep -qE '\-\-enrich[[:space:]]+SEED-[0-9]+(-[a-zA-Z0-9]{3})?'; then
   # Anchor on the flag and capture the COMPLETE id — uppercase-tolerant, since
   # the docs display SEED-YYMMDD-XXX. A leftmost `SEED-[0-9]+` would truncate
   # an uppercase or malformed suffix to its date and enrich an arbitrary
@@ -79,6 +79,7 @@ else
     # What's the idea? (one sentence)
     IDEA="<user response>"
   fi
+fi
 fi
 ```
 

@@ -449,6 +449,14 @@ List and audit captured seeds (read-only).
 Usage: `/gsd:capture --list-seeds`
 Usage: `/gsd:capture --list-seeds dormant`
 
+**`/gsd:capture --seed --close SEED-ID (--promoted REQ-ID | --built PHASE | --dropped "why")`**
+Close a seed whose idea was acted on, so it stops surfacing in `/gsd:new-milestone` and the milestone-close audit.
+
+- Exactly one outcome flag; sets `status: closed` and records `outcome_kind`, `outcome_ref` and `outcome`
+- The seed file and its reasoning are kept; `/gsd:capture --list-seeds closed` still lists it
+
+Usage: `/gsd:capture --seed --close SEED-260315-k3x --promoted PLAT-17`
+
 ### User Acceptance Testing
 
 **`/gsd:verify-work [phase]`**

@@ -279,7 +279,7 @@ describe('shipped prompts and docs for closing a seed (#4647)', () => {
     assert.ok(closeStep.includes('--files'), 'the close commit must be scoped with --files');
     // Routing: close mode is tested before enrich and only when --close opens the arguments, so a value
     // that mentions --enrich cannot reroute it. The outcome-flag count is checked mechanically in parse-idea.
-    const closeBranch = t.indexOf("grep -qE '^[[:space:]]*--close[[:space:]]+SEED-");
+    const closeBranch = t.indexOf("sed -nE 's/^[[:space:]]*--close[[:space:]]+(SEED-");
     const enrichBranch = t.indexOf("grep -qE '\\-\\-enrich[[:space:]]+SEED-");
     assert.ok(closeBranch !== -1 && enrichBranch !== -1, 'parse-idea must hold both mode branches');
     assert.ok(closeBranch < enrichBranch, 'the anchored --close branch must be tested before --enrich');
@@ -358,8 +358,7 @@ describe('plant-seed parse-idea routes close mode mechanically (#4647)', () => {
   });
   afterEach(() => { cleanup(dir); });
 
-  function route(t, args) {
-    if (process.platform === 'win32') { t.skip('bash is not guaranteed on Windows lanes'); return null; }
+  function route(args) {
     const script = parseIdeaBlock().replace('\n$ARGUMENTS\n', `\n${args}\n`)
       + '\nprintf "close=%s enrich=%s idea=%s\\n" "${CLOSE_TARGET:-}" "${ENRICH_TARGET:-}" "${IDEA:-}"\n';
     const scriptPath = path.join(dir, 'parse-idea.sh');
@@ -369,52 +368,45 @@ describe('plant-seed parse-idea routes close mode mechanically (#4647)', () => {
     return r;
   }
 
-  test('a valid close names its target and plants nothing', (t) => {
-    const r = route(t, '--close SEED-260315-k3x --promoted PLAT-17');
-    if (!r) return;
+  test('a valid close names its target and plants nothing', () => {
+    const r = route('--close SEED-260315-k3x --promoted PLAT-17');
     assert.strictEqual(r.exitCode, 0);
     assert.strictEqual(r.stdout.trim(), 'close=SEED-260315-k3x enrich= idea=');
   });
 
-  test('a close with no outcome flag fails closed', (t) => {
-    const r = route(t, '--close SEED-260315-k3x');
-    if (!r) return;
+  test('a close with no outcome flag fails closed', () => {
+    const r = route('--close SEED-260315-k3x');
     assert.strictEqual(r.exitCode, 1);
     assert.strictEqual(r.stdout.trim(), '');
   });
 
-  test('a close with two outcome flags fails closed', (t) => {
-    const r = route(t, '--close SEED-260315-k3x --built 3 --dropped "why"');
-    if (!r) return;
+  test('a close with two outcome flags fails closed', () => {
+    const r = route('--close SEED-260315-k3x --built 3 --dropped "why"');
     assert.strictEqual(r.exitCode, 1);
     assert.strictEqual(r.stdout.trim(), '');
   });
 
-  test('a close naming no seed fails closed', (t) => {
-    const r = route(t, '--close SEED-999 --built 2');
-    if (!r) return;
+  test('a close naming no seed fails closed', () => {
+    const r = route('--close SEED-999 --built 2');
     assert.strictEqual(r.exitCode, 1);
   });
 
-  test('a dropped value mentioning --enrich cannot reroute the close', (t) => {
-    const r = route(t, '--close SEED-001 --dropped "see --enrich SEED-260315-k3x"');
-    if (!r) return;
+  test('a dropped value mentioning --enrich cannot reroute the close', () => {
+    const r = route('--close SEED-001 --dropped "see --enrich SEED-260315-k3x"');
     assert.strictEqual(r.exitCode, 0);
     assert.strictEqual(r.stdout.trim(), 'close=SEED-001 enrich= idea=');
   });
 
-  test('an idea that merely mentions --close later is still an idea', (t) => {
-    const r = route(t, 'Revisit the --close SEED-001 --built 2 wording of the docs');
-    if (!r) return;
+  test('an idea that merely mentions --close later is still an idea', () => {
+    const r = route('Revisit the --close SEED-001 --built 2 wording of the docs');
     assert.strictEqual(r.exitCode, 0);
     assert.strictEqual(r.stdout.trim(), 'close= enrich= idea=Revisit the --close SEED-001 --built 2 wording of the docs');
   });
 
-  test('enrich and a plain idea keep routing as before', (t) => {
-    const enrich = route(t, '--enrich SEED-260315-k3x');
-    if (!enrich) return;
+  test('enrich and a plain idea keep routing as before', () => {
+    const enrich = route('--enrich SEED-260315-k3x');
     assert.strictEqual(enrich.stdout.trim(), 'close= enrich=SEED-260315-k3x idea=');
-    const idea = route(t, 'Add real-time collaboration');
+    const idea = route('Add real-time collaboration');
     assert.strictEqual(idea.stdout.trim(), 'close= enrich= idea=Add real-time collaboration');
   });
 });
