@@ -22,9 +22,9 @@ const { PROBE_TIMEOUT_MS } = require('./timeouts.cjs');
  */
 const REQUIRE_ENV_KEYS = ['CI', 'GSD_REQUIRE_BASH_TOOLS'];
 
-/** True when `cmd` resolves on PATH under bash. */
+/** True when `cmd` resolves on PATH under bash. `cmd` is an argument to the probe, never part of its shell text. */
 function have(cmd) {
-  const r = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+  const r = spawnSync('bash', ['-c', 'command -v -- "$1"', 'bash', cmd], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   return !r.error && r.status === 0;
 }
 

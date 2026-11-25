@@ -8,7 +8,7 @@
 
 ## Why a skip can hide a gap
 
-Tests that run a documented bash block gate on `skipUnless` in `tests/helpers/bash-probe.cjs`. With a tool missing and `CI` unset, the suite skips. A skipped `describe` registers none of its tests, so a host without `curl` and `jq` reported `skipped 0` while eleven files' bash-block tests did not run. The gsd-test tester image is such a host.
+Tests that run a documented bash block gate on `skipUnless` in `tests/helpers/bash-probe.cjs`. With a tool missing and `CI` unset, the suite skips. A skipped `describe` registers none of its tests, so a host without `curl` and `jq` reported `skipped 0` while ten files' bash-block tests did not run. The gsd-test tester image is such a host.
 
 Since #6677 each skip is announced as a named skipped test, `bash-block behavior tests skipped on this host: <tools> are required`, so it shows in the run summary (`# skipped N`) and in the reporter events.
 
@@ -26,7 +26,7 @@ A file whose tool is missing now fails at load, with the same error `CI` gives:
 curl is required under GSD_REQUIRE_BASH_TOOLS: a bash-block behavior test must run, not skip
 ```
 
-An empty value does not count: `GSD_REQUIRE_BASH_TOOLS=` leaves the skip in place.
+An empty value does not count: `GSD_REQUIRE_BASH_TOOLS=` leaves the skip in place. Any other value turns the switch on, including `0` and `false`: unset the variable to turn it off.
 
 ## Fix the host instead
 

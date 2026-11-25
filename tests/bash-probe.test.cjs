@@ -18,7 +18,6 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const probe = require('./helpers/bash-probe.cjs');
 
 const { createSkipUnless, REQUIRE_ENV_KEYS } = probe;
@@ -143,6 +142,12 @@ describe('the default skipUnless against this host', () => {
   test('a tool that does not exist does not', () => {
     assert.strictEqual(probe.have(MISSING), false);
   });
+
+  test('a name with shell syntax is looked up as a name, never run', () => {
+    // As part of the shell text this would run `true` after the lookup and answer true.
+    assert.strictEqual(probe.have(`${MISSING}; true`), false);
+    assert.strictEqual(probe.have(`${MISSING} || true`), false);
+  });
 });
 
 describe('a guarded suite, run for real (fixture under node --test)', () => {
@@ -163,9 +168,9 @@ describe('a guarded suite, run for real (fixture under node --test)', () => {
     ].join('\n'));
     const base = { PATH: process.env.PATH };
     if (process.env.SystemRoot) base.SystemRoot = process.env.SystemRoot;
+    // tap is the reporter scripts/run-tests.cjs gives its own chunks; the seam's default bound applies.
     const result = runNode(['--test', '--test-reporter=tap', file], {
       env: isolatedEnv({ home: dir, base, override: extra }),
-      timeoutMs: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(result.outcome, OUTCOME.EXITED, result.stderr);
     return result;

@@ -468,7 +468,7 @@ gates on `skipUnless('bash', 'jq')` from `tests/helpers/bash-probe.cjs`, never o
 - A tool missing anywhere else: the suite skips, and the skip is announced as a named skipped test
   (`bash-block behavior tests skipped on this host: ...`), so it shows in the run summary and the
   reporter events. A skipped `describe` registers none of its children, so without that line a
-  skip leaves no trace: the gsd-test tester image has no `curl` or `jq`, and eleven files' bash-block
+  skip leaves no trace: the gsd-test tester image has no `curl` or `jq`, and ten files' bash-block
   tests skipped on it with `skipped 0` in the verdict (#6677).
 
 A host that is not CI but must not skip sets `GSD_REQUIRE_BASH_TOOLS=1`
