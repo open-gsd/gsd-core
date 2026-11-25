@@ -2538,7 +2538,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
         esac
       }`, shell);
       assertShellExit(result, result.stderr);
-      assert.match(result.stdout, /^UI-SPEC-01 A-01_x$/m);
+      assert.match(result.stdout.replace(/\r/g, ''), /^UI-SPEC-01 A-01_x$/m);
     });
 
     for (const [input, flag] of [['--raw', '--raw'], ['-h', '-h'], ['-r', '-r'], ['[ONLY1-01,-r]', '-r'], ['REQ-', 'REQ-'], ['not-an-id', 'not-an-id'], ['-A-01', '-A-01'], ['A-01;x', 'A-01;x']]) {
