@@ -1335,8 +1335,23 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const target = path.join(f.dir, 'real-return.md');
     fs.writeFileSync(target, '## ISSUES FOUND\nreal\n');
     fs.unlinkSync(f.receipt);
-    try { fs.symlinkSync(target, f.receipt); } catch { return; /* no symlink right on this OS: the other cases ran */ }
+    try { fs.symlinkSync(target, f.receipt); } catch { t.skip('no symlink right on this OS; the other cases ran'); return; }
     assert.equal(body(f.receipt), '', 'a symlink is never read');
+  });
+
+  // Property (CLAUDE.md: a reader with a budget gets a fast-check row): any text of up to the cap that
+  // holds no NUL round-trips byte for byte, and the same text with one NUL put anywhere prints nothing.
+  test('gsd_return_body round-trips any NUL-free return up to the cap and refuses it with a NUL (#5182)', (t) => {
+    const f = fixture(t);
+    const textArb = fc.string({ unit: fc.constantFrom('a', 'Z', ' ', '#', '$', '`', "'", '"', '\\', '-', '\n'), minLength: 1, maxLength: 600 }).filter((x) => x.trim() !== '');
+    fc.assert(fc.property(textArb, fc.nat(), (text, at) => {
+      const body = `## ISSUES FOUND\n${text}x`;
+      writeReceipt(f, body);
+      const clean = runHelpers(`gsd_return_body ${q(f.receipt)}`) === body.replace(/\s+$/, '');
+      const cut = at % body.length;
+      writeReceipt(f, `${body.slice(0, cut)}\0${body.slice(cut)}`);
+      return clean && runHelpers(`gsd_return_body ${q(f.receipt)}`) === '';
+    }), { seed: 5182, numRuns: 8, examples: [['\n\n', 0], ['a', 15]] });
   });
 
   test('a half-written .part file is not a receipt (#5182)', (t) => {
@@ -1363,6 +1378,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     for (const rel of ['docs/FEATURES.md', 'docs/features/planner-stall-watchdog.md', 'CONTEXT.md']) {
       assert.ok(readFileNormalized(path.join(REPO_ROOT, rel)).includes('complete return'), `${rel} says the receipt holds the complete return`);
     }
+    assert.ok(readFileNormalized(path.join(REPO_ROOT, 'CONTEXT.md')).includes(String(BODY_CAP_BYTES)), 'CONTEXT.md states the body cap this suite pins');
   });
 
   test('AC1 wiring: all five watch sites bind {receipt}; none binds the host {outputFile}', () => {
