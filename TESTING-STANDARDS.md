@@ -494,6 +494,7 @@ Do not write into a template (`gitTemplateRoot`). A test process that changes on
 | `local/no-magic-sleep-in-tests` | `error` | `setTimeout`/`sleep`/`delay` calls inside `test()`/`it()`/`describe()` bodies |
 | `local/no-elapsed-assertion` | `error` (promoted by #3331, precondition delivered by #3314) | Assertions on `Date.now()` delta, `process.hrtime()`, `performance.now()` comparisons |
 | `local/no-adhoc-timeout-literal` | `error` | Bare numeric `timeout`/`timeoutMs` option literal in `tests/**/*.cjs` (PR #4428) |
+| `local/no-adhoc-env-isolation` | `error` (no options; allowlist retired by #6040) | A hand-written PATH split/filter or HOME/USERPROFILE env in `tests/**/*.cjs`; `tests/helpers/isolated-env.cjs` is the only route and the only exempt file |
 | `no-only-tests/no-only-tests` | `error` | `test.only`/`describe.only`/`it.only` committed to non-scratch files |
 | `no-restricted-syntax` (ban 1) | `error` | Top-level `setTimeout` in `ExpressionStatement` |
 | `no-restricted-syntax` (ban 2) | `error` | `.only` member access on `test`/`it`/`describe` (belt-and-suspenders) |
