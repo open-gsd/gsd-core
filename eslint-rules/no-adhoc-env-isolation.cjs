@@ -97,10 +97,6 @@ const rule = {
   create(context) {
     const sourceCode = context.sourceCode;
 
-    function violation(node, messageId, data) {
-      context.report({ node, messageId, data });
-    }
-
     /** True when `node` is a read of `process.env.PATH` (or `Path`). */
     function isEnvPathRead(node) {
       return (
@@ -178,7 +174,7 @@ const rule = {
           (readsEnvPath(callee.object) && !isLengthOnly(node)) ||
           (isPathDelimiter(node.arguments[0]) && isFilteredSplit(node))
         ) {
-          violation(node, 'inlinePathFilter');
+          context.report({ node, messageId: 'inlinePathFilter' });
         }
       },
 
@@ -187,7 +183,7 @@ const rule = {
           if (prop.type !== 'Property') continue;
           const key = staticName(prop.key, prop.computed);
           if (HOME_KEYS.has(key) && !isNotASandbox(prop.value, key)) {
-            violation(prop, 'adhocHomeConstruction', { key });
+            context.report({ node: prop, messageId: 'adhocHomeConstruction', data: { key } });
             return;
           }
         }
@@ -198,7 +194,7 @@ const rule = {
         if (left.type !== 'MemberExpression' || isProcessEnv(left.object)) return;
         const key = staticName(left.property, left.computed);
         if (HOME_KEYS.has(key) && !isNotASandbox(node.right, key)) {
-          violation(node, 'adhocHomeConstruction', { key });
+          context.report({ node, messageId: 'adhocHomeConstruction', data: { key } });
         }
       },
     };

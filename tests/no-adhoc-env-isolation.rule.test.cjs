@@ -483,7 +483,7 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
     });
     await assert.rejects(
       () => withAllowlist.lintText(CLEAN, { filePath: path.join(REPO_ROOT, 'tests/adhoc-env-isolation-option-6040.test.cjs') }),
-      /allowlist|Configuration for rule/,
+      /should NOT have more than 0 items/,
     );
   });
 
@@ -491,6 +491,10 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
     eslint ??= new ESLint({ cwd: REPO_ROOT });
     const config = await eslint.calculateConfigForFile(path.join(REPO_ROOT, 'tests/adhoc-env-isolation-config-6040.test.cjs'));
     assert.deepStrictEqual(config.rules[RULE_ID], [2]);
+    // An unused `eslint-disable` for this rule is caught by ESLint's unused-directive warning
+    // (lint runs with --max-warnings 0), which is what makes a rule-specific disable fail with the
+    // count above covering a used one. Pin the setting so turning it off breaks this row.
+    assert.ok(config.linterOptions.reportUnusedDisableDirectives >= 1, 'unused eslint-disable directives must be reported');
   });
 });
 
