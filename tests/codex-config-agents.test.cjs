@@ -23,6 +23,7 @@ const os = require('os');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const _fc = require('fast-check');
 const { CLAUDE_AGENT_ALIASES: _CLAUDE_AGENT_ALIASES } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
@@ -1568,7 +1569,7 @@ function runCodexInstall({ profile, preseed }) {
   // (mirrors tests/install-minimal-hooks.test.cjs Codex downgrade test).
   const result = runNode(
     [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir, `--profile=${profile}`],
-    { env: installerEnv({ HOME: configDir, USERPROFILE: configDir }), timeoutMs: INSTALL_TIMEOUT_MS },
+    { env: installerEnv(isolatedEnv({ home: configDir })), timeoutMs: INSTALL_TIMEOUT_MS },
   );
   return { configDir, result };
 }
@@ -1717,7 +1718,7 @@ describe('#2695: re-running the installer is idempotent for the three-file set',
     // Second run into the SAME config dir.
     const result2 = runNode(
       [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', first.configDir, '--profile=full'],
-      { env: installerEnv({ HOME: first.configDir, USERPROFILE: first.configDir }), timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: installerEnv(isolatedEnv({ home: first.configDir })), timeoutMs: INSTALL_TIMEOUT_MS },
     );
     assert.ok(result2.stdout || result2.stderr);
 

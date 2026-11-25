@@ -16,6 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const helpers = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -474,7 +475,7 @@ describe('#5850 the installer writes the shell key', () => {
     t.after(() => helpers.cleanup(home));
     const result = runNode(['-e', WIN32_INSTALL_PROBE], {
       cwd: path.join(__dirname, '..'),
-      env: helpers.installSpawnEnv({ HOME: home, USERPROFILE: home, PROBE_REPO: path.join(__dirname, '..'), GSD_TEST_MODE: '1' }),
+      env: helpers.installSpawnEnv(isolatedEnv({ home, override: { PROBE_REPO: path.join(__dirname, '..'), GSD_TEST_MODE: '1' } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     const line = result.stdout.split('\n').find((entry) => entry.startsWith('PROBE_JSON '));

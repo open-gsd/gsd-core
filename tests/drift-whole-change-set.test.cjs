@@ -1307,7 +1307,7 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
 // config first, then the project root's).
 describe('verify codebase-drift: workflow.drift_threshold / drift_action through the gate-config reader (#5139)', () => {
   const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
-  const { TEST_ENV_BASE } = require('./helpers.cjs');
+  const { isolatedEnv } = require('./helpers/isolated-env.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -1341,7 +1341,7 @@ describe('verify codebase-drift: workflow.drift_threshold / drift_action through
     const r = runNode([TOOLS, 'verify', 'codebase-drift'], {
       cwd: tmp,
       timeoutMs: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
+      env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' } }),
     });
     assertSeamExit(assert, r, 0, 'verify codebase-drift failed');
     return { data: JSON.parse(r.stdout), stderr: r.stderr };

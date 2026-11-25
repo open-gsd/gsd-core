@@ -24,6 +24,7 @@ const {
 } = require('./helpers.cjs');
 const { runInProcessSync } = require('../gsd-core/bin/lib/in-process-cli.cjs');
 const { runGit } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -116,7 +117,7 @@ test('the comparison masks a run directory however its path is spelled (#6333)',
 function harness(t) {
   const home = canonical(createTempDir('gsd-parity-home-'));
   t.after(() => cleanup(home));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: path.join(home, '.gsd') };
+  const env = isolatedEnv({ home, override: { GSD_HOME: path.join(home, '.gsd') } });
 
   const inFreshProject = (run) => {
     const dir = canonical(createTempDir('gsd-parity-'));
