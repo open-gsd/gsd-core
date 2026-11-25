@@ -28,6 +28,8 @@ import estimation = require('./phase-estimation.cjs');
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 config-value-resolver.cjs is an export= CommonJS module
+import configValueResolver = require('./config-value-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocator = require('./phase-locator.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
@@ -36,6 +38,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { output, error, ERROR_REASON } = io;
 const { planningDir } = planningWorkspace;
 const { CONFIG_DEFAULTS } = configLoader;
+const { resolveConfigValue } = configValueResolver;
 const { listMilestonePhaseDirs } = phaseLocator;
 const { SCOPE } = planningScopeMod;
 
@@ -86,17 +89,14 @@ function defaultBudget(): number {
  */
 export function readSmartZoneBudget(cwd: string): number {
   try {
-    const configPath = path.join(planningDir(cwd), 'config.json');
-    // Bounded read (#5759): null (absent) and any throw (FIFO, device, oversized) keep the default.
-    const raw = configLoader.readConfigFileBounded(configPath);
-    if (raw === null) return defaultBudget();
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed !== null && typeof parsed === 'object') {
-      const workflow = (parsed as Record<string, unknown>)['workflow'];
-      if (workflow !== null && typeof workflow === 'object') {
-        const value = (workflow as Record<string, unknown>)['smart_zone_tokens'];
-        if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
-      }
+    // #6030: the resolver owns the layers, so a budget set in the root config is honored under a
+    // workstream like any other key (the global file supplies only the loader's own key set). A
+    // quiet read: an unusable layer is simply "not set" here, as before.
+    const resolved = resolveConfigValue('workflow.smart_zone_tokens', {
+      cwd, family: 'A', quiet: true, honorGlobal: configLoader.honorsGlobalDefaults,
+    });
+    if (resolved.found && typeof resolved.value === 'number' && Number.isSafeInteger(resolved.value) && resolved.value > 0) {
+      return resolved.value;
     }
   } catch {
     // Absent, unreadable, or malformed config — the default is the answer.

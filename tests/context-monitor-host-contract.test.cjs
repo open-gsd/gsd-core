@@ -18,7 +18,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 
@@ -36,7 +37,7 @@ function install(runtime, { home, configDir }) {
     {
       encoding: 'utf-8',
       timeout: INSTALL_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home },
+      env: isolatedEnv({ home, override: { GSD_HOME: home } }),
     },
   );
   assert.equal(res.status, 0, `${runtime} install failed:\n${res.stdout}\n${res.stderr}`);

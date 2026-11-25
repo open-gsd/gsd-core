@@ -6,7 +6,7 @@
  *
  * Covers test-matrix rows 10-22 and 27 (`50-test-matrix.md`). Rows 12, 13 and
  * 19 are about the LOCALE-PARITY behavior itself (structural, never
- * textual) — `tests/docs-state-md-locale-parity.test.cjs` already owns the
+ * textual) — the `docs-state-md-locale-parity` text contract already owns the
  * real-doc regression for row 12/13 (registered in
  * scripts/docs-guard-registry.cjs); this file re-derives the same
  * structural-comparison algorithm against TEMP fixtures (never the real
@@ -244,7 +244,7 @@ describe('gen-state-md-docs.cjs CLI (#3873 rows 10-22, 27)', () => {
 
 describe('gen-state-md-docs.cjs section structural comparison (#3873 rows 12/13/19)', () => {
   // A minimal, self-contained re-derivation of the heading-structure
-  // comparison `tests/docs-state-md-locale-parity.test.cjs` uses against the
+  // comparison the `docs-state-md-locale-parity` text contract uses against the
   // real docs — exercised here against synthetic fixtures ONLY, so the
   // algorithm's structural-only guarantee is pinned independent of shipped
   // content. See that file for the real-doc regression (row 12).

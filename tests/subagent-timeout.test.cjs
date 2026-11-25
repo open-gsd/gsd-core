@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, readWorkflowCombined } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─── config key registration ─────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ describe('workflow.subagent_timeout config key (#1472)', () => {
       workflow: { subagent_timeout: 600000 }
     }, null, 2));
 
-    const result = runGsdTools('init map-codebase', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init map-codebase', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init map-codebase should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -75,7 +76,7 @@ describe('workflow.subagent_timeout config key (#1472)', () => {
     const configPath = path.join(tmpDir, '.planning', 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({}, null, 2));
 
-    const result = runGsdTools('init map-codebase', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init map-codebase', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init map-codebase should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -257,7 +258,7 @@ describe('init execute-phase context_window (#1472)', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan');
 
-    const result = runGsdTools('init execute-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init execute-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -273,7 +274,7 @@ describe('init execute-phase context_window (#1472)', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan');
 
-    const result = runGsdTools('init execute-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init execute-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);

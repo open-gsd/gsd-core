@@ -15,6 +15,7 @@ require('node:test').afterEach(() => {
 
 const helpers = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
@@ -879,9 +880,9 @@ function gsd5100RunWin32InstallProbe(t, runtime) {
   t.after(() => helpers.cleanup(home));
   const result = runNode(['-e', GSD_5100_WIN32_INSTALL_PROBE], {
     cwd: path.join(__dirname, '..'),
-    env: helpers.installSpawnEnv({
-      HOME: home,
-      USERPROFILE: home,
+    env: helpers.installSpawnEnv(isolatedEnv({
+      home,
+      override: {
       PROBE_REPO: path.join(__dirname, '..'),
       PROBE_RUNTIME: runtime,
       GSD_TEST_MODE: '1',
@@ -901,7 +902,8 @@ function gsd5100RunWin32InstallProbe(t, runtime) {
       ProgramFiles: '',
       'ProgramFiles(x86)': '',
       SystemDrive: '',
-    }),
+      },
+    })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   const marker = 'PROBE_JSON ';

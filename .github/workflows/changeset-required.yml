@@ -11,7 +11,7 @@ on:
   # the queue's temporary merge commit (base plus the queued PRs), so a queued
   # PR that edits this file runs its own version. Safety does not come from the
   # file's origin: every job or step below is skipped on that event, so nothing
-  # in this file executes there (tests/ci-merge-group-wiring.test.cjs pins it).
+  # in this file executes there (the ci-merge-group-wiring text contract pins it).
   merge_group:
     types: [checks_requested]
 
@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1
         with:
-          # Intentionally shallow — see tests/policy-lint-shallow-checkout.test.cjs.
+          # Intentionally shallow — see the policy-lint-shallow-checkout text contract.
           # Depth 50 covers >99% of PRs; a deeper merge base fails CLOSED with a
           # loud lint error, which is the accepted trade.
           fetch-depth: 50

@@ -171,6 +171,22 @@ function planningRoot(cwd: string): string {
   return path.join(cwd, '.planning');
 }
 
+/**
+ * The one place that names a project's own `config.json` (ADR-1411 Decision 5, #6032): the file the
+ * active workstream or project owns. `ws` selects a workstream the way `planningDir` does; omit it
+ * for the environment's. Readers, probes and pre-write checks take the path from here, so
+ * `local/no-adhoc-config-merge` can flag any other construction of it. This module defines it
+ * because it owns the directory half (`planningDir`); `config-loader.cts` re-exports it.
+ */
+function projectConfigPath(cwd: string, ws?: string | null): string {
+  return path.join(planningDir(cwd, ws), 'config.json');
+}
+
+/** The flat root `config.json` a workstream inherits from (the loader's second project layer). */
+function rootConfigPath(cwd: string): string {
+  return path.join(planningRoot(cwd), 'config.json');
+}
+
 type ScopedConfigValue = { present: boolean; value: unknown };
 
 const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, value: undefined });
@@ -225,10 +241,10 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  */
 function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
+    const scoped = ownConfigValue(projectConfigPath(cwd, workstream), keyPath);
     if (scoped.present) return scoped;
     if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
-      return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
+      return ownConfigValue(rootConfigPath(cwd), keyPath);
     }
   } catch {
     // Degrade to "not present" — see the contract above.
@@ -746,6 +762,8 @@ export = {
   createMemoryPointerAdapter,
   planningDir,
   planningRoot,
+  projectConfigPath,
+  rootConfigPath,
   resolveEnvWorkstream,
   resolvePhaseIdConvention,
   listAvailableWorkstreams,

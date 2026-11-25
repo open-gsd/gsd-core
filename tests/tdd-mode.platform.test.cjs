@@ -22,6 +22,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv, withIsolatedProcessState } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +51,8 @@ describe('#5276 homeSandboxEnv canary for tdd_mode defaults', () => {
     t.after(() => cleanup(homeOnlyDir));
     const homeOnly = withIsolatedProcessState(() => {
       Object.assign(process.env, homeSandboxEnv(ambientHome));
-      return runGsdTools('config-ensure-section', homeOnlyDir, { HOME: homeOnlyDir }); // #5276 HOME-only control: the leak this PR fixes
+      // #5276 HOME-only control: HOME is the project dir while USERPROFILE stays the poisoned ambient home (the leak this PR fixes)
+      return runGsdTools('config-ensure-section', homeOnlyDir, isolatedEnv({ home: homeOnlyDir, userProfile: ambientHome }));
     });
     assert.ok(homeOnly.success, `HOME-only seed failed: ${homeOnly.error}`);
     assert.strictEqual(
