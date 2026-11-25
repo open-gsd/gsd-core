@@ -142,12 +142,13 @@ Result: Creates `.planning/phases/01-foundation/01-01-PLAN.md`
 
 ### Execution
 
-**`/gsd:execute-phase <phase-number> [--wave N] [--gaps-only] [--tdd]`**
+**`/gsd:execute-phase <phase-number> [--wave N] [--gaps-only] [--tdd] [--force-mvp-gate "<reason>"]`**
 Execute all plans in a phase, or run a specific wave.
 
 - `--wave N` — execute only wave N (see *Plans within each wave* below)
 - `--gaps-only` — re-run only plans flagged as gaps by a prior verifier
 - `--tdd` — enforce test-driven order during execution
+- `--force-mvp-gate "<reason>"` — record an attributed acceptance for the phase's TDD review violations (reason required) and re-run the review
 
 - Groups plans by wave (from frontmatter), executes waves sequentially
 - Plans within each wave run in parallel via Task tool
