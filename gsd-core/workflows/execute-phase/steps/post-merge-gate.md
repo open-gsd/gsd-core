@@ -6,11 +6,12 @@ cross-plan integration failures that individual worktree self-checks cannot
 detect.
 
 **Cadence — `workflow.post_merge_gate` (#5822):** `always` (the default) runs
-both gates after every wave. `on_merge` skips both when the wave merged
-nothing: with `workflow.use_worktrees` set to `false`, `ISOLATION` is `none`,
-so every plan ran and committed on the main working tree and no worktree
-branch was merged. A merge commit at `HEAD` runs both gates whatever the
-configuration says. The decision never reads an executor's SUMMARY. Each
+both gates after every wave. `on_merge` skips both in serial mode: with
+`workflow.use_worktrees` set to `false`, `ISOLATION` is `none`, executors run
+on the main working tree, and step 5.5 merges no worktree branch. A merge
+commit at `HEAD` runs both gates whatever the configuration says. Both keys
+are read when the gate runs, so change `workflow.use_worktrees` between
+phases, not during one. The decision never reads an executor's SUMMARY. Each
 block below makes it for itself and prints a skip line naming the reason,
 so run both blocks as written.
 
@@ -25,7 +26,7 @@ POST_MERGE_GATE=$(gsd_run query config-get workflow.post_merge_gate --default al
 GATE_USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 BUILD_EXIT=0
 if [ "$POST_MERGE_GATE" = "on_merge" ] && [ "$GATE_USE_WORKTREES" = "false" ] && ! git rev-parse -q --verify HEAD^2 >/dev/null 2>&1; then
-  echo "○ Post-merge build gate skipped (workflow.post_merge_gate=on_merge): serial mode (workflow.use_worktrees=false), so this wave merged no worktree branch"
+  echo "○ Post-merge build gate skipped (workflow.post_merge_gate=on_merge): workflow.use_worktrees=false (serial mode) and HEAD is not a merge commit"
 else
 # Resolve build command: project config > Xcode > Makefile > language sniff
 BUILD_CMD=$(gsd_run query config-get workflow.build_command --default "" --raw 2>/dev/null || true)
@@ -118,7 +119,7 @@ POST_MERGE_GATE=$(gsd_run query config-get workflow.post_merge_gate --default al
 GATE_USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 TEST_EXIT=0
 if [ "$POST_MERGE_GATE" = "on_merge" ] && [ "$GATE_USE_WORKTREES" = "false" ] && ! git rev-parse -q --verify HEAD^2 >/dev/null 2>&1; then
-  echo "○ Post-merge test gate skipped (workflow.post_merge_gate=on_merge): serial mode (workflow.use_worktrees=false), so this wave merged no worktree branch"
+  echo "○ Post-merge test gate skipped (workflow.post_merge_gate=on_merge): workflow.use_worktrees=false (serial mode) and HEAD is not a merge commit"
 else
 # Resolve test command: project config > Xcode > Makefile > language sniff
 TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" --raw 2>/dev/null || true)

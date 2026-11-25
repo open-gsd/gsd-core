@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempGitProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
+const conversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -25,10 +26,11 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const ROOT = path.join(__dirname, '..');
 const TOOLS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 const POST_MERGE_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'post-merge-gate.md');
+const EXECUTE_PHASE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 
 const STEP_A = '**Step A — Build gate:**';
 const STEP_B = '**Step B — Test gate:**';
-const SKIP_REASON = '(workflow.post_merge_gate=on_merge): serial mode (workflow.use_worktrees=false), so this wave merged no worktree branch';
+const SKIP_REASON = '(workflow.post_merge_gate=on_merge): workflow.use_worktrees=false (serial mode) and HEAD is not a merge commit';
 const BUILD_SKIP = `○ Post-merge build gate skipped ${SKIP_REASON}\n`;
 const TEST_SKIP = `○ Post-merge test gate skipped ${SKIP_REASON}\n`;
 
@@ -49,9 +51,12 @@ function configPath(dir) {
   return path.join(dir, '.planning', 'config.json');
 }
 
+// Writes and commits the config, so HEAD is an ordinary one-parent commit (the fixture's first commit is a root).
 function writeWorkflowConfig(dir, workflow) {
   const config = { workflow: { build_command: 'touch build.ran', test_command: 'touch test.ran', ...workflow } };
   fs.writeFileSync(configPath(dir), JSON.stringify(config, null, 2));
+  gitOrThrow(['add', '-f', '.planning/config.json'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+  gitOrThrow(['commit', '-q', '-m', 'config'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
 }
 
 // Leaves HEAD at a two-parent merge, the shape step 5.5's `--no-ff` merge of a worktree branch produces.
@@ -176,5 +181,23 @@ describe('#5822: workflow.post_merge_gate config key', () => {
       assert.match(result.error, /on_merge/, `'${bad}' error names the allowed values`);
       assert.equal(fs.readFileSync(configPath(tmpDir), 'utf8'), before, `'${bad}' must not be written`);
     }
+  });
+});
+
+describe('#5822: the gate reads workflow.use_worktrees the way execute-phase does on every runtime', () => {
+  // The installer rewrites execute-phase's use_worktrees read per runtime; the gate must take the same rewrite,
+  // or the two would disagree about serial mode on an installed copy.
+  test('each runtime stamps both gate reads exactly when it stamps the execute-phase read', () => {
+    const stamped = (text) => (text.match(/config-get workflow\.use_worktrees --default false --raw/g) || []).length;
+    const gate = fs.readFileSync(POST_MERGE_GATE, 'utf-8');
+    const executePhase = fs.readFileSync(EXECUTE_PHASE, 'utf-8');
+    let stampedRuntimes = 0;
+    for (const runtime of ['claude', ...conversion.NON_CLAUDE_RUNTIMES]) {
+      const inExecutePhase = stamped(conversion._stampNonClaudeRuntimeDefaults(executePhase, runtime));
+      const inGate = stamped(conversion._stampNonClaudeRuntimeDefaults(gate, runtime));
+      assert.equal(inGate, 2 * inExecutePhase, `${runtime}: gate ${inGate}, execute-phase ${inExecutePhase}`);
+      if (inExecutePhase > 0) stampedRuntimes += 1;
+    }
+    assert.ok(stampedRuntimes > 0, 'at least one runtime must stamp the read, or this row checks nothing');
   });
 });
