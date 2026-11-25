@@ -30,7 +30,9 @@ const shellCommandProjection = require('../gsd-core/bin/lib/shell-command-projec
 const { runCli } = require('../gsd-core/bin/gsd-tools.cjs');
 
 const { resolveProjectContext, parseGitConfig } = projectContext;
-const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
+const { homePair } = require('./helpers/isolated-env.cjs');
+
+const IDENTITY =['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false'];
 
 function git(cwd, args, env) {
   const result = runGit([...IDENTITY, ...args], { cwd, ...(env ? { env: { ...process.env, ...env } } : {}) });
@@ -43,6 +45,20 @@ function buildFixtures(t) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-git-layout-')));
   t.after(() => cleanup(root));
   const at = (...parts) => path.join(root, ...parts);
+
+  // The reader answers from the filesystem on Windows only for a repository inside this user's
+  // home (ownedByThisUser, src/project-context.cts). The fixtures are the home's contents, so the
+  // test declares that home instead of relying on os.tmpdir() sitting inside the runner's real
+  // one, which the runner's sandbox HOME/USERPROFILE (#4635) no longer guarantees.
+  const homeKeys = Object.keys(homePair(root));
+  const savedHome = Object.fromEntries(homeKeys.map((name) => [name, process.env[name]]));
+  Object.assign(process.env, homePair(root));
+  t.after(() => {
+    for (const [name, value] of Object.entries(savedHome)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
 
   fs.mkdirSync(at('main', 'sub', 'deep'), { recursive: true });
   git(at('main'), ['init', '-q']);
