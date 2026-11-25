@@ -1534,8 +1534,14 @@ describe('#6542: state prune --keep-recent validation', () => {
 
   test('--keep-recent 0 at phase 0 returns the early "nothing to prune" result', () => {
     fs.writeFileSync(statePath, ['# Session State', '', '## Decisions', '', D1, ''].join('\n'));
-    const out = JSON.parse(runGsdTools(['state', 'prune', '--keep-recent', '0'], tmpDir).output);
-    assert.deepStrictEqual(out, { pruned: false, reason: 'Only 0 phases — nothing to prune with --keep-recent 0' });
+    const before = fs.readFileSync(statePath);
+    const result = runGsdTools(['state', 'prune', '--keep-recent', '0'], tmpDir);
+    assert.strictEqual(result.exitCode, 0, result.error);
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(Object.keys(out).sort(), ['pruned', 'reason'], 'the early-return shape, not a prune result');
+    assert.strictEqual(out.pruned, false);
+    assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md byte-identical');
+    assert.strictEqual(fs.existsSync(archivePath), false, 'no archive');
   });
 
   const INVALID = [
@@ -1599,14 +1605,33 @@ describe('#6542: state prune --keep-recent validation', () => {
     });
   }
 
-  for (const value of ['0', '00', '007', '3', '9007199254740991']) {
-    test(`--keep-recent ${value} is a whole number and is accepted`, () => {
+  for (const [value, keepRecent, cutoff] of [['0', 0, 10], ['00', 0, 10], ['007', 7, 3], ['3', 3, 7]]) {
+    test(`--keep-recent ${value} is a whole number and is accepted as ${keepRecent}`, () => {
       const result = runGsdTools(['state', 'prune', '--keep-recent', value, '--dry-run'], tmpDir);
       assert.strictEqual(result.exitCode, 0, result.error);
       const out = JSON.parse(result.output);
-      assert.strictEqual(out.keep_recent ?? Number(value), Number(value));
+      assert.strictEqual(out.keep_recent, keepRecent);
+      assert.strictEqual(out.cutoff_phase, cutoff);
     });
   }
+
+  test('--keep-recent 9007199254740991 (the largest safe integer) at phase 10 is accepted and returns the early "nothing to prune" result', () => {
+    const result = runGsdTools(['state', 'prune', '--keep-recent', '9007199254740991', '--dry-run'], tmpDir);
+    assert.strictEqual(result.exitCode, 0, result.error);
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(Object.keys(out).sort(), ['pruned', 'reason'], 'the early-return shape, not a prune result');
+    assert.strictEqual(out.pruned, false);
+  });
+
+  test('--keep-recent 9007199254740991 is kept exact: one phase above it, the cutoff is phase 1', () => {
+    fs.writeFileSync(statePath, ['# Session State', '', '**Current Phase:** 9007199254740992', '', '## Decisions', '', D1, D8, ''].join('\n'));
+    const result = runGsdTools(['state', 'prune', '--keep-recent', '9007199254740991', '--dry-run'], tmpDir);
+    assert.strictEqual(result.exitCode, 0, result.error);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.keep_recent, 9007199254740991);
+    assert.strictEqual(out.cutoff_phase, 1);
+    assert.deepStrictEqual(out.sections, [{ section: 'Decisions', entries_would_archive: 1 }]);
+  });
 
   test('without --keep-recent the default is still 3', () => {
     const out = JSON.parse(runGsdTools(['state', 'prune', '--dry-run'], tmpDir).output);
