@@ -582,8 +582,11 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
     } finally {
       const dests = stagedKinds.map((item) => path.resolve(item.dest));
       const reached = recordedBeforeSync.filter((entry) => {
-        // An entry outside every destination has no pre-apply hash and is never written.
-        return dests.filter((d) => tryWithinRootLexical(entry.path, d) !== null).every((d) => finished.has(d));
+        // Recorded only when the entry is under at least one destination and every destination
+        // it is under finished. An entry under no destination (a redirect the resolver refused,
+        // which fell back to a config-dir path) is excluded here, not left to its null preHash.
+        const matching = dests.filter((d) => tryWithinRootLexical(entry.path, d) !== null);
+        return matching.length > 0 && matching.every((d) => finished.has(d));
       });
       const recorded = recordManifestFileHashesResult(layout.configDir, reached);
       if (recorded === 'conflict') {
