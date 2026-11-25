@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withHome } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withEnv, withHome } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -166,6 +166,32 @@ describe('withHome (#6639)', () => {
 
     assert.equal('USERPROFILE' in process.env, false);
     assert.equal(process.env.HOME, homeBefore);
+  });
+
+  test('calls on one context stack: the restore is to the value from before the first call, in either hook order', (t) => {
+    const names = Object.keys(homePair('x'));
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+
+    for (const order of ['forward', 'reverse']) {
+      const hooks = [];
+      const ctx = { after: (fn) => hooks.push(fn) };
+      withHome(ctx, '/h/first');
+      withHome(ctx, '/h/second');
+      withEnv(ctx, { GSD_6639_STACK_PROBE: 'on' });
+      assert.equal(process.env.HOME, '/h/second');
+      assert.equal(process.env.GSD_6639_STACK_PROBE, 'on');
+
+      for (const fn of order === 'forward' ? hooks : [...hooks].reverse()) fn();
+      assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before, order);
+      assert.equal('GSD_6639_STACK_PROBE' in process.env, false, order);
+      assert.equal(hooks.length, 1, 'one restore hook per context, however many calls');
+    }
   });
 });
 

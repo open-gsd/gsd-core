@@ -24,7 +24,7 @@ const os = require('node:os');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { withHome } = require('./helpers/isolated-env.cjs');
+const { withEnv, withHome } = require('./helpers/isolated-env.cjs');
 const { runGit } = require('./helpers/process-seam.cjs');
 const projectContext = require('../gsd-core/bin/lib/project-context.cjs');
 const shellCommandProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -38,18 +38,6 @@ function git(cwd, args, env) {
   const result = runGit([...IDENTITY, ...args], { cwd, ...(env ? { env: { ...process.env, ...env } } : {}) });
   assert.equal(result.exitCode, 0, `git ${args.join(' ')} failed in ${cwd}: ${result.stderr}`);
   return result.stdout;
-}
-
-/** Set `vars` on process.env for the life of the test `t`, then restore each (or delete it if it was unset). */
-function withEnv(t, vars) {
-  const saved = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, vars);
-  t.after(() => {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  });
 }
 
 /** One tree holding every layout. Built once: the rows only read it. */

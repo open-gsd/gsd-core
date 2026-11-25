@@ -12,7 +12,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, homePair, withEnv } = require('./helpers/isolated-env.cjs');
 const { BUILD_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
@@ -67,18 +67,9 @@ function makeHookTree(t, homeDirName) {
   return { home, configDir };
 }
 
-function withHome(t, home) {
-  const origHome = process.env.HOME;
-  const origProfile = process.env.USERPROFILE;
-  process.env.HOME = home;
-  process.env.GSD_HOME = home; // #5017: the defaults store root follows HOME
-  process.env.USERPROFILE = home;
-  t.after(() => {
-    if (origHome === undefined) delete process.env.HOME;
-    else process.env.HOME = origHome;
-    if (origProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = origProfile;
-  });
+function withHomeAndGsdHome(t, home) {
+  // #5017: the defaults store root follows HOME
+  withEnv(t, { ...homePair(home), GSD_HOME: home });
 }
 
 function makeNodeStub(t, label) {
@@ -124,7 +115,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('portable hook command resolves node when baked path is absent', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane; win32 structural coverage below')) return;
       const { home, configDir } = makeHookTree(t, 'portable-run');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const emitted = hooksSurface.buildHookCommand(configDir, 'gsd-statusline.js', {
         portableHooks: true,
         runtime: 'claude',
@@ -145,7 +136,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('plain hook command resolves node when baked path is absent', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane; win32 structural coverage below')) return;
       const { home, configDir } = makeHookTree(t, 'plain-run');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const emitted = hooksSurface.buildHookCommand(configDir, 'gsd-statusline.js', {
         runtime: 'claude',
       });
@@ -165,7 +156,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('chain prefers the baked absolute runner first', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane; win32 structural coverage below')) return;
       const { home, configDir } = makeHookTree(t, 'chain-order');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const stub = makeNodeStub(t, 'chain-order');
       const emitted = hooksSurface.buildHookCommand(configDir, 'gsd-statusline.js', {
         runtime: 'claude',
@@ -186,7 +177,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('resolver prefers its first argument', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane; win32 structural coverage below')) return;
       const { home, configDir } = makeHookTree(t, 'resolver-order');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const stub = makeNodeStub(t, 'resolver-order');
       const emitted = hooksSurface.buildHookCommand(configDir, 'gsd-statusline.js', {
         portableHooks: true,
@@ -208,7 +199,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('chain resolves with the real execPath under a minimal PATH', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane; win32 structural coverage below')) return;
       const { home, configDir } = makeHookTree(t, 'minimal-path');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const emitted = hooksSurface.buildHookCommand(configDir, 'gsd-statusline.js', {
         runtime: 'claude',
       });
@@ -226,7 +217,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
 
     test('no bare node token in any emitted hook command', (t) => {
       const { home, configDir } = makeHookTree(t, 'bare-node');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       for (const hook of MANAGED_JS_HOOKS) {
         for (const portableHooks of [false, true]) {
           const emitted = hooksSurface.buildHookCommand(configDir, hook, {
@@ -245,7 +236,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
 
     test('every managed js hook emits a resolving runner', (t) => {
       const { home, configDir } = makeHookTree(t, 'all-managed');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       for (const hook of MANAGED_JS_HOOKS) {
         const plain = hooksSurface.buildHookCommand(configDir, hook, { runtime: 'claude' });
         // #5850: Windows always gets the PowerShell runner; POSIX hosts the chain.
@@ -430,7 +421,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
   describe('unchanged surfaces (criterion 5)', () => {
     test('sh hook commands are unchanged', (t) => {
       const { home, configDir } = makeHookTree(t, 'sh-pins');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const plain = hooksSurface.buildHookCommand(configDir, 'gsd-session-state.sh', {
         runtime: 'claude',
       });
@@ -451,7 +442,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('chain embeds shell-hostile baked paths safely', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane')) return;
       const { home, configDir } = makeHookTree(t, 'hostile-path');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const hostileDir = createTempDir('gsd3662-hostile');
       const weird = path.join(hostileDir, 'sp ace$dollar');
       fs.mkdirSync(weird, { recursive: true });
@@ -478,7 +469,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('chain stays valid sh when no candidate resolves', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane')) return;
       const { home, configDir } = makeHookTree(t, 'sh-valid');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const emitted = hooksSurface.buildHookCommand(configDir, 'gsd-statusline.js', {
         runtime: 'claude',
         execPath: FOREIGN_NODE,
@@ -541,7 +532,7 @@ describe('#3662 runtime-resolving managed hook runners', () => {
     test('kimi toml hook commands resolve node at run time', (t) => {
       if (skipOnWin32(t, 'POSIX sh execution lane')) return;
       const { home, configDir } = makeHookTree(t, 'kimi-run');
-      withHome(t, home);
+      withHomeAndGsdHome(t, home);
       const block = hooksSurface.buildKimiHooksTomlBlock(configDir, {
         hookOpts: { portableHooks: false, runtime: 'kimi' },
       });

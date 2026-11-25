@@ -754,7 +754,7 @@ describe('#6355: readGitLayout', () => {
     }
 
     test('a `.git` that is a symbolic link', { skip: process.platform === 'win32' && 'needs symlink privilege' }, (t) => {
-      const root = mkHome(t);
+      const root = mkTmp(t);
       const { common } = mainAndLinked(root);
       fs.mkdirSync(path.join(root, 'work'));
       fs.symlinkSync(common, path.join(root, 'work', '.git'), 'dir');
@@ -767,7 +767,7 @@ describe('#6355: readGitLayout', () => {
     // instead of a hang.
     test('a FIFO where a file is expected is never opened', { skip: process.platform === 'win32' && 'no FIFOs' }, (t) => {
       const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
-      const root = mkHome(t);
+      const root = mkTmp(t);
       const { main, common, linked, linkedGitDir } = mainAndLinked(root);
       for (const file of [path.join(common, 'config'), path.join(linkedGitDir, 'commondir')]) {
         fs.unlinkSync(file);
@@ -822,7 +822,7 @@ describe('#6355: readGitLayout', () => {
     });
 
     test('a repository another user owns', { skip: typeof process.getuid !== 'function' && 'no uid on this platform' }, (t) => {
-      const { main } = mainAndLinked(mkHome(t));
+      const { main } = mainAndLinked(mkTmp(t));
       const mine = process.getuid();
       t.mock.method(process, 'getuid', () => mine + 1);
       assert.equal(readGitLayout(main), null);

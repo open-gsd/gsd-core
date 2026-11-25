@@ -274,10 +274,40 @@ function homePair(dir) {
   return { HOME: dir, USERPROFILE: dir };
 }
 
+// Per test context: the value each variable had before the FIRST withEnv call on that context. A
+// second call on the same context must not snapshot what the first call set, or the restore hooks
+// (run in whatever order the runner picks) would leave the first call's value behind.
+const ENV_BEFORE = new WeakMap();
+
 /**
- * Make `dir` this process's home for the life of the test `t`, then put each variable back (or
- * delete it if it was unset). The in-process counterpart of `isolatedEnv({ home })`: for a test
- * that calls the product in-process and needs `os.homedir()` to be a directory it chose.
+ * Set `vars` on process.env for the life of the test `t`, then put each variable back, or delete
+ * it if it was unset. Calls on one `t` stack: the restore is to the value from before the first.
+ * The in-process counterpart of `isolatedEnv`, for a test that calls the product in-process.
+ *
+ * @param {{ after: (fn: () => void) => void }} t node:test context (anything with `after`).
+ * @param {Record<string, string>} vars
+ */
+function withEnv(t, vars) {
+  let before = ENV_BEFORE.get(t);
+  if (!before) {
+    before = new Map();
+    ENV_BEFORE.set(t, before);
+    t.after(() => {
+      for (const [name, value] of before) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      ENV_BEFORE.delete(t);
+    });
+  }
+  for (const name of Object.keys(vars)) {
+    if (!before.has(name)) before.set(name, process.env[name]);
+  }
+  Object.assign(process.env, vars);
+}
+
+/**
+ * Make `dir` this process's home for the life of the test `t` (see withEnv).
  *
  * The runner's sandbox HOME/USERPROFILE (#4635) no longer sits above `os.tmpdir()`, and on
  * Windows the filesystem git-layout reader answers only for a repository inside the home
@@ -288,15 +318,7 @@ function homePair(dir) {
  * @param {string} dir directory to use as the home.
  */
 function withHome(t, dir) {
-  const pair = homePair(dir);
-  const saved = Object.fromEntries(Object.keys(pair).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, pair);
-  t.after(() => {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  });
+  withEnv(t, homePair(dir));
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withHome };
+module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, withEnv, withHome };
