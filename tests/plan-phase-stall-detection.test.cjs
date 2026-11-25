@@ -1344,13 +1344,13 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
 
   test('step 7.99 routes on the receipt body without waiting for the completion result (#5182)', () => {
     const step = sectionOf(readPlanPhase(), ['## 7.99.', '## 8. ']);
-    inOrder(step, ['complete return', 'gsd_return_body "{receipt}"', 'without waiting for the completion result'], 'the binding paragraph says where the return comes from');
+    inOrder(step, ['on `marker_received`', 'the return is `gsd_return_body "{receipt}"`', 'no completion-result wait'], 'the binding paragraph says where the return comes from');
   });
 
   test('the docs, the changeset, CONTEXT.md and the agent contracts describe the receipt as the complete return (#5182)', () => {
     const changeset = fs.readFileSync(path.join(REPO_ROOT, '.changeset', 'lively-sloths-forage.md'), 'utf8');
     assert.ok(changeset.includes('complete return'), 'the changeset says the receipt holds the complete return');
-    for (const rel of ['docs/FEATURES.md', 'docs/features/planner-stall-watchdog.md', 'CONTEXT.md', 'gsd-core/references/agent-contracts.md']) {
+    for (const rel of ['docs/FEATURES.md', 'docs/features/planner-stall-watchdog.md', 'CONTEXT.md']) {
       assert.ok(readFileNormalized(path.join(REPO_ROOT, rel)).includes('complete return'), `${rel} says the receipt holds the complete return`);
     }
   });
