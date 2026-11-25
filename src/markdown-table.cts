@@ -134,6 +134,19 @@ export function isDelimiterRow(cells: string[]): boolean {
 }
 
 /**
+ * True when `line` can be a table's header row: it starts with `|` and has a second `|` (whitespace around it
+ * ignored). The ONE header test: `parseMarkdownTable` takes the first such line as the header, and every writer that
+ * splices the table it parsed (`resetQuickTaskRows`, `migrateQuickTasksTable`, `pruneQuickTaskRows`) finds the header
+ * with it too, so a one-pipe prose line before the table (`| note`, a lone `|`) is prose to all of them (review of
+ * #6561). Data rows are a different test: any line starting with `|` continues the table, so a one-pipe line after
+ * the header is a ragged row, not the end of the table.
+ */
+export function isTableHeaderLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1;
+}
+
+/**
  * Parse the FIRST GFM pipe table found in `sectionText`.
  *
  * Defensive by design: never throws — every malformed shape (no table,
@@ -153,14 +166,7 @@ export function parseMarkdownTable(sectionText: string): Result<MarkdownTable> {
 
   const lines = sectionText.split(/\r?\n/);
 
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
-      headerIdx = i;
-      break;
-    }
-  }
+  const headerIdx = lines.findIndex(isTableHeaderLine);
   if (headerIdx === -1) {
     return { ok: false, reason: 'no table found' };
   }
@@ -1031,7 +1037,7 @@ export function migrateQuickTasksTable(
   // scanning for the last pipe line anywhere in the body would splice the
   // rewrite across it and silently destroy it. Only the first CONTIGUOUS run
   // of pipe lines — the table that was parsed — is replaced.
-  const firstTableLineIdx = lines.findIndex((l) => l.trim().startsWith('|'));
+  const firstTableLineIdx = lines.findIndex(isTableHeaderLine);
   let lastTableLineIdx = firstTableLineIdx;
   while (lastTableLineIdx + 1 < lines.length && lines[lastTableLineIdx + 1].trim().startsWith('|')) {
     lastTableLineIdx++;
@@ -1120,12 +1126,9 @@ export function resetQuickTaskRows(
   const eol = /\r\n/.test(section.body) ? '\r\n' : '\n';
   const lines = section.body.split(/\r?\n/);
 
-  let headerIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim().startsWith('|')) { headerIdx = i; break; }
-  }
-  // headerIdx is always found here — parseMarkdownTable already confirmed a
-  // header + delimiter row exist in this same `section.body`.
+  // The header parseMarkdownTable took (same predicate, same `section.body`), so it
+  // is always found and is followed by the delimiter row.
+  const headerIdx = lines.findIndex(isTableHeaderLine);
 
   let lastTableLineIdx = headerIdx + 1; // delimiter row, when there are zero data rows
   for (let i = headerIdx + 2; i < lines.length; i++) {
@@ -1154,7 +1157,8 @@ export function resetQuickTaskRows(
  * #6389 (`state prune --keep-recent-quick N`): keep the last `keepRecent` data rows of the Quick Tasks table (table
  * order = append order) and remove the older ones; `resetQuickTaskRows` keeps its clear-all contract. The table is
  * `appendQuickTaskRow`'s (`selectQuickTasksSection`), with its fail-loud posture and nothing modified on failure:
- * no section -> `QUICK_TASKS_SECTION_ABSENT`; not a table or a ragged row -> `quick-tasks table: ...`; an unknown
+ * no section -> `QUICK_TASKS_SECTION_ABSENT`; not a table, a ragged row, or table lines that do not match the parse
+ * -> `quick-tasks table: ...`; an unknown
  * header -> `unrecognized Quick Tasks schema (...)`; also an empty document or a `keepRecent` that is not a whole
  * number >= 0. Only the removed row lines leave the document: a row is its text plus its own `\r` (CRLF), and its
  * `\n` goes with it, except that an unterminated last line of the document goes alone so the line before keeps its
@@ -1198,19 +1202,33 @@ export function pruneQuickTaskRows(
       ? { text: stateContent.slice(start), start, end: stateContent.length, next: stateContent.length, terminated: false }
       : { text: stateContent.slice(start, nl), start, end: nl, next: nl + 1, terminated: true };
   };
+  // The header is found with parseMarkdownTable's own test (`isTableHeaderLine`), so a one-pipe prose line before the
+  // table is skipped here as it is there. The lines found are then checked against the parse: the same columns, a
+  // delimiter row of the same width and the same number of data rows. Any difference refuses the prune.
+  const mismatch = (what: string) => ({ ok: false as const, reason: `quick-tasks table: ${what} does not match the parsed table` });
   let line = lineAt(section.bodyStart);
-  while (!line.text.trim().startsWith('|')) {
-    // parseMarkdownTable found a header in this body, so the scan meets it before running out.
+  while (!isTableHeaderLine(line.text)) {
+    if (!line.terminated) return mismatch('header row');
     line = lineAt(line.next);
   }
   const header = line;
+  const headerCells = splitTableRow(header.text);
+  if (headerCells.length !== parsed.value.columns.length || headerCells.some((c, i) => c !== parsed.value.columns[i])) {
+    return mismatch('header row');
+  }
+  if (!header.terminated) return mismatch('delimiter row');
   const delimiter = lineAt(header.next);
+  const delimiterCells = splitTableRow(delimiter.text);
+  if (!delimiter.text.trim().startsWith('|') || !isDelimiterRow(delimiterCells) || delimiterCells.length !== headerCells.length) {
+    return mismatch('delimiter row');
+  }
   const rows: Line[] = [];
   let cursor = delimiter.terminated ? lineAt(delimiter.next) : null;
   while (cursor !== null && cursor.text.trim().startsWith('|')) {
     rows.push(cursor);
     cursor = cursor.terminated && cursor.next < stateContent.length ? lineAt(cursor.next) : null;
   }
+  if (rows.length !== parsed.value.rows.length) return mismatch('data row count');
 
   const moveCount = Math.max(0, rows.length - keepRecent);
   const kept = rows.length - moveCount;

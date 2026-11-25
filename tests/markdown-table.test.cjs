@@ -1706,6 +1706,19 @@ describe('resetQuickTaskRows (#2142)', () => {
     assert.ok(!result.value.content.includes('fix typo'));
   });
 
+  // Review of #6561 (Major 1): the header is the line parseMarkdownTable takes as one, never a one-pipe prose line.
+  for (const before of [['| note'], ['|'], ['| note', '']]) {
+    test(`a one-pipe line before the table (${JSON.stringify(before)}) stays, and only the data rows are cleared`, () => {
+      const head = ['# STATE', '', '### Quick Tasks Completed', '', ...before,
+        '| # | Description | Date | Commit | Directory |', '|---|-------------|------|--------|-----------|'];
+      const tail = ['', '### Blockers/Concerns', 'None'];
+      const state = [...head, '| 1 | a | 2026-01-01 | c1 | — |', '| 2 | b | 2026-01-02 | c2 | — |', ...tail].join('\n');
+      assert.deepEqual(resetQuickTaskRows(state), {
+        ok: true, value: { content: [...head, ...tail].join('\n'), cleared: 2, variant: 'no-status' },
+      });
+    });
+  }
+
   test('property: reset always clears exactly the input row count and never touches the header line', () => {
     const rowCountArb = fc.integer({ min: 0, max: 50 });
     fc.assert(
@@ -1806,6 +1819,27 @@ describe('migrateQuickTasksTable (#3730 option b)', () => {
     assert.ok(!/[^\r]\n/.test(r.value.content.split('## Quick Tasks Completed')[1] || ''),
       'no mixed EOL introduced into the section');
   });
+
+  // Review of #6561 (Major 1): the legacy table is the one parseMarkdownTable read, never a one-pipe prose line.
+  for (const before of [['| note'], ['|'], ['| note', '']]) {
+    test(`a one-pipe line before the table (${JSON.stringify(before)}) stays, and the legacy table is the one replaced`, () => {
+      const head = ['# State', '', '## Quick Tasks Completed', '', ...before];
+      const state = [...head, '| Date | Slug |', '|------|------|', '| 2026-04-17 | 260417-abc |', '', 'after'].join('\n');
+      const canonical = TABLE_SCHEMAS.QuickTasks.find((v) => v.label === 'with-status').columns;
+      assert.deepEqual(migrateQuickTasksTable(state), {
+        ok: true,
+        value: {
+          content: [...head,
+            `| ${canonical.join(' | ')} |`,
+            `| ${canonical.map((c) => '-'.repeat(Math.max(3, c.length + 2))).join(' | ')} |`,
+            '| 1 | 260417-abc | 2026-04-17 | — | — | — |', '', 'after'].join('\n'),
+          migrated: true,
+          from: ['Date', 'Slug'],
+          rows: 1,
+        },
+      });
+    });
+  }
 
   test('a migrated table is appendable (round-trip)', () => {
     const migrated = migrateQuickTasksTable(legacyState());
@@ -1992,10 +2026,10 @@ describe('pruneQuickTaskRows (#6389)', () => {
     return Array.from({ length: n }, (_, i) => `| ${from + i} | task ${from + i} | 2026-10-01 | c${from + i} | — |`);
   }
 
-  function stateWith(header, delim, rows, eol = '\n') {
+  function stateWith(header, delim, rows, eol = '\n', before = []) {
     return [
       '# STATE', '', 'Intro prose.', '',
-      '### Quick Tasks Completed', '', 'Prose before the table.', '',
+      '### Quick Tasks Completed', '', 'Prose before the table.', '', ...before,
       header, delim, ...rows, '',
       'Prose after the table.', '',
       '### Blockers/Concerns', 'None', '',
@@ -2106,6 +2140,27 @@ describe('pruneQuickTaskRows (#6389)', () => {
     }
   });
 
+  // Review of #6561 (Major 1): a line that starts with `|` but has no second `|` is prose to parseMarkdownTable,
+  // so it is prose to the prune too: the table below it is pruned and the line stays where it is.
+  for (const before of [['| note'], ['|'], ['| note', ''], ['|', ''], ['  |  ', '| also prose', '']]) {
+    test(`a one-pipe line before the table (${JSON.stringify(before)}) is not taken as its header`, () => {
+      for (const eol of ['\n', '\r\n']) {
+        const rows = rows5(4);
+        const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows, eol, before), 1);
+        assert.equal(result.ok, true);
+        const cr = eol === '\r\n' ? '\r' : '';
+        assert.deepEqual(result.value, {
+          content: stateWith(HEADER_5, DELIM_5, rows.slice(3), eol, before),
+          archived: rows.slice(0, 3).map((r) => r + cr),
+          header: HEADER_5 + cr,
+          delimiter: DELIM_5 + cr,
+          variant: 'no-status',
+          kept: 1,
+        });
+      }
+    });
+  }
+
   test('a second table later in the same section is not touched', () => {
     const tail = ['', '| Note | Value |', '|---|---|', '| keep | me |', ''];
     const state = ['### Quick Tasks Completed', '', HEADER_5, DELIM_5, ...rows5(3), ...tail].join('\n');
@@ -2148,6 +2203,7 @@ describe('pruneQuickTaskRows (#6389)', () => {
     ['a ragged row', [HEADER_5, DELIM_5, '| 1 | only | three |']],
     ['no table', ['just prose']],
     ['a missing delimiter', [HEADER_5, '| 1 | a | d | c | — |']],
+    ['a one-pipe data row', [HEADER_5, DELIM_5, '| 1 | a | d | c | — |', '| note']],
   ]) {
     test(`${label}: fails loud, never the absent sentinel, returns no content`, () => {
       const result = pruneQuickTaskRows(['### Quick Tasks Completed', '', ...body, ''].join('\n'), 0);
@@ -2175,14 +2231,18 @@ describe('pruneQuickTaskRows (#6389)', () => {
   test('property: kept + moved rows are the original rows in order, and the rest of the file is unchanged', () => {
     const cell = fc.string({ unit: fc.constantFrom('a', 'Z', '0', ' ', '-', '[', ']', 'é', '\\|'), maxLength: 8 });
     const row = fc.tuple(cell, cell).map(([a, b]) => `| ${a.trim() || 'x'} | ${b} | d | c | — |`);
-    fc.assert(fc.property(fc.array(row, { maxLength: 12 }), fc.nat(15), fc.constantFrom('\n', '\r\n'), (rows, keep, eol) => {
-      const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows, eol), keep);
-      assert.equal(result.ok, true);
-      const moved = Math.max(0, rows.length - keep);
-      const cr = eol === '\r\n' ? '\r' : '';
-      assert.deepEqual(result.value.archived, rows.slice(0, moved).map((r) => r + cr));
-      assert.equal(result.value.content, stateWith(HEADER_5, DELIM_5, rows.slice(moved), eol));
-    }), { seed: 6389 });
+    // Prose lines before the table, one-pipe lines among them (review of #6561, Major 1).
+    const proseLine = fc.constantFrom('', 'prose', '| note', '|', '  |  ', 'prose | x', '|-');
+    fc.assert(fc.property(fc.array(row, { maxLength: 12 }), fc.nat(15), fc.constantFrom('\n', '\r\n'), fc.array(proseLine, { maxLength: 3 }),
+      (rows, keep, eol, before) => {
+        const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows, eol, before), keep);
+        assert.equal(result.ok, true);
+        const moved = Math.max(0, rows.length - keep);
+        const cr = eol === '\r\n' ? '\r' : '';
+        assert.deepEqual(result.value.archived, rows.slice(0, moved).map((r) => r + cr));
+        assert.equal(result.value.header, HEADER_5 + cr);
+        assert.equal(result.value.content, stateWith(HEADER_5, DELIM_5, rows.slice(moved), eol, before));
+      }), { seed: 6389 });
   });
 });
 
