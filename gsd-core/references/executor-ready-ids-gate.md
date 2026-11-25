@@ -55,8 +55,8 @@ _mp() {
 # Path $1 is a regular non-symlink file whose parent directory is inside canonical directory $2.
 _in() {
   [ -f "$1" ] && [ ! -L "$1" ] && [ -d "$2" ] || return 1
-  _d=$(cd "${2%/}" && pwd -P) || return 1
-  _f=$(cd "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1") || return 1
+  _d=$(CDPATH= cd -P -- "${2%/}" && pwd -P) || return 1
+  _f=$(CDPATH= cd -P -- "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1") || return 1
   case "$_f" in "$_d"/*) ;; *) return 1;; esac
 }
 _bad=0; _mc=0

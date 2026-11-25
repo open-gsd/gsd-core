@@ -2499,22 +2499,64 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       assert.match(result.stderr, /CALL:requirements\.ready-ids/);
       assert.doesNotMatch(result.stderr, /CALL:requirements\.mark-complete/);
     });
-  }
-
-  for (const [input, flag] of [['--raw', '--raw'], ['-h', '-h'], ['-r', '-r'], ['[ONLY1-01,-r]', '-r'], ['REQ-', 'REQ-'], ['not-an-id', 'not-an-id']]) {
-    test(`executor rejects ${input} before calling the requirement tools`, (t) => {
+    test(`executor resolves plans/ layout when CDPATH is set under ${shell}`, (t) => {
       const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+      if (shell === 'zsh' && skipIfNoZsh(t)) return;
       const dir = makePhaseDir(tmpDir);
-      const planPath = path.join(dir, '05-01-PLAN.md');
+      const plansDir = path.join(dir, 'plans');
+      fs.mkdirSync(plansDir, { recursive: true });
+      const planPath = path.join(plansDir, 'PLAN-01.md');
       fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
       const result = runExtractedExecutorBash(tmpDir, {
-        PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
-        REQ_IDS: `ONLY1-01 ${input}`,
-      }, 'gsd_run() { echo "UNEXPECTED_REQUIREMENTS_CALL:$*" >&2; }');
+        PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: '',
+        REQ_IDS: 'ONLY1-01', CDPATH: `.:${dir}`,
+      }, `gsd_run() {
+        case "$2" in
+          requirements.ready-ids) printf '%s' '{"ready":["ONLY1-01"]}' ;;
+          requirements.mark-complete) printf '%s\\n' "$3" ;;
+          *) return 1 ;;
+        esac
+      }`, shell);
       assertShellExit(result, result.stderr);
-      assert.doesNotMatch(result.stderr, /UNEXPECTED_REQUIREMENTS_CALL/);
-      assert.ok(result.stderr.includes(`Invalid requirement ID: ${flag}`));
+      assert.match(result.stdout, /^ONLY1-01$/m);
     });
+
+    test(`executor accepts hyphenated and underscored IDs under ${shell}`, (t) => {
+      const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+      if (shell === 'zsh' && skipIfNoZsh(t)) return;
+      const dir = makePhaseDir(tmpDir);
+      const planPath = path.join(dir, '05-01-PLAN.md');
+      fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [UI-SPEC-01, A-01_x]\n---\n');
+      const result = runExtractedExecutorBash(tmpDir, {
+        PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
+        REQ_IDS: 'UI-SPEC-01 A-01_x',
+      }, `gsd_run() {
+        case "$2" in
+          requirements.ready-ids) shift 3; [ "$*" = "UI-SPEC-01 A-01_x" ] && printf '%s' '{"ready":["UI-SPEC-01","A-01_x"]}' ;;
+          requirements.mark-complete) shift 2; printf '%s\\n' "$*" ;;
+          *) return 1 ;;
+        esac
+      }`, shell);
+      assertShellExit(result, result.stderr);
+      assert.match(result.stdout, /^UI-SPEC-01 A-01_x$/m);
+    });
+
+    for (const [input, flag] of [['--raw', '--raw'], ['-h', '-h'], ['-r', '-r'], ['[ONLY1-01,-r]', '-r'], ['REQ-', 'REQ-'], ['not-an-id', 'not-an-id'], ['-A-01', '-A-01'], ['A-01;x', 'A-01;x']]) {
+      test(`executor rejects ${input} before calling the requirement tools under ${shell}`, (t) => {
+        const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+        if (shell === 'zsh' && skipIfNoZsh(t)) return;
+        const dir = makePhaseDir(tmpDir);
+        const planPath = path.join(dir, '05-01-PLAN.md');
+        fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
+        const result = runExtractedExecutorBash(tmpDir, {
+          PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
+          REQ_IDS: `ONLY1-01 ${input}`,
+        }, 'gsd_run() { echo "UNEXPECTED_REQUIREMENTS_CALL:$*" >&2; }', shell);
+        assertShellExit(result, result.stderr);
+        assert.doesNotMatch(result.stderr, /UNEXPECTED_REQUIREMENTS_CALL/);
+        assert.ok(result.stderr.includes(`Invalid requirement ID: ${flag}`));
+      });
+    }
   }
 
   test('negative control: preset PLAN_PATH with missing or empty plan frontmatter fails closed (#4944)', (t) => {
