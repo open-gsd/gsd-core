@@ -491,6 +491,9 @@ const QUICK_BATCH_MODES: readonly string[] = Object.freeze(['research', 'validat
 /** The one `options` key core interprets; failures about it carry this as `field`. */
 const MODES_FIELD = 'options.modes';
 
+/** The field a failure about the shape of `options` itself names. */
+const OPTIONS_FIELD = 'options';
+
 /** A failure that names the field it is about, so `--json-errors` callers get it typed. */
 type FieldFailure = { ok: false; reason: string; field: string; [extra: string]: unknown };
 
@@ -575,6 +578,14 @@ function createBatch(
 ): Result<{ batchId: string; manifestPath: string; manifest: QuickBatchManifest }> | FieldFailure {
   if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
     return { ok: false, reason: 'createBatch requires at least one item' };
+  }
+  // The loader (`validateBatchSchema`) accepts only an object `options`, so any
+  // other value is refused here, before ids are allocated or BATCH.json is
+  // written. No options (undefined or null) is stored as `{}`.
+  const batchOptions: unknown = options.batchOptions;
+  if (batchOptions !== undefined && batchOptions !== null
+    && (typeof batchOptions !== 'object' || Array.isArray(batchOptions))) {
+    return { ok: false, reason: 'options must be a JSON object', field: OPTIONS_FIELD };
   }
   // #6532: an invalid `options.modes` is refused before anything is written.
   if (hasModes(options.batchOptions)) {
