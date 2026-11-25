@@ -211,10 +211,12 @@ node gsd-tools.cjs state prune --keep-recent-quick N [--keep-recent K] [--dry-ru
   cutoff. A row keeps its own bytes, including the `\r` of a CRLF line; the archive separates lines with `\n`.
 - **Crash safety.** The archive is written first, then STATE.md; a failed STATE.md write puts the archive back. A run
   killed between the two writes leaves the entries in both files, and a retry recognizes the archive's last block by
-  its content: with the same options it archives nothing twice (rows that became due since are added to that same
-  block, so one interrupted run stays one block); with options that complete the interrupted run (a larger phase
-  cutoff, or a smaller N, whose prune equals that block exactly) it finishes that run; with any other options it
-  appends its whole prune, so rows may then appear twice but none is lost.
+  its content: with the same options it archives nothing twice (rows and entries that became due since are added to
+  that same block, so one interrupted run stays one block; the block keeps its date and its heading records the
+  cutoff it now covers). A retry with the same option set that prunes less than the interrupted run, in no part more
+  and in at least one part less (a smaller phase cutoff, that is a larger `--keep-recent`, or a larger N), finishes
+  the interrupted run at its options when the prune at those options equals that block exactly, and reports them;
+  with any other options it appends its whole prune, so rows may then appear twice but none is lost.
 - **Refusals (exit 1, nothing written).** `--keep-recent-quick` refuses while any
   `.planning/quick-batches/*/BATCH.json` has an item that is not `complete`, or whose manifest cannot be read
   (`quick_batch_unfinished`), because a resumed batch treats a missing row as "not yet run"; and when the Quick Tasks
