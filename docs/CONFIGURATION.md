@@ -276,6 +276,7 @@ derived from the shipped agent declaration.
 | `ref_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Ref search API availability. When unset, GSD checks for `REF_API_KEY` env var or `$GSD_HOME/.gsd/ref_api_key` file |
 | `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `$GSD_HOME/.gsd/perplexity_api_key` file |
 | `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `$GSD_HOME/.gsd/jina_api_key` file when an explicit override is needed |
+| `serply_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Serply search availability. When unset, GSD checks for `SERPLY_API_KEY` env var or `$GSD_HOME/.gsd/serply_api_key` file. Off unless a key is present or you set it to `true`, so nothing is sent to Serply by default. Research calls go through the Serply MCP server registered as `serply` (`mcp__serply__google_search`; [setup](https://github.com/serply-inc/mcp)) |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
 ### Custom phase directories
@@ -343,6 +344,7 @@ API key fields accept a string value (the key itself). They can also be set to t
 | `ref_search` | string \| boolean \| null | `null` | Ref search API key used in the docs-discovery waterfall. Masked in display |
 | `perplexity` | string \| boolean \| null | `null` | Perplexity API key used in the web-discovery waterfall. Masked in display |
 | `jina` | string \| boolean \| null | `null` | Jina API key (docs / scrape fallback). Masked in display |
+| `serply_search` | string \| boolean \| null | `null` | Serply API key used in the web-discovery waterfall |
 
 **Masking convention (`gsd-core/bin/lib/secrets.cjs`):** keys 8+ characters render as `****<last-4>`; shorter keys render as `****`; `null`/empty renders as `(unset)`. Plaintext is written as-is to `.planning/config.json` — that file is the security boundary — but the CLI, confirmation tables, logs, and `AskUserQuestion` descriptions never display the plaintext. This applies to the `config-set` command output itself: `config-set brave_search <key>` returns a JSON payload with the value masked.
 
@@ -1149,6 +1151,8 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 ### MemPalace Settings
 
 MemPalace is an opt-in, default-resilient memory capability. Every hook is `onError: skip` — a missing or unreachable MemPalace installation never halts or fails the loop. Enable with `mempalace.enabled: true` after installing MemPalace (`pip install mempalace`).
+
+The shipped `gsd-mempalace-curator` agent carries the tool grant `mcp__mempalace__*`: MemPalace's MCP server registers under the name `mempalace`, and the grant follows that registration, so on tool-allowlist runtimes the curator can call the `mempalace_*` MCP tools its instructions name. When the server is unreachable the agent falls back to the `mempalace` CLI, and every capability hook stays `onError: skip` — a missing MemPalace never fails `ship:post`. The `agent_tools` override path (above) keeps working for per-host adjustments.
 
 `mempalace.enabled` is the **master gate**: all five loop hooks (discuss, plan, execute-wave, verify, ship) and both curator contributions are gated on this key. When it is `false` (the default), nothing fires and the GSD loop is byte-for-byte unchanged. The remaining keys only refine behavior when `mempalace.enabled` is `true`; they are honored at runtime by the skills, curator, and fragments — they do not add independent hook gating.
 

@@ -6,10 +6,10 @@
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('#2840 — runtime from defaults.json must not poison project config', () => {
   let tmpDir;

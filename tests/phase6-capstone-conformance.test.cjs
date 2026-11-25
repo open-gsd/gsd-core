@@ -235,8 +235,11 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
     // and a same-session conflict record never closed on resolution). Same rationale as #3771:
     // conflict-record persistence is core planner control flow, not an un-extracted
     // optional feature.
+    //
+    // #6451: the execute-phase.md ceiling was raised from 93600 to accommodate the --force-mvp-gate parse_args
+    // entry — its footprint legitimately raises the host-loop ceiling, same rationale as #1298/#3771.
     const { lfByteCount } = require('../scripts/workflow-size.cjs');
-    const PRE_PHASE6 = { 'plan-phase.md': 98300, 'execute-phase.md': 93600 };
+    const PRE_PHASE6 = { 'plan-phase.md': 98300, 'execute-phase.md': 93700 };
     const notShrunk = [];
     for (const [file, frozen] of Object.entries(PRE_PHASE6)) {
       const now = lfByteCount(path.join(ROOT, 'gsd-core', 'workflows', file));

@@ -36,6 +36,7 @@ const {
   validateCapability,
 } = require('../gsd-core/bin/lib/capability-validator.cjs');
 const { cleanup, readFileNormalized } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -2339,15 +2340,15 @@ describe('#3714 dispatch-isolation CLI — model policy end-to-end (RED pre-fix 
         [GSD_TOOLS, 'query', 'dispatch-isolation', '--json', '--cwd-target', '/tmp/wt', '--prompt', 'do the thing'],
         {
           cwd: projectDir,
-          env: {
-            ...process.env,
-            GSD_RUNTIME: 'codex',
-            HOME: sandboxHomeDir,
-            USERPROFILE: sandboxHomeDir,
-            GSD_HOME: sandboxHomeDir,
-            [TEST_HOME_SANDBOX_MARKER]: sandboxHomeDir,
-            ...extraEnv,
-          },
+          env: isolatedEnv({
+            home: sandboxHomeDir,
+            override: {
+              GSD_RUNTIME: 'codex',
+              GSD_HOME: sandboxHomeDir,
+              [TEST_HOME_SANDBOX_MARKER]: sandboxHomeDir,
+              ...extraEnv,
+            },
+          }),
           timeoutMs: PROBE_TIMEOUT_MS,
         },
       );

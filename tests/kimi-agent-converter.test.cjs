@@ -10,6 +10,7 @@ process.env.GSD_TEST_MODE = '1';
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const { homePair } = require('./helpers/isolated-env.cjs');
 
 const {
   buildKimiAgentArtifacts,
@@ -187,6 +188,7 @@ const XDG_HOME = path.join(os.tmpdir(), 'gsd-xdg-home-test');
 const INSTALL_SCRIPT = path.join(ROOT, 'bin', 'install.js');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   getGlobalConfigDir,
@@ -224,7 +226,7 @@ describe('Kimi runtime homes', () => {
   test('default Kimi global root is recommended ~/.config/agents when no generic skills root exists', () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-home-default-'));
     try {
-      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined, HOME: tmpHome, USERPROFILE: tmpHome }, () => {
+      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined, ...homePair(tmpHome) }, () => {
         assert.strictEqual(
           getGlobalConfigDir('kimi'),
           path.join(tmpHome, '.config', 'agents'),
@@ -288,7 +290,7 @@ describe('Kimi runtime homes', () => {
   test('XDG_CONFIG_HOME does not change Kimi default root', () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-home-xdg-'));
     try {
-      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: XDG_HOME, HOME: tmpHome, USERPROFILE: tmpHome }, () => {
+      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: XDG_HOME, ...homePair(tmpHome) }, () => {
         assert.strictEqual(
           getGlobalConfigDir('kimi'),
           path.join(tmpHome, '.config', 'agents'),
@@ -312,7 +314,7 @@ describe('Kimi runtime homes', () => {
         [INSTALL_SCRIPT, '--kimi', '--global', '--no-sdk'],
         {
           cwd: tmpProject,
-          env: installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome }),
+          env: installerEnv(isolatedEnv({ home: tmpHome })),
           timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
@@ -367,7 +369,7 @@ describe('Kimi local install guard', () => {
         [INSTALL_SCRIPT, '--kimi', '--local', '--no-sdk'],
         {
           cwd: tmpProject,
-          env: installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome }),
+          env: installerEnv(isolatedEnv({ home: tmpHome })),
           timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
@@ -400,7 +402,7 @@ describe('Kimi local install guard', () => {
         [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'],
         {
           cwd: tmpProject,
-          env: installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome }),
+          env: installerEnv(isolatedEnv({ home: tmpHome })),
           timeoutMs: INSTALL_TIMEOUT_MS,
         },
       );
@@ -475,7 +477,7 @@ describe('Kimi local install guard', () => {
     const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-project-'));
     const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-config-'));
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-reinstall-home-'));
-    const env = installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome });
+    const env = installerEnv(isolatedEnv({ home: tmpHome }));
 
     try {
       const installArgs = [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'];
@@ -529,7 +531,7 @@ describe('Kimi local install guard', () => {
     const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-project-'));
     const tmpConfig = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-config-'));
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-uninstall-home-'));
-    const env = installerEnv({ HOME: tmpHome, USERPROFILE: tmpHome });
+    const env = installerEnv(isolatedEnv({ home: tmpHome }));
 
     try {
       const installArgs = [INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', tmpConfig, '--no-sdk'];

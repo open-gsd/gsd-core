@@ -330,6 +330,7 @@ Execute all plans in a phase with wave-based parallelization, or run a specific 
 | `--wave N` | No | Execute only Wave `N` in the phase |
 | `--cross-ai` | No | Delegate execution to an external AI CLI (uses `workflow.cross_ai_command`) |
 | `--no-cross-ai` | No | Force local execution even if cross-AI is enabled in config |
+| `--force-mvp-gate "<reason>"` | No | Record an attributed acceptance for the phase's TDD review violations (reason required) and re-run the review |
 
 **Prerequisites:** Phase has PLAN.md files
 **Produces:** per-plan `{phase}-{N}-SUMMARY.md`, git commits, and `{phase}-VERIFICATION.md` when the phase is fully complete
@@ -515,7 +516,7 @@ Archive milestone, tag release.
 | Quick tasks | `.planning/quick/` | SUMMARY missing or not `complete` |
 | Threads | `.planning/threads/` | status not terminal |
 | Pending todos | `.planning/todos/pending/` | present |
-| Seeds | `.planning/seeds/` | not yet implemented |
+| Seeds | `.planning/seeds/` | status `dormant` / `active` / `triggered` (any other status, such as `closed`, is not open) |
 | UAT gaps | `*-UAT.md` | scenarios still pending |
 | Verification gaps | `*-VERIFICATION.md` | verdict `gaps_found` / `human_needed` |
 | CONTEXT questions | `*-CONTEXT.md` | questions left open |
@@ -2095,12 +2096,13 @@ Capture ideas, tasks, notes, and seeds to their appropriate destination. Default
 | `--note [text]` | Zero-friction note — append, list (`--note list`), or promote (`--note promote N`) |
 | `--backlog <description>` | Add to the backlog parking lot using 999.x numbering |
 | `--seed [idea summary]` | Capture a forward-looking idea with trigger conditions |
+| `--seed --close <SEED-ID> (--promoted <REQ-ID> \| --built <PHASE> \| --dropped "<why>")` | Close a seed and record what it became: sets `status: closed` plus `outcome_kind`, `outcome_ref` and `outcome`. Exactly one outcome flag; refuses an already-closed seed |
 | `--list` | List pending todos and select one to work on |
 | `--list-seeds [status]` | List/audit captured seeds, optionally filtered by status (read-only) |
 | `--global` | Use global scope (for note operations) |
 
 **Backlog:** 999.x numbering keeps items outside the active phase sequence; phase directories are created immediately so `/gsd-discuss-phase` and `/gsd-plan-phase` work on them.
-**Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`).
+**Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`). A seed is open while its `status` is `dormant`, `active` or `triggered`; `--seed --close` sets the one closed value, `closed`, which `/gsd-new-milestone` and `audit-open` both skip.
 
 **Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-YYMMDD-xxx-slug.md` (--seed)
 

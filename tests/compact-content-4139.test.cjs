@@ -32,10 +32,10 @@
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, cleanup, withIsolatedProcessState } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 test('#5039: compact-content config seed ignores conflicting ambient defaults', (t) => {
   const ambientHome = createTempDir('gsd-5039-compact-ambient-');

@@ -27,6 +27,7 @@ const surface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const scenarios = require('./fixtures/hook-registration/run-scenarios.cjs');
 const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -136,7 +137,7 @@ function probeRegistration({ command, file, hooksDir, root }) {
     input: PAYLOAD,
     encoding: 'utf8',
     timeout: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
-    env: { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, CLAUDE_PROJECT_DIR: root, GSD_PROBE_LOG: log },
+    env: isolatedEnv({ home: root, override: { GSD_HOME: root, CLAUDE_PROJECT_DIR: root, GSD_PROBE_LOG: log } }),
   });
   const lines = fs.existsSync(log) ? splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean) : [];
   const hit = lines.map((l) => JSON.parse(l)).find((e) => e.hook === file && String(e.payload).includes('gsd-5215'));
