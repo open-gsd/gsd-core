@@ -1950,6 +1950,47 @@ describe('workflow call sites declare --files (#2269)', () => {
     }
   });
 
+  test('#5817: --files-removed is declared scope, each list running to the next list flag', () => {
+    // routeCommit parses `--files` and `--files-removed` as two path lists, each
+    // running from its flag to the NEXT LIST FLAG (gsd-core/bin/gsd-tools.cjs,
+    // the #4253 review rule), and cmdCommit treats either non-empty list as
+    // explicit scope. The guard claimed to mirror that predicate but recognized
+    // only `--files`, so a deletion-only call — the shape #4253 made legal —
+    // would be a false offender the moment a workflow carried one.
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit plan --files-removed a.md'), true,
+      'a deletion-only call is explicit scope at runtime and must read as scoped',
+    );
+    // An empty list is not scope: the flag alone, and two adjacent empty lists,
+    // stay unscoped — same rule that keeps a bare `--files` an offender.
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files-removed'), false);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files-removed --files'), false);
+    // Each list runs to the next LIST flag: a boolean flag inside a list is
+    // skipped, not a terminator, and a repeated list flag merges — every
+    // occurrence contributes its run, and a non-empty second list scopes the
+    // call even when the first list is empty.
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit plan --files-removed --amend a.md'), true,
+      'a boolean flag inside a list must not end it',
+    );
+    assert.strictEqual(
+      hasScopedFiles('gsd_run query commit plan --files-removed --files a.md'), true,
+      'a non-empty second list scopes the call even when the first is empty',
+    );
+    // The --files readings the corpus already pins, re-pinned here so the two
+    // spellings cannot drift apart again.
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files a.md'), true);
+    assert.strictEqual(hasScopedFiles('gsd_run query commit plan --files'), false);
+    // End-to-end through the classifier the repo walk applies to every file:
+    // a document whose only invocation is deletion-only scans clean.
+    const result = scanDocument(
+      'fixtures/deletion-only.md',
+      'gsd_run query commit "docs: prune" --files-removed .planning/phases/07/07-DISCARD.md',
+    );
+    assert.strictEqual(result.scanned.length, 1, 'the invocation is scanned');
+    assert.deepEqual(result.offenders, [], 'a deletion-only call must not be an offender');
+  });
+
   test('an invocation inside an HTML comment is not executable content', () => {
     // The scan must not be hostile to documenting the bug it guards. This is
     // the shape the scan's own strip step exists for; asserted on the helper
