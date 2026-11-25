@@ -39,3 +39,24 @@ issue:
     estimated_context: "~80%"
   fix_hint: "Split into: 01 (schema + API), 02 (middleware + lib), 03 (UI components)"
 ```
+
+## Scope Reduction (Dimension 7b)
+
+**Red flags (from real incident):**
+- CONTEXT.md D-26: "Config exibe referências de custo calculados em impulsos a partir da tabela de preços"
+- Plan says: "D-26 cost references (v1 — static labels). NOT wired to billingPrecosOriginaisModel — dynamic pricing display is a future enhancement"
+- This is a BLOCKER: the planner invented "v1/v2" versioning that doesn't exist in the user's decision
+
+**Example:**
+```yaml
+issue:
+  dimension: scope_reduction
+  severity: blocker
+  required_property: "Locked decisions are delivered at full recorded scope"
+  description: "Plan reduces D-26 from 'calculated costs in impulses' to 'static hardcoded labels'"
+  plan: "03"
+  task: 1
+  decision: "D-26: Config exibe referências de custo calculados em impulsos"
+  plan_action: "static labels v1 — NOT wired to billing"
+  fix_hint: "Either implement D-26 fully (fetch from billingPrecosOriginaisModel) or return PHASE SPLIT RECOMMENDED"
+```
