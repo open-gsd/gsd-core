@@ -89,7 +89,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     const name = path.basename(DIM11_REF);
     const mentions = [];
     const eager = [];
-    for (const dir of ['agents', 'gsd-core', 'commands', 'pi/package-agents']) {
+    for (const dir of ['agents', 'gsd-core', 'commands', 'skills', 'pi/package-agents', 'pi/package-skills']) {
       for (const rel of fs.readdirSync(path.join(ROOT, dir), { recursive: true })) {
         if (!String(rel).endsWith('.md')) continue;
         const text = read(path.join(dir, String(rel)));
