@@ -54,14 +54,16 @@ consumes the real returned result and removes the receipt the same way.
 
 **The receipt is the complete return; the completion result is the fallback:** the agent
 writes its whole return to the receipt as its last tool action, atomically, so a receipt
-that exists is complete and `marker_received` means the return has arrived. Route on
+that exists is complete, so for an agent that writes its complete return `marker_received` means the return has arrived. Route on
 `gsd_return_body "{receipt}"` without waiting for the completion result; the same text is
 also the agent's final message. If the spawned agent's real completion result reaches the
 orchestrator between cycles, stop the watch and route that result's recognized marker
 exactly as the `false` path does. Precedence: whichever
 of the two ends the wait routes it. If both are present and name different markers,
 treat the return as unrecognized (9a/11a). A receipt that holds only the marker (an
-agent definition installed before the body was added) leaves
+agent definition installed before the body was added; `gsd_return_body` then prints
+just that one line, and a one-line body counts as no body for the routes that need an
+issue list, a plan count or a checkpoint question) leaves
 the body to the completion result, and a route that needs the body when neither has it
 fails closed: a receipt-routed `## ISSUES FOUND` with no issue list is
 never counted as 0 issues; use 11a and offer Retry checker before Accept. A
@@ -83,7 +85,7 @@ either: re-run this block in every fence that calls them.
 
 **Plan-checker receipt:** a checker that PASSES touches no `*-PLAN.md`, so its receipt
 is its only completion signal for this watch. The checker keeps its read-only `tools:`
-line (no `Write`; #767 Group A) and writes the one receipt line through its shell, with
+line (no `Write`; #767 Group A) and writes its receipt (its complete return) through its shell, with
 one Bash call (`agents/gsd-plan-checker.md`). A refused write is not fatal: the
 checker notes it in its return and continues.
 
