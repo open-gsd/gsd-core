@@ -7,7 +7,7 @@
 // 10-diagnosis.md); every budget row ALSO asserts the exact result, so an
 // early return cannot pass by skipping work.
 //
-// Timing-rule note (50-test-matrix.md): CLAUDE.md's clock-seam rule governs
+// Timing-rule note: CLAUDE.md's clock-seam rule governs
 // logic that reads the clock; this is a performance-boundary assertion the
 // issue's acceptance criteria demand verbatim ("finish within a fixed
 // generous budget in a regression test").
@@ -64,6 +64,11 @@ test('objective matching stays case-sensitive (#6420)', () => {
   assert.equal(parsePlanDocument('<OBJECTIVE>x</OBJECTIVE>').objective, null);
 });
 
+test('objective line ends at CR as well as LF (#6420)', () => {
+  assert.equal(parsePlanDocument('<objective>a\rb').objective, 'a');
+  assert.equal(parsePlanDocument('<objective>\r\ntext').objective, 'text');
+});
+
 // ─── oracle parity (parser ⇒ fast-check required by CLAUDE.md) ────────────────
 
 // The pre-fix regexes, kept here as reference oracles (precedent: the parse()
@@ -73,7 +78,7 @@ const SEED = 6420;
 const NUM_RUNS = 300;
 const docArb = fc
   .array(
-    fc.constantFrom('<task ', '<task>', '>', '\n', ' ', 'x', '<objective>', '</task>'),
+    fc.constantFrom('<task ', '<task>', '>', '\n', '\r', '\t', ' ', 'x', '<objective>', '</task>'),
     { minLength: 0, maxLength: 40 }
   )
   .map((tokens) => tokens.join(''));
