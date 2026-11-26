@@ -87,10 +87,7 @@ Present plan identification, wait for confirmation.
 </step>
 
 <step name="record_start_time">
-```bash
-PLAN_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-PLAN_START_EPOCH=$(date +%s)
-```
+Read and execute `gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh`: this invocation owns the start marker. A checkpoint continuation is a new executor agent whose `<completed_tasks>` tag selects `continuation` (#5212).
 </step>
 
 <step name="parse_segments">
@@ -390,21 +387,7 @@ If `NODE_REPAIR` is `false` OR repair returns ESCALATE: STOP. Present: "Verifica
 </step>
 
 <step name="record_completion_time">
-```bash
-PLAN_END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-PLAN_END_EPOCH=$(date +%s)
-
-DURATION_SEC=$(( PLAN_END_EPOCH - PLAN_START_EPOCH ))
-DURATION_MIN=$(( DURATION_SEC / 60 ))
-
-if [[ $DURATION_MIN -ge 60 ]]; then
-  HRS=$(( DURATION_MIN / 60 ))
-  MIN=$(( DURATION_MIN % 60 ))
-  DURATION="${HRS}h ${MIN}m"
-else
-  DURATION="${DURATION_MIN} min"
-fi
-```
+After verification, before SUMMARY: read and execute `gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work.
 </step>
 
 <step name="generate_user_setup">
@@ -423,7 +406,9 @@ execute-phase.md step 5.5).
 
 Create `{phase}-{plan}-SUMMARY.md` at `{phase_dir}/` (`phase_dir` from init, e.g. `{planning_root}/phases/XX-name/`). Use the template at `~/.claude/gsd-core/templates/summary.md` (or `summary.compact.md` — same `compact-content-gate.md` resolution as the USER-SETUP template above).
 
-**Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration ($DURATION), completed ($PLAN_END_TIME date).
+**Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration and completion timestamp printed by `record_completion_time`.
+
+Use `record_completion_time`'s printed `duration` verbatim in SUMMARY and the completion report; never estimate (`~` or free text). Its cached result supplies the identical state metric in a fresh shell.
 
 **Coverage block (#1602):** Populate the `coverage:` frontmatter block — one entry per shipped deliverable (the structured form of each `## Accomplishments` bullet). For each deliverable, aggregate the task-level `<verify>` results and tests:
 - A task whose `<verify>` command passed or whose matching test passed → a `verification` entry with `kind` + `ref` (`tests/path#name`, Playwright screenshot ref, or command) + `status: pass`, and `human_judgment: false`.
@@ -445,25 +430,8 @@ handles STATE.md/ROADMAP.md updates centrally after merging worktrees to avoid
 merge conflicts).
 
 Update STATE.md using gsd_run query (or legacy gsd-tools) state mutations:
-
-```bash
-# Auto-detect parallel mode: .git is a file in worktrees, a directory in main repo
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
-
-# Skip in parallel mode — orchestrator handles STATE.md centrally
-if [ "$IS_WORKTREE" != "true" ]; then
-  # Advance plan counter (handles last-plan edge case)
-  gsd_run query state.advance-plan ${GSD_WS:+--ws=${GSD_WS##* }}
-
-  # Recalculate progress bar from disk state
-  gsd_run query state.update-progress ${GSD_WS:+--ws=${GSD_WS##* }}
-
-  # Record execution metrics
-  gsd_run query state.record-metric ${GSD_WS:+--ws=${GSD_WS##* }} \
-    --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
-    --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
-fi
-```
+Read and execute `gsd-core/workflows/execute-plan/steps/update-current-position.md`. Replace `{task_count}` and `{file_count}` with the measured completed-task and changed-file counts.
+The part validates the cached measured duration before any STATE write; a missing or malformed result stops without partial progress.
 </step>
 
 <step name="extract_decisions_and_issues">
@@ -574,6 +542,11 @@ Update only structural changes: new src/ dir → STRUCTURE.md | deps → STACK.m
 ```bash
 gsd_run query commit "" --files .planning/codebase/*.md --amend
 ```
+</step>
+
+<step name="clear_plan_timing">
+After successful close-out (including intentional metadata skips), remove the markers. Retain them on checkpoints or failures for continuation.
+Read and execute `gsd-core/workflows/execute-plan/steps/clear-plan-timing.md`.
 </step>
 
 <step name="offer_next">
