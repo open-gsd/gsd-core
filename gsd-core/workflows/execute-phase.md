@@ -743,7 +743,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
        - ${PROJECT_ROOT}/${prior_wave_summaries} (SUMMARY.md files from earlier waves in this phase — what was already built)
        ` : ''}
        - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
-       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
+       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — read each SKILL.md's frontmatter; read the full SKILL.md only for skills whose description fits this plan, or that have no description, and follow their rules during implementation)
        </required_reading>
 
        ${AGENT_SKILLS}
