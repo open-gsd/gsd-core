@@ -6195,6 +6195,7 @@ describe('#1747: new-project config emits only schema-recognized provider keys',
     'ref_search',
     'perplexity',
     'jina',
+    'serply_search',
     'keenable_search',
   ];
 

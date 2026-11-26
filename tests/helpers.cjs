@@ -9,6 +9,9 @@ const path = require('path');
 const { createFixture } = require('./fixtures/index.cjs');
 const processSeam = require('./helpers/process-seam.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+// The one owner of the HOME/USERPROFILE pair (#6639). isolated-env.cjs reads this module at call
+// time, so requiring it here at the top does not cycle.
+const { homePair } = require('./helpers/isolated-env.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -573,7 +576,7 @@ function runGsdToolsProcess(args, cwd = process.cwd(), env = {}) {
  * @returns {{HOME: string, USERPROFILE: string}}
  */
 function homeSandboxEnv(dir) {
-  return { HOME: dir, USERPROFILE: dir };
+  return homePair(dir);
 }
 
 /** Seed project config without reading defaults from the developer's home. */
@@ -1163,7 +1166,7 @@ function runNpm(args, options = {}) {
   // applied after the isolated env below (via the spread in the merge). (#131)
   const isolatedEnv = {
     ...process.env,
-    HOME: _npmIsolatedHome,
+    ...homePair(_npmIsolatedHome),
     GSD_HOME: _npmIsolatedHome, // #5017: the defaults store root follows HOME
     npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
     npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
@@ -1198,13 +1201,14 @@ function runNpm(args, options = {}) {
  * never reads from or writes to the caller's $HOME — the same guarantee
  * runNpm() already provides. (#131)
  *
- * @returns {object} env dict with HOME, npm_config_cache, npm_config_userconfig
- *   pointing into a process-scoped temp directory.
+ * @returns {object} env dict with HOME and USERPROFILE (npm resolves its home from
+ *   USERPROFILE on Windows), npm_config_cache and npm_config_userconfig pointing
+ *   into a process-scoped temp directory.
  */
 function isolatedNpmEnv() {
   return {
     ...process.env,
-    HOME: _npmIsolatedHome,
+    ...homePair(_npmIsolatedHome),
     npm_config_cache: path.join(_npmIsolatedHome, '.npm'),
     npm_config_userconfig: path.join(_npmIsolatedHome, '.npmrc'),
     npm_config_loglevel: 'error',
@@ -1500,8 +1504,7 @@ function installSpawnEnv(overrides = {}) {
   const env = {
     ...process.env,
     ...testEnvBase(),
-    HOME: home,
-    USERPROFILE: home,
+    ...homePair(home),
     [TEST_HOME_SANDBOX_MARKER]: home,
     ...overrides,
   };

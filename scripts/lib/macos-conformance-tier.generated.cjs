@@ -7,6 +7,7 @@
 module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
   "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
+  "tests/6420-plan-document-linear.test.cjs",
   "tests/active-workstream-store.unit.test.cjs",
   "tests/adr-612-bracket-phase-remove.test.cjs",
   "tests/adr-612-bracket-write-path.test.cjs",
@@ -272,6 +273,7 @@ module.exports = {
   "tests/state.platform.test.cjs",
   "tests/state.test.cjs",
   "tests/sub-repos-evaluation-scope-5867.test.cjs",
+  "tests/tdd-gate-model-overrides.test.cjs",
   "tests/text-contracts.test.cjs",
   "tests/timeout-evidence-from-ci.test.cjs",
   "tests/timeout-evidence.test.cjs",

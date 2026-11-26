@@ -42,7 +42,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-new-project`, `/gsd-new-milestone` |
 | **Parallelism** | 4 instances (stack, features, architecture, pitfalls) |
-| **Tools** | Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*, mcp__keenable__* |
+| **Tools** | Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*, mcp__serply__*, mcp__keenable__* |
 | **Model (balanced)** | Sonnet |
 | **Color** | Cyan |
 | **Produces** | `.planning/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md`, `PITFALLS.md` |
@@ -62,7 +62,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-plan-phase` |
 | **Parallelism** | 4 instances (same focus areas as project researcher) |
-| **Tools** | Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*, mcp__keenable__* |
+| **Tools** | Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*, mcp__serply__*, mcp__keenable__* |
 | **Model (balanced)** | Sonnet |
 | **Color** | Cyan |
 | **Produces** | `{phase}-RESEARCH.md` |
@@ -877,7 +877,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 |----------|-------|
 | **Spawned by** | MemPalace capability at `ship:post` (when `mempalace.enabled = true`); diary/tunnels/KG-mirror are then refined by their own toggles |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Bash, Grep, Glob |
+| **Tools** | Read, Bash, Grep, Glob, mcp__mempalace__* |
 | **Model (balanced)** | Sonnet |
 | **Produces** | Diary entry in MemPalace, wing tunnel proposals, KG provenance records |
 

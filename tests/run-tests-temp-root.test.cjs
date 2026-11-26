@@ -22,6 +22,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const RUNNER = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 
@@ -222,6 +223,153 @@ describe('#4020 — run-tests temp root', () => {
     assert.equal(r2.exitCode, 0, `second nested runner should pass: ${r2.stderr.slice(-300)}`);
     assert.ok(fs.existsSync(sibling),
       'a nested runner never sweeps the shared root — sibling fixtures survive');
+  });
+
+  describe('#4635 — the env every chunk inherits is hermetic', () => {
+    // isolatedEnv() covers the env a test hands to a CHILD. A test that calls the product
+    // in-process, or spreads process.env into a helper, reads the env the RUNNER passed down,
+    // so the runner is the one owner that can keep a developer's real config out of all of them.
+    const runner = require('../scripts/run-tests.cjs');
+    const helpers = require('./helpers.cjs');
+    const HOSTILE_KEYS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'GSD_AGENTS_DIR'];
+
+    // The state a chunk can observe, serialized to `GSD_PROBE_OUT` (probe file) or stdout (control).
+    const SNAPSHOT_SOURCE = `
+      const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+      const keys = ${JSON.stringify(HOSTILE_KEYS)};
+      const snapshot = () => ({
+        home: os.homedir(),
+        userProfile: process.env.USERPROFILE,
+        keys: Object.fromEntries(keys.map((k) => [k, process.env[k] ?? null])),
+        defaultsVisible: fs.existsSync(path.join(os.homedir(), '.gsd', 'defaults.json')),
+        gsdHome: process.env.GSD_HOME ?? null,
+        marker: process.env[${JSON.stringify(helpers.TEST_HOME_SANDBOX_MARKER)}] ?? null,
+      });
+    `;
+
+    function hostileEnv(t) {
+      const realHome = createTempDir('gsd-4635-real-home-');
+      t.after(() => cleanup(realHome));
+      fs.mkdirSync(path.join(realHome, '.gsd'));
+      fs.writeFileSync(path.join(realHome, '.gsd', 'defaults.json'), '{"agent_tools":["mcp__real__*"]}\n');
+      const ambient = Object.fromEntries(HOSTILE_KEYS.map((key) => [key, path.join(realHome, `ambient-${key}`)]));
+      return { realHome, env: isolatedEnv({ home: realHome, override: ambient }) };
+    }
+
+    test('control: a chunk started without the runner step sees the ambient config and the real home', (t) => {
+      const { realHome, env } = hostileEnv(t);
+      const r = runNode(['-e', `${SNAPSHOT_SOURCE}; process.stdout.write(JSON.stringify(snapshot()));`], {
+        timeoutMs: RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS,
+        env: { ...process.env, ...env },
+      });
+      assert.equal(r.exitCode, 0, r.stderr.slice(-300));
+      const seen = JSON.parse(r.stdout);
+      assert.equal(seen.home, realHome);
+      assert.equal(seen.defaultsVisible, true);
+      for (const key of HOSTILE_KEYS) assert.equal(seen.keys[key], env[key], `${key} is visible without the step`);
+    });
+
+    test('a real runner invocation hands its chunks no config-location variable and a sandbox home', (t) => {
+      const { realHome, env } = hostileEnv(t);
+      const sandbox = createTempDir('gsd-4635-spawn-');
+      t.after(() => cleanup(sandbox));
+      const out = path.join(sandbox, 'snapshot.json');
+      const testDir = path.join(sandbox, 'probe-tests');
+      fs.mkdirSync(testDir);
+      fs.writeFileSync(path.join(testDir, 'probe.test.cjs'), [
+        SNAPSHOT_SOURCE,
+        "require('node:test').test('probe #4635', () => {",
+        '  fs.writeFileSync(process.env.GSD_PROBE_OUT, JSON.stringify(snapshot()));',
+        '});',
+        '',
+      ].join('\n'));
+
+      const r = runNode([RUNNER], {
+        timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS,
+        env: {
+          ...nestedRunnerEnv(sandbox), ...env, TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox,
+          GSD_TEST_DIR: testDir, GSD_PROBE_OUT: out,
+        },
+      });
+      assert.equal(r.exitCode, 0, `runner should pass: ${r.stderr.slice(-400)}`);
+      const seen = JSON.parse(fs.readFileSync(out, 'utf8'));
+      for (const key of HOSTILE_KEYS) assert.equal(seen.keys[key], null, `${key} must not reach a chunk`);
+      assert.notEqual(seen.home, realHome, 'the chunk must not see the developer home');
+      assert.equal(seen.userProfile, seen.home, 'HOME and USERPROFILE name one sandbox');
+      assert.ok(path.basename(seen.home).startsWith(runner.RUN_USER_HOME_PREFIX), `sandbox home: ${seen.home}`);
+      assert.equal(seen.defaultsVisible, false, 'a real ~/.gsd/defaults.json is not visible');
+      assert.ok(seen.gsdHome && path.basename(seen.gsdHome).startsWith('gsd-test-home-'),
+        `the defaults store root is the run sandbox, not a real GSD_HOME: ${seen.gsdHome}`);
+      assert.equal(seen.marker, null,
+        'the runner leaves the real-home guard marker unset so a test that forgot sandboxHome() still fails loudly');
+    });
+
+    test('a real runner invocation leaves GSD_REQUIRE_BASH_TOOLS alone, so a host can make a missing tool fail (#6677)', (t) => {
+      const sandbox = createTempDir('gsd-6677-spawn-');
+      t.after(() => cleanup(sandbox));
+      const out = path.join(sandbox, 'switch.json');
+      const testDir = path.join(sandbox, 'probe-tests');
+      fs.mkdirSync(testDir);
+      fs.writeFileSync(path.join(testDir, 'probe.test.cjs'), [
+        "const fs = require('node:fs');",
+        "require('node:test').test('probe #6677', () => {",
+        '  fs.writeFileSync(process.env.GSD_PROBE_OUT, JSON.stringify({ value: process.env.GSD_REQUIRE_BASH_TOOLS ?? null }));',
+        '});',
+        '',
+      ].join('\n'));
+      const r = runNode([RUNNER], {
+        timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS,
+        env: {
+          ...nestedRunnerEnv(sandbox), TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox,
+          GSD_TEST_DIR: testDir, GSD_PROBE_OUT: out, GSD_REQUIRE_BASH_TOOLS: '1',
+        },
+      });
+      assert.equal(r.exitCode, 0, `runner should pass: ${r.stderr.slice(-400)}`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(out, 'utf8')), { value: '1' });
+    });
+
+    test('setupRunHermeticEnv deletes exactly the listed keys and reuses an inherited sandbox home', (t) => {
+      const root = createTempDir('gsd-4635-unit-');
+      t.after(() => cleanup(root));
+      const env = { A: '1', B: '2', KEEP: 'k', HOME: '/real', USERPROFILE: '/real' };
+      const first = runner.setupRunHermeticEnv({ env, root, keys: ['A', 'B', 'ABSENT'] });
+      assert.deepEqual(first.removed.sort(), ['A', 'B']);
+      assert.equal(env.KEEP, 'k', 'a variable outside the list is left alone');
+      assert.equal(path.dirname(first.home), root);
+      assert.ok(path.basename(first.home).startsWith(runner.RUN_USER_HOME_PREFIX));
+      assert.deepEqual([env.HOME, env.USERPROFILE], [first.home, first.home]);
+      const second = runner.setupRunHermeticEnv({ env, root, keys: ['A'] });
+      assert.equal(second.home, first.home, 'a nested runner reuses the inherited sandbox home');
+    });
+
+    test('an inherited GSD_HOME run sandbox survives the delete; any other GSD_HOME does not', (t) => {
+      const root = createTempDir('gsd-4635-gsdhome-');
+      t.after(() => cleanup(root));
+      const sandboxHome = path.join(root, 'gsd-test-home-abc');
+      const kept = { GSD_HOME: sandboxHome };
+      runner.setupRunHermeticEnv({ env: kept, root, keys: ['GSD_HOME'] });
+      assert.equal(kept.GSD_HOME, sandboxHome);
+      const dropped = { GSD_HOME: path.join(root, 'developer-gsd-home') };
+      runner.setupRunHermeticEnv({ env: dropped, root, keys: ['GSD_HOME'] });
+      assert.equal(dropped.GSD_HOME, undefined);
+    });
+
+    test('parity: the sandbox home prefix is a reserved temp prefix, so the chunk sweep never removes it', (t) => {
+      assert.ok(runner.RESERVED_TEMP_PREFIXES.includes(runner.RUN_USER_HOME_PREFIX));
+      const root = createTempDir('gsd-4635-sweep-');
+      t.after(() => cleanup(root));
+      const { home } = runner.setupRunHermeticEnv({ env: {}, root, keys: [] });
+      fs.mkdirSync(path.join(root, 'gsd-leak-fixture'));
+      runner.sweepRunTempRoot(root);
+      assert.ok(fs.existsSync(home), 'the sandbox home survives the sweep');
+      assert.ok(!fs.existsSync(path.join(root, 'gsd-leak-fixture')), 'an unreserved entry is swept');
+    });
+
+    test('the key list the runner deletes is the registry-derived list, so no hand-written copy can drift', () => {
+      for (const key of ['CODEX_HOME', 'KILO_CONFIG', 'ANTIGRAVITY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'CODEBUDDY_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'GSD_AGENTS_DIR']) {
+        assert.ok(helpers.CONFIG_LOCATION_ENV_KEYS.includes(key), `${key} is in the derived list`);
+      }
+    });
   });
 
   describe('#5688 — relative TMPDIR yields absolute temp paths', () => {
