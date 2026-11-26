@@ -179,6 +179,22 @@ describe('the value-taking global options share one refusal rule (#5933)', () =>
   // The `=` forms carry their value in the same token, so only an empty value is
   // a missing one, as for `--cwd=` and `--project-dir=`. `--ws=--x` names a
   // workstream, and an invalid name is reported as one.
+  // main() removes --raw, --cwd, --project-dir, --ws and --pick before it reads
+  // the later value flags. A value is judged on the argv as given, so a flag
+  // that was removed first can't be skipped over and the word after it taken.
+  for (const argv of [
+    ['--default', '--raw', 'config-get', 'absent.key'],
+    ['config-get', 'absent.key', '--default', '--pick', 'f'],
+    ['--pick', '--raw', 'f', 'config-get', 'absent.key'],
+    ['--ws', '--cwd', '.', 'config-get', 'absent.key'],
+    ['--project-dir', '--cwd', '.', 'config-get', 'absent.key'],
+    ['config-get', 'absent.key', '--default', '--help'],
+  ]) {
+    test(`${argv.join(' ')} is refused with the usage reason`, () => {
+      assertUsageRefusal(run(argv, tmpDir));
+    });
+  }
+
   test('--ws=--x is judged as a workstream name, like any other invalid name', () => {
     const dashed = run(['config-get', 'absent.key', '--ws=--x'], tmpDir);
     const invalid = run(['config-get', 'absent.key', '--ws=bad/name'], tmpDir);
@@ -245,14 +261,14 @@ describe('properties of the refusal rule (#5933)', () => {
   });
 
   const VALUE_FLAGS = ['--cwd', '--project-dir', '--ws', '--pick', '--default'];
-  // Other global flags are read by their own rules before these, so a value
-  // spelled like one of them is left out of the generated values.
-  const GLOBAL_TOKENS = new Set([...VALUE_FLAGS, '--raw', '--json-errors', '-h', '-?', '-v']);
+  // Another global flag as the value, too: main() removes some of them before
+  // it reaches a later value flag, which must not then take the word after it.
+  const GLOBAL_FLAG_VALUES = [...VALUE_FLAGS, '--raw', '--json-errors', '--help'];
 
-  const dashedValue = fc
-    .stringMatching(/^[a-z0-9-]{0,8}$/)
-    .map((rest) => `--${rest}`)
-    .filter((value) => !GLOBAL_TOKENS.has(value));
+  const dashedValue = fc.oneof(
+    fc.stringMatching(/^[a-z0-9-]{0,8}$/).map((rest) => `--${rest}`),
+    fc.constantFrom(...GLOBAL_FLAG_VALUES),
+  );
   // Led by a letter and not true/false/null, so the ADR 1411 parsing leaves it a
   // string and `--raw` prints it back unchanged; the table above covers the
   // values that parse to something else.
@@ -267,14 +283,16 @@ describe('properties of the refusal rule (#5933)', () => {
         fc.option(dashedValue, { nil: undefined }),
         fc.boolean(),
         (flag, value, flagFirst) => {
-          // A missing value means the flag is the last token.
+          // A missing value means the flag is the last token. Otherwise a plain
+          // word follows the value: it is what the flag would wrongly take if
+          // the value were skipped over.
           let argv;
           if (value === undefined) {
             argv = ['config-get', 'absent.key', flag];
           } else if (flagFirst) {
-            argv = [flag, value, 'config-get', 'absent.key'];
+            argv = [flag, value, 'word', 'config-get', 'absent.key'];
           } else {
-            argv = ['config-get', 'absent.key', flag, value];
+            argv = ['config-get', 'absent.key', flag, value, 'word'];
           }
           const result = runInProcess(argv, tmpDir);
           assert.notEqual(result.exitCode, 0, `argv ${JSON.stringify(argv)}`);
