@@ -3,9 +3,10 @@
 /**
  * #4696 — a type: tdd plan may run its RED gate and its GREEN/REFACTOR gates on different models.
  * The gate models are `model_overrides` entries named `<executor-type>:tdd-red` and
- * `<executor-type>:tdd-green-refactor`, resolved exactly the way execute-phase's split step resolves
- * them: `resolve-model "<type>:tdd-<gate>" --fallback-agent <type>`. There is no gate-specific resolver;
- * these tests pin the contract the workflow depends on.
+ * `<executor-type>:tdd-green-refactor`. execute-phase's split step resolves each one with
+ * `resolve-model "<key>" --fallback-agent gsd-executor` and reads the answer's `fallback_agent`: its
+ * presence means the key set nothing, so that gate uses the routed executor's own model. There is no
+ * gate-specific resolver; these tests pin the contract that step depends on.
  */
 
 const { test, describe } = require('node:test');
@@ -32,99 +33,91 @@ function setup(t, config, runtime = 'claude') {
   return root;
 }
 
-/** The model the split step would use for one gate, via the exact call the step file runs. */
-function gateModel(root, type, gateKey) {
-  const r = runGsdTools(['resolve-model', gateKey, '--fallback-agent', type, '--raw'], root);
+/**
+ * What the split step reads for one gate: the model the key sets, or null when the key set nothing
+ * (the answer carries `fallback_agent`), exactly the call the step file runs.
+ */
+function gateModel(root, gateKey) {
+  const r = runGsdTools(['resolve-model', gateKey, '--fallback-agent', EXECUTOR], root);
   assert.ok(r.success, r.error);
-  return r.output.trim();
+  const answer = JSON.parse(r.output);
+  return 'fallback_agent' in answer ? null : answer.model;
 }
 
 describe('#4696 gate-keyed model_overrides', () => {
-  test('no gate keys: both gates resolve to the executor model, so no split', (t) => {
+  test('no gate keys: neither gate sets a model', (t) => {
     const root = setup(t, { model_profile: 'balanced', model_overrides: { [EXECUTOR]: 'sonnet' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'sonnet');
-    assert.equal(gateModel(root, EXECUTOR, GREEN(EXECUTOR)), 'sonnet');
+    assert.equal(gateModel(root, RED(EXECUTOR)), null);
+    assert.equal(gateModel(root, GREEN(EXECUTOR)), null);
   });
 
-  test('the red key wins for the RED gate and the green gate falls back to the executor', (t) => {
+  test('the red key sets the RED gate only', (t) => {
     const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus', [EXECUTOR]: 'sonnet' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(root, EXECUTOR, GREEN(EXECUTOR)), 'sonnet');
+    assert.equal(gateModel(root, RED(EXECUTOR)), 'opus');
+    assert.equal(gateModel(root, GREEN(EXECUTOR)), null);
   });
 
-  test('the green key alone leaves RED on the executor model', (t) => {
+  test('the green key sets the GREEN/REFACTOR gate only', (t) => {
     const root = setup(t, { model_overrides: { [GREEN(EXECUTOR)]: 'haiku', [EXECUTOR]: 'opus' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(root, EXECUTOR, GREEN(EXECUTOR)), 'haiku');
+    assert.equal(gateModel(root, RED(EXECUTOR)), null);
+    assert.equal(gateModel(root, GREEN(EXECUTOR)), 'haiku');
   });
 
-  test('both keys set to different models resolve independently', (t) => {
-    const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus', [GREEN(EXECUTOR)]: 'haiku' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(root, EXECUTOR, GREEN(EXECUTOR)), 'haiku');
+  test('both keys resolve independently, equal or different', (t) => {
+    const distinct = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus', [GREEN(EXECUTOR)]: 'haiku' } });
+    assert.equal(gateModel(distinct, RED(EXECUTOR)), 'opus');
+    assert.equal(gateModel(distinct, GREEN(EXECUTOR)), 'haiku');
+    const same = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus', [GREEN(EXECUTOR)]: 'opus' } });
+    assert.equal(gateModel(same, RED(EXECUTOR)), gateModel(same, GREEN(EXECUTOR)));
   });
 
-  test('both keys set to the same model resolve equal', (t) => {
-    const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus', [GREEN(EXECUTOR)]: 'opus' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), gateModel(root, EXECUTOR, GREEN(EXECUTOR)));
-  });
-
-  test('a gate key beats the executor override for its own gate only', (t) => {
+  test('a gate key wins over the executor override for its own gate and leaves the other unset', (t) => {
     const root = setup(t, { model_overrides: { [EXECUTOR]: 'haiku', [RED(EXECUTOR)]: 'opus' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(root, EXECUTOR, GREEN(EXECUTOR)), 'haiku');
+    assert.equal(gateModel(root, RED(EXECUTOR)), 'opus');
+    assert.equal(gateModel(root, GREEN(EXECUTOR)), null);
   });
 
-  test('a specialist executor resolves its own gate keys and falls back to its own override', (t) => {
+  test('a specialist executor has its own gate keys', (t) => {
     const hinted = 'acme-rails-executor';
-    const root = setup(t, {
-      model_overrides: { [RED(hinted)]: 'opus', [hinted]: 'haiku', [EXECUTOR]: 'sonnet' },
-    });
-    assert.equal(gateModel(root, hinted, RED(hinted)), 'opus');
-    assert.equal(gateModel(root, hinted, GREEN(hinted)), 'haiku');
+    const root = setup(t, { model_overrides: { [RED(hinted)]: 'opus', [hinted]: 'haiku' } });
+    assert.equal(gateModel(root, RED(hinted)), 'opus');
+    assert.equal(gateModel(root, GREEN(hinted)), null);
   });
 
-  test('a runtime-keyed gate entry resolves for the active runtime', (t) => {
-    const config = { model_overrides: { [RED(EXECUTOR)]: { claude: 'opus', codex: 'gpt-6-astra' }, [EXECUTOR]: 'sonnet' } };
-    assert.equal(gateModel(setup(t, config, 'claude'), EXECUTOR, RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(setup(t, config, 'codex'), EXECUTOR, RED(EXECUTOR)), 'gpt-6-astra');
+  test('a runtime-keyed gate entry resolves for the active runtime only', (t) => {
+    const config = { model_overrides: { [RED(EXECUTOR)]: { claude: 'opus', codex: 'gpt-6-astra' } } };
+    assert.equal(gateModel(setup(t, config, 'claude'), RED(EXECUTOR)), 'opus');
+    assert.equal(gateModel(setup(t, config, 'codex'), RED(EXECUTOR)), 'gpt-6-astra');
+    const other = { model_overrides: { [RED(EXECUTOR)]: { codex: 'gpt-6-astra' } } };
+    assert.equal(gateModel(setup(t, other, 'claude'), RED(EXECUTOR)), null);
   });
 
-  test('a runtime-keyed gate entry without the active runtime falls back to the executor', (t) => {
-    const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: { codex: 'gpt-6-astra' }, [EXECUTOR]: 'sonnet' } }, 'claude');
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'sonnet');
+  test('an empty object entry sets nothing', (t) => {
+    const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: {} } });
+    assert.equal(gateModel(root, RED(EXECUTOR)), null);
   });
 
-  test('a gate entry that is not a model string falls back to the executor, never throws', (t) => {
-    for (const bad of [5, ['opus'], null, true, {}]) {
-      const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: bad, [EXECUTOR]: 'sonnet' } });
-      assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'sonnet', JSON.stringify(bad));
-    }
-  });
-
-  test('an empty or whitespace-only gate entry falls back to the executor', (t) => {
-    for (const bad of ['', '  ']) {
-      const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: bad, [EXECUTOR]: 'sonnet' } });
-      assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'sonnet', JSON.stringify(bad));
-    }
+  test('inherit is a real value for a gate', (t) => {
+    const root = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'inherit', [EXECUTOR]: 'sonnet' } });
+    assert.equal(gateModel(root, RED(EXECUTOR)), 'inherit');
   });
 
   test('the gate key is case-sensitive', (t) => {
     const root = setup(t, { model_overrides: { 'GSD-EXECUTOR:TDD-RED': 'opus', [EXECUTOR]: 'sonnet' } });
-    assert.equal(gateModel(root, EXECUTOR, RED(EXECUTOR)), 'sonnet');
+    assert.equal(gateModel(root, RED(EXECUTOR)), null);
   });
 
   test('a prototype-shaped executor type never resolves an inherited member', (t) => {
     const root = setup(t, { model_overrides: { [EXECUTOR]: 'sonnet' } });
     for (const type of ['__proto__', 'constructor', 'toString']) {
-      assert.equal(gateModel(root, EXECUTOR, RED(type)), 'sonnet', type);
+      assert.equal(gateModel(root, RED(type)), null, type);
     }
   });
 
   test('two projects with different configs do not share gate models', (t) => {
-    const a = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus', [EXECUTOR]: 'sonnet' } });
+    const a = setup(t, { model_overrides: { [RED(EXECUTOR)]: 'opus' } });
     const b = setup(t, { model_overrides: { [EXECUTOR]: 'haiku' } });
-    assert.equal(gateModel(a, EXECUTOR, RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(b, EXECUTOR, RED(EXECUTOR)), 'haiku');
+    assert.equal(gateModel(a, RED(EXECUTOR)), 'opus');
+    assert.equal(gateModel(b, RED(EXECUTOR)), null);
   });
 });

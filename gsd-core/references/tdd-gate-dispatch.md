@@ -23,8 +23,9 @@ This dispatch exists so the RED gate can run on its own model.
 
 The RED commit already exists on this branch. This dispatch runs the remaining gates.
 
-- Confirm the RED commit is in the git log first. If it is absent, halt with the "Missing RED
-  commit" rule of `references/tdd.md`. Never write the failing test yourself to make up for it.
+- Confirm the RED commit is in the git log first. If it is absent, halt and report that the RED
+  commit is missing; this dispatch does not own the RED gate. Never write the failing test yourself
+  to make up for it.
 - Never rerun or repeat the RED gate. Do not rewrite or amend the RED commit.
 - Run the GREEN gate, then the REFACTOR gate if the plan needs one, as `references/tdd.md` specifies.
 - Create `SUMMARY.md` as usual, including the `## TDD Gate Compliance` section, and treat the RED

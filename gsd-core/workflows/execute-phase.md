@@ -612,6 +612,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    Read and execute **Part 1** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md` for each plan. It extracts `PLAN_FILES` from the plan's JSON, intersects against `SUBMODULE_PATHS` (with normalization, bidirectional matching, and glob-prefix handling), and sets `USE_WORKTREES_FOR_PLAN` to `false` when the plan touches a submodule path. Append `plan_id` to a `WAVE_WORKTREE_PLANS` accumulator when `USE_WORKTREES_FOR_PLAN != false`. **Store each plan's decision** (`plan_id → USE_WORKTREES_FOR_PLAN`): the shared `USE_WORKTREES_FOR_PLAN` value is overwritten by the next plan's decision.
 
+   **TDD gate split (#4696).** Right after Part 1 for a plan, run Part 1 of `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`. A plan it marks `TDD_GATE_SPLIT=true` has `USE_WORKTREES_FOR_PLAN=false`: store that as its decision and do not append it to `WAVE_WORKTREE_PLANS`.
+
    The plan-scoped dispatch-isolation record is **not written here**. It is a single slot, so it is written in step 3, immediately before each plan's own dispatch (Part 2 of the gate, #5516).
 
    The dispatch branches in step 3 gate on both `USE_WORKTREES` and the dispatched plan's own stored `USE_WORKTREES_FOR_PLAN` (#2474).
@@ -643,7 +645,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **TDD-applicability resolution (#4266/#4272).** Run `gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md`.
 
-   **TDD gate split (#4696).** Run `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`. When it prints `TDD_GATE_SPLIT=false` (the default) dispatch as below; when `true`, that file's split dispatch replaces the single `Agent()` call.
+   **TDD gate split (#4696).** For a plan stored in step 2.5 as `TDD_GATE_SPLIT=true`, run Part 2 of `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`: its two sequential-mode dispatches replace this single `Agent()` call. Every other plan dispatches as below.
 
    **Worktree mode** (`USE_WORKTREES` and `USE_WORKTREES_FOR_PLAN` not `false`):
 
