@@ -6608,6 +6608,15 @@ describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", (
     "bash -oc errexit 'cat .env'",
     "bash -eco errexit 'cat .env'",
     "bash +c 'cat .env'",
+    // A later `-c` does not hide the cluster's before it: the shell runs the cluster's script, the `-c` is `$0`.
+    "bash -ce 'cat .env' -c",
+    "bash -xc 'cat .env' -c",
+    "bash -cx 'cat .env' -c",
+    "sh -ce 'cat .env' -c",
+    "sh -xc 'cat .env' -c",
+    "sh -cx 'cat .env' -c",
+    "echo x | xargs sh -ce 'cat .env' -c",
+    "printf .e | xargs -I{} sh -ce 'cat {}nv' -c",
     "sudo bash -c -- 'cat .env'",
     "find . -exec sh -c -- 'cat .env' \\;",
     "find . -exec bash -c -eo pipefail 'cat .env' \\;",
@@ -6650,6 +6659,7 @@ describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", (
     "bash -c -- 'claude --agent gsd-debugger -p hi'",
     "bash -c -eo pipefail 'claude --agent gsd-debugger -p hi'",
     "bash -ce 'claude --agent gsd-debugger -p hi'",
+    "bash -ce 'claude --agent gsd-debugger -p hi' -c",
   ]) {
     test(`denies a debugger spawn: ${JSON.stringify(cmd)}`, () => {
       assertBlocked(runHook(bash(cmd)), cmd, { code: 'debugger-cli-spawn', tool: 'Bash' });
@@ -6661,6 +6671,10 @@ describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", (
     "bash -c -e 'cat notes.txt'",
     "bash -c -euo pipefail 'cat notes.txt'",
     "bash -ce 'echo hi'",
+    "bash -ce 'echo hi' -c",
+    // A cluster's `o` takes the next word as an option name: bash refuses it and runs nothing.
+    "bash -co 'cat .env' -c 'echo hi'",
+    "bash -co 'cat .env'",
     "sh -c -o errexit 'echo hi'",
     "bash -c -- 'claude --agent gsd-planner -p hi'",
     "printf .n | xargs -I{} sh -c -- 'cat {}nv'",

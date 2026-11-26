@@ -4687,13 +4687,15 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
 }
 
 // The debugger spawn in the script of a shell's `-c`, read past its options as
-// scanShellInterpreter reads it (dashCScriptIndices), or null.
+// scanShellInterpreter reads it (dashCScriptIndices), at each index
+// dashCIndices gives, or null.
 function dashCScriptSpawnsDebugger(operands, depth) {
-  const cIdx = dashCIndex(operands);
-  if (cIdx === -1) return null;
-  for (const k of dashCScriptIndices(operands, cIdx)) {
-    const hit = findDebuggerCliSpawn(operands[k].text, depth + 1);
-    if (hit) return hit;
+  const cIdxs = dashCIndices(operands);
+  for (let i = 0; i < cIdxs.length; i++) {
+    for (const k of dashCScriptIndices(operands, cIdxs[i])) {
+      const hit = findDebuggerCliSpawn(operands[k].text, depth + 1);
+      if (hit) return hit;
+    }
   }
   return null;
 }
@@ -4702,7 +4704,8 @@ function dashCScriptSpawnsDebugger(operands, depth) {
 function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
   const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
   // Mode c: the script follows -c's options (dashCScriptIndices); stdin is DATA (not scanned).
-  if (cIdx !== -1) return dashCScriptReadsSecret(operands, cIdx, depth);
+  // A cluster's `-c` before it is read too (`bash -ce 'cat .env' -c`: bash runs the cluster's script).
+  if (cIdx !== -1) return dashCScriptReadsSecret(operands, cIdx, depth) || clusteredDashCReadsSecret(operands, depth);
   // A `-c` inside a cluster is read too; with nothing found the reading goes on as before.
   const clustered = clusteredDashCReadsSecret(operands, depth);
   if (clustered) return clustered;
@@ -4737,16 +4740,17 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 }
 
 // The operands a shell's `-c` at `cIdx` may run as its script: the word right
-// after it, which is the one read before, and the first word past the options
-// that may follow it. bash, dash and zsh run that one (`bash -c -- 'cat .env'`,
+// after a `-c` DASH_C_RE matches, which is the one read before, and the first
+// word past the options that may follow it (after a cluster, only that one:
+// its next word can be an option's value, as in `bash -co x`). bash, dash and zsh run that one (`bash -c -- 'cat .env'`,
 // `sh -c -euo pipefail '…'`, `bash -c + '…'`): `--` or a lone `-` ends the
 // options, each `o` or `O` in a cluster takes the next word, and any other
 // word starting with `-` or `+` is an option. Reading both keeps every denial
 // the first made.
 function dashCScriptIndices(operands, cIdx) {
-  const out = cIdx + 1 < operands.length ? [cIdx + 1] : [];
+  const out = cIdx + 1 < operands.length && DASH_C_RE.test(operands[cIdx].text) ? [cIdx + 1] : [];
   const k = dashCScriptIndex(operands, cIdx);
-  if (k < operands.length && k !== cIdx + 1) out.push(k);
+  if (k < operands.length && (out.length === 0 || k !== cIdx + 1)) out.push(k);
   return out;
 }
 
@@ -4773,14 +4777,18 @@ function shortOptionValues(t) {
   return n;
 }
 
-// The index of a shell's `-c`: the word DASH_C_RE matches, as before, else a
+// The indexes of a shell's `-c`: the word DASH_C_RE matches, as before, and a
 // cluster holding `c` (`bash -ce '…'`, `-co errexit`, `+c`) among the options
 // before the first other word, where the shell stops reading options (a
-// script file's arguments are not options); -1 when there is none. Callers
-// read the second only where the first finds nothing.
-function dashCIndex(operands) {
+// script file's arguments are not options). Both are read: a later word
+// DASH_C_RE matches does not hide a cluster's `-c` before it, so in
+// `bash -ce 'cat .env' -c` the cluster's script is read (`-c` is `$0`).
+function dashCIndices(operands) {
   const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
-  return cIdx !== -1 ? cIdx : dashCClusterIndex(operands);
+  const kIdx = dashCClusterIndex(operands);
+  const out = cIdx === -1 ? [] : [cIdx];
+  if (kIdx !== -1 && kIdx !== cIdx) out.push(kIdx);
+  return out;
 }
 const SHORT_CLUSTER_RE = /^[-+][A-Za-z]+$/;
 const SHELL_LONG_OPTIONS = new Set(['norc', 'noprofile', 'noediting', 'login', 'posix', 'verbose', 'debugger',
@@ -4801,9 +4809,9 @@ function dashCClusterIndex(operands) {
 }
 
 // The block for a secret read in the script of a `-c` written inside a
-// cluster (dashCIndex's second arm), or null.
+// cluster (dashCClusterIndex), or null.
 function clusteredDashCReadsSecret(operands, depth) {
-  const cIdx = dashCIndex(operands);
+  const cIdx = dashCClusterIndex(operands);
   return cIdx === -1 ? null : dashCScriptReadsSecret(operands, cIdx, depth);
 }
 
@@ -5476,13 +5484,23 @@ function xargsFedWords(operands, s, bySeg, sepAfter, runs) {
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
 // (quotes and backslashes removed), is read as the script, or substituted into it.
 function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
-  const cIdx = dashCIndex(shellOperands);
-  if (cIdx === -1) return null;
-  // The word after -c, then the one past its options (dashCScriptIndices);
-  // with none past them, each piped word is the script (`… | xargs sh -c --`).
-  const first = xargsShellScriptsRead(shellOperands[cIdx + 1], replaceStr, upstream, depth);
-  const k = first === null ? dashCScriptIndex(shellOperands, cIdx) : cIdx + 1;
-  return k === cIdx + 1 ? first : xargsShellScriptsRead(shellOperands[k], replaceStr, upstream, depth);
+  const cIdxs = dashCIndices(shellOperands);
+  for (let i = 0; i < cIdxs.length; i++) {
+    const hit = xargsShellScriptsAt(shellOperands, cIdxs[i], replaceStr, upstream, depth);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// scanXargsShellScripts for the `-c` at `cIdx`: the word after it, then the
+// one past its options, as dashCScriptIndices reads them; with none past them,
+// each piped word is the script (`… | xargs sh -c --`).
+function xargsShellScriptsAt(shellOperands, cIdx, replaceStr, upstream, depth) {
+  const after = DASH_C_RE.test(shellOperands[cIdx].text);
+  const first = after ? xargsShellScriptsRead(shellOperands[cIdx + 1], replaceStr, upstream, depth) : null;
+  if (first !== null) return first;
+  const k = dashCScriptIndex(shellOperands, cIdx);
+  return after && k === cIdx + 1 ? null : xargsShellScriptsRead(shellOperands[k], replaceStr, upstream, depth);
 }
 
 // scanXargsShellScripts for one `script` operand (undefined: none). The
