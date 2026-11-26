@@ -101,15 +101,16 @@ describe('#6719: skill-manifest --skills-dir lists project skills without their 
     assert.equal(json.roots[0].skill_count, 1);
   });
 
-  test('skips dangling and file symlinks without failing', (t) => {
-    fs.writeFileSync(path.join(root, 'a-file'), 'not a skill dir');
-    try {
-      fs.symlinkSync(path.join(root, 'missing-dir'), path.join(skillsDir, 'dangling'), 'junction');
+  test('skips dangling and file symlinks without failing', () => {
+    // A link made dangling by removing its target works with a junction on Windows too.
+    const gone = path.join(root, 'gone-skill');
+    fs.mkdirSync(gone);
+    fs.symlinkSync(gone, path.join(skillsDir, 'dangling'), 'junction');
+    cleanup(gone);
+    // A file symlink needs a privilege on Windows that a runner may not have, so it is POSIX only.
+    if (process.platform !== 'win32') {
+      fs.writeFileSync(path.join(root, 'a-file'), 'not a skill dir');
       fs.symlinkSync(path.join(root, 'a-file'), path.join(skillsDir, 'to-file'), 'file');
-    } catch (err) {
-      // Windows without symlink privilege cannot create the file link; the guard below is POSIX behavior.
-      t.skip(`cannot create symlinks here: ${err.code}`);
-      return;
     }
     writeSkill('real', `---\nname: real\ndescription: A real skill\n---\n`);
     const { json } = manifest();
