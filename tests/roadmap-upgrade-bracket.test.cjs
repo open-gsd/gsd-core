@@ -4251,6 +4251,7 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
   // STATE.md is written through its own read-modify-write seam, which resyncs the frontmatter (timestamps, progress),
   // so a rewritten STATE.md is compared by its body: everything after the closing frontmatter fence.
   const stateBody = (text) => text.slice(text.indexOf('\n---\n', 4) + '\n---\n'.length);
+  const projectText = (...bodyLines) => ['# Project', '', ...bodyLines, ''].join('\n');
 
   // A project with no phase directories: the roadmap is the only source of phase identity.
   function roadmapOnlyProject(label, roadmapLines) {
@@ -4264,7 +4265,7 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     const cwd = materializeFixture('legacy-multi-milestone');
     seed(cwd, {
       'STATE.md': stateText('Stopped at: Phase 1: Alpha review, Phase 01: padded and Phase 2.1: Beta.', '', 'Next: Phase 3: Gamma'),
-      'PROJECT.md': ['# Project', '', 'Phase 3: Gamma ships last.', ''].join('\n'),
+      'PROJECT.md': projectText('Phase 3: Gamma ships last.'),
     });
 
     const plan = planBracket(cwd);
@@ -4283,14 +4284,19 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
       stateBody(readPlanning(cwd, 'STATE.md')),
       stateBody(stateText('Stopped at: [GSD.01] 01: Alpha review, [GSD.01] 01: padded and [GSD.01] 02: Beta.', '', 'Next: [GSD.02] 01: Gamma')),
     );
-    assert.equal(readPlanning(cwd, 'PROJECT.md'), ['# Project', '', '[GSD.02] 01: Gamma ships last.', ''].join('\n'));
+    // The STATE.md seam resyncs the frontmatter from the rewritten body, so the frontmatter carries the new labels too
+    // and keeps the status the file already had.
+    const frontmatter = extractFrontmatter(readPlanning(cwd, 'STATE.md'));
+    assert.equal(frontmatter.status, 'executing');
+    assert.equal(frontmatter.stopped_at, '[GSD.01] 01: Alpha review, [GSD.01] 01: padded and [GSD.01] 02: Beta.');
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), projectText('[GSD.02] 01: Gamma ships last.'));
   });
 
   test('rewrites M-NN labels, keeping the lifted milestone integer', () => {
     const cwd = materializeFixture('mnn-multi-milestone');
     seed(cwd, {
       'STATE.md': stateText('Done: Phase 2-01: Foundation. Next: Phase 2-04-01: Deep slice.'),
-      'PROJECT.md': ['# Project', '', 'Phase 2-04-01: Deep slice is the long pole.', ''].join('\n'),
+      'PROJECT.md': projectText('Phase 2-04-01: Deep slice is the long pole.'),
     });
 
     const plan = planBracket(cwd);
@@ -4306,7 +4312,7 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
       stateBody(readPlanning(cwd, 'STATE.md')),
       stateBody(stateText('Done: [GSD.02] 01: Foundation. Next: [GSD.02] 04.01: Deep slice.')),
     );
-    assert.equal(readPlanning(cwd, 'PROJECT.md'), ['# Project', '', '[GSD.02] 04.01: Deep slice is the long pole.', ''].join('\n'));
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), projectText('[GSD.02] 04.01: Deep slice is the long pole.'));
   });
 
   test('skips and reports a label whose number exists in two milestones', () => {
@@ -4343,13 +4349,27 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     assert.deepEqual(editKeys(plan), [`STATE.md|Phase 999.1:|${headingId}:`]);
   });
 
+  test('rewrites a backlog sentinel label into the 0 milestone the heading moved to', () => {
+    const cwd = roadmapOnlyProject('xref-backlog', [
+      '# Roadmap', '', '## v1.0 — Foundation', '', '### Phase 1: Alpha', '', '### Phase 0.1: Backlog',
+    ]);
+    seed(cwd, { 'STATE.md': stateText('Parked: Phase 0.1: someday') });
+
+    const plan = planBracket(cwd);
+
+    const heading = plan.roadmapEdits.find((edit) => edit.from.includes('Phase 0.1')).to;
+    const headingId = heading.replace(/^#+\s+/, '').replace(/:.*$/, '');
+    assert.match(headingId, /^\[GSD\.00\] \d{2}$/);
+    assert.deepEqual(editKeys(plan), [`STATE.md|Phase 0.1:|${headingId}:`]);
+  });
+
   test('plans edits only for the files that exist', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     let plan = planBracket(cwd);
     assert.deepEqual(plan.crossRefEdits, []);
     assert.deepEqual(plan.crossRefSkipped, []);
 
-    seed(cwd, { 'PROJECT.md': ['# Project', '', 'Phase 1: Alpha', ''].join('\n') });
+    seed(cwd, { 'PROJECT.md': projectText('Phase 1: Alpha') });
     plan = planBracket(cwd);
     assert.deepEqual(editKeys(plan), ['PROJECT.md|Phase 1:|[GSD.01] 01:']);
     assert.deepEqual(plan.crossRefSkipped, []);
@@ -4402,6 +4422,49 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     );
   });
 
+  test('neither scans nor reports a label that appears only inside a fenced code block', () => {
+    const fenced = (label) => stateText('```', label, '```');
+    const legacy = materializeFixture('legacy-multi-milestone');
+    seed(legacy, { 'STATE.md': fenced('Phase 3: only in the fence') });
+    const legacyPlan = planBracket(legacy);
+    assert.deepEqual(legacyPlan.crossRefEdits, []);
+    assert.deepEqual(legacyPlan.crossRefSkipped, []);
+
+    const ambiguous = roadmapOnlyProject('xref-fenced-ambiguous', [
+      '# Roadmap', '', '## v1.0 — Foundation', '', '### Phase 1: Alpha', '', '## v2.0 — Scale', '', '### Phase 1: Beta',
+    ]);
+    seed(ambiguous, { 'STATE.md': fenced('Phase 1: only in the fence') });
+    const ambiguousPlan = planBracket(ambiguous);
+    assert.deepEqual(ambiguousPlan.crossRefEdits, []);
+    assert.deepEqual(ambiguousPlan.crossRefSkipped, [], 'a fenced label is not an ambiguity the owner has to resolve');
+  });
+
+  test('reports a file the apply could not parse instead of failing after a clean dry-run', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const unterminated = ['---', 'name: x', 'Phase 1: Alpha', ''].join('\n');
+    seed(cwd, { 'PROJECT.md': unterminated, 'STATE.md': stateText('Phase 3: Gamma') });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(plan.crossRefSkipped, [{ file: 'PROJECT.md', reason: 'file-unreadable' }]);
+    assert.deepEqual(editKeys(plan), ['STATE.md|Phase 3:|[GSD.02] 01:']);
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), unterminated, 'the unparseable file is left byte-intact');
+  });
+
+  test('apply refuses a dirty tracked working tree before writing the STATE.md and PROJECT.md edits', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Phase 3: Gamma'), 'PROJECT.md': projectText('Phase 1: Alpha') });
+    fs.appendFileSync(path.join(cwd, 'README.md'), '\ndirty\n', 'utf8');
+    const before = snapshotTree(cwd, { skipGit: true });
+
+    const result = runBracketUpgrade(cwd, ['--apply']);
+
+    assertExited(result, 1, 'dirty-tree refusal over cross-reference edits');
+    assert.match(result.stderr, /Working tree is dirty/);
+    assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'the refusal must precede every write');
+  });
+
   test('preserves CRLF line terminators when rewriting labels', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     const crlf = (text) => text.replaceAll('\n', '\r\n');
@@ -4418,7 +4481,7 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
   test('reports a non-regular STATE.md instead of reading it, and still rewrites PROJECT.md', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     fs.mkdirSync(planningFile(cwd, 'STATE.md'));
-    seed(cwd, { 'PROJECT.md': ['# Project', '', 'Phase 1: Alpha', ''].join('\n') });
+    seed(cwd, { 'PROJECT.md': projectText('Phase 1: Alpha') });
 
     const plan = planBracket(cwd);
 
@@ -4426,10 +4489,10 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     assert.deepEqual(editKeys(plan), ['PROJECT.md|Phase 1:|[GSD.01] 01:']);
 
     applyMigration(cwd, plan, { dryRun: false });
-    assert.equal(readPlanning(cwd, 'PROJECT.md'), ['# Project', '', '[GSD.01] 01: Alpha', ''].join('\n'));
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), projectText('[GSD.01] 01: Alpha'));
   });
 
-  test('maps overlapping label literals independently', () => {
+  test('rewrites each spelling in a crowded line and leaves an unmapped neighbor untouched', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     seed(cwd, { 'STATE.md': stateText('Phase 1: a, Phase 11: b, Phase 2.1: c, Phase 1: d') });
 
@@ -4447,7 +4510,7 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     const cwd = materializeFixture('legacy-multi-milestone');
     seed(cwd, {
       'STATE.md': stateText('Stopped at: Phase 3: Gamma'),
-      'PROJECT.md': ['# Project', '', 'Phase 1: Alpha', ''].join('\n'),
+      'PROJECT.md': projectText('Phase 1: Alpha'),
     });
     const before = snapshotTree(cwd, { skipGit: true });
 
@@ -4462,7 +4525,7 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     const cwd = materializeFixture('legacy-multi-milestone');
     seed(cwd, {
       'STATE.md': stateText('Stopped at: Phase 3: Gamma'),
-      'PROJECT.md': ['# Project', '', 'Phase 1: Alpha', ''].join('\n'),
+      'PROJECT.md': projectText('Phase 1: Alpha'),
     });
     const plan = planBracket(cwd);
     assert.equal(plan.crossRefEdits.length, 2, 'precondition: both files carry an edit');
@@ -4489,6 +4552,11 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     const cwd = materializeFixture('legacy-multi-milestone');
     seed(cwd, { 'STATE.md': stateText('Stopped at: Phase 3: Gamma') });
     applyMigration(cwd, planBracket(cwd), { dryRun: false });
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Stopped at: [GSD.02] 01: Gamma')),
+      'precondition: the first apply rewrote the label',
+    );
 
     const again = planBracket(cwd);
 
