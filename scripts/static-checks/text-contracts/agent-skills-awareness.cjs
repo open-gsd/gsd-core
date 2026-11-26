@@ -36,11 +36,12 @@ module.exports = {
     // Every discovery agent, canonical and compact, includes the one shared reference and restates
     // none of it (#4649): 21 + 15 files, one owner.
     for (const rel of DISCOVERY_FILES) {
+      const name = rel.replace(/^agents\//, '').replace(/\.md$/, ''); // gsd-roadmapper, gsd-roadmapper.compact
       ctx.doc(rel)
-        .has('Project skills', `${rel} missing Project skills block`)
+        .has('Project skills', `${name} missing Project skills block`)
         .has(INCLUDE, `${rel} must @-include the shared project-skills-discovery reference`)
-        .lacks('Read AGENTS.md', `${rel} should not instruct loading full AGENTS.md`)
-        .lacks('load AGENTS.md', `${rel} should not instruct loading full AGENTS.md`)
+        .lacks('Read AGENTS.md', `${name} should not instruct loading full AGENTS.md`)
+        .lacks('load AGENTS.md', `${name} should not instruct loading full AGENTS.md`)
         .lacks(/lightweight index|~130[- ]line|\(~130 lines\)/i, `${rel} restates the old index-size claim inline`)
         .lacks(/Read `SKILL\.md` (?:for each|per skill)|Read each `SKILL\.md`|read each `SKILL\.md`/, `${rel} restates the read-every-SKILL.md step inline`)
         .lacks(/(?:do not|never) load full `?AGENTS\.md`?/i, `${rel} tells the reader not to load AGENTS.md`)
