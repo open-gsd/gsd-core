@@ -33,3 +33,9 @@ tree — plans in the same wave that retained worktree isolation can still run i
 alongside the sequential ones, but two non-worktree plans in the same wave must serialize.
 When the project-level `USE_WORKTREES=false`, all plans in the wave serialize regardless of
 the `PARALLELIZATION` setting.
+
+## TDD gate split (#4696)
+
+A plan stored in step 2.5 as `TDD_GATE_SPLIT=true` is in Sequential mode on purpose. Its single
+`Agent()` call is replaced by the two foreground dispatches of Part 2 of
+`gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`; follow that part now.

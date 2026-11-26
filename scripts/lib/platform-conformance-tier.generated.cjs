@@ -316,6 +316,7 @@ module.exports = {
   "tests/state.platform.test.cjs",
   "tests/sub-repos-evaluation-scope-5867.test.cjs",
   "tests/subject-first-line.platform.test.cjs",
+  "tests/tdd-gate-split-dispatch.test.cjs",
   "tests/tdd-mode.platform.test.cjs",
   "tests/tdd-review-checkpoint-cross-plan.test.cjs",
   "tests/teams-status.test.cjs",
