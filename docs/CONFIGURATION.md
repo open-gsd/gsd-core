@@ -1072,7 +1072,7 @@ The read is scoped (#4649):
 
 For skill authors: write a `description` that says when the skill applies. A `SKILL.md` without one is read in full on every spawn.
 
-Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The spawn prompts in `execute-phase`, `plan-phase` and `quick` still ask the agent to read every project `SKILL.md`, so the saving does not reach those paths until #5248 lands. A size warning for large skills is tracked in #5249.
+Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The project-skills lines in the `execute-phase`, `plan-phase` and `quick` spawn prompts and in the research `plan-pre` fragment state the same frontmatter-first read, so the saving reaches those paths too (#5248); each line is self-contained for runtimes where the agent's `@`-include does not resolve. A size warning for large skills is tracked in #5249.
 
 ---
 
