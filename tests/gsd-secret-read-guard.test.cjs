@@ -6142,6 +6142,10 @@ describe('gsd-secret-read-guard: the words printf and echo print into xargs (#57
     ["printf 'env\\n' | xargs -I{} sh -c 'cat .{}'", '.env'],
     ["printf 'nv\\n' | xargs -I{} sh -c 'cat .e{}'", '.env'],
     ["echo -e 'env\\n' | xargs -I{} sh -c 'cat .{}'", '.env'],
+    // The same words passed on by a `tee` or a bare `cat`.
+    ["echo env | tee f | xargs -I{} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | tee f | xargs -I{} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | cat | xargs -I{} sh -c 'cat .{}'", '.env'],
     // zsh's echo, and bash's under `xpg_echo`, decode escapes with no -e.
     ["echo '\\x2eenv' | xargs cat", '.env'],
   ];
@@ -6178,6 +6182,7 @@ describe('gsd-secret-read-guard: the words printf and echo print into xargs (#57
     // A printed word put into a script that names another file.
     "printf 'txt\\n' | xargs -I{} sh -c 'cat notes.{}'",
     "printf 'env\\n' | xargs -I{} sh -c 'cat {}'",
+    "echo txt | tee f | xargs -I{} sh -c 'cat notes.{}'",
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {

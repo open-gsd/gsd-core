@@ -5003,23 +5003,58 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
 
   const prevCmd = upstreamCommand(prevSeg, bySeg);
   if (!prevCmd) return null;
+  const printer = xargsPrinter(prevSeg, bySeg, sepAfter);
   if (subIsShell) {
     // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
     // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = pipedShellScriptsRead(operands, subIdx, subOperands, prevCmd, depth);
+    const hit = pipedShellScriptsRead(operands, subIdx, subOperands, prevCmd, printer, depth);
     if (hit) return hit;
   }
-  return xargsPipedReadsSecret(operands, prevCmd, curl);
+  return xargsPipedReadsSecret(operands, prevCmd, curl, printer);
 }
 
 // The block for a word piped into `xargs … SHELL -c` that the shell runs as
 // its script or with the word put into it (scanXargsShellScripts), or null:
 // the upstream command's words as written, then the words a printf or echo
-// prints (printedWords: `printf 'env\n' | xargs -I{} sh -c 'cat .{}'`).
-function pipedShellScriptsRead(operands, subIdx, subOperands, prev, depth) {
+// prints (printedWords: `printf 'env\n' | xargs -I{} sh -c 'cat .{}'`), also
+// when a `tee` or a bare `cat` passes them on (xargsPrinter).
+function pipedShellScriptsRead(operands, subIdx, subOperands, prev, printer, depth) {
   const replaceStr = xargsReplaceStr(operands, subIdx);
   return scanXargsShellScripts(subOperands, replaceStr, prev.operands, depth)
-    || scanXargsShellScripts(subOperands, replaceStr, printedWords(prev, operands, xargsCommandIndex(operands, 0, operands.length)), depth);
+    || (printer !== null && scanXargsShellScripts(subOperands, replaceStr, printedWords(printer, operands, xargsCommandIndex(operands, 0, operands.length)), depth))
+    || null;
+}
+
+// The printf or echo whose output an xargs reads from segment `prevSeg`: that
+// segment's command, or the one upstream of each `tee` or bare `cat` that
+// passes its stdin on (passesStdinThrough: `printf 'env\n' | tee f | xargs …`),
+// or null. It is found once per segment, and each segment walked is charged to
+// the reader budget.
+const xargsPrinterBySegMap = new WeakMap();
+function xargsPrinter(prevSeg, bySeg, sepAfter) {
+  let found = xargsPrinterBySegMap.get(bySeg);
+  if (!found) xargsPrinterBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(prevSeg)) found.set(prevSeg, findXargsPrinter(prevSeg, bySeg, sepAfter));
+  return found.get(prevSeg);
+}
+function findXargsPrinter(prevSeg, bySeg, sepAfter) {
+  let seg = prevSeg;
+  for (;;) {
+    const cmd = upstreamCommand(seg, bySeg);
+    if (!cmd) return null;
+    if (cmd.base === 'printf' || cmd.base === 'echo') return cmd;
+    const tokens = bySeg.get(seg) || [];
+    chargeReader(tokens.length);
+    const words = resolveCommand(commandWords(tokens));
+    const feeds = {
+      heredocs: ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(seg) || []).map((h) => h.text),
+      hereStrings: hereStringTargets(tokens),
+    };
+    if (!words || !passesStdinThrough(words, feeds)) return null;
+    const { op, prevSeg: up } = precedingOp(seg, bySeg, sepAfter);
+    if (!((op === '|' || op === '|&') && up >= 0)) return null;
+    seg = up;
+  }
 }
 
 // precedingOp for an xargs segment, found once per segment: `find` runs many
@@ -5057,9 +5092,10 @@ function xargsCurlTarget(operands) {
 
 // The block for a piped word that names a secret the xargs sub-command
 // reads (secretRead), or null. `prev` is the upstream command: its operands
-// are the piped words as written, and where it is `printf` or `echo` the
-// words it prints are judged too (printedWords).
-function xargsPipedReadsSecret(operands, prev, curl) {
+// are the piped words as written, and the words `printer` prints are judged
+// too (printedWords): `prev` itself where it is `printf` or `echo`, or one
+// upstream of a `tee` or bare `cat` (xargsPrinter).
+function xargsPipedReadsSecret(operands, prev, curl, printer = prev) {
   const piped = prev.operands;
   // They become curl's arguments when that command is curl: `xargs sudo curl`.
   // A piped word is a cert option's value where the sub-command's cert option
@@ -5082,7 +5118,7 @@ function xargsPipedReadsSecret(operands, prev, curl) {
   // And where a piped word is such an option put in by the replace string, the
   // sub-command word after that string is its value
   // (`printf -E | xargs -I{} curl {} f:pw`), quoted or not (`echo '"-E"'`).
-  const printed = printedWords(prev, operands, toCurl ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  const printed = printer === null ? [] : printedWords(printer, operands, toCurl ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
   if (toCurl && rep !== null && (certOptionPiped(piped) || certOptionPiped(printed))) {
     for (let k = subCmd + 1; k + 1 < operands.length; k++) {
       if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return secretRead(curlOpened);
