@@ -1504,12 +1504,17 @@ The command anchors to the project root via `findProjectRoot` before loading con
 Pre-compute and cache skill discovery for faster command loading.
 
 ```bash
-# Generate skill manifest (writes to .claude/skill-manifest.json)
+# Print the manifest of every skill root (project, global and legacy)
 node gsd-tools.cjs skill-manifest
 
-# Generate with custom output path
-node gsd-tools.cjs skill-manifest --output <path>
+# Also write it to skill-manifest.json in the planning directory (when that directory exists)
+node gsd-tools.cjs skill-manifest --write
+
+# List one directory only: this is what the project-skills discovery step runs per directory
+node gsd-tools.cjs skill-manifest --skills-dir .claude/skills
 ```
+
+Each entry carries the skill's `name`, `description`, `triggers`, `path` and `file_path` from its `SKILL.md` frontmatter. The body is not emitted, apart from lines that start `TRIGGER when:`, which are collected into `triggers`; `description` and `triggers` are not length-limited. Within one directory a skill is keyed by its frontmatter `name`: two skill folders that declare the same `name` are listed once. A skill directory that is a symlink is listed; a dangling link or a link to a file is skipped. A skill with no usable `description` (missing key, unparseable or unterminated frontmatter) is listed with `description: ""`. `--skills-dir` replaces the default roots with that one directory (scope `custom`); a directory that does not exist is reported with `present: false`.
 
 Returns JSON mapping of all available GSD skills with their metadata (name, description, file path, argument hints). Used by the installer and session-start hooks to avoid repeated filesystem scans.
 
