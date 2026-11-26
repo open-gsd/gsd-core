@@ -57,16 +57,22 @@ module.exports = {
       ctx.doc(rel).lacks(INCLUDE, `${rel} includes the discovery reference but is not in the agent-skills-awareness list`);
     }
 
-    // The reference itself: frontmatter first, a description gate, the no-description fallback,
-    // deferred skills stay reachable, generic resource loading, and nothing from the dropped dedup
-    // step or the old pack-specific steps.
+    // The reference itself: a code-produced frontmatter index (#6719), a description gate, the
+    // no-description fallback, a frontmatter-only fallback when the command fails, deferred skills
+    // stay reachable, generic resource loading, and nothing from the dropped dedup step or the old
+    // pack-specific steps.
     ctx.doc(REFERENCE)
-      .has(/only the (?:YAML )?frontmatter/i, 'step 3 must scope the index read to the frontmatter')
+      .has('skill-manifest', 'the listing step must run the skill-manifest command, which emits no skill body')
+      .has('--skills-dir <dir>', 'the skill-manifest call must be scoped with --skills-dir <dir>, one project skills directory at a time')
+      .has('gsd-run-resolver.md', 'the reference must name the launcher file that defines gsd_run')
+      .lacks(/@\S*gsd-run-resolver\.md/, 'the reference must not @-include the launcher: 2.8 KB on every spawn, including when no skills dir exists')
+      .has(/If the launcher or the command fails, list/, 'the reference needs a fallback that lists the directories when the launcher or command fails')
+      .has(/only the (?:YAML )?frontmatter/i, 'the fallback must scope the read to the frontmatter')
       .has('`description`', 'the read must be gated on the skill description')
       .has(/no `description`/, 'a skill without a description must still be read in full')
       .has(/stays available|remains available/i, 'a skill that was not read must stay reachable')
       .has(/a `SKILL\.md` references/, 'resource loading must follow what a SKILL.md references')
-      .lacks(/config-get|gsd_run|agent_skills/, 'the agent_skills dedup step was dropped (#4649, 2026-10-14)')
+      .lacks(/config-get|agent_skills/, 'the agent_skills dedup step was dropped (#4649, 2026-10-14)')
       .lacks(/AGENTS\.md/, 'the reference must not mention AGENTS.md')
       .lacks('rules/*.md', 'the reference must not encode one pack\'s rules/*.md layout')
       .satisfies(

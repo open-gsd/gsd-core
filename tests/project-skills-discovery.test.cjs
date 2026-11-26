@@ -199,7 +199,7 @@ describe('#4649: the shared reference states the scoped read', () => {
 
   test('a reference with no fallback when the command fails is named', (t) => {
     const root = copyOfFiles(t);
-    edit(root, REFERENCE, (text) => text.replace(/If the command fails/g, 'When it works'));
+    edit(root, REFERENCE, (text) => text.replace(/If the launcher or the command fails/g, 'When it works'));
     const found = messages(root);
     assert.ok(found.some((line) => line.includes('fallback')), found.join('\n'));
   });

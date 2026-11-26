@@ -111,9 +111,9 @@ describe('#6719: skill-manifest --skills-dir lists project skills without their 
       t.skip(`cannot create symlinks here: ${err.code}`);
       return;
     }
-    writeSkill('real', frontmatter('A real skill'));
+    writeSkill('real', `---\nname: real\ndescription: A real skill\n---\n`);
     const { json } = manifest();
-    assert.deepEqual(json.skills.map((s) => s.name), ['demo']);
+    assert.deepEqual(json.skills.map((s) => s.name), ['real']);
     assert.equal(json.roots[0].skill_count, 1);
   });
 
@@ -125,7 +125,7 @@ describe('#6719: skill-manifest --skills-dir lists project skills without their 
   });
 
   test('reports a missing skills dir', () => {
-    fs.rmSync(skillsDir, { recursive: true });
+    cleanup(skillsDir);
     const { json } = manifest();
     assert.deepEqual(json.skills, []);
     assert.equal(json.roots[0].present, false);

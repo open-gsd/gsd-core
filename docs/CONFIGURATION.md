@@ -1063,14 +1063,23 @@ See [How to attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugi
 
 Separately from `agent_skills`, skills in `.claude/skills/` or `.agents/skills/` are found without any setting. The 21 agents that read project skills, and their compact variants, all `@`-include one instruction, [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md), and add one line of their own saying how they apply the rules. The rule is stated once instead of in 36 copies.
 
-The read is scoped (#4649):
+The read is scoped (#4649), and the listing is produced by code (#6719):
 
-1. The agent lists the skill directories and reads only each `SKILL.md` frontmatter (`name`, `description`).
-2. It reads the whole `SKILL.md` when the `description` fits the task, or when the skill has no `description`.
-3. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
-4. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
+1. For each of `.claude/skills/` and `.agents/skills/` that exists, the agent runs `gsd_run skill-manifest --skills-dir <dir>`. The [`skill-manifest`](CLI-TOOLS.md#skill-manifest) command lists each skill's `name`, `description` and `file_path` from its `SKILL.md` frontmatter, and does not emit the skill body, so the size of the listing does not depend on how long the skill bodies are (it grows with each `description` and any `TRIGGER when:` lines). A skill directory that is a symlink is listed too; a dangling link or a link to a file is skipped.
+2. The agent reads the whole `SKILL.md` only when its `description` fits the task, or when the skill has no `description` (the command reports it as an empty string, which is also what a missing, unparseable or unterminated frontmatter block gives).
+3. If the command cannot run or fails, the agent lists the subdirectories and reads only each `SKILL.md` frontmatter (`name`, `description`).
+4. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
+5. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
 
 For skill authors: write a `description` that says when the skill applies. A `SKILL.md` without one is read in full on every spawn.
+
+To see what an agent sees, run the same command in the project root:
+
+```bash
+node gsd-tools.cjs skill-manifest --skills-dir .claude/skills
+```
+
+An empty `skills` array with `present: true` means the directory has no skill subdirectories; `present: false` means the directory does not exist.
 
 Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The spawn prompts in `execute-phase`, `plan-phase` and `quick` still ask the agent to read every project `SKILL.md`, so the saving does not reach those paths until #5248 lands. A size warning for large skills is tracked in #5249.
 
