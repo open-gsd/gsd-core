@@ -117,10 +117,13 @@ if (done.scope === 'complete' && !haltUnknown) {
 }
 
 for (const phase of snapshot.phases) {
+  const haltedIds = new Set(phase.plans.filter((p) => !p.superseded && p.halted).map((p) => p.id));
   for (const plan of phase.plans) {
     if (plan.superseded) continue;
     if (plan.halted) render(`${plan.id}: halted`);
-    else if (plan.blocked_by.length > 0) render(`${plan.id}: waiting on ${plan.blocked_by.join(', ')}`);
+    else if (plan.blocked_by.length === 0) continue;
+    else if (plan.blocked_by.every((id) => haltedIds.has(id))) render(`${plan.id}: behind halted ${plan.blocked_by.join(', ')}`);
+    else render(`${plan.id}: in or behind a depends_on cycle`);
   }
 }
 ```
@@ -132,6 +135,18 @@ counted as completed and not halted when its halt is unknown.
 The loop skips superseded rows because `halted` is set on them too, while
 `halted_count` and `progress.halted_plans` leave them out; without the skip, a
 retired plan would be listed as halted beside a count that does not include it.
+
+`blocked_by` names the halted plans upstream of a plan, except in or behind a
+`depends_on` cycle, where a plan that is not halted names its own direct
+`depends_on` plans in the phase instead, completed ones included (one that
+depends on itself names itself). The loop therefore prints the ids only when
+each one is the id of a halted plan in the same phase, and prints the cycle
+line otherwise.
+
+`blocked_by` is incomplete around a PLAN that could not be read, or that
+resolves outside the planning root (a `plan_unreadable` diagnostic names the
+file): that plan's `depends_on` is unknown, so its own `blocked_by` is `[]`,
+and a halt upstream of it does not reach the plans downstream through it.
 
 The new fields also add to `diagnostics[]`: under a scope that is not
 `complete` it carries a `percent_withheld` entry for `progress.halted_plans`,
