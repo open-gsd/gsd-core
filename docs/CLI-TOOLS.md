@@ -1358,8 +1358,16 @@ give different answers:
   short-form token (the plan number alone, such as `01`) to the first plan in
   sort order with that plan number, which can be a third plan; an exact or
   canonical match to another plan is taken before the short form.
-- **A phase directory that cannot be listed.** `phase-plan-index` throws; `planning
-  inspect` reports the phase `unreadable` with no plan rows (`phase_scope_degraded`).
+- **A phase directory that cannot be listed, or that resolves outside the
+  planning root.** For one that cannot be listed, `phase-plan-index` throws;
+  `planning inspect` reports the phase `unreadable` with no plan rows
+  (`phase_scope_degraded`). When `phases/` is a symlink out of the planning
+  root, the phase directories under it resolve outside the root:
+  `phase-plan-index` reads such a directory and reports its plans, with their
+  `halted` and `blocked_by`; `planning inspect` reports the phase `unreadable`
+  with no plan rows and a `halted_count` of `0` (`phase_scope_degraded`). A
+  phase directory that is itself a symlink is not a difference: both commands
+  skip it when they list phase directories.
 - **A `depends_on` token that resolves to a plan whose id is empty** (a bare
   `PLAN.md`, named by `depends_on: [""]`). `phase-plan-index` leaves that edge
   out of its wave order but keeps it in the halt propagation it runs in that
