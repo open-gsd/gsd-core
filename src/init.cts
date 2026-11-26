@@ -3417,15 +3417,23 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       phase['deps_satisfied'] = true;
     } else {
       const prose = phase['depends_on'] as string;
+      // #6507: a LEAD negation is the decision itself — "Nothing (independent
+      // of Phases 1 and 3)" must yield no dependencies. The rule lives INSIDE
+      // this branch on purpose: the exact-none short-circuit above keeps its
+      // payload shape (no dep_phases key), and bare "Nothing" keeps the empty
+      // array the extraction path always produced for it.
+      const negatedLead = /^(nothing|none)\b/i.test(prose);
       const ownNumber = normalizePhaseNumber(phase['number'] as string);
       const ownIdentity = typeof phase['display_id'] === 'string'
         ? bracketIdentityKey(phase['display_id'])
         : null;
       const depNums: string[] = [];
       const seen = new Set<string>();
-      const dependencyTokens = phaseIdConvention === 'bracket'
-        ? extractPhaseDependencyTokens(prose, phaseIdConvention)
-        : legacyManagerDependencyTokens(prose);
+      const dependencyTokens = negatedLead
+        ? []
+        : phaseIdConvention === 'bracket'
+          ? extractPhaseDependencyTokens(prose, phaseIdConvention)
+          : legacyManagerDependencyTokens(prose);
       for (const token of dependencyTokens) {
         const identity = bracketIdentityKey(token);
         if (identity) {
