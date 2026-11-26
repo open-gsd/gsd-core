@@ -498,7 +498,7 @@ describe('#4799 / #3819 / #2924 behaviours, now held by executor.guard', () => {
   }
 });
 
-describe('#6216 fix review: layouts, path resolution and ledger confinement', () => {
+describe('#6216: layouts, path resolution and ledger confinement', () => {
   function unprotected(t, dir, branch) {
     git(['checkout', '-q', '-b', branch], dir);
     return dir;
@@ -687,7 +687,7 @@ describe('#6216 fix review: layouts, path resolution and ledger confinement', ()
   });
 });
 
-describe('#6216 fix review, pass 2: separators, layouts, ledger ignore file, fail-closed exit', () => {
+describe('#6216: separators, layouts, ledger ignore file, fail-closed exit', () => {
   test('--path on POSIX treats a backslash as part of a name, so a link named a\\b is followed', { skip: process.platform === 'win32' }, (t) => {
     const { tmp, wt } = mkFixture(t);
     const outside = path.join(tmp, 'outside');
