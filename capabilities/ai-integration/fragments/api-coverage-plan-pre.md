@@ -19,16 +19,37 @@ The detector is a deterministic scan over the phase scope. It strips fenced
 code blocks first, so a trigger term inside a code snippet does not fire. It
 returns a typed result: `{ detected, signals[], terms }`. Run it on the phase
 scope (the concatenation of this phase's ROADMAP section + the PLAN body). The
-path resolves through `$GSD_TOOLS` — the shipped `gsd-tools.cjs` the `gsd_run`
-preamble already located — so it works from a local checkout and a global
-install alike:
+path is resolved through the shipped `gsd_run` launcher — `$GSD_TOOLS` when the
+workflow preamble ran in this shell, otherwise the PATH entry a later shell
+inherits — so it works from a local checkout, a config-dir install and a
+global install alike:
 
 ```bash
 SCOPE="$(cat "${PHASE_DIR}"/*-PLAN.md 2>/dev/null) $(gsd_run query roadmap.get-phase "${PHASE}" 2>/dev/null || true)"
-API_COVERAGE_BIN="${GSD_TOOLS%/*}/lib/api-coverage.cjs"
+# Resolve the shipped gsd-core/bin the way the gsd_run launcher itself does:
+# $GSD_TOOLS when the workflow preamble ran in this shell, else the PATH entry
+# a later shell inherits. Symlinks are followed so an npm-style global install
+# lands in the real gsd-core/bin — the directory that holds lib/.
+API_COVERAGE_BIN=""
+_GSD_SEED="${GSD_TOOLS:-$(command -v gsd_run 2>/dev/null || true)}"
+if [ -n "$_GSD_SEED" ]; then
+  _GSD_SRC="$_GSD_SEED"
+  while [ -h "$_GSD_SRC" ]; do
+    _GSD_DIR="$(cd -P "$(dirname "$_GSD_SRC")" && pwd)" || break
+    _GSD_SRC="$(readlink "$_GSD_SRC")"
+    case "$_GSD_SRC" in /*) ;; *) _GSD_SRC="$_GSD_DIR/$_GSD_SRC" ;; esac
+  done
+  _GSD_BINDIR="$(cd -P "$(dirname "$_GSD_SRC")" 2>/dev/null && pwd || true)"
+  API_COVERAGE_BIN="${_GSD_BINDIR:+$_GSD_BINDIR/lib/api-coverage.cjs}"
+fi
 API_COVERAGE_JSON=$(printf '%s' "$SCOPE" | node "$API_COVERAGE_BIN" --json 2>/dev/null) || true
 if [ -z "$API_COVERAGE_JSON" ]; then
-  printf 'ERROR: api-coverage detector did not run (%s not found or failed to start) — report this to the user before planning; it is not a "no API integration" verdict.\n' "$API_COVERAGE_BIN" >&2
+  if [ -n "$API_COVERAGE_BIN" ]; then
+    _GSD_WHY="$API_COVERAGE_BIN not found or failed to start"
+  else
+    _GSD_WHY="no gsd-tools.cjs reachable in this shell"
+  fi
+  printf 'ERROR: api-coverage detector did not run (%s) — report this to the user before planning; it is not a "no API integration" verdict.\n' "$_GSD_WHY" >&2
   API_COVERAGE_JSON='{"skipped":true,"reason":"probe_unavailable"}'
 fi
 ```
@@ -98,7 +119,8 @@ Rules:
   matrix is the *subtraction record*.
 - **Every `OPT-OUT` MUST carry a one-line reason of at most 200 characters**
   (`not needed`, `not needed yet`, `explicitly out of scope`, …) — the seal
-  gate rejects reasons over 200 characters. An opt-out without a reason is an
+  gate rejects reasons over 200 characters (the cap covers every reason it
+  reads, `INTEGRATE` rows included). An opt-out without a reason is an
   un-decided hole — the exact failure mode this gate exists to close.
 - **A second integration against the same need** (e.g. a second platform for the
   same capability) starts from the **same full-coverage baseline** as the first.
