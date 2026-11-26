@@ -1680,8 +1680,8 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
     cleanup(tmpDir);
   });
 
-  // The issue's measured phase-663 prose: dates, a round name, ledger ids and
-  // the row's own number, plus one genuine "Phase 654" mention.
+  // The issue's measured phase-663 prose. The "Phase 654" mention sits inside
+  // the explanation of a DROPPED dependency; #6507: the "Nothing." lead wins.
   const ISSUE_663_PROSE =
     'Nothing. Round 663-DISPOSITION Q7 (3/3, 2026-09-14, ' +
     '`.planning/decisions/663-CROSSAI-stream-consumer-failure-disposition.md`) moved the ' +
@@ -1698,11 +1698,11 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
     const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
     const row = output.phases.find((p) => p.number === '663');
 
-    assert.deepEqual(row.dep_phases, ['654']);
+    assert.deepEqual(row.dep_phases, []);
     for (const junk of ['663', '2026', '09', '14', '7', '3', '1843', '1977', '1985', '1992']) {
       assert.ok(!row.dep_phases.includes(junk), `must not scrape ${junk} as a dependency`);
     }
-    assert.strictEqual(row.deps_satisfied, false, '654 is incomplete — the only real reference');
+    assert.strictEqual(row.deps_satisfied, true, '#6507: "Nothing." lead means no dependencies, so the row is satisfied');
   });
 
   test('#4764: a date-only depends_on prose yields no dependencies and a satisfied row', () => {
