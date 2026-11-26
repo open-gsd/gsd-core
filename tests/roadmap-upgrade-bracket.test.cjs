@@ -4248,6 +4248,9 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
   const planBracket = (cwd) => computeMigrationPlan(cwd, { convention: 'bracket' });
   const editKeys = (plan) => plan.crossRefEdits.map(({ file, from, to }) => `${file}|${from}|${to}`).sort();
   const stateText = (...bodyLines) => [...STATE_HEAD, ...bodyLines, ''].join('\n');
+  // STATE.md is written through its own read-modify-write seam, which resyncs the frontmatter (timestamps, progress),
+  // so a rewritten STATE.md is compared by its body: everything after the closing frontmatter fence.
+  const stateBody = (text) => text.slice(text.indexOf('\n---\n', 4) + '\n---\n'.length);
 
   // A project with no phase directories: the roadmap is the only source of phase identity.
   function roadmapOnlyProject(label, roadmapLines) {
@@ -4277,8 +4280,8 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
 
     applyMigration(cwd, plan, { dryRun: false });
     assert.equal(
-      readPlanning(cwd, 'STATE.md'),
-      stateText('Stopped at: [GSD.01] 01: Alpha review, [GSD.01] 01: padded and [GSD.01] 02: Beta.', '', 'Next: [GSD.02] 01: Gamma'),
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Stopped at: [GSD.01] 01: Alpha review, [GSD.01] 01: padded and [GSD.01] 02: Beta.', '', 'Next: [GSD.02] 01: Gamma')),
     );
     assert.equal(readPlanning(cwd, 'PROJECT.md'), ['# Project', '', '[GSD.02] 01: Gamma ships last.', ''].join('\n'));
   });
@@ -4300,8 +4303,8 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
 
     applyMigration(cwd, plan, { dryRun: false });
     assert.equal(
-      readPlanning(cwd, 'STATE.md'),
-      stateText('Done: [GSD.02] 01: Foundation. Next: [GSD.02] 04.01: Deep slice.'),
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Done: [GSD.02] 01: Foundation. Next: [GSD.02] 04.01: Deep slice.')),
     );
     assert.equal(readPlanning(cwd, 'PROJECT.md'), ['# Project', '', '[GSD.02] 04.01: Deep slice is the long pole.', ''].join('\n'));
   });
@@ -4320,7 +4323,10 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     assert.deepEqual(plan.crossRefSkipped, [{ file: 'STATE.md', from: 'Phase 1:', reason: 'ambiguous-milestone' }]);
 
     applyMigration(cwd, plan, { dryRun: false });
-    assert.equal(readPlanning(cwd, 'STATE.md'), stateText('Phase 1: shared number and [GSD.02] 02: unique number'));
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Phase 1: shared number and [GSD.02] 02: unique number')),
+    );
   });
 
   test('rewrites a sentinel label into the sentinel milestone the heading moved to', () => {
@@ -4391,8 +4397,8 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     applyMigration(cwd, planBracket(cwd), { dryRun: false });
 
     assert.equal(
-      readPlanning(cwd, 'STATE.md'),
-      stateText('```', 'Phase 1: inside the fence', '```', '', '[GSD.01] 01: Alpha in prose'),
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('```', 'Phase 1: inside the fence', '```', '', '[GSD.01] 01: Alpha in prose')),
     );
   });
 
@@ -4431,7 +4437,10 @@ describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (
     assert.deepEqual(editKeys(plan), ['STATE.md|Phase 1:|[GSD.01] 01:', 'STATE.md|Phase 2.1:|[GSD.01] 02:'].sort());
 
     applyMigration(cwd, plan, { dryRun: false });
-    assert.equal(readPlanning(cwd, 'STATE.md'), stateText('[GSD.01] 01: a, Phase 11: b, [GSD.01] 02: c, [GSD.01] 01: d'));
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('[GSD.01] 01: a, Phase 11: b, [GSD.01] 02: c, [GSD.01] 01: d')),
+    );
   });
 
   test('dry-run prints the cross-reference edits and writes zero bytes', () => {
