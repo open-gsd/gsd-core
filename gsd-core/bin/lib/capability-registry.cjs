@@ -2074,7 +2074,9 @@ const capabilities = {
       "unsupported": []
     },
     "skills": [],
-    "agents": [],
+    "agents": [
+      "gsd-intel-updater"
+    ],
     "activationKey": "intel.enabled",
     "config": {
       "intel.enabled": {
@@ -4444,6 +4446,7 @@ const byAgent = {
   "gsd-code-reviewer": "code-review",
   "gsd-code-fixer": "code-review",
   "gsd-behavior-verifier": "deep-verify",
+  "gsd-intel-updater": "intel",
   "gsd-dom-verifier": "live-dom-uat",
   "gsd-mempalace-curator": "mempalace",
   "gsd-nyquist-auditor": "nyquist",

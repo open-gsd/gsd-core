@@ -1227,6 +1227,40 @@ function resolveEffectiveProfile({ requestedProfileName, targetDir }: ResolveEff
   return 'full';
 }
 
+interface AgentsStagedByMarkerOpts {
+  /** Candidate `commands/gsd` source dirs, first existing wins. Default: the repo layout, then the installed
+   *  layout (`<runtime config>/gsd-core/commands/gsd`, where `__dirname` is `gsd-core/bin/lib`). */
+  commandsDirs?: readonly string[];
+  workflowsDir?: string;
+  registry?: CapabilityRegistry;
+}
+
+/**
+ * #4761: the agents an install in `configDir` stages, derived from its `.gsd-profile` marker with the exact
+ * `resolveProfile` call shape `bin/install.js` uses (`core` gets an empty skill manifest, every profile derives agents
+ * from the real one). `null` means "no filtering": no usable marker, a `full` profile, or no command sources to derive
+ * from (a derivation that cannot run must never hide a missing agent, so it degrades to the full list).
+ */
+function agentsStagedByMarker(configDir: string, opts: AgentsStagedByMarkerOpts = {}): Set<string> | null {
+  const marker = readActiveProfile(configDir);
+  if (!marker) return null;
+  const candidates = opts.commandsDirs ?? [
+    DEFAULT_COMMANDS_DIR,
+    path.resolve(__dirname, '..', '..', 'commands', 'gsd'),
+  ];
+  const commandsDir = candidates.find((dir) => fs.existsSync(dir));
+  if (commandsDir === undefined) return null;
+  const fullManifest = loadSkillsManifest(commandsDir, opts.workflowsDir ?? DEFAULT_WORKFLOWS_DIR);
+  if (fullManifest.size === 0) return null;
+  const resolved = resolveProfile({
+    modes: [marker],
+    manifest: marker === 'core' ? new Map() : fullManifest,
+    agentManifest: fullManifest,
+    registry: opts.registry,
+  });
+  return resolved.skills === '*' ? null : resolved.agents;
+}
+
 // ---------------------------------------------------------------------------
 // Back-compat shims (deprecated — use profile-based API instead)
 // ---------------------------------------------------------------------------
@@ -1308,6 +1342,7 @@ export = {
   loadSkillsManifest,
   resolveProfile,
   resolveEffectiveProfile,
+  agentsStagedByMarker,
   mostRestrictiveProfile,
   stageSkillsForProfile,
   stageAgentsForProfile,
