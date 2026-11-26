@@ -43,13 +43,8 @@ Before verifying, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists. Follow all project-specific guidelines, security requirements, conventions.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/`:
-1. List available skills (subdirectories)
-2. Read `SKILL.md` per skill (~130 lines)
-3. Load specific `rules/*.md` as needed during verification
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-
-Ensures project-specific patterns/conventions/best practices are applied during verification.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Apply skill rules when verifying documentation claims.
 </project_context>
 
 <claim_extraction>

@@ -537,10 +537,26 @@ describe('neutralizeAgentReferences', () => {
     assert.ok(neutralizeAgentReferences(input, 'AGENTS.md').includes('AGENTS.md'));
   });
 
-  test('removes AGENTS.md load-blocking instruction', () => {
-    const input = 'Do NOT load full `AGENTS.md` files — they contain agent definitions.';
-    const result = neutralizeAgentReferences(input, 'AGENTS.md');
-    assert.ok(!result.includes('Do NOT load full'), 'blocking instruction removed');
+  // #4649: the strip existed only to serve one skill pack's "do not load AGENTS.md" step. With that
+  // step gone from the agents and the shared reference, nothing is stripped; a line the strip used to
+  // delete is ordinary text, and a numbered item that held it no longer renders empty.
+  const AGENTS_MD_SENTENCE = 'Do NOT load full `AGENTS.md` files (100KB+ context cost)';
+  const compiledNeutralize = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs').neutralizeAgentReferences;
+
+  for (const [label, neutralize] of [['bin/install.js', neutralizeAgentReferences], ['compiled module', compiledNeutralize]]) {
+    test(`[${label}] leaves an AGENTS.md sentence unchanged`, () => {
+      assert.equal(neutralize(AGENTS_MD_SENTENCE, 'AGENTS.md'), AGENTS_MD_SENTENCE);
+    });
+
+    test(`[${label}] keeps every line of a numbered list that holds it`, () => {
+      const input = ['1. List available skills', `2. ${AGENTS_MD_SENTENCE}`, '3. Apply skill rules'].join('\n');
+      assert.equal(neutralize(input, 'AGENTS.md'), input);
+    });
+  }
+
+  test('both neutralizeAgentReferences copies agree on the former strip input', () => {
+    const input = `Claude reads CLAUDE.md.\n${AGENTS_MD_SENTENCE}\n`;
+    assert.equal(neutralizeAgentReferences(input, 'AGENTS.md'), compiledNeutralize(input, 'AGENTS.md'));
   });
 
   test('preserves claude- prefixes (CSS classes, package names)', () => {

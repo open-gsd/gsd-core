@@ -34,13 +34,8 @@ Before analyzing patterns, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, coding conventions, and architectural patterns.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
-3. Load specific `rules/*.md` files as needed during analysis
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-
-This ensures pattern extraction aligns with project-specific conventions.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Align pattern extraction with project skill conventions.
 </project_context>
 
 <upstream_input>
