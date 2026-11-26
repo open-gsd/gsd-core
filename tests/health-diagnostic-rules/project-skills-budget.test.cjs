@@ -70,8 +70,7 @@ describe('W033 (project skills that defeat the scoped discovery read)', () => {
       assert.match(d.message, /\.claude\/skills\/api-conventions\/SKILL\.md/);
       assert.match(d.message, /no frontmatter description/);
       assert.equal(d.remedy.action, REMEDY_ACTION.ADVISE);
-      assert.match(d.remedy.args.command, /description/);
-      assert.match(d.remedy.args.command, /references\//);
+      assert.match(d.remedy.args.command, /Add a frontmatter description to \.claude\/skills\/api-conventions\/SKILL\.md/);
     });
 
     test('frontmatter without a description key reports', (t) => {
