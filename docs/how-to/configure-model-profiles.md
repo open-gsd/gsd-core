@@ -65,6 +65,34 @@ npx @opengsd/gsd-core@latest --codex --global   # or --opencode, --kilo, etc.
 
 GSD will also warn you if you forget: workflow entry commands (`gsd init plan-phase`, `gsd init execute-phase`, etc.) detect when `.planning/config.json` or `~/.gsd/defaults.json` is newer than your installed agent files and print a one-line stderr reminder naming the changed file and the re-install command. The check is read-only and runs only on `codex` and `opencode`; Claude Code resolves models at spawn time and is unaffected. (#1688)
 
+### Pin a different model per runtime from one committed config
+
+`.planning/config.json` is shared by every host that works the repository, so a model id written for one runtime reaches the others as well: a Codex id on Claude Code fails when the agent is spawned. Give the agent an object keyed by runtime instead of a string (#4669):
+
+1. Edit `model_overrides` so the agent maps each runtime you use to that runtime's own model. A runtime you leave out keeps tier routing for that agent:
+
+   ```json
+   {
+     "model_overrides": {
+       "gsd-planner":  { "claude": "opus", "codex": "gpt-6-astra" },
+       "gsd-debugger": { "codex": "gpt-6-astra" }
+     }
+   }
+   ```
+
+   From the command line, `gsd-tools config-set model_overrides.gsd-planner '{"claude":"opus","codex":"gpt-6-astra"}'` writes the whole object. A dotted path such as `model_overrides.gsd-planner.codex` is not accepted, so always write the full object.
+
+2. Re-run the installer for each runtime that bakes the model into its agent files (`--codex`, `--opencode`, `--kilo`). Each install picks the key for the runtime it is installing, so the Codex files carry the Codex id and the OpenCode files the OpenCode id. Claude Code resolves at spawn time and needs no re-install.
+
+3. Check what each host will use. `GSD_RUNTIME` selects the host for the query:
+
+   ```bash
+   GSD_RUNTIME=claude gsd-tools query resolve-model gsd-planner --raw   # opus
+   GSD_RUNTIME=codex  gsd-tools query resolve-model gsd-planner --raw   # gpt-6-astra
+   ```
+
+**When there is nothing for the runtime.** An object with no key for the active runtime, or an unusable value under it (empty string, number, `null`, a nested object), is not an error and prints no warning. The agent resolves by tier, as if it had no entry; above, `gsd-debugger` on Claude Code. If a host is not using the model you expect, check the key spelling first: keys are the exact runtime ids (`claude`, `codex`, `opencode`, `kilo`), compared case-sensitively.
+
 ---
 
 ## Per-phase-type models (`models`)

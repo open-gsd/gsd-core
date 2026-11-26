@@ -8,9 +8,9 @@
   "label": "PROXY-TOKENIZER DELTA — gpt-tokenizer is a stand-in; Anthropic publishes no tokenizer for Claude 3+. The on/off COMPARISON is exact under this pinned tokenizer; absolute counts are not Claude's real token counts.",
   "pairs": {
     "agents/gsd-advisor-researcher.md": {
-      "offTokens": 1087,
-      "onTokens": 853,
-      "reductionPct": 21.53
+      "offTokens": 1100,
+      "onTokens": 866,
+      "reductionPct": 21.27
     },
     "agents/gsd-ai-researcher.md": {
       "offTokens": 1446,
@@ -18,29 +18,29 @@
       "reductionPct": 7.26
     },
     "agents/gsd-assumptions-analyzer.md": {
-      "offTokens": 1063,
-      "onTokens": 842,
-      "reductionPct": 20.79
+      "offTokens": 1076,
+      "onTokens": 877,
+      "reductionPct": 18.49
     },
     "agents/gsd-code-fixer.md": {
-      "offTokens": 10752,
-      "onTokens": 6698,
-      "reductionPct": 37.7
+      "offTokens": 11716,
+      "onTokens": 7416,
+      "reductionPct": 36.7
     },
     "agents/gsd-code-reviewer.md": {
-      "offTokens": 5424,
-      "onTokens": 4555,
-      "reductionPct": 16.02
+      "offTokens": 6243,
+      "onTokens": 5384,
+      "reductionPct": 13.76
     },
     "agents/gsd-codebase-mapper.md": {
-      "offTokens": 5357,
-      "onTokens": 4834,
-      "reductionPct": 9.76
+      "offTokens": 5368,
+      "onTokens": 4846,
+      "reductionPct": 9.72
     },
     "agents/gsd-debug-session-manager.md": {
-      "offTokens": 5005,
-      "onTokens": 4716,
-      "reductionPct": 5.77
+      "offTokens": 5126,
+      "onTokens": 4837,
+      "reductionPct": 5.64
     },
     "agents/gsd-doc-classifier.md": {
       "offTokens": 2901,
@@ -53,14 +53,14 @@
       "reductionPct": 13.26
     },
     "agents/gsd-doc-verifier.md": {
-      "offTokens": 2996,
-      "onTokens": 2667,
-      "reductionPct": 10.98
+      "offTokens": 3015,
+      "onTokens": 2669,
+      "reductionPct": 11.48
     },
     "agents/gsd-doc-writer.md": {
-      "offTokens": 9040,
-      "onTokens": 5588,
-      "reductionPct": 38.19
+      "offTokens": 9552,
+      "onTokens": 6017,
+      "reductionPct": 37.01
     },
     "agents/gsd-dom-verifier.md": {
       "offTokens": 1733,
@@ -73,9 +73,9 @@
       "reductionPct": 17.83
     },
     "agents/gsd-eval-auditor.md": {
-      "offTokens": 2919,
-      "onTokens": 2786,
-      "reductionPct": 4.56
+      "offTokens": 2931,
+      "onTokens": 2799,
+      "reductionPct": 4.5
     },
     "agents/gsd-eval-planner.md": {
       "offTokens": 1674,
@@ -88,9 +88,9 @@
       "reductionPct": 27.63
     },
     "agents/gsd-integration-checker.md": {
-      "offTokens": 4105,
-      "onTokens": 2377,
-      "reductionPct": 42.1
+      "offTokens": 4181,
+      "onTokens": 2407,
+      "reductionPct": 42.43
     },
     "agents/gsd-intel-updater.md": {
       "offTokens": 4331,
@@ -98,54 +98,54 @@
       "reductionPct": 5.5
     },
     "agents/gsd-mempalace-curator.md": {
-      "offTokens": 1160,
-      "onTokens": 985,
-      "reductionPct": 15.09
+      "offTokens": 1188,
+      "onTokens": 1014,
+      "reductionPct": 14.65
     },
     "agents/gsd-nyquist-auditor.md": {
-      "offTokens": 1768,
-      "onTokens": 1654,
-      "reductionPct": 6.45
+      "offTokens": 1781,
+      "onTokens": 1667,
+      "reductionPct": 6.4
     },
     "agents/gsd-pattern-mapper.md": {
-      "offTokens": 3155,
-      "onTokens": 2670,
-      "reductionPct": 15.37
+      "offTokens": 3151,
+      "onTokens": 2674,
+      "reductionPct": 15.14
     },
     "agents/gsd-project-researcher.md": {
-      "offTokens": 5442,
-      "onTokens": 5113,
-      "reductionPct": 6.05
+      "offTokens": 5454,
+      "onTokens": 5125,
+      "reductionPct": 6.03
     },
     "agents/gsd-research-synthesizer.md": {
-      "offTokens": 3100,
-      "onTokens": 2895,
-      "reductionPct": 6.61
+      "offTokens": 3439,
+      "onTokens": 3206,
+      "reductionPct": 6.78
     },
     "agents/gsd-roadmapper.md": {
-      "offTokens": 6008,
-      "onTokens": 4774,
-      "reductionPct": 20.54
+      "offTokens": 6180,
+      "onTokens": 4924,
+      "reductionPct": 20.32
     },
     "agents/gsd-security-auditor.md": {
-      "offTokens": 2201,
-      "onTokens": 1969,
-      "reductionPct": 10.54
+      "offTokens": 2212,
+      "onTokens": 1981,
+      "reductionPct": 10.44
     },
     "agents/gsd-ui-auditor.md": {
-      "offTokens": 6775,
-      "onTokens": 4137,
-      "reductionPct": 38.94
+      "offTokens": 6786,
+      "onTokens": 4148,
+      "reductionPct": 38.87
     },
     "agents/gsd-ui-checker.md": {
-      "offTokens": 4499,
-      "onTokens": 3048,
-      "reductionPct": 32.25
+      "offTokens": 4528,
+      "onTokens": 3079,
+      "reductionPct": 32
     },
     "agents/gsd-ui-researcher.md": {
-      "offTokens": 5410,
-      "onTokens": 4793,
-      "reductionPct": 11.4
+      "offTokens": 5782,
+      "onTokens": 5129,
+      "reductionPct": 11.29
     },
     "agents/gsd-user-profiler.md": {
       "offTokens": 1859,
@@ -153,9 +153,9 @@
       "reductionPct": 20.33
     },
     "gsd-core/templates/summary.md": {
-      "offTokens": 2938,
-      "onTokens": 2299,
-      "reductionPct": 21.75
+      "offTokens": 2940,
+      "onTokens": 2301,
+      "reductionPct": 21.73
     },
     "gsd-core/templates/user-setup.md": {
       "offTokens": 2061,
@@ -163,14 +163,14 @@
       "reductionPct": 33.87
     },
     "gsd-core/workflows/help/modes/full.md": {
-      "offTokens": 9933,
-      "onTokens": 6573,
-      "reductionPct": 33.83
+      "offTokens": 9981,
+      "onTokens": 6618,
+      "reductionPct": 33.69
     }
   },
   "aggregate": {
-    "offTokens": 122467,
-    "onTokens": 95637,
-    "reductionPct": 21.91
+    "offTokens": 126060,
+    "onTokens": 98795,
+    "reductionPct": 21.63
   }
 }

@@ -236,6 +236,21 @@ describe('research-provider boundary: LOW classification', () => {
     );
   });
 
+  test('serply, no verdict → LOW (#4942)', () => {
+    assert.equal(
+      classifyConfidence({ provider: 'serply' }),
+      'LOW'
+    );
+  });
+
+  // Rule 6: serply has web authority, so verification lifts it to MEDIUM only
+  test('serply + verifiedAgainstOfficial → MEDIUM (#4942)', () => {
+    assert.equal(
+      classifyConfidence({ provider: 'serply', verifiedAgainstOfficial: true }),
+      'MEDIUM'
+    );
+  });
+
   // Rule 7: completely unknown provider, no other signals → LOW
   test('unknown provider, no verdict → LOW', () => {
     assert.equal(

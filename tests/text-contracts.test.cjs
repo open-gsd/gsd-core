@@ -16,6 +16,7 @@ const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
 const textContracts = require('../scripts/static-checks/text-contracts.cjs');
+const PROJECT_SKILLS = require('../scripts/static-checks/text-contracts/lib/project-skills-discovery.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -429,8 +430,8 @@ describe('the run itself fails closed', () => {
 
   test('the shipped contracts load, with unique ids, and their number is the pinned minimum', () => {
     const ids = textContracts.loadContracts().map((c) => c.id);
-    // The earlier contracts are exercised here; the batch 8 ones (#6566) in tests/text-contracts.batch8.test.cjs, the batch 9 ones (#6573) in tests/text-contracts.batch9.test.cjs and the batch 10 ones (#6577) in tests/text-contracts.batch10.test.cjs and the batch 11 ones (#6583) in tests/text-contracts.batch11.test.cjs.
-    assert.deepEqual([...ids].sort(), [...SHIPPED, ...require('./helpers/text-contracts-batch8-ids.cjs'), ...require('./helpers/text-contracts-batch9-ids.cjs'), ...require('./helpers/text-contracts-batch10-ids.cjs'), ...require('./helpers/text-contracts-batch11-ids.cjs')].sort());
+    // The earlier contracts are exercised here; the batch 8 ones (#6566) in tests/text-contracts.batch8.test.cjs, the batch 9 ones (#6573) in tests/text-contracts.batch9.test.cjs and the batch 10 ones (#6577) in tests/text-contracts.batch10.test.cjs the batch 11 ones (#6583) in tests/text-contracts.batch11.test.cjs and the batch 12 ones (#6654) in tests/text-contracts.batch12.test.cjs.
+    assert.deepEqual([...ids].sort(), [...SHIPPED, ...require('./helpers/text-contracts-batch8-ids.cjs'), ...require('./helpers/text-contracts-batch9-ids.cjs'), ...require('./helpers/text-contracts-batch10-ids.cjs'), ...require('./helpers/text-contracts-batch11-ids.cjs'), ...require('./helpers/text-contracts-batch12-ids.cjs')].sort());
     assert.equal(new Set(ids).size, ids.length);
     // Deleting a contract file, or adding one without raising MIN_CONTRACTS, fails here.
     assert.equal(ids.length, textContracts.MIN_CONTRACTS);
@@ -573,6 +574,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/references/verify-mvp-mode.md', 'gsd-core/references/planner-human-verify-mode.md', 'gsd-core/references/checkpoints.md',
     'gsd-core/workflows/settings-advanced.md', 'gsd-core/workflows/review.md', 'gsd-core/workflows/quick.md',
     'gsd-core/references/untrusted-input-boundary.md', 'package-lock.json', '.github/workflows/test.yml',
+    // agent-skills-awareness (#4649): the 21 canonical agents, their 15 compact variants and the shared reference.
+    ...PROJECT_SKILLS.DISCOVERY_FILES, PROJECT_SKILLS.REFERENCE,
   ];
 
   function copyOfRepoFiles(t) {

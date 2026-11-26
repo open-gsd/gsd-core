@@ -157,6 +157,8 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  // #4647: the closed seed status must be named beside the open values in the CLI, user and command docs.
+  'tests/seed-close.test.cjs': ['docs/CLI-TOOLS.md', 'docs/USER-GUIDE.md', 'docs/COMMANDS.md'],
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
   // #6337: copies the docs the shipped text contracts read into a temporary root to show a
@@ -209,6 +211,13 @@ const DOCS_GUARD_TESTS = {
     'docs/ko-KR/FEATURES.md',
     'docs/reference/agents.md',
   ],
+  // #6654: the same, for the batch 12 contracts (tests/text-contracts.batch12.test.cjs copies these docs).
+  'tests/text-contracts.batch12.test.cjs': [
+    'docs/COMMANDS.md',
+    'docs/INVENTORY-MANIFEST.json',
+    'docs/INVENTORY.md',
+    'docs/reference/agents.md',
+  ],
   'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
@@ -217,7 +226,6 @@ const DOCS_GUARD_TESTS = {
   // Walks docs/features/ as a directory (the fragment corpus) and asserts the
   // committed docs/FEATURES.md equals the generated projection of it (#3840).
   'tests/features-index-gate.test.cjs': ['docs/features/', 'docs/FEATURES.md'],
-  'tests/agent-classification-parity.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md'],
   // #3683: pins the learnings feature section's agreement with the canonical
   // artifact registry (reads docs/FEATURES.md around the extract-learnings
   // entry).
@@ -276,11 +284,6 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/INVENTORY.md',
   ],
   'tests/drift-detection.test.cjs': ['docs/CONFIGURATION.md', 'docs/reference/agents.md'],
-  'tests/edit-phase.test.cjs': [
-    'docs/INVENTORY.md',
-    'docs/INVENTORY-MANIFEST.json',
-    'docs/COMMANDS.md',
-  ],
   'tests/effort-surface-axis.test.cjs': ['docs/reference/host-integration-capability-matrix.md'],
   'tests/execute-phase-active-flags.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
@@ -373,7 +376,6 @@ const DOCS_GUARD_TESTS = {
     'docs/README.md',
   ],
   'tests/plan-authoring-verification-gaps.test.cjs': ['docs/reference/plan-md.md'],
-  'tests/plan-checker-coupling.test.cjs': ['docs/reference/agents.md'],
   'tests/planner-verify-command-validation.test.cjs': ['docs/how-to/validate-an-automated-command.md'],
   'tests/plan-phase-drift-guard.test.cjs': [
     'docs/CONFIGURATION.md',
@@ -397,7 +399,6 @@ const DOCS_GUARD_TESTS = {
     'docs/ja-JP/README.md',
     'docs/pt-BR/README.md',
   ],
-  'tests/progress-forensic.test.cjs': ['docs/COMMANDS.md'],
   'tests/registry-docs-approved-issue-parity.test.cjs': [
     'docs/registries/README.md',
     'docs/how-to/list-your-reviewer-lane.md',

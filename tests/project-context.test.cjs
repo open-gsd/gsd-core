@@ -20,6 +20,7 @@ const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { withHome } = require('./helpers/isolated-env.cjs');
 
 const {
   resolveProjectContext,
@@ -55,6 +56,18 @@ function git(args, cwd) {
 function mkTmp(t, prefix = 'gsd-6043-') {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   t.after(() => cleanup(dir));
+  return dir;
+}
+
+/**
+ * mkTmp, declared as the home for the test's lifetime. On Windows the layout reader answers only
+ * for a repository inside the user's home (ownedByThisUser, src/project-context.cts), so a test
+ * that asserts what the reader answers builds its repositories in the home it declares, not in
+ * os.tmpdir(), which the runner's sandbox HOME/USERPROFILE (#4635) no longer sits inside.
+ */
+function mkHome(t, prefix) {
+  const dir = mkTmp(t, prefix);
+  withHome(t, dir);
   return dir;
 }
 
@@ -562,7 +575,7 @@ describe('#6355: readGitLayout', () => {
   }
 
   test('a main checkout: the checkout is both roots, from its top and from below', (t) => {
-    const root = mkTmp(t);
+    const root = mkHome(t);
     const { main, common } = mainAndLinked(root);
     fs.mkdirSync(path.join(main, 'a', 'b'), { recursive: true });
 
@@ -574,7 +587,7 @@ describe('#6355: readGitLayout', () => {
   });
 
   test('a linked worktree: its own top, the main checkout as the repo root, the shared git dir', (t) => {
-    const root = mkTmp(t);
+    const root = mkHome(t);
     const { main, common, linked } = mainAndLinked(root);
     fs.mkdirSync(path.join(linked, 'a'));
 
@@ -586,7 +599,7 @@ describe('#6355: readGitLayout', () => {
   });
 
   test('no repository above the start: the start itself, and that is not a degradation', (t) => {
-    const start = path.join(mkTmp(t), 'a', 'b');
+    const start = path.join(mkHome(t), 'a', 'b');
     fs.mkdirSync(start, { recursive: true });
 
     assert.deepEqual(readGitLayout(start), {
@@ -595,7 +608,7 @@ describe('#6355: readGitLayout', () => {
   });
 
   test('the nearest repository wins: a repository nested in another answers for what is inside it', (t) => {
-    const root = mkTmp(t);
+    const root = mkHome(t);
     const outer = path.join(root, 'outer');
     const inner = path.join(outer, 'vendor', 'inner');
     gitDir(path.join(outer, '.git'));
@@ -607,7 +620,7 @@ describe('#6355: readGitLayout', () => {
   });
 
   test('property: from any depth, the answer is the nearest ancestor that holds a repository', (t) => {
-    const root = mkTmp(t);
+    const root = mkHome(t);
     let n = 0;
     fc.assert(fc.property(
       fc.integer({ min: 0, max: 6 }),
@@ -736,7 +749,7 @@ describe('#6355: readGitLayout', () => {
     };
     for (const [name, build] of Object.entries(cases)) {
       test(name, (t) => {
-        assert.equal(readGitLayout(build(mkTmp(t))), null);
+        assert.equal(readGitLayout(build(mkHome(t))), null);
       });
     }
 
@@ -859,7 +872,7 @@ describe('#6355: readGitLayout', () => {
   });
 
   test('resolveProjectContext says which path answered, and uses git only when the reader declines', (t) => {
-    const { main } = mainAndLinked(mkTmp(t));
+    const { main } = mainAndLinked(mkHome(t));
     const calls = [];
     const execGit = (args, opts) => {
       calls.push(args.join(' '));

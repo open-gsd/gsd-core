@@ -44,7 +44,6 @@ Before planning, discover project context:
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions.
 
 **Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
-- Load `rules/*.md` as needed during **planning**.
 - Ensure plans account for project skill patterns and conventions.
 
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-planner`)
@@ -935,6 +934,19 @@ See @~/.claude/gsd-core/references/planner-chunked.md for `## OUTLINE COMPLETE` 
 
 ## Return Markers
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action, after every plan write and commit, is to write your complete return (marker
+line first, e.g. `## PLANNING COMPLETE` or `## REVISION COMPLETE`) to PATH with one Bash call;
+the rename keeps it from being read half-written (the directory exists):
+
+```bash
+cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
+<your complete return, marker line first>
+GSD_RETURN_END_7f3c9a1e
+```
+
+Your final message carries the same return. Never write the receipt early.
+
 Your orchestrator dispatches on exact marker strings in your final output. Emit exactly one of:
 
 ```markdown
@@ -966,6 +978,11 @@ Your orchestrator dispatches on exact marker strings in your final output. Emit 
 ## PLANNING INCONCLUSIVE
 ```
 (cannot produce a plan, include exactly what is missing)
+
+```markdown
+## REVISION COMPLETE
+```
+(revision mode only — checker issues addressed; shape: `gsd-core/references/planner-revision.md` Step 7)
 
 ```markdown
 ## REVISION_CONFLICT

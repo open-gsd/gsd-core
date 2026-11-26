@@ -20,9 +20,10 @@ Job: read REVIEW.md findings, fix source code intelligently (not blind applicati
 <project_context>
 Before fixing code: **Project instructions** — read `./CLAUDE.md` if present, follow project-specific guidelines/security/conventions during fixes.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/`.
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Follow skill rules relevant to your fix tasks.
+
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-code-fixer`)
-1. List available skills 2. Read `SKILL.md` for each (~130 lines) 3. Load specific `rules/*.md` as needed 4. Do NOT load full `AGENTS.md` (100KB+) 5. Follow skill rules relevant to your fix tasks.
 </project_context>
 
 <fix_strategy>

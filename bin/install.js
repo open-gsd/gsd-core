@@ -1616,6 +1616,14 @@ function stripJsonComments(text) {
   let i = 0;
   let inString = false;
   let stringChar = '';
+  // #5989: a comma seen outside a string is held, not emitted. It is dropped
+  // only when the next emitted non-whitespace char is `}` or `]` (a JSONC
+  // trailing comma) and flushed before any other emitted char. Comments are
+  // skipped by this same pass, so `, /*c*/ }` collapses exactly as the old
+  // post-strip regex `,\s*([}\]])` did — but that regex ran on stripped text,
+  // where a `,}` inside a string was indistinguishable from structure and
+  // rewrote values like "x,}y".
+  let pendingComma = false;
   while (i < text.length) {
     // Handle string literals — don't strip comments inside strings
     if (inString) {
@@ -1633,6 +1641,10 @@ function stripJsonComments(text) {
     }
     // Start of string
     if (text[i] === '"' || text[i] === "'") {
+      if (pendingComma) {
+        result += ',';
+        pendingComma = false;
+      }
       inString = true;
       stringChar = text[i];
       result += text[i];
@@ -1649,14 +1661,37 @@ function stripJsonComments(text) {
     if (text[i] === '/' && text[i + 1] === '*') {
       i += 2;
       while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      // #5990: the scan may stop at end of input — that is not a closed comment.
+      if (i >= text.length) throw new SyntaxError('Unterminated block comment');
       i += 2; // skip closing */
       continue;
+    }
+    if (text[i] === ',') {
+      // Consecutive commas keep failing exactly as before: the held comma is
+      // flushed and this one takes its place.
+      if (pendingComma) result += ',';
+      pendingComma = true;
+      i++;
+      continue;
+    }
+    if (/\s/.test(text[i])) {
+      result += text[i];
+      i++;
+      continue;
+    }
+    if (text[i] === '}' || text[i] === ']') {
+      pendingComma = false;
+    } else if (pendingComma) {
+      result += ',';
+      pendingComma = false;
     }
     result += text[i];
     i++;
   }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
+  // EOF flush: nothing followed the comma to drop it, so the text keeps the
+  // same malformed shape the old regex left behind ({"a":1, still fails).
+  if (pendingComma) result += ',';
+  return result;
 }
 
 /**
@@ -1713,6 +1748,11 @@ const {
   readGsdRuntimeProfileResolver,
   resolveAgentModelOverride,
 } = require(path.join(_gsdLibDir, 'install-model-override-resolver.cjs'));
+// #4669: the one selector for a runtime-keyed `model_overrides.<agent>` entry. The Codex `.toml`
+// baker below reads that key directly rather than through resolveAgentModelOverride (it has its own
+// value policy: trim, drop Anthropic-flavored ids with a warning), so it selects through the same
+// function the dispatch and install resolvers use and the three cannot disagree.
+const { selectAgentModelOverride } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2875 Part 2: effort frontmatter injection moved to runtimeArtifactConversion
 // (single source of truth with the descriptor pipeline's
@@ -4417,7 +4457,10 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // default now, and only an explicit model_overrides pin survives. See the
   // deprecation-notice block below for the population that used to get a pin from
   // the resolver and no longer does.
-  const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+
+  // #4669: an entry may be a runtime-keyed object; this file IS the codex install, so `codex` is the key.
+  const rawModelOverride = selectAgentModelOverride(modelOverrides?.[resolvedName], 'codex')
+    || selectAgentModelOverride(modelOverrides?.[agentName], 'codex');
   let pinnedModel = null;
   if (rawModelOverride) {
     // Trim before the truthiness test (#3241 defect fix): a whitespace-only value
@@ -6783,6 +6826,82 @@ function symlinkedDestRefusal(filePath) {
     'Re-run with GSD_ALLOW_SYMLINKED_DEST=1 to edit the file it points at (the link is kept).';
 }
 
+/**
+ * #5716: refuse a symlinked Codex config.toml unless GSD_ALLOW_SYMLINKED_DEST is set, as
+ * installCodexConfig and the hooks.json writer refuse it. Callers run this only for a run
+ * that will write config.toml, so a link GSD would leave alone is never refused, and run
+ * it before that run changes anything else, so a refused run leaves the install whole.
+ * Returns whether config.toml is a symlink, so a caller that goes on to write it acts on
+ * the same observation the check made.
+ */
+function assertCodexConfigLinkAllowed(configPath) {
+  const isSymlink = fs.lstatSync(configPath).isSymbolicLink();
+  if (isSymlink && !isSymlinkedDestOptIn()) {
+    throw new Error(
+      `Codex config.toml at "${configPath}" is a symlink, refusing to change it. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+    );
+  }
+  return isSymlink;
+}
+
+/**
+ * #5716: with GSD_ALLOW_SYMLINKED_DEST, writeStrippedCodexConfig writes in place at the file a
+ * symlinked config.toml resolves to, so that file must be writable; its directory need not
+ * be. Uninstall runs this with its up-front check, so a read-only target is refused before
+ * anything is removed instead of failing the write after the skills, agent files and hooks
+ * are gone.
+ */
+function assertCodexConfigLinkTargetWritable(configPath) {
+  const target = fs.realpathSync(configPath);
+  try {
+    fs.accessSync(target, fs.constants.W_OK);
+  } catch (cause) {
+    throw new Error(
+      `Codex config.toml at "${configPath}" is a symlink to a file GSD cannot write ("${target}", ${cause.code}), refusing to change it. Make that file writable, then re-run.`,
+      { cause },
+    );
+  }
+}
+
+/**
+ * #5716: save stripGsdFromCodexConfig's result back to config.toml. `cleaned` is null
+ * when only GSD content was left, and a regular file is then deleted as before. Deleting
+ * a symlinked config.toml would delete the user's link and leave the GSD block in the
+ * file it points at, and deleting the file it points at would leave a dangling link,
+ * so with GSD_ALLOW_SYMLINKED_DEST that file is emptied instead and the link stays.
+ * Without the opt-in a symlinked config.toml is refused before it or the file it links
+ * to is touched. Returns true when the file was deleted.
+ */
+function writeStrippedCodexConfig(configPath, cleaned) {
+  const isSymlink = assertCodexConfigLinkAllowed(configPath);
+  if (cleaned === null && !isSymlink) {
+    fs.unlinkSync(configPath);
+    return true;
+  }
+  // A link that passed the check implies the opt-in, so it is written at the file it
+  // resolves to. Both callers skip a dangling link before they get here.
+  fs.writeFileSync(isSymlink ? fs.realpathSync(configPath) : configPath, cleaned === null ? '' : cleaned);
+  return false;
+}
+
+/**
+ * #5716: stripGsdFromCodexConfig as uninstall applies it to config.toml. Behind a symlink,
+ * a result that differs from the file only in whitespace at either end means the file held
+ * no GSD content, so the file comes back unchanged instead. That covers an empty file an
+ * earlier uninstall left there, perhaps with a newline an editor added since (the strip
+ * calls whitespace alone GSD-only, null), and a user's own file whose leading or trailing
+ * blank space the strip would trim. A rerun neither rewrites such a file nor reports work
+ * it did not do, and without the opt-in it is not refused.
+ */
+function stripGsdFromCodexConfigOnUninstall(configPath, content) {
+  const stripped = stripGsdFromCodexConfig(content);
+  if (stripped !== content && (stripped ?? '').trim() === content.trim()
+    && fs.lstatSync(configPath).isSymbolicLink()) {
+    return content;
+  }
+  return stripped;
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
   // #5301: the write lands on the symlink's target, never replaces the link.
   configPath = resolveSymlinkWriteTarget(configPath);
@@ -7619,7 +7738,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
  *   Preserves: "Claude Code" (product), "Claude Opus/Sonnet/Haiku" (models),
  *   "claude-" (prefixes), "CLAUDE.md" (handled separately)
  * - "CLAUDE.md" → runtime-appropriate instruction file
- * - "Do NOT load full AGENTS.md" → removed (harmful for AGENTS.md runtimes)
  *
  * @param {string} content - File content to neutralize
  * @param {string} instructionFile - Runtime's instruction file ('AGENTS.md', 'GEMINI.md', etc.)
@@ -7634,8 +7752,6 @@ function neutralizeAgentReferences(content, instructionFile) {
   if (instructionFile) {
     c = c.replace(/CLAUDE\.md/g, instructionFile);
   }
-  // Remove instructions that conflict with AGENTS.md-based runtimes
-  c = c.replace(/Do NOT load full `AGENTS\.md` files[^\n]*/g, '');
   return c;
 }
 
@@ -8888,6 +9004,23 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
 
   let removedCount = 0;
 
+  // #5716: the config.toml strip further down refuses a symlinked config.toml it would
+  // change unless GSD_ALLOW_SYMLINKED_DEST is set. Refuse here, before anything is
+  // removed, so a refused uninstall leaves the install whole instead of deleting the
+  // skills, agent files and hooks while config.toml still registers them. A link the
+  // strip would leave unchanged is not refused. With the opt-in, a link whose target file
+  // the strip could not write is refused here too.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (fs.existsSync(codexConfigPath)) {
+      const content = fs.readFileSync(codexConfigPath, 'utf8');
+      if (stripGsdFromCodexConfigOnUninstall(codexConfigPath, content) !== content
+        && assertCodexConfigLinkAllowed(codexConfigPath)) {
+        assertCodexConfigLinkTargetWritable(codexConfigPath);
+      }
+    }
+  }
+
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR uninstall run that died between staging and
   // its own restore/discard, BEFORE this run's own preserve steps (sites 2,
@@ -8970,13 +9103,13 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
     if (fs.existsSync(codexConfigPath)) {
       const content = fs.readFileSync(codexConfigPath, 'utf8');
-      const cleaned = stripGsdFromCodexConfig(content);
+      const cleaned = stripGsdFromCodexConfigOnUninstall(codexConfigPath, content);
       if (cleaned === null) {
-        fs.unlinkSync(codexConfigPath);
+        const removed = writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
-        console.log(`  ${green}✓${reset} Removed config.toml (was GSD-only)`);
+        console.log(`  ${green}✓${reset} ${removed ? 'Removed config.toml' : 'Emptied config.toml target, symlink kept'} (was GSD-only)`);
       } else if (cleaned !== content) {
-        fs.writeFileSync(codexConfigPath, cleaned);
+        writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
         console.log(`  ${green}✓${reset} Cleaned GSD sections from config.toml`);
       }
@@ -11671,6 +11804,22 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
   }
 
+  // #5716: when the profile registers no Codex agent roles, this install strips GSD content
+  // from config.toml and the validated rewrite after it always writes the file, so without
+  // GSD_ALLOW_SYMLINKED_DEST a symlinked config.toml is refused even when the strip has
+  // nothing to change. Refuse here, with the other destination preflights and before the
+  // install's first write (the orphan recovery below), so a refused run changes nothing
+  // instead of depending on the best-effort pre-config rollback, which leaves
+  // saveLocalPatches's gsd-local-patches/ backup behind. The roles follow the profile
+  // resolved from a committed Runtime Surface above. A dangling link is skipped, as the
+  // strip skips it.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (!_codexAgentRolesEnabled() && fs.existsSync(codexConfigPath)) {
+      assertCodexConfigLinkAllowed(codexConfigPath);
+    }
+  }
+
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
   // its own restore/discard, BEFORE this run's own preserve step stages
@@ -12746,13 +12895,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // resolvedProfile. Reuse the same helper that powers `--uninstall`.
   if (!_codexAgentRolesEnabled() && hostBehaviorsFor(runtime).tomlConfigInstall) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
+    // #5716: a symlinked config.toml without GSD_ALLOW_SYMLINKED_DEST was already refused
+    // before the install's first write (writeStrippedCodexConfig still checks at the write).
     if (fs.existsSync(codexConfigPath)) {
       const existing = fs.readFileSync(codexConfigPath, 'utf8');
       const cleaned = stripGsdFromCodexConfig(existing);
-      if (cleaned === null) {
-        fs.unlinkSync(codexConfigPath);
-      } else if (cleaned !== existing) {
-        fs.writeFileSync(codexConfigPath, cleaned);
+      if (cleaned !== existing) {
+        writeStrippedCodexConfig(codexConfigPath, cleaned);
       }
     }
   }
@@ -15593,6 +15742,7 @@ module.exports = {
     CODEX_EXTENDED_HOOK_EVENTS,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
+    stripGsdFromCodexConfigOnUninstall,
     migrateCodexHooksMapFormat,
     stripStaleGsdHookBlocks,
     hasUserNamespacedAotHooks,

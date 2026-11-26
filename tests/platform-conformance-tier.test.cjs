@@ -38,6 +38,7 @@ const {
   CATEGORIES,
   MACOS_CATEGORIES,
   walkTestFiles,
+  readTestFile,
   ALWAYS_REAL_OS,
   PLATFORM_SIBLING_SUFFIX,
   findPlatformSplitViolations,
@@ -54,8 +55,8 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 // constant in the same change, so the bound only tightens. Do not raise a number to make a red test green.
 // The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
 // swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
-const WINDOWS_TIER_SIZE_BASELINE = 351; // -2 (#6039): wave 4 moved 2 files off the lane (env literal only)
-const MACOS_TIER_SIZE_BASELINE = 298; // -2: tests/contributor-standards.test.cjs and tests/verification-overrides.test.cjs became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566)
+const WINDOWS_TIER_SIZE_BASELINE = 355; // +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1 (#4647): tests/seed-close.test.cjs runs the shipped plant-seed parse-idea block under a real `bash` (runHook interpreter), the signal the tier exists for; +1: tests/6451-tdd-deviation-acceptance.test.cjs joins the tier (#6451); -2 (#6039): wave 4 moved 2 files off the lane (env literal only); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip
+const MACOS_TIER_SIZE_BASELINE = 301; // +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1: tests/6420-plan-document-linear.test.cjs joins the tier (#6420); -2: contributor-standards and verification-overrides became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip
 
 // A tier of `count` files against its committed baseline: nonzero, not above, not below.
 function assertTierAtBaseline(count, baseline, label, constantName) {
@@ -1404,5 +1405,137 @@ describe('#6002: detectors match platform behavior, not text', () => {
         for (const sig of before) assert.ok(after.includes(sig), `lost ${sig}`);
       }),
     );
+  });
+});
+
+// ─── #6166: a test file that vanishes between the walk and the read ─────────
+
+describe('#6166 tree classifiers skip a test file deleted after enumeration', () => {
+  // Make reading `gone.test.cjs` (or each of `goneNames`) throw an error with
+  // `code` (none when `code` is null), as a file deleted between walkTestFiles
+  // and the read does; every other read goes through.
+  function withFailingRead(t, testsDir, code, { goneNames = ['gone.test.cjs'], message } = {}) {
+    const gone = new Set(goneNames.map((name) => path.join(testsDir, name)));
+    const readFileSync = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (file, ...rest) => {
+      if (gone.has(file)) {
+        const err = new Error(message ?? `${code}: ${file}`);
+        throw code === null ? err : Object.assign(err, { code });
+      }
+      return readFileSync(file, ...rest);
+    });
+  }
+
+  function withTestsDir(prefix, files, body) {
+    const tmpDir = createTempDir(prefix);
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(testsDir, name), content);
+      body(testsDir);
+    } finally {
+      cleanup(tmpDir);
+    }
+  }
+
+  const DARWIN = "if (process.platform === 'darwin') {}\n";
+  const PLAIN = 'assert.equal(1 + 1, 2);\n';
+
+  test('readTestFile answers null for ENOENT and rethrows every other error', (t) => {
+    withTestsDir('gen-platform-read-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+      const gone = path.join(testsDir, 'gone.test.cjs');
+      assert.equal(readTestFile(gone), PLAIN);
+      assert.equal(readTestFile(path.join(testsDir, 'never-there.test.cjs')), null);
+      assert.throws(() => readTestFile(testsDir), { code: 'EISDIR' });
+
+      withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
+      assert.throws(() => readTestFile(gone), { code: 'EIO' });
+      assert.equal(readTestFile(path.join(testsDir, 'never-there.test.cjs')), null);
+    });
+  });
+
+  for (const [name, classify] of [
+    ['classifyTree', classifyTree],
+    ['classifyMacosTree', classifyMacosTree],
+  ]) {
+    test(`${name}: an ENOENT file is left out of files and total`, (t) => {
+      withTestsDir('gen-platform-vanished-', { 'gone.test.cjs': DARWIN, 'kept.test.cjs': DARWIN }, (testsDir) => {
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/gone.test.cjs', 'tests/kept.test.cjs'] });
+
+        withFailingRead(t, testsDir, 'ENOENT');
+        assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/kept.test.cjs'] });
+      });
+    });
+
+    test(`${name}: the files left after a skip are the same, in the same order, as with the file deleted`, (t) => {
+      const files = { 'c.test.cjs': DARWIN, 'gone.test.cjs': DARWIN, 'a.test.cjs': DARWIN, 'b.test.cjs': PLAIN };
+      withTestsDir('gen-platform-order-', files, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT');
+        const skipped = classify(testsDir);
+        t.mock.restoreAll();
+
+        fs.unlinkSync(path.join(testsDir, 'gone.test.cjs'));
+        assert.deepEqual(skipped, classify(testsDir));
+        assert.deepEqual(skipped, { total: 3, files: ['tests/a.test.cjs', 'tests/c.test.cjs'] });
+      });
+    });
+
+    for (const code of ['EACCES', 'EISDIR', 'EIO', 'EMFILE', 'ENOTDIR', 'EBUSY']) {
+      test(`${name}: a ${code} read error still throws`, (t) => {
+        withTestsDir('gen-platform-unreadable-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+          withFailingRead(t, testsDir, code);
+          assert.throws(() => classify(testsDir), { code });
+        });
+      });
+    }
+
+    test(`${name}: two files that vanish in one run are both left out of total`, (t) => {
+      const files = { 'a.test.cjs': DARWIN, 'gone.test.cjs': DARWIN, 'gone-too.test.cjs': PLAIN };
+      withTestsDir('gen-platform-two-vanished-', files, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['gone.test.cjs', 'gone-too.test.cjs'] });
+        assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an empty file is read, counted in total and not flagged`, () => {
+      withTestsDir('gen-platform-empty-', { 'empty.test.cjs': '', 'a.test.cjs': DARWIN }, (testsDir) => {
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an error with no code still throws`, (t) => {
+      withTestsDir('gen-platform-codeless-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+        withFailingRead(t, testsDir, null, { message: 'read failed' });
+        assert.throws(() => classify(testsDir), { message: 'read failed' });
+      });
+    });
+
+    test(`${name}: a suite-tagged file is counted in total but never read or flagged`, (t) => {
+      // Suite files are filtered out before the read, so a vanished one stays in
+      // total, as on next; only unit-suite files are read and can be skipped.
+      withTestsDir('gen-platform-suite-', { 'x.install.test.cjs': DARWIN, 'a.test.cjs': DARWIN }, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['x.install.test.cjs'] });
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an error whose message says ENOENT but whose code does not still throws`, (t) => {
+      withTestsDir('gen-platform-message-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+        withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
+        assert.throws(() => classify(testsDir), { code: 'EIO' });
+      });
+    });
+  }
+
+  test('classifyTree: a .platform sibling that vanished never reaches the #5074 split check', (t) => {
+    // Base without signal + sibling with one is a valid split. With the sibling
+    // gone, only the base is left: no split to check, nothing flagged.
+    const files = { 'a.test.cjs': PLAIN, 'a.platform.test.cjs': DARWIN };
+    withTestsDir('gen-platform-split-', files, (testsDir) => {
+      assert.deepEqual(classifyTree(testsDir), { total: 2, files: ['tests/a.platform.test.cjs'] });
+
+      withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['a.platform.test.cjs'] });
+      assert.deepEqual(classifyTree(testsDir), { total: 1, files: [] });
+    });
   });
 });

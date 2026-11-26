@@ -1,31 +1,24 @@
 'use strict';
 
-// allow-test-rule: source-text-is-the-product (#1190)
-// Reads the shipped .github/workflows YAML — the deployed text GitHub
-// Actions executes — as the security artifact under test.
-
 /**
  * ADR-230 regression guard: PR target-branch policy.
  *
- * (A) Behavioral coverage of classifyPrTarget — every decision path, including
- *     boundary cases (wrong version format, partial prefix matches).
+ * (A) Behavioral coverage of classifyPrTarget, every decision path and boundary.
+ * (B) Equivalence oracle: the old inline decision logic of the workflow's
+ *     github-script is embedded verbatim as oracle(); every (base, head) combo must
+ *     decide the same in the module and the oracle (behaviour preserved).
+ * (C) MAIN_ALLOWED_PATTERNS export: the array is exported and well-formed.
  *
- * (B) Equivalence oracle — the old inline decision logic from the workflow's
- *     github-script is embedded here verbatim as oracle(). Every (base, head)
- *     combo must produce the same decision from both the module and the oracle.
- *     This proves behavior-preservation across the refactor.
- *
- * (C) Structural assertions — pr-target-validator.yml must now check out the
- *     base ref (fork-tamper-safe) and require the policy module.
+ * The structural assertions on pr-target-validator.yml (base-ref checkout, pinned
+ * SHA, policy require, preserved behaviour) are the `adr-230-pr-target-policy`
+ * text contract in scripts/static-checks/text-contracts/.
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 
 const POLICY_PATH = path.join(__dirname, '..', 'scripts', 'pr-target-policy.cjs');
-const WORKFLOW_PATH = path.join(__dirname, '..', '.github', 'workflows', 'pr-target-validator.yml');
 
 const { classifyPrTarget, MAIN_ALLOWED_PATTERNS } = require(POLICY_PATH);
 
@@ -261,96 +254,7 @@ describe('equivalence oracle — module agrees with original inline logic', () =
 });
 
 // ---------------------------------------------------------------------------
-// (C) Structural assertions — workflow wiring
-// ---------------------------------------------------------------------------
-
-describe('pr-target-validator.yml structural wiring', () => {
-  let workflowSrc;
-
-  test('workflow file exists', () => {
-    assert.ok(fs.existsSync(WORKFLOW_PATH), `workflow not found at ${WORKFLOW_PATH}`);
-    workflowSrc = fs.readFileSync(WORKFLOW_PATH, 'utf8');
-  });
-
-  test('workflow checks out the base ref (fork-tamper-safe)', () => {
-    assert.ok(
-      workflowSrc,
-      'workflowSrc not loaded (prior test may have failed)'
-    );
-    // Must have a checkout step using the base ref so that a fork PR cannot
-    // supply its own copy of the policy module.
-    assert.match(
-      workflowSrc,
-      /ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.ref\s*\}\}/,
-      'checkout step must pin ref to github.event.pull_request.base.ref'
-    );
-  });
-
-  test('checkout step uses the repo-standard pinned SHA (de0fac2e...)', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    assert.match(
-      workflowSrc,
-      /actions\/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd/,
-      'checkout must use the repo-standard pinned SHA de0fac2e4500dabe0009e67214ff5f5447ce83dd'
-    );
-  });
-
-  test('workflow requires pr-target-policy.cjs', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    assert.match(
-      workflowSrc,
-      /require\(.*scripts\/pr-target-policy\.cjs/,
-      'github-script must require scripts/pr-target-policy.cjs'
-    );
-  });
-
-  test('workflow calls classifyPrTarget', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    assert.match(
-      workflowSrc,
-      /classifyPrTarget\(/,
-      'github-script must call classifyPrTarget()'
-    );
-  });
-
-  test('workflow no longer contains the inline mainAllowed array', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    // The inline pattern array `mainAllowed` was the old classification code.
-    // It must have been removed to avoid the logic diverging from the module.
-    assert.doesNotMatch(
-      workflowSrc,
-      /const mainAllowed\s*=/,
-      'old inline mainAllowed array must not appear in the rewired workflow'
-    );
-  });
-
-  test('WARN_ONLY env and setFailed/warning behavior preserved', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    assert.match(workflowSrc, /WARN_ONLY/, 'WARN_ONLY env must still be present');
-    assert.match(workflowSrc, /core\.setFailed/, 'core.setFailed must still be called on block');
-    assert.match(workflowSrc, /core\.warning.*warning-only mode/, 'WARN_ONLY warning message must be preserved');
-  });
-
-  test('sticky-comment marker and post/update logic preserved', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    assert.match(workflowSrc, /pr-target-validator/, 'comment marker must still reference pr-target-validator');
-    assert.match(workflowSrc, /listComments/, 'listComments call must be preserved');
-    assert.match(workflowSrc, /updateComment/, 'updateComment call must be preserved');
-    assert.match(workflowSrc, /createComment/, 'createComment call must be preserved');
-  });
-
-  test('maintainer carve-out (if: author_association) preserved', () => {
-    assert.ok(workflowSrc, 'workflowSrc not loaded');
-    assert.match(
-      workflowSrc,
-      /OWNER.*MEMBER.*COLLABORATOR|COLLABORATOR.*MEMBER.*OWNER/s,
-      'maintainer association carve-out must still be present'
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// (D) MAIN_ALLOWED_PATTERNS export — verify array is exported and well-formed
+// (C) MAIN_ALLOWED_PATTERNS export — verify array is exported and well-formed
 // ---------------------------------------------------------------------------
 
 describe('MAIN_ALLOWED_PATTERNS export', () => {

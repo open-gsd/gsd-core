@@ -678,7 +678,7 @@ not migrated or flagged.
 
 **Behavior:**
 
-- **Two signals count as progress.** A completion marker in the agent's output, or a `*-PLAN.md` file modified within the last check interval. Either one keeps plan-phase waiting. Only when neither appears for `planner.stall_threshold_minutes` (default `10`) does plan-phase treat the agent as stalled.
+- **A receipt ends the wait; a fresh plan keeps it going.** A completion marker on the agent's return receipt ends the wait. The receipt is a file holding the agent's complete return (its marker line first), written as the agent's last action and renamed into place so it is never half-written, under a `<phase>/.gsd-returns/` directory that plan-phase creates and git-ignores. Plan-phase routes on that file without waiting for the host's completion result; the agent's final message carries the same return. When plan-phase cannot make the receipt safely (for example the phase directory is a symlink or resolves outside the project), it prints a `gsd_receipt_path: no receipt:` line naming the reason, and that dispatch has no receipt to wait on. A `*-PLAN.md` modified within the last check interval keeps plan-phase waiting. Plan-phase treats the agent as stalled only once `planner.stall_threshold_minutes` (default `10`) has passed since dispatch and the latest check found neither signal.
 - **It checks on a fixed cadence.** Plan-phase looks every `planner.stall_detect_interval_minutes` (default `5`). Each check is one bounded wait, so a finished agent is noticed at most one interval late. That is the cost of never hanging.
 - **The threshold is the knob for slow models.** A model that is still working but takes longer than the threshold to write anything is flagged as stalled. Raising the threshold removes those false alarms. Lowering the interval notices a finished planner sooner, at the price of more checks.
 - **Both values are whole minutes, `1` or more.** A stored `0`, a negative, a non-number or a value of more than nine digits falls back to the default. An interval of `0` would make every check a zero-length wait, and a threshold of `0` would flag a healthy agent on the first check.
@@ -3055,9 +3055,22 @@ With `features.global_learnings: true`, phase completion runs the extraction for
 - REQ-TDD-04: Executor fails fast if tests pass unexpectedly during RED phase (feature already exists or test is wrong)
 - REQ-TDD-05: End-of-phase collaborative review checkpoint verifies gate compliance across all TDD plans (advisory, non-blocking)
 - REQ-TDD-06: Gate violations surfaced in SUMMARY.md under `## TDD Gate Compliance` section
+- REQ-TDD-07: When `model_overrides` names a different model for `<executor>:tdd-red` than for `<executor>:tdd-green-refactor`, `execute-phase` runs a `type: tdd` plan as a RED dispatch followed by a GREEN/REFACTOR dispatch, each on its own model; with neither key set, dispatch is unchanged (#4696)
 
-**Configuration:** `workflow.tdd_mode`
-**Reference files:** `tdd.md`, `checkpoints.md`
+**Configuration:** `workflow.tdd_mode`; optional `model_overrides` keys `<executor>:tdd-red` and `<executor>:tdd-green-refactor`
+**Reference files:** `tdd.md`, `checkpoints.md`, `tdd-gate-dispatch.md`
+
+#### Per-gate models
+
+The RED gate is the step that most benefits from careful reasoning about what behavior to assert, and
+GREEN and REFACTOR are mechanical by comparison. A model is fixed for the length of one executor
+dispatch, so running the gates on different models means two dispatches. When the two gate models
+differ, `execute-phase` (`gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`) dispatches the
+executor for the RED gate only, checks that the RED commit exists, then dispatches it again for GREEN
+and REFACTOR. The second dispatch writes `SUMMARY.md`. A split plan runs in the orchestrator's own
+tree rather than a worktree, because a worktree is removed when its executor returns and GREEN must
+start from the RED commit. Effort is not switched per gate; per-gate effort needs an amendment to
+ADR-443 first. See [Configuration](CONFIGURATION.md#tdd-gate-models-executortdd-red-executortdd-green-refactor).
 
 #### RED evidence formats
 
@@ -4599,10 +4612,11 @@ integer follows `process.exit(` in its outer `catch`.
 **What changed (ADR-3889 Phase 7, #3911):**
 
 - `hooks/lib/hook-exit.js` (hand-written) exposes `allow(payload)` → exit 0,
-  `deny(payload, stderrPayload?)` → exit 2, and `crash(onCrash, payload)`,
-  which dispatches to `allow`/`deny` per a `HOOK_ON_CRASH` policy the caller
-  must supply — `crash()` has no default policy, so a hook cannot fail open
-  by omission.
+  `deny(payload, stderrPayload?)` → exit 2, and
+  `crash(onCrash, payload, stderrPayload?)`, which dispatches to `allow`/`deny`
+  per a `HOOK_ON_CRASH` policy the caller must supply (the optional
+  `stderrPayload` reaches `deny` only; #5784) — `crash()` has no default
+  policy, so a hook cannot fail open by omission.
 - Every one of the 19 enforcement hooks under `hooks/*.js` now declares
   `const ON_CRASH = HOOK_ON_CRASH.ALLOW` (or `DENY`) once, with a
   hook-specific comment naming why, and calls `crash(ON_CRASH, payload)` from
