@@ -3,7 +3,7 @@ Execute a phase prompt (PLAN.md) and create the outcome summary (SUMMARY.md).
 </purpose>
 
 <required_reading>
-Load project state with `init_context`'s STATE.md section reads (#6388).
+Load project state with `init_context`'s STATE.md section reads.
 Read config.json for planning behavior settings.
 
 @~/.claude/gsd-core/references/git-integration.md
@@ -60,7 +60,7 @@ Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir
 
 If `.planning/` missing: error.
 
-Then, in this shell (for `GSD_WS`):
+Then, in this shell:
 @~/.claude/gsd-core/references/executor-state-sections.md
 </step>
 
