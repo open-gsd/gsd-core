@@ -218,12 +218,38 @@ function getAgentsDir(runtime?: string, projectRoot?: string): string {
 }
 
 /**
+ * The agents the install profile in `configDir` stages, or `null` for "expect every agent". Lazily required: the
+ * installer's profile module is far heavier than this read/verify surface, and a derivation that throws must degrade
+ * to the full list rather than stop a reporting path.
+ */
+function stagedAgentsFor(
+  configDir: string,
+  override?: (configDir: string) => Set<string> | null,
+): Set<string> | null {
+  try {
+    if (override) return override(configDir);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4761 lazy: install-profiles is heavy for this read surface
+    const { agentsStagedByMarker } = require('./install-profiles.cjs') as {
+      agentsStagedByMarker: (configDir: string) => Set<string> | null;
+    };
+    return agentsStagedByMarker(configDir);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check which GSD agents are installed on disk.
  *
  * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
  * @param projectRoot - canonical project root for local-install discovery
+ * @param deps - test seam: `stagedAgents(configDir)` replaces the profile-marker derivation
  */
-function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsInstalledResult {
+function checkAgentsInstalled(
+  runtime?: string,
+  projectRoot?: string,
+  deps: { stagedAgents?: (configDir: string) => Set<string> | null } = {},
+): AgentsInstalledResult {
   const resolvedRuntime = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
   // #5236: this is a reporting path (every `init` bundle carries its result). For an id GSD cannot resolve there is
   // no agents directory to read, and throwing would stop GSD on any out-of-tree host; say it could not be checked.
@@ -240,7 +266,10 @@ function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsIns
     };
   }
   const agentsDir = getAgentsDir(resolvedRuntime, projectRoot);
-  const expectedAgents = Object.keys(MODEL_PROFILES);
+  // #4761: a tiered install (`.gsd-profile` core/standard) deliberately stages only the agents its skills spawn, so the
+  // expected set is that subset, not the whole catalog. A derivation that cannot run expects every agent, as before.
+  const staged = stagedAgentsFor(path.dirname(agentsDir), deps.stagedAgents);
+  const expectedAgents = Object.keys(MODEL_PROFILES).filter((agent) => staged === null || staged.has(agent));
   const installed: string[] = [];
   const missing: string[] = [];
 
@@ -306,7 +335,7 @@ function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsIns
   }
 
   return {
-    agents_installed: installed.length > 0 && missing.length === 0 && incomplete.length === 0,
+    agents_installed: (installed.length > 0 || expectedAgents.length === 0) && missing.length === 0 && incomplete.length === 0,
     missing_agents: missing,
     installed_agents: installed,
     incomplete_agents: incomplete,

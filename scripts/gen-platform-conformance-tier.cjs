@@ -428,6 +428,20 @@ const ALWAYS_REAL_OS = new Map([
     'The product resolves the runtime-user settings layer from <sandbox home>/.claude/settings.json ' +
       'and .claude files under the sandbox, through HOME/USERPROFILE and the Claude config dir.',
   ],
+  // #6639: files whose subject is the home resolution itself. They build their HOME/USERPROFILE pair
+  // with homePair() (tests/helpers/isolated-env.cjs), which leaves no `windows-env-var` token in the
+  // file, so the lane would drop them; a Windows run is what proves os.homedir() follows USERPROFILE.
+  [
+    'tests/kimi-agent-converter.test.cjs',
+    'The Kimi runtime-home tests assert getGlobalConfigDir(\'kimi\') resolves under the sandbox home ' +
+      '(~/.config/agents and the XDG variants) through HOME and USERPROFILE; os.homedir() reads ' +
+      'USERPROFILE on Windows.',
+  ],
+  [
+    'tests/runtime-home-hermeticity.test.cjs',
+    'Asserts that runtime home resolution stays inside the sandbox home while hostile ambient config ' +
+      'keys leak into the child; the home resolves through USERPROFILE on Windows.',
+  ],
 ]);
 
 /**

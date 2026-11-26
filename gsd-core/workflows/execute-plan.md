@@ -513,7 +513,7 @@ IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 
 if [ "$IS_WORKTREE" != "true" ]; then
   # use_worktrees: false → this handler is the sole post-plan sync point (#2661)
-  PROGRESS=$(gsd_run query roadmap.update-plan-progress ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+  PROGRESS=$(gsd_run query roadmap.update-plan-progress ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") && [ -n "$PROGRESS" ] && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 fi
 ```
 Counts PLAN vs SUMMARY files on disk. Updates progress table row with correct count and status (`In Progress` or `Complete` with date).

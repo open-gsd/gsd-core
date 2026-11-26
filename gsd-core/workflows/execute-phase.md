@@ -77,6 +77,7 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--gaps-only` → `GAPS_ONLY=true`
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
+- Optional `--force-mvp-gate "<reason>"` → `FORCE_MVP_GATE_REASON` (required value; see `execute-phase/steps/verify-phase-goal.md`)
 
 If `--wave` is absent, preserve the current behavior of executing all incomplete waves in the phase.
 </step>
@@ -959,7 +960,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    if [ "${TEST_EXIT}" -eq 0 ]; then
      # Update ROADMAP plan progress for each completed plan in this wave
      for plan_id in {completed_plan_ids}; do
-       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete" ${GSD_WS:+--ws=${GSD_WS##* }}) && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete" ${GSD_WS:+--ws=${GSD_WS##* }}) && [ -n "$PROGRESS" ] && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
      done
 
      # Only commit tracking files if they actually changed

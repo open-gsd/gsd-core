@@ -623,6 +623,10 @@ function convertedAgentsKind(
   sourceContext: SourceResolutionContext,
   scope: 'local' | 'global',
   excludeSuffixes?: string[],
+  // #4669: the runtime this layout is being resolved for. A runtime-keyed `model_overrides` entry is
+  // selected by it, not by the static `config.runtime` key, which on a shared committed config is
+  // right for at most one of the hosts installing from it.
+  runtime?: string,
 ): ArtifactKind {
   return {
     kind: 'agents',
@@ -672,7 +676,7 @@ function convertedAgentsKind(
           : null;
         converter = (content, _isGlobal, meta) => {
           const modelOverride = meta
-            ? installModelOverrideResolver.resolveAgentModelOverride(meta.agentName, modelOverrides, runtimeResolver)
+            ? installModelOverrideResolver.resolveAgentModelOverride(meta.agentName, modelOverrides, runtimeResolver, runtime)
             : null;
           // The universal level is NOT emitted raw. `clampEffortForHost` is the
           // declared OpenCode effort capability (EFFORT_ARGV.opencode: its own
@@ -965,7 +969,7 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
     case 'agents':
       result = converter == null
         ? agentsKind(destSubpath, prefix, configDir, sourceContext)
-        : convertedAgentsKind(destSubpath, prefix, converter, configDir, sourceContext, scope, entry.excludeSuffixes);
+        : convertedAgentsKind(destSubpath, prefix, converter, configDir, sourceContext, scope, entry.excludeSuffixes, runtime);
       break;
 
     case 'skills':

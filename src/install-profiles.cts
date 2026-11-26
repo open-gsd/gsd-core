@@ -1145,6 +1145,8 @@ function stageCommandsForRuntimeFlat(
 // ---------------------------------------------------------------------------
 
 const PROFILE_MARKER_NAME = '.gsd-profile';
+/** A marker holds a profile name (or a comma list of them); 4 KiB is far above any real value. */
+const PROFILE_MARKER_MAX_BYTES = 4096;
 
 /**
  * Read the active profile from a runtime config directory.
@@ -1152,6 +1154,10 @@ const PROFILE_MARKER_NAME = '.gsd-profile';
 function readActiveProfile(runtimeConfigDir: string): string | null {
   const markerPath = path.join(runtimeConfigDir, PROFILE_MARKER_NAME);
   try {
+    // #4761: health and init now read this on every run. A marker is a short profile name: refuse a non-regular
+    // file (a FIFO blocks the read) and anything over the cap rather than slurping it.
+    const stat = fs.statSync(markerPath);
+    if (!stat.isFile() || stat.size > PROFILE_MARKER_MAX_BYTES) return null;
     const raw = fs.readFileSync(markerPath, 'utf8').trim();
     if (!raw) return null;
     // Validate that it looks like a profile name (alphanumeric + hyphens + commas)
@@ -1225,6 +1231,101 @@ function resolveEffectiveProfile({ requestedProfileName, targetDir }: ResolveEff
   if (marker && marker !== 'full') return marker;
   // 3. Default
   return 'full';
+}
+
+/** The shipped capability registry, the one `bin/install.js` passes on every first-party install; `undefined` when it
+ *  cannot load (the install then derives from the profile alone, as an install without a registry does). */
+function firstPartyRegistry(): CapabilityRegistry | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4761 lazy: only the health check needs it
+    return require('./capability-registry.cjs') as CapabilityRegistry;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The surface state file name `surface.cts` owns (`SURFACE_FILE_NAME`); duplicated here so a marker-only install does
+ *  not load that module. `tests/agent-install-surface-expected.test.cjs` pins parity with `writeSurface`. */
+const SURFACE_STATE_FILE = '.gsd-surface.json';
+
+interface SurfaceStateShape {
+  baseProfile: string;
+  disabledClusters: string[];
+  explicitAdds: string[];
+  explicitRemoves: string[];
+}
+
+interface SurfaceModule {
+  readSurface: (configDir: string) => SurfaceStateShape | null;
+  resolveSurface: (
+    configDir: string,
+    manifest: Map<string, string[]>,
+    clusterMap: undefined,
+    registry: CapabilityRegistry | undefined,
+    surfaceOverride: SurfaceStateShape,
+  ) => { agents: Set<string> };
+}
+
+interface AgentsStagedByMarkerOpts {
+  /** Candidate `commands/gsd` source dirs, first existing wins. Default: the repo layout, then the installed
+   *  layout (`<runtime config>/gsd-core/commands/gsd`, where `__dirname` is `gsd-core/bin/lib`). */
+  commandsDirs?: readonly string[];
+  workflowsDir?: string;
+  registry?: CapabilityRegistry;
+}
+
+/**
+ * #4761: the agents an install in `configDir` stages, derived from its `.gsd-profile` marker with the exact
+ * `resolveProfile` call shape `bin/install.js` uses (`core` gets an empty skill manifest, every profile derives agents
+ * from the real one). `null` means "no filtering": no usable marker, a `full` profile, or no command sources to derive
+ * from (a derivation that cannot run must never hide a missing agent, so it degrades to the full list). The registry
+ * defaults to the shipped first-party one; an installed third-party overlay registry is not consulted, so a
+ * third-party capability with core/standard membership is not expected here (it can only under-report).
+ */
+function agentsStagedByMarker(configDir: string, opts: AgentsStagedByMarkerOpts = {}): Set<string> | null {
+  const marker = readActiveProfile(configDir);
+  // #6715: `/gsd:surface` re-stages agents from the surface-resolved skills and prunes the rest (`applySurface`), so a
+  // `.gsd-surface.json` state, when present, decides the staged set instead of the marker alone. surface.cts imports
+  // this module, so it is required lazily, and only for a config dir that carries a state file: a marker-only install
+  // never loads it, and a module that cannot load leaves the marker-derived set in force instead of the full list.
+  let surfaceModule: SurfaceModule | null = null;
+  let surface: SurfaceStateShape | null = null;
+  if (fs.existsSync(path.join(configDir, SURFACE_STATE_FILE))) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6715 lazy: surface.cts imports this module
+      surfaceModule = require('./surface.cjs') as SurfaceModule;
+      surface = surfaceModule.readSurface(configDir);
+    } catch {
+      surface = null;
+    }
+  }
+  if (!marker && !surface) return null;
+  // Installed layout first: `<runtime config>/gsd-core/commands/gsd` is the full copy, while the runtime's own
+  // `<runtime config>/commands/gsd` (what DEFAULT_COMMANDS_DIR resolves to there) holds only the staged subset and
+  // would shrink the derived agent set. In the repo layout the first path does not exist and the second is the source.
+  const candidates = opts.commandsDirs ?? [
+    path.resolve(__dirname, '..', '..', 'commands', 'gsd'),
+    DEFAULT_COMMANDS_DIR,
+  ];
+  const commandsDir = candidates.find((dir) => fs.existsSync(dir));
+  if (commandsDir === undefined) return null;
+  const fullManifest = loadSkillsManifest(commandsDir, opts.workflowsDir ?? DEFAULT_WORKFLOWS_DIR);
+  if (fullManifest.size === 0) return null;
+  const registry = opts.registry ?? firstPartyRegistry();
+  if (surface && surfaceModule) {
+    // applySurface stages every agent for an unmodified `full` surface (the `'*'` sentinel); any other state stages
+    // exactly `resolveSurface(...).agents`.
+    const modified = surface.disabledClusters.length > 0 || surface.explicitAdds.length > 0 || surface.explicitRemoves.length > 0;
+    if (surface.baseProfile === 'full' && !modified) return null;
+    return surfaceModule.resolveSurface(configDir, fullManifest, undefined, registry, surface).agents;
+  }
+  const resolved = resolveProfile({
+    modes: [marker as string],
+    manifest: marker === 'core' ? new Map() : fullManifest,
+    agentManifest: fullManifest,
+    registry,
+  });
+  return resolved.skills === '*' ? null : resolved.agents;
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,6 +1409,7 @@ export = {
   loadSkillsManifest,
   resolveProfile,
   resolveEffectiveProfile,
+  agentsStagedByMarker,
   mostRestrictiveProfile,
   stageSkillsForProfile,
   stageAgentsForProfile,

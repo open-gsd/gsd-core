@@ -387,7 +387,10 @@ const RUN_TEMP_ROOT_PREFIX = 'gsd-test-run-';
 // tests/helpers/shared-install-fixture.cjs: installed trees (#6335) and git
 // fixture templates (#6336). Every test file of the run reads the same ones,
 // so they must outlive the chunk that built them.
-const RESERVED_TEMP_PREFIXES = ['gsd-test-home-', 'gsd-run-tests-events-', 'gsd-fxs-'];
+const RESERVED_TEMP_PREFIXES = ['gsd-test-home-', 'gsd-test-userhome-', 'gsd-run-tests-events-', 'gsd-fxs-'];
+
+// #4635: the sandbox HOME/USERPROFILE every chunk inherits (see setupRunHermeticEnv).
+const RUN_USER_HOME_PREFIX = 'gsd-test-userhome-';
 
 /**
  * Create (or reuse) this run's private temp root and repoint the env at it.
@@ -434,6 +437,33 @@ function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir, platform = pro
   const root = inherited || mkdtempSync(join(parent || resolve(tmpdirFn()), RUN_TEMP_ROOT_PREFIX));
   for (const key of ['TMPDIR', 'TEMP', 'TMP']) env[key] = root;
   return root;
+}
+
+/**
+ * #4635: make the env the runner hands to every chunk hermetic. isolatedEnv() covers a CHILD a
+ * test spawns; it cannot reach a test that calls the product in-process, or a helper that spreads
+ * process.env, and both read what the runner passed down. So the runner deletes every
+ * config-location variable in `keys` (derived from the capability registry by tests/helpers.cjs,
+ * never hand-listed) and points HOME/USERPROFILE at a private dir under `root`, which keeps a real
+ * `~/.gsd/defaults.json` and `~/.claude` out of reach. IDEMPOTENT like the GSD_HOME sandbox: a
+ * nested run-tests inherits the sandbox home, and an inherited run-sandbox GSD_HOME is kept.
+ * The real-home guard marker is NOT set: it stays fail-closed for a test that forgot sandboxHome().
+ * One home is shared by every chunk of the run (a test needing its own state sandboxes its own).
+ * @returns {{home: string, removed: string[]}}
+ */
+function setupRunHermeticEnv({ env = process.env, root, keys }) {
+  const removed = [];
+  for (const key of keys) {
+    if (env[key] === undefined) continue;
+    if (key === 'GSD_HOME' && basename(env[key]).startsWith('gsd-test-home-')) continue;
+    delete env[key];
+    removed.push(key);
+  }
+  const [homeKey, profileKey] = ['HOME', 'USERPROFILE'];
+  const inherited = env[homeKey] && basename(env[homeKey]).startsWith(RUN_USER_HOME_PREFIX) ? env[homeKey] : '';
+  const home = inherited || mkdtempSync(join(root, RUN_USER_HOME_PREFIX));
+  for (const key of [homeKey, profileKey]) env[key] = home;
+  return { home, removed };
 }
 
 /**
@@ -2242,6 +2272,17 @@ async function main() {
     }
   }
 
+  // #4635: delete every other config-location variable and sandbox HOME/USERPROFILE (see
+  // setupRunHermeticEnv). Runs after the live-config snapshot above, which needs the REAL roots.
+  {
+    const testHelpers = require('../tests/helpers.cjs');
+    setupRunHermeticEnv({
+      env: process.env,
+      root: runTempRoot,
+      keys: testHelpers.CONFIG_LOCATION_ENV_KEYS,
+    });
+  }
+
   let firstFailureExit = 0;
   for (let i = 0; i < chunks.length; i++) {
     if (chunks.length > 1) {
@@ -2548,6 +2589,8 @@ module.exports = {
   walkTestFiles,
   // #4020: run-scoped temp root — see the block above their definitions.
   setupRunTempRoot,
+  setupRunHermeticEnv,
+  RUN_USER_HOME_PREFIX,
   RUN_TEMP_ROOT_PREFIX,
   RESERVED_TEMP_PREFIXES,
   sweepRunTempRoot,

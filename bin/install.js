@@ -1616,6 +1616,14 @@ function stripJsonComments(text) {
   let i = 0;
   let inString = false;
   let stringChar = '';
+  // #5989: a comma seen outside a string is held, not emitted. It is dropped
+  // only when the next emitted non-whitespace char is `}` or `]` (a JSONC
+  // trailing comma) and flushed before any other emitted char. Comments are
+  // skipped by this same pass, so `, /*c*/ }` collapses exactly as the old
+  // post-strip regex `,\s*([}\]])` did — but that regex ran on stripped text,
+  // where a `,}` inside a string was indistinguishable from structure and
+  // rewrote values like "x,}y".
+  let pendingComma = false;
   while (i < text.length) {
     // Handle string literals — don't strip comments inside strings
     if (inString) {
@@ -1633,6 +1641,10 @@ function stripJsonComments(text) {
     }
     // Start of string
     if (text[i] === '"' || text[i] === "'") {
+      if (pendingComma) {
+        result += ',';
+        pendingComma = false;
+      }
       inString = true;
       stringChar = text[i];
       result += text[i];
@@ -1649,14 +1661,37 @@ function stripJsonComments(text) {
     if (text[i] === '/' && text[i + 1] === '*') {
       i += 2;
       while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      // #5990: the scan may stop at end of input — that is not a closed comment.
+      if (i >= text.length) throw new SyntaxError('Unterminated block comment');
       i += 2; // skip closing */
       continue;
+    }
+    if (text[i] === ',') {
+      // Consecutive commas keep failing exactly as before: the held comma is
+      // flushed and this one takes its place.
+      if (pendingComma) result += ',';
+      pendingComma = true;
+      i++;
+      continue;
+    }
+    if (/\s/.test(text[i])) {
+      result += text[i];
+      i++;
+      continue;
+    }
+    if (text[i] === '}' || text[i] === ']') {
+      pendingComma = false;
+    } else if (pendingComma) {
+      result += ',';
+      pendingComma = false;
     }
     result += text[i];
     i++;
   }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
+  // EOF flush: nothing followed the comma to drop it, so the text keeps the
+  // same malformed shape the old regex left behind ({"a":1, still fails).
+  if (pendingComma) result += ',';
+  return result;
 }
 
 /**
@@ -1713,6 +1748,11 @@ const {
   readGsdRuntimeProfileResolver,
   resolveAgentModelOverride,
 } = require(path.join(_gsdLibDir, 'install-model-override-resolver.cjs'));
+// #4669: the one selector for a runtime-keyed `model_overrides.<agent>` entry. The Codex `.toml`
+// baker below reads that key directly rather than through resolveAgentModelOverride (it has its own
+// value policy: trim, drop Anthropic-flavored ids with a warning), so it selects through the same
+// function the dispatch and install resolvers use and the three cannot disagree.
+const { selectAgentModelOverride } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2875 Part 2: effort frontmatter injection moved to runtimeArtifactConversion
 // (single source of truth with the descriptor pipeline's
@@ -4417,7 +4457,10 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // default now, and only an explicit model_overrides pin survives. See the
   // deprecation-notice block below for the population that used to get a pin from
   // the resolver and no longer does.
-  const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+
+  // #4669: an entry may be a runtime-keyed object; this file IS the codex install, so `codex` is the key.
+  const rawModelOverride = selectAgentModelOverride(modelOverrides?.[resolvedName], 'codex')
+    || selectAgentModelOverride(modelOverrides?.[agentName], 'codex');
   let pinnedModel = null;
   if (rawModelOverride) {
     // Trim before the truthiness test (#3241 defect fix): a whitespace-only value
@@ -7695,7 +7738,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
  *   Preserves: "Claude Code" (product), "Claude Opus/Sonnet/Haiku" (models),
  *   "claude-" (prefixes), "CLAUDE.md" (handled separately)
  * - "CLAUDE.md" → runtime-appropriate instruction file
- * - "Do NOT load full AGENTS.md" → removed (harmful for AGENTS.md runtimes)
  *
  * @param {string} content - File content to neutralize
  * @param {string} instructionFile - Runtime's instruction file ('AGENTS.md', 'GEMINI.md', etc.)
@@ -7710,8 +7752,6 @@ function neutralizeAgentReferences(content, instructionFile) {
   if (instructionFile) {
     c = c.replace(/CLAUDE\.md/g, instructionFile);
   }
-  // Remove instructions that conflict with AGENTS.md-based runtimes
-  c = c.replace(/Do NOT load full `AGENTS\.md` files[^\n]*/g, '');
   return c;
 }
 
