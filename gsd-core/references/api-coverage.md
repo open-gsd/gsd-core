@@ -99,8 +99,8 @@ Canonical form — a markdown table (human-editable, diff-friendly):
 
 Rules enforced at seal time: the matrix must be non-empty; every capability name
 must be non-empty and unique; every decision must be `INTEGRATE` or `OPT-OUT`;
-every `OPT-OUT` must have a reason. Violations block the seal with a precise
-error.
+every reason is capped at 200 characters (`INTEGRATE` rows included) and every
+`OPT-OUT` must carry one. Violations block the seal with a precise error.
 
 ### Declaring "no external API integration" (#2365)
 
@@ -112,9 +112,10 @@ declares it instead of fabricating a row:
 No external API integration: UI-only phase, no third-party surface.
 ```
 
-The reason is **required**, exactly like an `OPT-OUT` reason — the declaration
-is a reasoned decision, not a bypass. A `COVERAGE.md` containing both the
-declaration and coverage rows is contradictory and blocks the seal. When the
+The reason is **required** and at most 200 characters, exactly like an
+`OPT-OUT` reason — the declaration is a reasoned decision, not a bypass. A
+`COVERAGE.md` containing both the declaration and coverage rows is
+contradictory and blocks the seal. When the
 detector still finds integration signals in the phase scope, the declaration
 wins (it is the human overrule for a fallible detector) but the gate output
 surfaces the overridden signals so the contradiction is visible, not silent.
@@ -144,7 +145,9 @@ zero — the matrix is the durable subtraction record.
 ## Detector CLI
 
 ```bash
-echo "$PHASE_SCOPE" | node gsd-core/bin/lib/api-coverage.cjs --json
+echo "$PHASE_SCOPE" | node "$API_COVERAGE_BIN" --json
+# $API_COVERAGE_BIN = <gsd-core/bin>/lib/api-coverage.cjs, resolved from
+# $GSD_TOOLS or the PATH-resolved gsd_run launcher (symlinks followed)
 # exit 0 = integration detected, 1 = none (real input, examined, no signal)
 # NO_INPUT = stdin was empty or whitespace-only (registry code — ADR-3889 Phase 3, #3907)
 # UNAVAILABLE = stdin read failed (registry code)

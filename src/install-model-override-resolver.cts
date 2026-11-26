@@ -71,10 +71,21 @@ import modelCatalog = require('./model-catalog.cjs');
 const { MODEL_PROFILES: GSD_MODEL_PROFILES } = modelCatalog as unknown as { MODEL_PROFILES: Record<string, Record<string, string>> };
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolverModule = require('./model-resolver.cjs');
-const { resolveTierEntry: gsdResolveTierEntry, resolveModelPolicy: gsdResolveModelPolicy } = modelResolverModule as {
+const {
+  resolveTierEntry: gsdResolveTierEntry,
+  resolveModelPolicy: gsdResolveModelPolicy,
+  selectAgentModelOverride: gsdSelectAgentModelOverride,
+} = modelResolverModule as {
   resolveTierEntry: (opts: { runtime: string; tier: string; overrides: unknown }) => { model?: string } | null;
   resolveModelPolicy: (policy: unknown, tier: string | null | undefined) => string | null;
+  selectAgentModelOverride: (entry: unknown, runtime: string | null | undefined) => unknown;
 };
+
+/**
+ * #4669: a `model_overrides.<agent>` entry is the long-standing model-id string OR a runtime-keyed
+ * object (`{ "codex": "gpt-6-astra", "claude": "opus" }`), so the map's values are no longer all strings.
+ */
+type ModelOverrideMap = Record<string, unknown>;
 
 interface ReadOptions {
   homedir?: () => string;
@@ -94,7 +105,7 @@ interface RuntimeProfileResolver {
  * (silent try/catch — no stderr warning on malformed JSON, unlike
  * `_readGsdConfigFile`'s effort-config sibling — preserved for byte-parity).
  */
-function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, string> | null {
+function readGsdGlobalModelOverrides(options: ReadOptions = {}): ModelOverrideMap | null {
   try {
     const home = resolveGsdHome(options.homedir ? options.homedir() : os.homedir());
     const defaultsPath = globalDefaultsPath(home);
@@ -104,7 +115,7 @@ function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, 
     const parsed = JSON.parse(raw) as { model_overrides?: unknown };
     const overrides = parsed.model_overrides;
     if (!overrides || typeof overrides !== 'object') return null;
-    return overrides as Record<string, string>;
+    return overrides as ModelOverrideMap;
   } catch {
     return null;
   }
@@ -124,10 +135,10 @@ function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, 
  * Returns a plain `{ agentName: modelId }` object, or `null` when neither
  * source defines `model_overrides`.
  */
-function readGsdEffectiveModelOverrides(targetDir: string | null = null, options: ReadOptions = {}): Record<string, string> | null {
+function readGsdEffectiveModelOverrides(targetDir: string | null = null, options: ReadOptions = {}): ModelOverrideMap | null {
   const global = readGsdGlobalModelOverrides(options);
 
-  let projectOverrides: Record<string, string> | null = null;
+  let projectOverrides: ModelOverrideMap | null = null;
   if (targetDir) {
     // #2875 defect fix (Generative Fix Divergence): the 8-deep upward walk to
     // `.planning/config.json` is single-sourced in install-effort-resolver.cts
@@ -142,7 +153,7 @@ function readGsdEffectiveModelOverrides(targetDir: string | null = null, options
         if (text === null) throw new Error('unusable project config');
         const parsed = JSON.parse(text) as { model_overrides?: unknown };
         if (parsed && typeof parsed === 'object' && parsed.model_overrides && typeof parsed.model_overrides === 'object') {
-          projectOverrides = parsed.model_overrides as Record<string, string>;
+          projectOverrides = parsed.model_overrides as ModelOverrideMap;
         }
       } catch {
         // Malformed config.json — fall back to global; readGsdRuntimeProfileResolver
@@ -153,7 +164,7 @@ function readGsdEffectiveModelOverrides(targetDir: string | null = null, options
 
   if (!global && !projectOverrides) return null;
   // Per-project wins on conflict; preserve non-conflicting global keys.
-  return _deepMergeConfig(global || {}, projectOverrides || {}) as Record<string, string>;
+  return _deepMergeConfig(global || {}, projectOverrides || {}) as ModelOverrideMap;
 }
 
 type AgentTools = Record<string, string[]>;
@@ -330,14 +341,23 @@ function readGsdRuntimeProfileResolver(targetDir: string | null = null): Runtime
  *   2. runtimeResolver.resolve(agentName)?.model
  *      (#2794 — tier-based model_profile_overrides.<runtime>.<tier>)
  *   3. null (omit — J7: the frontmatter key must not appear, not `null`/`""`)
+ *
+ * #4669: an object entry selects by `targetRuntime` (the runtime being INSTALLED); none given selects
+ * nothing; no usable key falls to step 2.
  */
 function resolveAgentModelOverride(
   agentName: string,
-  modelOverrides: Record<string, string> | null | undefined,
+  modelOverrides: ModelOverrideMap | null | undefined,
   runtimeResolver: RuntimeProfileResolver | null | undefined,
+  targetRuntime?: string | null,
 ): string | null {
-  const explicit = modelOverrides ? modelOverrides[agentName] : undefined;
-  if (explicit) return explicit;
+  // Own-property guard: a prototype-chain agent name ("toString", "constructor") must not resolve
+  // an inherited member as if it were a configured override.
+  const entry = (modelOverrides && Object.hasOwn(modelOverrides, agentName))
+    ? modelOverrides[agentName]
+    : undefined;
+  const explicit = gsdSelectAgentModelOverride(entry, targetRuntime || null);
+  if (explicit) return explicit as string;
   if (runtimeResolver) {
     const entry = runtimeResolver.resolve(agentName);
     if (entry && entry.model) return entry.model;

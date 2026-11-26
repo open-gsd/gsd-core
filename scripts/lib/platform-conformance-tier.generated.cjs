@@ -5,6 +5,7 @@ module.exports = {
   CONFORMANCE_TIER_FILES: [
   "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
   "tests/6451-tdd-deviation-acceptance.test.cjs",
+  "tests/6503-api-coverage-probe-install-lookup.test.cjs",
   "tests/adr-612-bracket-phase-remove.test.cjs",
   "tests/adr-612-bracket-write-path.test.cjs",
   "tests/adr-index-gate.test.cjs",
@@ -316,6 +317,7 @@ module.exports = {
   "tests/state.platform.test.cjs",
   "tests/sub-repos-evaluation-scope-5867.test.cjs",
   "tests/subject-first-line.platform.test.cjs",
+  "tests/tdd-gate-split-dispatch.test.cjs",
   "tests/tdd-mode.platform.test.cjs",
   "tests/tdd-review-checkpoint-cross-plan.test.cjs",
   "tests/teams-status.test.cjs",

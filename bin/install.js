@@ -1748,6 +1748,11 @@ const {
   readGsdRuntimeProfileResolver,
   resolveAgentModelOverride,
 } = require(path.join(_gsdLibDir, 'install-model-override-resolver.cjs'));
+// #4669: the one selector for a runtime-keyed `model_overrides.<agent>` entry. The Codex `.toml`
+// baker below reads that key directly rather than through resolveAgentModelOverride (it has its own
+// value policy: trim, drop Anthropic-flavored ids with a warning), so it selects through the same
+// function the dispatch and install resolvers use and the three cannot disagree.
+const { selectAgentModelOverride } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2875 Part 2: effort frontmatter injection moved to runtimeArtifactConversion
 // (single source of truth with the descriptor pipeline's
@@ -4452,7 +4457,10 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // default now, and only an explicit model_overrides pin survives. See the
   // deprecation-notice block below for the population that used to get a pin from
   // the resolver and no longer does.
-  const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+
+  // #4669: an entry may be a runtime-keyed object; this file IS the codex install, so `codex` is the key.
+  const rawModelOverride = selectAgentModelOverride(modelOverrides?.[resolvedName], 'codex')
+    || selectAgentModelOverride(modelOverrides?.[agentName], 'codex');
   let pinnedModel = null;
   if (rawModelOverride) {
     // Trim before the truthiness test (#3241 defect fix): a whitespace-only value
