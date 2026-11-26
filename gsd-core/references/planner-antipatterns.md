@@ -191,8 +191,8 @@ my-project@1.0.0
 Lines begin with `└──`, not `vite`. The `^` anchor matches line start, which is a tree character — the grep finds nothing.
 
 **Bad:** `pnpm ls vite | grep -E '^vite@7\.'`
-**Good:** `pnpm ls vite | grep -E 'vite@7\.'`
-**Good (strict):** `pnpm ls vite | grep -E '(└|├)── vite@7\.'`
+**Good:** `set -o pipefail; pnpm ls vite | grep -E 'vite@7\.'`
+**Good (strict):** `set -o pipefail; pnpm ls vite | grep -E '(└|├)── vite@7\.'`
 
 Same trap: `npm ls`, `yarn list`, `docker ps` column output, `kubectl get` table output.
 
@@ -201,7 +201,7 @@ Same trap: `npm ls`, `yarn list`, `docker ps` column output, `kubectl get` table
 Never emit `grep '714 tests'` or `grep '52 test files'` unless you ran the count command in this session. Model-recalled counts are stale from training.
 
 **Bad:** `npm test 2>&1 | grep '714 passed'`
-**Good:** `npm test 2>&1 | grep -E '[0-9]+ passed'` or just `npm test`
+**Good:** `npm test`
 
 ## Error-Suppressing Fallbacks in Verify Gates (#1479)
 

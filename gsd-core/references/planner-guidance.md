@@ -261,7 +261,7 @@ must_haves:
 - **R1** — An exact count out of `grep -c` (`== 2`, `returns exactly 2`): it counts lines, not matches. Use `>= 1`, `== 0`, or `grep -n` and read the line numbers.
 - **R2** — A bulk "all N tests were observed failing" claim: unsatisfiable when any test asserts a non-change. Say "each test discriminates" (fails before, passes after) and attach a mutation record where a test cannot go red.
 - **R3** — `$VAR` unquoted in command position: zsh does not word-split it, the command exits 127 and the gate passes vacuously. Write the prefix inline or use a shell function.
-- **R4** (warning) — A fallible `git` in a non-final pipeline stage: the pipeline reports the last stage's status. Capture the status first (`git ... ; status=$?`).
+- **R4** (warning) — A fallible `git` in a non-final pipeline stage: the pipeline reports the last stage's status. Capture the status first (`git ... ; status=$?`). Also an `<automated>` command piped into `tail`, `head` or `grep`: capture its output first and filter the capture (`out=$(cmd) && tail -n 20 <<<"$out"`), or run it unpiped and have it print less. `set -o pipefail` before the pipeline also works when the last stage reads all of its input, not under `!` or with `head`, `grep -q` or `grep -m`. Not flagged: a `grep` fed only by `grep`, `sed`, `awk`, `cat` or `tac`, and a pipeline whose next command reads `$PIPESTATUS`.
 - **R5** — `wc` output compared by string equality (`grep -x 0`): BSD `wc` pads. Compare numerically (`test "$n" -eq 0`) or `tr -d ' '` first.
 - **R6** — `git diff`/`git log HEAD~N`: names whatever commit landed last; bare `git diff` (warning) is vacuously clean for committed work. Pin an explicit range (`<sha>^..<sha>`), a tag, or a message pattern.
 
