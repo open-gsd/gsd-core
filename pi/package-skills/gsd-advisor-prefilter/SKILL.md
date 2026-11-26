@@ -19,7 +19,9 @@ A same-context pre-filter. Before the orchestrator starts the next review gate (
 
 Dispatched by the `advisor-prefilter` capability as a `step` at `execute:wave:post`, `verify:post` and `ship:pre` when `workflow.advisor_prefilter` is true. It runs in the orchestrator's own context, so the advisor sees the whole transcript, including every edit made after the last reviewer pass.
 
-This skill does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`, or the cross-AI reviewer lanes of `/skill:gsd-plan-review-convergence`. Those exist for specialised, decorrelated review and keep running unchanged. The advisor is a session-level model that may share a family with the executor, so its answer is a cheap early warning, never a verdict.
+This skill does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`, or any cross-AI reviewer lane. Those exist for specialised, decorrelated review and keep running unchanged. The advisor is a session-level model that may share a family with the executor, so its answer is a cheap early warning, never a verdict.
+
+Each consult sends the calling session's full transcript to the advisor model, billed at the advisor's rate and reported separately from the executor's tokens. The capability is off by default for that reason. See `gsd-core/references/model-profiles.md`, "Advisor Tool (Claude Code)".
 </objective>
 
 <process>
@@ -48,7 +50,3 @@ followed by the advisor's bullets, verbatim, when it answered `drift-suspected`.
 
 If the advisor call fails or returns nothing usable, print nothing and return; `onError: skip` applies.
 </process>
-
-<cost>
-Each consult sends the calling session's full transcript to the advisor model, billed at the advisor's rate and reported separately from the executor's tokens. The capability is off by default for that reason. See `gsd-core/references/model-profiles.md`, "Advisor Tool (Claude Code)".
-</cost>

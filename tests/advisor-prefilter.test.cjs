@@ -16,15 +16,12 @@
 const { describe, test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 
-const { cleanup, installSpawnEnv } = require('./helpers.cjs');
-const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
+const { createHermeticRoot } = require('./helpers/isolated-env.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const GSD_TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
@@ -50,22 +47,17 @@ function mineAt(point, advisorPrefilter) {
 }
 
 function makeProject(config) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-advisor-prefilter-'));
+  // A hermetic root: GSD's upward `.planning/config.json` search stops here (CONTRIBUTING, #4613).
+  const dir = createHermeticRoot('gsd-advisor-prefilter-');
   tmpDirs.push(dir);
-  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
   if (config !== undefined) fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(config), 'utf8');
   return dir;
 }
 
 function renderHooks(cwd, point) {
-  const result = spawnSync(process.execPath, [GSD_TOOLS, 'loop', 'render-hooks', point, '--raw'], {
-    encoding: 'utf8',
-    timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-    cwd,
-    env: installSpawnEnv(),
-  });
-  assert.equal(result.status, 0, `render-hooks ${point} exited ${result.status}: ${result.stderr}`);
-  return JSON.parse(result.stdout).activeHooks.filter((hook) => hook.capId === CAP_ID);
+  const result = runGsdTools(['loop', 'render-hooks', point, '--raw'], cwd, homeSandboxEnv(cwd));
+  assert.equal(result.success, true, `render-hooks ${point} failed: ${result.error || result.output}`);
+  return JSON.parse(result.output).activeHooks.filter((hook) => hook.capId === CAP_ID);
 }
 
 describe('advisor-prefilter: default off', () => {
@@ -106,7 +98,7 @@ describe('advisor-prefilter: enabled', () => {
     }
   });
 
-  test('verifyPostKeepsTheSecurityStepBesideIt', () => {
+  test('verifyPostDispatchesEachStepStemOnce', () => {
     const stems = resolve('verify:post', true).activeHooks
       .filter((hook) => hook.kind === 'step')
       .map((hook) => hook.ref && hook.ref.skill);
@@ -119,7 +111,9 @@ describe('advisor-prefilter: enabled', () => {
     const emitting = ALL_POINTS.filter((point) => mineAt(point, true).length > 0);
     assert.deepEqual([...emitting].sort(), [...DECLARED_POINTS].sort());
     assert.equal(emitting.length, 3);
-    assert.equal(ALL_POINTS.length - emitting.length, 10, 'the other ten canonical points stay silent');
+    const silent = ALL_POINTS.filter((point) => !DECLARED_POINTS.includes(point));
+    assert.ok(silent.length > 0);
+    for (const point of silent) assert.deepEqual(mineAt(point, true), [], `${point} must stay silent`);
   });
 });
 

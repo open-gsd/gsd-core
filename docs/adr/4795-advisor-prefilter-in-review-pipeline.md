@@ -33,5 +33,7 @@ Claude Code can pair the session's executor with a stronger advisor model that r
 
 - Every enabled consult sends the full transcript to the advisor model, billed at the advisor's rate; the key is off by default and the how-to states the cost.
 - Non-Claude-Code runtimes get a silent no-op.
+- `secure-phase` needs no call site of its own: it is itself a `verify:post` step, so the `verify:post` consult already covers its point.
 - The plan-checker loop is not hooked: `plan:post` publishes `planner` and `checker`, and the issue's proposed points exclude it.
+- Whether a skill-invoked context exposes the advisor tool under the skill's restricted `allowed-tools` is host behavior this repository cannot assert; the skill's silent no-op covers the case where it does not.
 - The Claude Code advisor interface is experimental upstream; drift is a standing maintenance tail, bounded by taking no dependency beyond tool presence.
