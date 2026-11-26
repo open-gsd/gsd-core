@@ -16,17 +16,7 @@ const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const { appendAgentTools, buildKimiAgentArtifacts, convertClaudeAgentToQwenAgent, convertClaudeAgentToZcodeAgent, _decodeToolScalar } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
-const { parseFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
-
-function parseTools(content) {
-  const tools = parseFrontmatter(content).tools;
-  if (tools === undefined || tools === null) return [];
-  if (typeof tools === 'object' && !Array.isArray(tools)) return [];
-  return (Array.isArray(tools) ? tools : [tools])
-    .flatMap((value) => String(value).replace(/\s+#.*$/, '').split(/[,\s]+/))
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
+const { parseTools } = require('./helpers/agent-tools-frontmatter.cjs');
 
 function installClaude(t, { defaults, projectConfig, root = createTempDir('gsd-4032-claude-') } = {}) {
   t.after(() => cleanup(root));

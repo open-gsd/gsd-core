@@ -843,7 +843,24 @@ function tokenizePhaseDependencyReferences(
   return identityAware;
 }
 
+/**
+ * #6507: a `**Depends on**` value that LEADS with "Nothing"/"None" declares
+ * no dependencies — phase names in the trailing prose are the writer's
+ * rationale, not tokens to harvest. The rule lives in this shared owner
+ * because BOTH readers of the line (init.manager and planning inspect)
+ * consume `extractPhaseDependencyTokens` — see the #4764/#4304 comment in
+ * planning-inspect.cts's extractDependencyTokens; gating one caller instead
+ * would split the two surfaces.
+ */
+const NEGATED_DEPENDENCY_LEAD_RE = /^(?:nothing|none)\b/i;
+
+/** Whether a Depends-on value leads with a Nothing/None negation. */
+function isNegatedDependencyLead(prose: string): boolean {
+  return NEGATED_DEPENDENCY_LEAD_RE.test(String(prose).trim());
+}
+
 function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
+  if (isNegatedDependencyLead(prose)) return [];
   const found = tokenizePhaseDependencyReferences(prose, convention);
   const seen = new Set<string>();
   return found.flatMap(({ token }) => {
@@ -2413,6 +2430,7 @@ const phaseIdExports = {
   PHASE_DEP_REF_SOURCE,
   tokenizePhaseDependencyReferences,
   extractPhaseDependencyTokens,
+  isNegatedDependencyLead,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
   CASE_FLEXIBLE_PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_CONTINUATION_SEGMENT_SOURCE,

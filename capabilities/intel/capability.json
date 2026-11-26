@@ -16,7 +16,7 @@
     "unsupported": []
   },
   "skills": [],
-  "agents": [],
+  "agents": ["gsd-intel-updater"],
   "activationKey": "intel.enabled",
   "config": {
     "intel.enabled": {
