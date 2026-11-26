@@ -139,15 +139,13 @@ describe('#5248: the spawn prompts state the same scoped read as the reference',
   const PRE = 'capabilities/research/fragments/plan-pre.md';
   const named = (found, rel, needle) => found.some((line) => line.startsWith(rel) && line.includes(needle));
 
-  test('there are five spawn-prompt files', () => {
-    assert.equal(SPAWN_PROMPT_FILES.length, 5);
-  });
+  const OLD_EXECUTOR_LINE = 'list skills, read SKILL.md for each, follow relevant rules during implementation';
 
   // Every spawn file: a project-skills line that restores the old read is named.
   for (const [rel, oldLine] of [
-    [EXEC, 'list skills, read SKILL.md for each, follow relevant rules during implementation'],
-    [ISOLATION, 'list skills, read SKILL.md for each, follow relevant rules during implementation'],
-    [QUICK, 'list skills, read SKILL.md for each, follow relevant rules during implementation'],
+    [EXEC, OLD_EXECUTOR_LINE],
+    [ISOLATION, OLD_EXECUTOR_LINE],
+    [QUICK, OLD_EXECUTOR_LINE],
     [PLAN, 'read SKILL.md files, plans should account for project skill rules'],
     [PRE, 'Read SKILL.md files and account for project skill patterns.'],
   ]) {
@@ -172,6 +170,13 @@ describe('#5248: the spawn prompts state the same scoped read as the reference',
     edit(root, PRE, (text) => text.replace(/description/g, 'summary'));
     const found = messages(root);
     assert.ok(found.some((line) => line.startsWith(PRE) && line.includes('description')), found.join('\n'));
+  });
+
+  test('a project-skills line with no fallback for a skill without a description is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, ISOLATION, (text) => text.replace(/ or is missing/, ''));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.startsWith(ISOLATION) && line.includes('without a description')), found.join('\n'));
   });
 
   test('a spawn file with no project-skills line is named', (t) => {

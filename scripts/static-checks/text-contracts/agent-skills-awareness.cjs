@@ -29,19 +29,22 @@ function roleStatementUnderInclude(text) {
 
 // A spawn prompt that names the project skill directories states the scoped read (#5248): the
 // frontmatter first, the full SKILL.md only where the description fits, never every SKILL.md. Lines
-// are found by the "<.claude dir> or <.agents dir>" pair plus a SKILL.md mention, so the spike/sketch
-// lookups and the plan checker line, which ask for no read, are not read as project-skills lines.
+// are found by the "<.claude dir> or <.agents dir>" pair, so the spike/sketch lookups, which name
+// neither, are not read as project-skills lines. The plan checker line names both but asks for no
+// read ("verify plans account for ...", out of scope in #5248), so it is set aside by its verb.
 const SKILL_DIRS_LINE = /\.claude\/skills\/ or [^\n]*\.agents\/skills\//;
+const PLAN_CHECKER_LINE = /\bverify plans\b/;
 const READ_EVERY_SKILL = /read SKILL\.md(?: for each| files)/i;
 
 function spawnLinesAreScoped(text) {
-  const lines = text.split(/\r?\n/).filter((line) => SKILL_DIRS_LINE.test(line) && line.includes('SKILL.md'));
+  const lines = text.split(/\r?\n/).filter((line) => SKILL_DIRS_LINE.test(line) && !PLAN_CHECKER_LINE.test(line));
   if (lines.length === 0) return 'no project-skills line found';
   for (const line of lines) {
     const shown = JSON.stringify(line.trim().slice(0, 70));
     if (READ_EVERY_SKILL.test(line)) return `a project-skills line asks to read every SKILL.md: ${shown}`;
     if (!/frontmatter/i.test(line)) return `a project-skills line does not scope the read to the frontmatter: ${shown}`;
     if (!/\bdescription\b/.test(line)) return `a project-skills line does not gate the full read on the description: ${shown}`;
+    if (!/no description|\bmissing\b/.test(line)) return `a project-skills line has no fallback for a skill without a description: ${shown}`;
   }
   return true;
 }

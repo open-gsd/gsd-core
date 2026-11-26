@@ -861,7 +861,7 @@ Validate before shipping (#4586): @gsd-core/references/planner-verify-command-va
 <!-- gsd:protected:end -->
 
 **Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists — follow project-specific guidelines
-**Project skills:** Check .claude/skills/ or .agents/skills/ directory (if either exists) — read each SKILL.md's frontmatter, read in full only the skills whose description fits this phase (or that have no description); plans should account for their rules
+**Project skills:** Check .claude/skills/ or .agents/skills/ if either exists — frontmatter first, full file if description fits or is missing; plans apply them
 
 {For each active entry in `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `into == "planner"` (in array order): inject the entry's `fragment.inline` verbatim here. This delivers all planner-targeted contributions — including tdd's `<tdd_mode_active>` block (type:tdd heuristics), schema-gate's schema-push detection guidance (if active at plan:pre), and security's threat-model guidance. For the security contribution, also surface the resolved `configValues`: `security_asvs_level` (ASVS enforcement level) and `security_block_on` (severity threshold) so the planner uses the configured values when generating `<threat_model>` blocks. If no active planner contributions exist, omit this block entirely.}
 
