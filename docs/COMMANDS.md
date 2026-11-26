@@ -2200,6 +2200,15 @@ scores `missing_phase_details` against (no colon required after the token),
 attributed to their own milestone section when two sections share a leading
 major integer, and skipped inside a fenced code block the same way a fenced
 heading is skipped.
+The bracket target also rewrites the `Phase N:` labels in `STATE.md` and
+`PROJECT.md` prose (legacy `Phase 3:` and M-NN `Phase 2-01:`) to the same
+canonical display the migrated ROADMAP heading has (`[GSD.02] 01:`), resolving
+each label through the ROADMAP-order mapping the planner already computes. A
+label whose number is carried by phases in more than one milestone is not
+guessed at: it is left as written and listed in the plan's `crossRefSkipped`
+(`ambiguous-milestone`), as is an unreadable `STATE.md` or `PROJECT.md`
+(`file-unreadable`). See
+[How to migrate to bracket phase IDs](how-to/migrate-to-bracket-phase-ids.md).
 It refuses before writing when: a source phase has no bracket spelling; a
 multi-milestone phase (or a checklist bullet outside every section) has no
 unambiguous reader-recognized milestone section; the same legacy phase
@@ -2217,7 +2226,7 @@ and is not itself part of the same migration.
 | `--apply` | No | Write changes to disk (default: dry-run only) |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
-**Produces:** Dry-run JSON plan (default) or in-place ROADMAP/config updates and phase-directory renames (`--apply`)
+**Produces:** Dry-run JSON plan (default) or in-place ROADMAP/config/STATE/PROJECT updates and phase-directory renames (`--apply`)
 
 An apply refuses a dirty tracked working tree. If a later migration operation
 fails, it reverses completed renames and restores the exact files it changed;
