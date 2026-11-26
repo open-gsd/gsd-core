@@ -643,6 +643,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **TDD-applicability resolution (#4266/#4272).** Run `gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md`.
 
+   **TDD gate split (#4696).** Run `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`. When it prints `TDD_GATE_SPLIT=false` (the default) dispatch as below; when `true`, that file's split dispatch replaces the single `Agent()` call.
+
    **Worktree mode** (`USE_WORKTREES` and `USE_WORKTREES_FOR_PLAN` not `false`):
 
    Before spawning, capture the current HEAD:

@@ -1755,6 +1755,36 @@ The runtime that selects the key is the one that is actually resolving, in the o
 
 Global and project files merge per runtime key: a project object replaces a global string, a project string replaces a global object, and two objects merge key by key with the project winning a conflict. Set an object with `config-set model_overrides.<agent> '{"codex":"gpt-6-astra"}'`. A per-runtime dotted path such as `model_overrides.<agent>.codex` is not an addressable key, so write the whole object. A runtime whose dispatch surface cannot carry a per-agent model at all ignores the entry; that is a no-op, not an error.
 
+#### TDD gate models (`<executor>:tdd-red`, `<executor>:tdd-green-refactor`)
+
+A `type: tdd` plan normally runs RED, GREEN and REFACTOR in one executor dispatch on one model. Two optional `model_overrides` keys give the RED gate and the GREEN/REFACTOR gates their own models ([#4696](https://github.com/open-gsd/gsd-core/issues/4696)):
+
+```json
+{
+  "workflow": { "tdd_mode": true },
+  "model_overrides": {
+    "gsd-executor:tdd-red": "opus",
+    "gsd-executor": "sonnet"
+  }
+}
+```
+
+| Key | Gate it governs | When unset |
+|---|---|---|
+| `<executor-type>:tdd-red` | The RED dispatch: the failing test and its RED evidence | Falls back to `<executor-type>`'s own model |
+| `<executor-type>:tdd-green-refactor` | The GREEN/REFACTOR dispatch | Falls back to `<executor-type>`'s own model |
+
+`<executor-type>` is `gsd-executor`, or the specialist a plan names with `agent_hint`. Each entry takes every form an agent entry takes: a model string, or an object keyed by runtime. A value that is not a usable model string resolves as no entry.
+
+`execute-phase` splits a plan into a RED dispatch and a GREEN/REFACTOR dispatch only when all of these hold:
+
+- `workflow.tdd_mode` is `true`
+- the plan's frontmatter says `type: tdd`
+- the two gate models resolve to different models
+- the plan is dispatched through `Agent()` (not the `orchestrator-worktree` backend, and not routed to a foreign runtime by `executor_runtime`)
+
+With neither key set the two models are equal and dispatch is unchanged. A split plan runs in the orchestrator's own working tree, one dispatch after the other, instead of in a worktree, so that GREEN starts from the RED commit; other plans in the wave keep their isolation. Reasoning effort is not switched per gate: effort still comes from the agent's own configuration. See [How to run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md).
+
 ### Per-Phase-Type Models (`models`) — added in v1.41
 
 > Express tuning at the **phase** level (planning, research, execution, verification) without learning the agent taxonomy. Added in [#3023](https://github.com/open-gsd/gsd-core/pull/3030).
