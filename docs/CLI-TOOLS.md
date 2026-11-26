@@ -1649,6 +1649,58 @@ node gsd-tools.cjs websearch <query> [--limit N] [--freshness day|week|month]
 
 ---
 
+## Commit Selection, Sub-repo and Reviewer-flag Verbs
+
+These verbs run as `node gsd-tools.cjs <verb>` (or `node gsd-tools.cjs query <verb>`); the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `select-revert-commits --range <git-range> (--phase <id> | --plan <id>)`
+
+Selects, from a git range, the commits that belong to one phase or one plan, for `/gsd-undo`. Exactly one of `--phase` and `--plan` is required, and `--range` is required and must not start with `-`; each failure is a usage error. The verb runs `git log --no-merges` over `--range` in the directory it was invoked from (not the main worktree) and reads each subject's declared scope: the `scope` of a `type(scope):` header, with a leading `fixup! ` or `squash! ` or a `Revert "…"` wrapper removed first. A subject with no scope, or no `type:` header, has no declared scope and is never selected.
+
+| Flag | Selects a commit when its declared scope is |
+|------|---------------------------------------------|
+| `--phase <id>` | the phase id, or starts with `<id>-` (so `3` selects `03` and `03-01`; an all-digit id is zero-padded first; a bracket-style id such as `PROJ-42` is used as given) |
+| `--plan <id>` | exactly the plan id, in the two-segment form `NN-MM` (`3-1` is padded to `03-01`). A three-segment id, or a bracket-style phase segment, is refused |
+
+Output: `{selected: [{sha, subject}], classified: [{sha, subject, parsedScope, matched}]}`, `classified` holding every commit in the range with its parsed scope. With `--raw` the output is one `<sha> <subject>` line per selected commit. A `git log` failure (an invalid range, or one that takes more than 15 seconds) is a usage error naming the range.
+
+```bash
+node gsd-tools.cjs select-revert-commits --range main..HEAD --plan 03-01
+node gsd-tools.cjs select-revert-commits --range HEAD~20..HEAD --phase 3 --raw
+```
+
+### `commit-to-subrepo "<message>" --files <path>...`
+
+Commits files in the sub-repositories listed in `sub_repos` of `.planning/config.json`, one commit per sub-repository. The message is required, `sub_repos` must be non-empty, and `--files` is required, each a usage error. Each path is assigned to the sub-repository whose name is the longest prefix of the path (`sub_repos: ["packages", "packages/core"]` sends `packages/core/x.ts` to `packages/core`); a path matching none is reported on stderr and listed in `unmatched`. Within each sub-repository the verb stages the named paths (relative to it) and commits only those, never the rest of the index. A path that fails to stage unstages what this call staged and records `staging_failed` (or `staging_timeout`) for that sub-repository.
+
+Output: `{committed, repos: {<repo>: {committed, hash, files, reason?, error?}}, unmatched?}`. `committed` is `true` when any sub-repository committed. A sub-repository that did not commit carries `reason`: `nothing_to_commit`, `staging_failed`, `staging_timeout`, `commit_timeout` or `error`. With `--raw` the output is `<repo>:<hash>` pairs, `skip` standing for a missing hash.
+
+### `pr-subrepo "<message>" --repo <path> --branch <name>`
+
+Puts a sub-repository's tracked changes on a new branch and pushes it, ready for a pull request. The message, `--repo` and `--branch` are required; `--branch` must not start with `-`; `--repo` must resolve inside the project root (an escaping path is refused). The verb collects the tracked changes of the sub-repository (untracked files are excluded; a rename counts both paths), refuses when the branch already exists, creates the branch, stages exactly those files, commits them with the message, and runs `git push --set-upstream origin <branch>`. It does not open the pull request.
+
+| Result | Output |
+|--------|--------|
+| No tracked changes | `{ok: true, repo, branch, committed: false, reason: "nothing_to_commit", files: []}`; no branch is created |
+| Pushed | `{ok: true, repo, branch, committed: true, files, commit_hash, remote_url, remote_slug}`; `remote_slug` is the `owner/repo` of a GitHub `origin`, else `null` |
+| Staging or commit fails | The branch is deleted and the previous branch restored; the verb exits with an error |
+| Push fails | The error names the retry command; the local branch and its commit are kept |
+
+### `quick-tasks-migrate`
+
+Rewrites the `### Quick Tasks Completed` table of STATE.md into the canonical column set `# | Description | Date | Commit | Status | Directory`. Each legacy column is mapped onto its canonical column; a column with no canonical counterpart, or a second column mapping to an already-filled one, is folded into `Description` as `<column>: <value>`, so no value is dropped. Empty canonical cells are written as `—`. The write goes through the STATE.md writer, which also refreshes the file's frontmatter.
+
+Output: `{ok: true, migrated: true, from: [<legacy columns>], rows: <count>}` after a migration; `{ok: true, migrated: false}` when the table is absent or already canonical; `{ok: true, migrated: false, reason}` when STATE.md is missing (`reason` names the path). The verb is idempotent.
+
+### `review-lane explicit-from-argv [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] -- <argument>...`
+
+Tells the review workflows which reviewer lanes the user named. Every token after `--` is compared with the flags each lane declares (the first-party lanes plus installed third-party reviewer lanes; `antigravity` declares both `--antigravity` and `--agy`), and the slugs of the matching lanes are printed as plain text, sorted and comma-joined, with no trailing newline. Output is empty when no token matches. `--selected`, `--run-dir` and `--repo-root` are accepted for parity with the other `review-lane` subcommands and do not affect this one.
+
+```bash
+node gsd-tools.cjs review-lane explicit-from-argv -- --claude --agy --all
+# antigravity,claude
+```
+
 ## Update Backup and Restore
 
 The two halves of `/gsd-update`'s user-added-file protection. `detect-custom-files`
