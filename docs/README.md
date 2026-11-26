@@ -78,6 +78,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Handle quick and fast tasks](how-to/handle-quick-and-fast-tasks.md) — use `/gsd-quick` and `/gsd-fast` for ad-hoc work outside the phase loop
 - [Batch quick tasks](how-to/batch-quick-tasks.md) — run several `/gsd-quick`-shaped tasks together with `/gsd-quick-batch`, understand capacity/isolation, and recover a failed or interrupted batch
 - [Configure model profiles](how-to/configure-model-profiles.md) — switch between quality, balanced, and budget model tiers
+- [Run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md) — give the failing-test step its own model inside a `type: tdd` plan
 - [Choose which executors run your plans](how-to/choose-the-executor-policy.md) — answer the Executor question at new-project or in `/gsd-settings`: `gsd-executor` only, or allow installed executors named by `agent_hint:`
 - [Route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md) — send one plan to your own executor agent with `agent_hint:`, pick its model, and read the routing output
 - [Control which host runtime GSD reports](how-to/control-the-reported-host-runtime.md) — read the `agent_runtime` ladder, understand what host detection looks at, and pin the runtime when detection is not what you want
