@@ -55,6 +55,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Diagnose which gsd-tools is running](how-to/diagnose-a-foreign-gsd-tools.md) — tell this package's tool apart from the predecessor's colliding binary and from a gsd-core too old to identify itself
 - [Resolve an ESLint glob-coverage finding](how-to/resolve-eslint-coverage-findings.md) — bring a source file that matches no lint rule under coverage, or record a reasoned exemption
 - [Replace a hand-written env-isolation copy](how-to/replace-a-hand-written-env-isolation-copy.md) — turn a `local/no-adhoc-env-isolation` lint error into `isolatedEnv`, `isolatedPath`, `homePair` or `setEnvForTest`; there is no allowlist
+- [Make a missing test tool fail instead of skip](how-to/make-a-missing-test-tool-fail.md) — set `GSD_REQUIRE_BASH_TOOLS` so a host without `curl` or `jq` fails the bash-block tests it would otherwise skip without a trace
 - [Resolve a raw-terminator finding](how-to/resolve-a-raw-terminator-finding.md) — pick `runMain`/`ExitError`, `terminateNow`, or `process.exitCode` for a `local/require-registered-exit` finding, and know the two allowlist entries and the rule's documented evasions
 - [Adopt the v2 exit contract](how-to/adopt-the-v2-exit-contract.md) — turn on `gsd-tools`'s versioned exit-code projection, read the code table including what `80` (`DEGRADED`) means, and migrate a CI gate that treats any non-zero exit as fatal
 - [Read the statusline freshness marker](how-to/read-the-statusline-freshness-marker.md) — turn on `state ~N commits back`, and tell "STATE.md is fresh" apart from "freshness could not be established"
@@ -77,6 +78,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Handle quick and fast tasks](how-to/handle-quick-and-fast-tasks.md) — use `/gsd-quick` and `/gsd-fast` for ad-hoc work outside the phase loop
 - [Batch quick tasks](how-to/batch-quick-tasks.md) — run several `/gsd-quick`-shaped tasks together with `/gsd-quick-batch`, understand capacity/isolation, and recover a failed or interrupted batch
 - [Configure model profiles](how-to/configure-model-profiles.md) — switch between quality, balanced, and budget model tiers
+- [Run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md) — give the failing-test step its own model inside a `type: tdd` plan
 - [Choose which executors run your plans](how-to/choose-the-executor-policy.md) — answer the Executor question at new-project or in `/gsd-settings`: `gsd-executor` only, or allow installed executors named by `agent_hint:`
 - [Route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md) — send one plan to your own executor agent with `agent_hint:`, pick its model, and read the routing output
 - [Control which host runtime GSD reports](how-to/control-the-reported-host-runtime.md) — read the `agent_runtime` ladder, understand what host detection looks at, and pin the runtime when detection is not what you want

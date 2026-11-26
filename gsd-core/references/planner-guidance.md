@@ -255,3 +255,18 @@ must_haves:
       via: "database query via prisma.message"
       pattern: "prisma\\.message\\.(find|create)"
 ```
+
+## What `verify.plan-structure` flags in criteria and frontmatter
+
+- **R1** — An exact count out of `grep -c` (`== 2`, `returns exactly 2`): it counts lines, not matches. Use `>= 1`, `== 0`, or `grep -n` and read the line numbers.
+- **R2** — A bulk "all N tests were observed failing" claim: unsatisfiable when any test asserts a non-change. Say "each test discriminates" (fails before, passes after) and attach a mutation record where a test cannot go red.
+- **R3** — `$VAR` unquoted in command position: zsh does not word-split it, the command exits 127 and the gate passes vacuously. Write the prefix inline or use a shell function.
+- **R4** (warning) — A fallible `git` in a non-final pipeline stage: the pipeline reports the last stage's status. Capture the status first (`git ... ; status=$?`).
+- **R5** — `wc` output compared by string equality (`grep -x 0`): BSD `wc` pads. Compare numerically (`test "$n" -eq 0`) or `tr -d ' '` first.
+- **R6** — `git diff`/`git log HEAD~N`: names whatever commit landed last; bare `git diff` (warning) is vacuously clean for committed work. Pin an explicit range (`<sha>^..<sha>`), a tag, or a message pattern.
+
+Exit: `<!-- plan-criteria-allow: R1 - <reason> -->` — the reason is required and non-empty.
+executor_runtime must be a runtime id (letters, digits, `_`, `-`, starting with a letter or digit); it cannot be set on a plan with checkpoint tasks or `autonomous: false`; `executor_runtime` and `agent_hint` cannot both be set. Corrected form: omit `executor_runtime` — the runtime is inherited from the user's runtime configuration — or drop `agent_hint`, since one names a host subagent and the other a foreign process.
+- **B1** — A baseline notation whose comparison already holds at HEAD: the gate measures nothing and passes with or without the work. Anchor it to what the task creates, tighten `EXPECT` to the delta, or name the mutation that turns it red (`GUARD MUTATION: <ref>`).
+- **B2** (warning) — The old free-form `# baseline at HEAD: N` comment: nothing can check it. Replace it with the bracketed `[HEAD=... EXPECT...]` notation.
+Baseline notation grammar and worked examples: @~/.claude/gsd-core/references/planner-verify-command-grounding.md.
