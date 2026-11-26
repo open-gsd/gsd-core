@@ -157,6 +157,8 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  // #4647: the closed seed status must be named beside the open values in the CLI, user and command docs.
+  'tests/seed-close.test.cjs': ['docs/CLI-TOOLS.md', 'docs/USER-GUIDE.md', 'docs/COMMANDS.md'],
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
   // #6337: copies the docs the shipped text contracts read into a temporary root to show a
@@ -168,6 +170,54 @@ const DOCS_GUARD_TESTS = {
     'docs/how-to/develop-a-capability.md',
     'docs/README.md',
   ],
+  // #6566: the same, for the batch 8 contracts (tests/text-contracts.batch8.test.cjs copies these docs).
+  'tests/text-contracts.batch8.test.cjs': [
+    'docs/COMMANDS.md',
+    'docs/CONFIGURATION.md',
+    'docs/INVENTORY.md',
+    'docs/installer-migrations.md',
+    'docs/reference/planning-artifacts.md',
+    'docs/ja-JP/ARCHITECTURE.md',
+    'docs/ja-JP/INVENTORY.md',
+    'docs/ko-KR/ARCHITECTURE.md',
+    'docs/ko-KR/INVENTORY.md',
+    'docs/pt-BR/ARCHITECTURE.md',
+    'docs/pt-BR/CONFIGURATION.md',
+    'docs/pt-BR/INVENTORY.md',
+    'docs/zh-CN/ARCHITECTURE.md',
+    'docs/zh-CN/CONFIGURATION.md',
+    'docs/zh-CN/INVENTORY.md',
+  ],
+  // #6573: the same, for the batch 9 contracts (tests/text-contracts.batch9.test.cjs copies these docs).
+  'tests/text-contracts.batch9.test.cjs': [
+    'docs/CONFIGURATION.md',
+    'docs/CONTEXT-INDEX.json',
+    'docs/adr/550-spec-phase-probe-contract.md',
+    'docs/ja-JP/reference/state-md.md',
+    'docs/ko-KR/reference/state-md.md',
+    'docs/pt-BR/reference/state-md.md',
+    'docs/reference/plan-md.md',
+    'docs/reference/state-md.md',
+    'docs/zh-CN/reference/state-md.md',
+  ],
+  // #6577: the same, for the batch 10 contracts (tests/text-contracts.batch10.test.cjs copies these docs).
+  'tests/text-contracts.batch10.test.cjs': [
+    'docs/COMMANDS.md',
+    'docs/FEATURES.md',
+    'docs/contributor-standards.md',
+    'docs/ja-JP/COMMANDS.md',
+    'docs/ja-JP/FEATURES.md',
+    'docs/ko-KR/COMMANDS.md',
+    'docs/ko-KR/FEATURES.md',
+    'docs/reference/agents.md',
+  ],
+  // #6654: the same, for the batch 12 contracts (tests/text-contracts.batch12.test.cjs copies these docs).
+  'tests/text-contracts.batch12.test.cjs': [
+    'docs/COMMANDS.md',
+    'docs/INVENTORY-MANIFEST.json',
+    'docs/INVENTORY.md',
+    'docs/reference/agents.md',
+  ],
   'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
@@ -176,7 +226,6 @@ const DOCS_GUARD_TESTS = {
   // Walks docs/features/ as a directory (the fragment corpus) and asserts the
   // committed docs/FEATURES.md equals the generated projection of it (#3840).
   'tests/features-index-gate.test.cjs': ['docs/features/', 'docs/FEATURES.md'],
-  'tests/agent-classification-parity.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md'],
   // #3683: pins the learnings feature section's agreement with the canonical
   // artifact registry (reads docs/FEATURES.md around the extract-learnings
   // entry).
@@ -215,22 +264,7 @@ const DOCS_GUARD_TESTS = {
   // #4974: doc/workflow content-parity checks read docs/CONFIGURATION.md's
   // Gate Settings section directly (see tests/gates-confirmation-toggle-config.test.cjs).
   'tests/gates-confirmation-toggle-config.test.cjs': ['docs/CONFIGURATION.md'],
-  'tests/context-index-sync.test.cjs': ['docs/CONTEXT-INDEX.json'],
   'tests/context-predicates-query.test.cjs': ['docs/contributor-standards.md'],
-  // SCAN_DIRS includes 'docs' and recursively walks every .md file under it
-  // (context7-tool-name-parity.test.cjs:31-38) — a generic tree walk, not a
-  // fixed file set.
-  'tests/context7-tool-name-parity.test.cjs': ['*'],
-  'tests/contributor-standards.test.cjs': ['docs/contributor-standards.md'],
-  'tests/cursor-reviewer.test.cjs': [
-    'docs/COMMANDS.md',
-    'docs/FEATURES.md',
-    'docs/ja-JP/COMMANDS.md',
-    'docs/ja-JP/FEATURES.md',
-    'docs/ko-KR/COMMANDS.md',
-    'docs/ko-KR/FEATURES.md',
-  ],
-  'tests/discuss-all-flag.test.cjs': ['docs/COMMANDS.md'],
   'tests/discuss-mode.test.cjs': ['docs/workflow-discuss-mode.md'],
   // Walks docs/*.md and every docs/<locale>/*.md dir dynamically
   // (docs-parity-live-registry.test.cjs:42, 428) — deliberately generic.
@@ -249,20 +283,7 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/ARCHITECTURE.md',
     'docs/pt-BR/INVENTORY.md',
   ],
-  'tests/docs-state-md-locale-parity.test.cjs': [
-    'docs/reference/state-md.md',
-    'docs/ja-JP/reference/state-md.md',
-    'docs/zh-CN/reference/state-md.md',
-    'docs/ko-KR/reference/state-md.md',
-    'docs/pt-BR/reference/state-md.md',
-  ],
   'tests/drift-detection.test.cjs': ['docs/CONFIGURATION.md', 'docs/reference/agents.md'],
-  'tests/edge-probe-docs-fixtures.test.cjs': ['docs/adr/550-spec-phase-probe-contract.md'],
-  'tests/edit-phase.test.cjs': [
-    'docs/INVENTORY.md',
-    'docs/INVENTORY-MANIFEST.json',
-    'docs/COMMANDS.md',
-  ],
   'tests/effort-surface-axis.test.cjs': ['docs/reference/host-integration-capability-matrix.md'],
   'tests/execute-phase-active-flags.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
@@ -271,7 +292,6 @@ const DOCS_GUARD_TESTS = {
   // #3913 (ADR-3889 terminal phase): reads the generated docs/reference/exit-codes.md
   // (content invariants, F1/F3) and docs/README.md (F4, the index link).
   'tests/exit-code-registry.test.cjs': ['docs/reference/exit-codes.md', 'docs/README.md'],
-  'tests/external-job-waiting.test.cjs': ['docs/reference/planning-artifacts.md'],
   // Rows 8/9 (negative controls) read real docs/registries/eos.json and
   // docs/adr/0001-dispatch-policy-module.md and assert on their EXACT
   // committed content (an entry's name field, ADR-0001's H1 title) as a
@@ -325,7 +345,6 @@ const DOCS_GUARD_TESTS = {
   'tests/host-integration-descriptors.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
   ],
-  'tests/inline-plan-threshold-default.test.cjs': ['docs/CONFIGURATION.md', 'docs/zh-CN/CONFIGURATION.md', 'docs/pt-BR/CONFIGURATION.md'],
   'tests/install.test.cjs': ['docs/reference/agents.md', 'docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   // SOURCE_DIRS includes 'docs' and walks it recursively for every .md file
   // (intel.test.cjs:1223-1228) — a generic tree walk.
@@ -333,13 +352,6 @@ const DOCS_GUARD_TESTS = {
   'tests/inventory-manifest-sync.test.cjs': ['docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   'tests/kilo-upgrades.test.cjs': ['docs/how-to/connect-gsd-mcp-server.md'],
   'tests/live-config-guard.test.cjs': ['docs/TESTING-SUITES.md'],
-  // #5601: localized INVENTORY coverage notes must state no agent counts.
-  'tests/localized-inventory-agent-counts.test.cjs': [
-    'docs/ja-JP/',
-    'docs/ko-KR/',
-    'docs/pt-BR/',
-    'docs/zh-CN/',
-  ],
   // #3726: pins the `milestone complete` synopsis (English + four localized
   // mirrors), the `--confirm` flag row and the guard-override instructions —
   // `type: Fixed` exempts that PR from the docs-required lint, so this is the
@@ -364,7 +376,6 @@ const DOCS_GUARD_TESTS = {
     'docs/README.md',
   ],
   'tests/plan-authoring-verification-gaps.test.cjs': ['docs/reference/plan-md.md'],
-  'tests/plan-checker-coupling.test.cjs': ['docs/reference/agents.md'],
   'tests/planner-verify-command-validation.test.cjs': ['docs/how-to/validate-an-automated-command.md'],
   'tests/plan-phase-drift-guard.test.cjs': [
     'docs/CONFIGURATION.md',
@@ -380,7 +391,6 @@ const DOCS_GUARD_TESTS = {
     'docs/USER-GUIDE.md',
     'docs/ARCHITECTURE.md',
   ],
-  'tests/planner-estimate-emission.test.cjs': ['docs/reference/plan-md.md', 'docs/CONFIGURATION.md'],
   'tests/precondition-element.test.cjs': ['docs/reference/plan-md.md'],
   'tests/product-name-purity.test.cjs': [
     'docs/README.md',
@@ -389,7 +399,6 @@ const DOCS_GUARD_TESTS = {
     'docs/ja-JP/README.md',
     'docs/pt-BR/README.md',
   ],
-  'tests/progress-forensic.test.cjs': ['docs/COMMANDS.md'],
   'tests/registry-docs-approved-issue-parity.test.cjs': [
     'docs/registries/README.md',
     'docs/how-to/list-your-reviewer-lane.md',
@@ -424,9 +433,6 @@ const DOCS_GUARD_TESTS = {
   'tests/secure-phase.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/security-dead-exports.regression.test.cjs': ['docs/FEATURES.md'],
   'tests/security.test.cjs': ['docs/INVENTORY-MANIFEST.json'],
-  // Walks docs/ recursively (todos-done-rename-guard.test.cjs:19-22
-  // SCAN_DIRS) looking for stale references — a generic tree walk.
-  'tests/todos-done-rename-guard.test.cjs': ['*'],
   'tests/tracer-bullet.test.cjs': [
     'docs/COMMANDS.md',
     'docs/reference/plan-md.md',
@@ -446,7 +452,6 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/how-to/design-a-ui-phase.md',
   ],
   'tests/verifier-behavior-unverified.test.cjs': ['docs/reference/planning-artifacts.md'],
-  'tests/verifier-coincidental-reliance.test.cjs': ['docs/reference/agents.md'],
   'tests/verify.test.cjs': ['docs/reference/plan-md.md'],
   // #5118 V43: asserts the deleted execute-phase/steps/stale-reverification.md
   // is absent from the generated inventory manifest.

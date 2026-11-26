@@ -18,6 +18,7 @@ const fc = require('fast-check');
 
 const { cleanup, runGsdToolsAsync, installSpawnEnv } = require('./helpers.cjs');
 const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const {
   PROBE_TIMEOUT_MS,
   INSTALL_TIMEOUT_MS,
@@ -1184,7 +1185,7 @@ describe('installed-runtime agent manifest parity (#5356)', () => {
     const cwd = path.join(home, 'project');
     fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{}');
-    const env = installSpawnEnv({ HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: configDir, GSD_HOME: home });
+    const env = installSpawnEnv(isolatedEnv({ home, claudeConfigDir: configDir, override: { GSD_HOME: home } }));
     const install = runNode([path.join(repoRoot, 'bin', 'install.js'), `--${runtime}`, '--global', '--config-dir', configDir], {
       cwd, env, timeoutMs: INSTALL_TIMEOUT_MS,
     });
@@ -2305,10 +2306,7 @@ describe('regressions: --runtime override bypasses persisted runtime (#2003)', (
       // test onto the env-FIRST branch, silently dropping the only coverage this
       // #2003 regression has of the fallback branch. Sandboxing HOME keeps the
       // expectation test-controlled AND keeps the branch under test unchanged.
-      const result = await runGsdToolsAsync('capability state --runtime claude --raw', tmpDir, {
-        HOME: tmpDir,
-        USERPROFILE: tmpDir,
-      });
+      const result = await runGsdToolsAsync('capability state --runtime claude --raw', tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(result.success, `capability state --runtime should succeed: ${result.error || ''}`);
       const parsed = JSON.parse(result.output);
       // Home-derived Claude dir. That this is NOT <tmpDir>/.codex is the #2003

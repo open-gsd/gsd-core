@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { resolveOrchestratorExec } = require('../gsd-core/bin/lib/host-integration.cjs');
 
 const HOST_MODEL = 'HOSTMODEL-6301-XYZ';
@@ -43,7 +44,7 @@ function writePlan(fields) {
 function dispatch(runtime, extraEnv = {}) {
   // GSD_OPENCODE_GENERATION is always set: unset, the child probes a real `opencode --version`, so the
   // opencode argv would depend on the machine. Generation 1 keeps the descriptor's own argv.
-  const env = { HOME: project, USERPROFILE: project, GSD_HOME: project, GSD_RUNTIME: runtime, GSD_OPENCODE_GENERATION: '1', ...extraEnv };
+  const env = isolatedEnv({ home: project, base: {}, override: { GSD_HOME: project, GSD_RUNTIME: runtime, GSD_OPENCODE_GENERATION: '1', ...extraEnv } });
   // The record write is best-effort; remove the previous one so a silent write failure cannot leave a stale file to read.
   const recordPath = path.join(project, '.gsd', 'dispatch-isolation', `${PHASE}--${PLAN}.json`);
   cleanup(recordPath);

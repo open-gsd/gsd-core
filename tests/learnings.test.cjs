@@ -21,6 +21,7 @@ const {
   learningsPrune,
 } = require('../gsd-core/bin/lib/learnings.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
@@ -496,7 +497,7 @@ describe('CLI integration', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('learnings list returns valid JSON', () => {
-    const res = runGsdTools(['learnings', 'list'], tmpDir, { HOME: tmpDir });
+    const res = runGsdTools(['learnings', 'list'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.strictEqual(res.success, true);
     const parsed = JSON.parse(res.output);
     assert.ok(Array.isArray(parsed.learnings));
@@ -504,20 +505,20 @@ describe('CLI integration', () => {
   });
 
   test('learnings query --tag succeeds', () => {
-    const res = runGsdTools(['learnings', 'query', '--tag', 'auth'], tmpDir, { HOME: tmpDir });
+    const res = runGsdTools(['learnings', 'query', '--tag', 'auth'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.strictEqual(res.success, true);
     const parsed = JSON.parse(res.output);
     assert.ok(Array.isArray(parsed.learnings));
   });
 
   test('learnings prune with bad format exits non-zero', () => {
-    const res = runGsdTools(['learnings', 'prune', '--older-than', 'badformat'], tmpDir, { HOME: tmpDir });
+    const res = runGsdTools(['learnings', 'prune', '--older-than', 'badformat'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.strictEqual(res.success, false);
     assert.ok(res.error.includes('Invalid duration format'));
   });
 
   test('learnings unknown subcommand exits non-zero', () => {
-    const res = runGsdTools(['learnings', 'unknown'], tmpDir, { HOME: tmpDir });
+    const res = runGsdTools(['learnings', 'unknown'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.strictEqual(res.success, false);
     assert.ok(res.error.includes('Unknown learnings subcommand'));
   });

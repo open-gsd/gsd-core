@@ -14,6 +14,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runMinimalInstall, RUNTIME_META } = require('./helpers/install-shared.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode, runHook, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
@@ -299,7 +300,8 @@ describe('#5637 what an install writes', () => {
       `;
       const surfaceRun = runNode(['-e', script], {
         cwd: root,
-        env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root, GSD_HOME: root },
+        // `base: {}`: the child had exactly PATH, HOME, USERPROFILE and GSD_HOME before; it does not inherit the rest.
+        env: isolatedEnv({ home: root, path: process.env.PATH, base: {}, override: { GSD_HOME: root } }),
         timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
       assertSeamExit(assert, surfaceRun, 0);

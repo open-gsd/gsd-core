@@ -48,6 +48,7 @@ import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs'
 import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
 import directiveNamesIssue from './eslint-rules/directive-names-issue.cjs';
 import maxCommentBlockLines from './eslint-rules/max-comment-block-lines.cjs';
+import noAdhocEnvIsolation from './eslint-rules/no-adhoc-env-isolation.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 const adhocConfigMergeAllowlist = require('./eslint-rules/no-adhoc-config-merge.allowlist.json');
@@ -106,10 +107,16 @@ const localPlugin = {
     'named-args-spec-from-registry': namedArgsSpecFromRegistry,
     'directive-names-issue': directiveNamesIssue,
     'max-comment-block-lines': maxCommentBlockLines,
+    'no-adhoc-env-isolation': noAdhocEnvIsolation,
   },
 };
 
 export default tseslint.config(
+  // An `eslint-disable` that silences nothing is an error, not a warning that only
+  // `--max-warnings 0` turns into one: a rule-specific disable has no unused form that passes
+  // (tests/no-adhoc-env-isolation.rule.test.cjs pins this).
+  { linterOptions: { reportUnusedDisableDirectives: 'error' } },
+
   // ── Global ignores ─────────────────────────────────────────────────────────
   {
     ignores: [
@@ -864,6 +871,20 @@ export default tseslint.config(
       // `no-unbounded-spawn`, the allowlist is seeded empty and stays empty — this
       // epic migrated every call site, so the rule runs with no exemption surface.
       'local/no-unconfined-path-join': ['error', { allowlist: unconfinedPathJoinAllowlist }],
+    },
+  },
+
+  // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635) ─────────────────
+  // Its own block so the one exempt file can be excluded by exact path:
+  // tests/helpers/isolated-env.cjs IS the implementation the rule points to.
+  {
+    files: ['tests/**/*.cjs'],
+    ignores: ['tests/helpers/isolated-env.cjs'],
+    plugins: {
+      local: localPlugin,
+    },
+    rules: {
+      'local/no-adhoc-env-isolation': 'error',
     },
   },
 

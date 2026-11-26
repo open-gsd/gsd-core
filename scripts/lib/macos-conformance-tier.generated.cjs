@@ -7,6 +7,7 @@
 module.exports = {
   MACOS_CONFORMANCE_TIER_FILES: [
   "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
+  "tests/6420-plan-document-linear.test.cjs",
   "tests/active-workstream-store.unit.test.cjs",
   "tests/adr-612-bracket-phase-remove.test.cjs",
   "tests/adr-612-bracket-write-path.test.cjs",
@@ -69,7 +70,6 @@ module.exports = {
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
   "tests/config.test.cjs",
-  "tests/contributor-standards.test.cjs",
   "tests/copilot-install.test.cjs",
   "tests/core-utils.test.cjs",
   "tests/criterion-replay.test.cjs",
@@ -78,7 +78,6 @@ module.exports = {
   "tests/custom-phase-readers.process.test.cjs",
   "tests/custom-phase-readers.test.cjs",
   "tests/custom-phase-review-round7.test.cjs",
-  "tests/debugger-semantic-recall.test.cjs",
   "tests/default-flip-documentation-lint.test.cjs",
   "tests/dispatch-isolation-derived-executor.test.cjs",
   "tests/docs-update.test.cjs",
@@ -291,7 +290,6 @@ module.exports = {
   "tests/update-custom-backup.test.cjs",
   "tests/user-artifact-staging.test.cjs",
   "tests/verification-append-audit.test.cjs",
-  "tests/verification-overrides.test.cjs",
   "tests/verification-status.test.cjs",
   "tests/verify-command-grounding.test.cjs",
   "tests/verify.test.cjs",

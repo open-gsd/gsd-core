@@ -20,6 +20,7 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 
 const { runNode } = require('./process-seam.cjs');
+const { isolatedEnv } = require('./isolated-env.cjs');
 const { runStoreDir, fixtureKey, createSharedFixtureStore, copyInstalledTree } = require('./shared-install-fixture.cjs');
 const { ensureHooksDist } = require('./hooks-dist.cjs');
 
@@ -683,7 +684,7 @@ function runMinimalInstall({ runtime, scope, extraArgs = [], installScript = INS
     args.push(...extraArgs);
     const result = runNode(args, {
       cwd,
-      env: installerEnv({ HOME: root, USERPROFILE: root, ...extraEnv }),
+      env: installerEnv(isolatedEnv({ home: root, override: extraEnv })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     // Kept as a hand-rolled assert (rather than throwIfFailed from
