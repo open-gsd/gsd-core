@@ -1726,6 +1726,30 @@ function parseDeclaredScopeFlag(raw?: string): string[] {
   return String(raw || '').split(/\s+/).filter((token) => token.length > 0);
 }
 
+/**
+ * #6510: `--files`/`--deletions` values are whitespace-separated, so a token
+ * containing a comma is a comma-joined list mis-typed as ONE path — exactly
+ * the silent scope-defeat the cleanup-wave warnings exist to fail loudly
+ * about. Reject it outright rather than split it: splitting on commas would
+ * invent a second separator the flag never promised. Returns null when clean.
+ */
+function commaJoinedScopeRejection(
+  files?: string,
+  deletions?: string,
+): { reason: string; hint: string } | null {
+  const flags: Array<[string, string | undefined]> = [['--files', files], ['--deletions', deletions]];
+  for (const [flagName, raw] of flags) {
+    const offender = String(raw || '').split(/\s+/).find((token) => token.includes(',')) || null;
+    if (offender !== null) {
+      return {
+        reason: 'comma_joined_scope',
+        hint: `${flagName} paths are whitespace-separated; "${offender}" contains a comma. Re-run with paths separated by spaces, never commas, e.g. ${flagName} "a b c".`,
+      };
+    }
+  }
+  return null;
+}
+
 interface RecordAgentPlan {
   ok: boolean;
   reason: string;
@@ -1784,6 +1808,18 @@ function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields)
   // #3003: reuse parseDeclaredScopeFlag — a blank/absent --deletions leaves the
   // entry shape untouched, mirroring the --files rule directly above.
   const declaredDeletions = parseDeclaredScopeFlag(fields.deletions);
+  // #6510: a comma-joined scope value is rejected outright, never recorded as
+  // one bogus path — before any candidate construction or manifest write.
+  const commaRejection = commaJoinedScopeRejection(fields.files, fields.deletions);
+  if (commaRejection) {
+    return {
+      ok: false,
+      reason: commaRejection.reason,
+      hint: commaRejection.hint,
+      entry: null,
+      manifest: null,
+    };
+  }
   const candidate = {
     agent_id: agentId,
     worktree_path: worktreePath,
@@ -2031,6 +2067,17 @@ function planWorktreeCreate(fields: WorktreeCreateFields): WorktreeCreatePlan {
   // #3003: reuse parseDeclaredScopeFlag — a blank/absent --deletions leaves the
   // entry shape untouched, mirroring the --files rule directly above.
   const declaredDeletions = parseDeclaredScopeFlag(fields.deletions);
+  // #6510: same comma gate as planWorktreeRecordAgent — reject before any
+  // candidate construction, manifest write, or git command runs.
+  const commaRejection = commaJoinedScopeRejection(fields.files, fields.deletions);
+  if (commaRejection) {
+    return {
+      ok: false,
+      reason: commaRejection.reason,
+      hint: commaRejection.hint,
+      entry: null,
+    };
+  }
   const candidate = {
     agent_id: agentId,
     worktree_path: worktreePath,
