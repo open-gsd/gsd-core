@@ -23,7 +23,7 @@ Read these keys of the plan:
 | `crossRefEdits` | `STATE.md` and `PROJECT.md` labels that will be rewritten, one entry per spelling found |
 | `crossRefSkipped` | References the migration left alone, each with a `reason` |
 
-A `crossRefEdits` entry replaces the label as written with the canonical display and the same colon. `Phase 3:` becomes `[GSD.02] 01:`, the shape the migrated ROADMAP heading has. Only the exact `Phase <number>:` spelling is a label: `Phase 3 shipped`, `phase 3:` and directory names such as `GSD-01-setup` are not touched, and a label inside a fenced code block is never rewritten.
+A `crossRefEdits` entry replaces the label as written with the canonical display and the same colon. `Phase 3:` becomes `[GSD.02] 01:`, the shape the migrated ROADMAP heading has. Only the exact `Phase <number>:` spelling is a label: `Phase 3 shipped`, `phase 3:` and directory names such as `GSD-01-setup` are not touched, and a label inside a fenced code block is neither rewritten nor reported.
 
 ## 2. Resolve every `crossRefSkipped` entry
 
@@ -32,8 +32,7 @@ A label is rewritten only when exactly one roadmap phase answers to it. Anything
 | `reason` | Meaning | What to do |
 |---|---|---|
 | `ambiguous-milestone` | The label's number is carried by phases in more than one milestone (for example `Phase 1:` exists in v1.0 and in v2.0). `from` names the label. | After the migration, edit each occurrence by hand to the bracket display of the phase you meant, for example `[GSD.01] 01:`. |
-| `file-unreadable` | `STATE.md` or `PROJECT.md` exists but is not a regular, readable file. No `from`. | Fix the file, then re-run the dry-run before applying. |
-| `unrenderable-identity` | The canonical display helper could not render the phase's identity. `from` names the label. | Edit the label by hand after the migration. |
+| `file-unreadable` | `STATE.md` or `PROJECT.md` exists but is not a regular, readable file, or its content cannot be read as a planning document (for example an unterminated frontmatter fence). No `from`. | Fix the file, then re-run the dry-run before applying. |
 
 An empty `crossRefSkipped` and an empty `crossRefEdits` together mean nothing needed rewriting. A label for a phase that is not in the roadmap at all appears in neither list; it is left as written.
 
@@ -43,6 +42,6 @@ An empty `crossRefSkipped` and an empty `crossRefEdits` together mean nothing ne
 node gsd-tools.cjs roadmap upgrade --convention bracket --apply
 ```
 
-The apply refuses a dirty tracked working tree. If any write fails, every rename is reversed and every file it changed, `STATE.md` and `PROJECT.md` included, is restored to its exact bytes. `STATE.md` is written through its own state seam, so its frontmatter (timestamps, progress) is refreshed along with the label rewrite.
+The apply refuses a dirty tracked working tree. If any write fails, every rename is reversed and every file it changed, `STATE.md` and `PROJECT.md` included, is restored to its exact bytes, unless another writer changed that file after the migration wrote it: such a file is left as found and named in the error. `STATE.md` is written through its own state seam, so its frontmatter (timestamps, progress) is refreshed along with the label rewrite.
 
 Running the same command again reports `alreadyMigrated` with empty edit lists. Labels in a project that was migrated before this behavior existed are not rewritten by a re-run; edit those by hand.
