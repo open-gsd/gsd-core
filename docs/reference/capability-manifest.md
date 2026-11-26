@@ -75,7 +75,7 @@ Steps run at a loop extension point as independent units. Ordering within a poin
 
 | Sub-field | Type | Required | Description |
 |---|---|---|---|
-| `point` | string | Yes | One of the 12 valid loop extension point identifiers (see table below). |
+| `point` | string | Yes | One of the 13 valid loop extension point identifiers (see table below). |
 | `ref` | object | Yes | The dispatch target. Exactly one of `{ "skill": "<stem>" }`, `{ "agent": "<stem>" }`, or `{ "command": "<name>" }` (the three are mutually exclusive). A `skill`/`agent` stem must be declared in this capability's `skills`/`agents` array. |
 | `produces` | string[] | Yes | Artefact names this step produces. Must be present as an array (use `[]` when it produces none); an omitted `produces` fails validation. No two capability steps may produce the same artefact at the same point. |
 | `consumes` | string[] | Yes | Artefact names this step consumes. Must be present as an array (use `[]` when it consumes none); an omitted `consumes` fails validation. |
@@ -90,7 +90,7 @@ Contributions inject a fragment into a named agent role's prompt at a loop exten
 
 | Sub-field | Type | Required | Description |
 |---|---|---|---|
-| `point` | string | Yes | One of the 12 valid loop extension point identifiers. |
+| `point` | string | Yes | One of the 13 valid loop extension point identifiers. |
 | `into` | string | Yes | Agent role name. Must be a role published by that loop extension point in the host contract. |
 | `produces` | string[] | Yes | Artefact names this contribution produces. Use `[]` when it produces none. |
 | `consumes` | string[] | Yes | Artefact names this contribution reads. Use `[]` when it reads none. |
@@ -104,7 +104,7 @@ Gates check a condition at a loop extension point and optionally block progressi
 
 | Sub-field | Type | Required | Description |
 |---|---|---|---|
-| `point` | string | Yes | One of the 12 valid loop extension point identifiers. |
+| `point` | string | Yes | One of the 13 valid loop extension point identifiers. |
 | `check` | object | Yes | One of three forms (see table below). Must be present as an object; an omitted `check` fails validation. |
 | `blocking` | boolean | Yes | Must be present and a boolean; an omitted `blocking` fails validation. When `true`, a failed check halts the loop at this point. |
 | `onError` | `"skip"` \| `"halt"` | Yes | Behaviour when the check itself errors; must be present and one of `"skip"` or `"halt"` (an omitted `onError` fails validation). |
@@ -124,7 +124,7 @@ Declares that this capability resolves per-task content (`<action>`/`<verify>`/
 `<acceptance_criteria>`/`<read_first>`/`<done>`) from an external issue tracker instead of
 `execute-plan.md`'s per-task loop reading it inline from a task's `PLAN.md` body. This is **not**
 one of `steps` / `contributions` / `gates`, and it does not use a `point` value from the closed
-12-point vocabulary above — it is dispatched directly, once per task, by `execute-plan.md` before
+loop-point vocabulary above — it is dispatched directly, once per task, by `execute-plan.md` before
 that task's `read_first` gate, documented separately in
 [`loop-hook-dispatch.md`](../../gsd-core/references/loop-hook-dispatch.md#the-executetask-point-a-different-shape).
 See [ADR-3646](../adr/3646-per-task-content-resolution-seam.md) for the full design and
@@ -144,7 +144,7 @@ for the authoring walkthrough.
 
 ## Valid `point` values
 
-The 12 loop extension points are a **closed, additive-only vocabulary**. Every `steps`, `contributions`, and `gates` entry must use one of these identifiers exactly.
+The 13 loop extension points are a **closed, additive-only vocabulary**. The original twelve are the five lifecycle steps; `review:pre` (#3997) is the thirteenth. Every `steps`, `contributions`, and `gates` entry must use one of these identifiers exactly.
 
 A valid point is necessary but not sufficient: each host workflow decides, per point, which hook **kinds** its dispatch text handles, and a point may dispatch a subset. The registry build derives the real answer from the host workflows (`getWiredKinds()` in `scripts/gen-loop-host-contract.cjs`) and rejects a manifest declaring a kind the point does not dispatch — so an unsupported combination is a build-time error naming the point, the kind, and the kinds that point does cover. It is never a hook that renders and is then silently dropped.
 
@@ -166,6 +166,19 @@ A valid point is necessary but not sufficient: each host workflow decides, per p
 | `verify:post` | Verify | After the verify step completes |
 | `ship:pre` | Ship | Before the ship step executes |
 | `ship:post` | Ship | After the ship step completes |
+| `review:pre` | Review | While `/gsd-review` assembles the one prompt every external reviewer lane reads |
+
+### `review:pre` — reviewer contributions (#3997)
+
+`review:pre` publishes exactly one role, **`reviewer`**: the external review lanes `/gsd-review` hands a plan to. It is wired for `contribution` hooks only; a `step` or `gate` declared there fails the registry build.
+
+- **What is inserted.** Only `kind: "contribution"` entries with `into: "reviewer"` and an `inline` fragment. They are rendered once, inside one `<capability_reviewer_rules>` block appended to the shared review prompt, so every prompt-bearing lane receives the block exactly once. A lane whose `promptChannel` is `none` consumes no prompt and is unchanged. `/gsd-plan-review-convergence` calls `/gsd-review`, so every convergence cycle inherits the block with no second injection path.
+- **Order.** The registry's existing order: topological by `requires`, capability id as the tie-break.
+- **No-op.** With no active matching contribution nothing is appended and the prompt is byte-identical to a core-only run; the step prints nothing.
+- **Cap accounting.** The block is part of the prompt each lane's cap is measured against. A lane pushed over its cap is refused with `prompt_exceeds_context` (carrying `estimatedTokens`, `cap` and `capSource`), never shortened.
+- **Delivery is advisory.** A failure to render the point leaves the prompt without the block and never blocks the review. A literal `</capability_reviewer_rules>` inside a fragment is escaped so it cannot end the block early.
+- **Engine range.** A capability declaring any hook at `review:pre` must declare an `engines.gsd` range that excludes every core older than the release that introduced the point (`>=1.23.0`); the registry build rejects an absent or too-loose range, because an older core rejects the point. The check probes the earlier release lines rather than proving range intersection, so a range that admits an old release only through an exotic `||` arm is the one shape it can miss.
+- **Trust.** The text reaches external reviewers, a different boundary from the planner or executor. See [the trust model](../explanation/capability-trust-model.md#reviewer-contributions-cross-the-external-review-boundary).
 
 ---
 
@@ -336,8 +349,8 @@ The following invariants are enforced at **build time** by `scripts/gen-capabili
 - **Skill and agent stem uniqueness.** Exactly one capability may own each skill or agent stem across the entire merged registry.
 - **`requires` exist and are acyclic.** Every `id` listed in `requires` must exist in the registry; the dependency graph must be acyclic.
 - **`requires` is tier-monotone.** A `core` capability may not require a `standard` or `full` capability. A `standard` capability may not require a `full` capability.
-- **`point` values are from the closed set.** Every `point` in `steps`, `contributions`, and `gates` must be one of the 12 identifiers above.
-- **`contribution.into` is a published agent role.** The `into` value must be an agent role declared by the host contract for that loop extension point. The published roles are **family-partitioned** (ADR-894 §3, Amendment 2026-09-14): every role belongs to exactly one of orchestration (`orchestrator`), planning (`researcher`, `planner`, `checker`) or execution (`executor`, `verifier`, `code-reviewer`), and each loop step publishes exactly one family. So `execute:*` publishes `executor`/`verifier`/`code-reviewer` and never `orchestrator`, and `discuss:*`/`verify:*`/`ship:*` publish `orchestrator` and never `executor`/`verifier`. The partition is enforced when the host contract is generated, so the role set a point publishes is stable rather than incidental. A `code-reviewer` contribution (#4790) is delivered by `code-review.md` to the built-in `gsd-code-reviewer`, exactly once, beside its `agent_skills.gsd-code-reviewer` guidance; it is read from the loop point the review step is registered at (`workflow.code_review_point`, default `execute:post`). The role is admitted by the `execute` step as a whole, so a `code-reviewer` contribution declared at another execute point installs but is not delivered.
+- **`point` values are from the closed set.** Every `point` in `steps`, `contributions`, and `gates` must be one of the 13 identifiers above.
+- **`contribution.into` is a published agent role.** The `into` value must be an agent role declared by the host contract for that loop extension point. The published roles are **family-partitioned** (ADR-894 §3, Amendment 2026-09-14): every role belongs to exactly one of orchestration (`orchestrator`), planning (`researcher`, `planner`, `checker`) or execution (`executor`, `verifier`, `code-reviewer`), and each loop step publishes exactly one family. So `execute:*` publishes `executor`/`verifier`/`code-reviewer` and never `orchestrator`, and `discuss:*`/`verify:*`/`ship:*` publish `orchestrator` and never `executor`/`verifier`. The partition is enforced when the host contract is generated, so the role set a point publishes is stable rather than incidental. A `code-reviewer` contribution (#4790) is delivered by `code-review.md` to the built-in `gsd-code-reviewer`, exactly once, beside its `agent_skills.gsd-code-reviewer` guidance; it is read from the loop point the review step is registered at (`workflow.code_review_point`, default `execute:post`). The role is admitted by the `execute` step as a whole, so a `code-reviewer` contribution declared at another execute point installs but is not delivered. The external review lanes form a fourth family, **review** (`reviewer`), published only by the `review` step's `review:pre` (#3997); `reviewer` has no gsd agent file (the lanes are declared data, ADR-2782), so the generator's agent-presence check names it in an explicit exemption set alongside `orchestrator` instead of skipping unknown roles.
 - **Config key exclusivity.** A federated config key must be owned by exactly one capability and absent from the central `config-schema`. Presence in both is a collision; a half-migrated key fails the build gate.
 - **Artefact production uniqueness per point.** No two capability steps may `produces` the same artefact name at the same loop extension point.
 - **`engines.gsd` is a hard gate.** A capability whose `engines.gsd` range does not satisfy the installed GSD version is blocked at install and skipped (with a warning) at load time.

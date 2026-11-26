@@ -61,6 +61,7 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { cleanup, createTempDir, readFileNormalized } = require('./helpers.cjs');
 const { RUNTIME_META, installerEnv } = require('./helpers/install-shared.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   buildOverlayRepo,
@@ -266,7 +267,7 @@ function installOverlay(overlayRoot, runtime, extraArgs = []) {
   ];
   const result = runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root, base: {} })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   result.status = result.exitCode;
@@ -302,7 +303,7 @@ function installOverlayExpectingFailure(overlayRoot, runtime, extraArgs = []) {
   ];
   const result = runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root, base: {} })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   result.status = result.exitCode;

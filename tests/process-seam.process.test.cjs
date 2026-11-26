@@ -301,6 +301,23 @@ describe('process-seam', () => {
     }
   });
 
+  test('at-the-bound child on the hold path yields one deterministic outcome', async () => {
+    const fixture = writeFixture(tmpDir, 'sleeper.cjs', FIXTURE_SLEEPER);
+    const result = await runNode([fixture, '300'], { timeoutMs: SEAM_SHORT_TIMEOUT_MS, holdStdin: true });
+    // Mirror of the sync at-bound row: either side of the race is acceptable
+    // (the bound kill and the child's own exit contend), but the fields must
+    // be coherent with whichever branch won. Guards the hold path's
+    // `timedOut && code === null` discrimination (#5837 review).
+    assert.ok([OUTCOME.EXITED, OUTCOME.TIMED_OUT].includes(result.outcome));
+    if (result.outcome === OUTCOME.EXITED) {
+      assert.equal(result.timedOut, false);
+      assert.notEqual(result.exitCode, null);
+    } else {
+      assert.equal(result.timedOut, true);
+      assert.equal(result.exitCode, null);
+    }
+  });
+
   test('toSeamResult classifies a raced status+ETIMEDOUT as EXITED, not TIMED_OUT', () => {
     // Synthetic reproduction of the exact-bound race: spawnSync's timer
     // fired (error.code === 'ETIMEDOUT') just as the child finished on its
@@ -317,6 +334,27 @@ describe('process-seam', () => {
     assert.equal(result.outcome, OUTCOME.EXITED);
     assert.equal(result.timedOut, false);
     assert.equal(result.exitCode, 0);
+  });
+
+  test('toSeamResult classifies a raced status+overflow code as BUFFER_OVERFLOW, not EXITED (#4696)', () => {
+    // Synthetic reproduction of the exit-before-kill race: the child wrote past maxBuffer and exited
+    // 0 before spawnSync's SIGTERM landed, so the result carries the overflow code with status 0 and
+    // no signal. Measured on the v1.9.2 tester image: about 1 in 900 spawns of a child writing
+    // maxBuffer + 1 bytes, more often under load. The overflow is a fact about the output and must
+    // outrank the exit, or a caller reads truncated output as a clean run.
+    for (const code of BUFFER_OVERFLOW_CODES) {
+      const result = toSeamResult({
+        status: 0,
+        error: { code },
+        signal: null,
+        stdout: 'x',
+        stderr: '',
+      });
+      assert.equal(result.outcome, OUTCOME.BUFFER_OVERFLOW, code);
+      assert.equal(result.code, code);
+      assert.equal(result.timedOut, false);
+      assert.equal(result.killed, false);
+    }
   });
 
   test('child overrunning the bound is TIMED_OUT', () => {
@@ -350,6 +388,66 @@ describe('process-seam', () => {
       received: '',
       hadData: false,
     });
+  });
+
+  test('holdStdin keeps stdin open: the bound kills a stdin-reading child before EOF', async () => {
+    // #5837: the hold path's whole contract in one child — it announces on
+    // fd 1 via a synchronous write (survives the bound kill on every
+    // platform), carries a no-op data listener so the paused stdin stream is
+    // resumed and 'end' can fire at all (an 'end' listener alone never
+    // resumes it — bench run 5ad5e6c3 proved the unresumed child idles to the
+    // bound on both paths), reports EOF on that end and exits there, and
+    // otherwise holds the event loop open. With holdStdin the end handler can
+    // never fire, so the only way out is the seam's bound; the SAME fixture
+    // on the sync path with no option must still see EOF at once — the
+    // default the pre-#5837 C4 rows wrongly relied on.
+    const src = [
+      "const fs = require('fs');",
+      "fs.writeSync(1, 'listening\\n');",
+      "process.stdin.on('data', () => {});",
+      "process.stdin.on('end', () => {",
+      "  fs.writeSync(1, 'eof\\n');",
+      '  process.exit(0);',
+      '});',
+      'setTimeout(() => {}, 60000);',
+    ].join('\n');
+    const fixture = writeFixture(tmpDir, 'hold-stdin.cjs', src);
+    const held = await runNode([fixture], { holdStdin: true, timeoutMs: SEAM_STARTUP_CLEARING_TIMEOUT_MS });
+    assert.equal(held.outcome, OUTCOME.TIMED_OUT, held.summary);
+    assert.equal(held.timedOut, true);
+    assert.equal(held.exitCode, null);
+    assert.equal(typeof held.summary, 'string');
+    assert.match(held.summary, /outcome=timed_out/);
+    assert.match(held.stdout, /listening/, 'streamed stdout survives the bound kill');
+    assert.doesNotMatch(held.stdout, /eof/, 'stdin must not have been closed');
+    const closed = runNode([fixture]);
+    assert.equal(closed.outcome, OUTCOME.EXITED, closed.summary);
+    assert.match(closed.stdout, /eof/, 'omitted input still means unwritten-then-closed');
+  });
+
+  test('holdStdin combined with input is a seam contract violation', () => {
+    const fixture = writeFixture(tmpDir, 'echo-stdin.cjs', FIXTURE_ECHO_STDIN);
+    assert.throws(
+      () => runNode([fixture], { holdStdin: true, input: 'x' }),
+      (e) => e instanceof TypeError && /cannot be combined with input/.test(e.message),
+    );
+  });
+
+  test('holdStdin spawn failure is SPAWN_FAILED, not EXITED with a negative code', async () => {
+    // #5837 review: async spawn of a child that never starts emits 'error'
+    // then 'close' with a negative code. Passing that through as a status
+    // would classify EXITED with a negative exitCode; the OUTCOME contract
+    // requires SPAWN_FAILED, exactly what the sync path reports for the same
+    // input. A nonexistent cwd fails uv_spawn with ENOENT, the same failure
+    // class as a missing binary, without exposing a raw command parameter
+    // (the seam keeps spawnSeam unexported by design — see the missing-binary
+    // row above).
+    const missing = path.join(tmpDir, 'definitely-not-a-binary-5837');
+    const held = await runNode(['--version'], { cwd: missing, holdStdin: true, timeoutMs: SEAM_GENEROUS_TIMEOUT_MS });
+    const sync = runNode(['--version'], { cwd: missing, timeoutMs: SEAM_GENEROUS_TIMEOUT_MS });
+    assert.equal(held.outcome, sync.outcome);
+    assert.equal(held.outcome, OUTCOME.SPAWN_FAILED);
+    assert.equal(held.exitCode, null);
   });
 
   test('caller cannot override encoding into Buffers', () => {

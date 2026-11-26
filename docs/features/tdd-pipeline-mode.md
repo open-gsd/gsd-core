@@ -13,9 +13,22 @@ group: v1.36.0 Features
 - REQ-TDD-04: Executor fails fast if tests pass unexpectedly during RED phase (feature already exists or test is wrong)
 - REQ-TDD-05: End-of-phase collaborative review checkpoint verifies gate compliance across all TDD plans (advisory, non-blocking)
 - REQ-TDD-06: Gate violations surfaced in SUMMARY.md under `## TDD Gate Compliance` section
+- REQ-TDD-07: When `model_overrides` names a different model for `<executor>:tdd-red` than for `<executor>:tdd-green-refactor`, `execute-phase` runs a `type: tdd` plan as a RED dispatch followed by a GREEN/REFACTOR dispatch, each on its own model; with neither key set, dispatch is unchanged (#4696)
 
-**Configuration:** `workflow.tdd_mode`
-**Reference files:** `tdd.md`, `checkpoints.md`
+**Configuration:** `workflow.tdd_mode`; optional `model_overrides` keys `<executor>:tdd-red` and `<executor>:tdd-green-refactor`
+**Reference files:** `tdd.md`, `checkpoints.md`, `tdd-gate-dispatch.md`
+
+#### Per-gate models
+
+The RED gate is the step that most benefits from careful reasoning about what behavior to assert, and
+GREEN and REFACTOR are mechanical by comparison. A model is fixed for the length of one executor
+dispatch, so running the gates on different models means two dispatches. When the two gate models
+differ, `execute-phase` (`gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`) dispatches the
+executor for the RED gate only, checks that the RED commit exists, then dispatches it again for GREEN
+and REFACTOR. The second dispatch writes `SUMMARY.md`. A split plan runs in the orchestrator's own
+tree rather than a worktree, because a worktree is removed when its executor returns and GREEN must
+start from the RED commit. Effort is not switched per gate; per-gate effort needs an amendment to
+ADR-443 first. See [Configuration](../CONFIGURATION.md#tdd-gate-models-executortdd-red-executortdd-green-refactor).
 
 #### RED evidence formats
 
@@ -54,7 +67,10 @@ not exist yet. The whole run is refused as `build_failure`, ahead of the generic
 Which paths count as test files is one list, `src/tdd-test-files.cts`, shared by the
 behavior-adding check and the RED-commit pathspec in `execute-phase.md` (a test pins the
 two together): `*.test.*`, `*.spec.*`, `tests/` or `test/` and `__tests__/` directories,
-`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`.
+`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`. Letter case
+is ignored on both sides: the router folds case itself and the gate passes the same list behind
+git's `:(icase)` pathspec magic, so a RED commit made only of `Tests/foo.rs` or `Foo.TEST.js` is
+found (#5766).
 
 The upstream parsers (`tap-parser` and `saxes`) ship as reproducible bundles,
 including license notices, so installed runtimes need no `node_modules`.

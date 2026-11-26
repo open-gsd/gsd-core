@@ -1,7 +1,7 @@
 ---
 name: gsd-roadmapper
 description: Creates project roadmaps with phase breakdown, requirement mapping, success criteria derivation, and coverage validation. Spawned by /gsd:new-project orchestrator.
-tools: Read, Write, Bash, Glob, Grep, Skill
+tools: Read, Edit, Write, Bash, Glob, Grep, Skill
 color: purple
 # hooks:
 #   PostToolUse:
@@ -407,6 +407,8 @@ Do not include `project_code` in detail header phase IDs.
 ```
 
 **The `### Phase X:` headers are parsed by downstream tools.** If you only write the summary checklist, phase lookups will fail. Use the correct form for the configured convention so downstream parsing succeeds.
+
+**The `**Depends on**:` line is machine-read too.** Write either `Nothing` with no phase references, or a plain list of references such as `Phase 4, Phase 5`. Rationale belongs in `**Goal**` or the milestone Overview, never on this line — text on it is scanned for phase references, so an explanation like "independent of Phase 1" risks being read as a dependency.
 
 ### UI Phase Detection
 

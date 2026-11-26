@@ -177,7 +177,7 @@ An *unknown* field inside your `reviewer` body behaves differently: it is a non-
 
 ### Publish it so people can find it
 
-From GSD 1.9.1, a lane has its own discoverability catalog: the [Reviewer Lane Registry](../registries/reviewer-registry.md). Listing is a documentation PR — append one entry to `docs/registries/reviewers.json`, regenerate, open a PR. Register once; your GitHub Releases are the update channel from then on.
+From GSD 1.9.1, a lane has its own discoverability catalog: the [Reviewer Lane Registry](../registries/reviewer-registry.md). Listing is a documentation PR — get an approved issue first (a maintainer-applied `approved-feature`, `approved-enhancement` or `confirmed-bug` label; external PRs without a closing link to one are auto-closed, see the [Submission process](../registries/README.md#submission-process)), then append one entry to `docs/registries/reviewers.json`, regenerate, open a PR. Register once; your GitHub Releases are the update channel from then on.
 
 Follow [List your reviewer lane in the registry](list-your-reviewer-lane.md) for the task flow.
 

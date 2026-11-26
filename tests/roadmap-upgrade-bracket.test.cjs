@@ -29,6 +29,7 @@ const helpers = require('./helpers.cjs');
 const { cleanup, TOOLS_PATH } = helpers;
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const {
   computeMigrationPlan,
@@ -133,11 +134,7 @@ function runBracketUpgrade(cwd, extraArgs = []) {
     [TOOLS_PATH, 'roadmap', 'upgrade', '--convention', 'bracket', ...extraArgs],
     {
       cwd,
-      env: {
-        ...process.env,
-        ...helpers.TEST_ENV_BASE,
-        HOME: cwd,
-      },
+      env: isolatedEnv({ home: cwd }),
       timeoutMs: COMMAND_TIMEOUT_MS,
     },
   );
@@ -516,6 +513,152 @@ describe('roadmap upgrade --convention bracket', () => {
       before,
       'ignored planning tree must be byte-restored after a config write failure',
     );
+  });
+
+  // ── #6351 — rollback must not overwrite a file another writer changed after the migration wrote it ──
+  //
+  // The migration's last write (config.json) is made to fail, and at that moment a concurrent writer saves its own
+  // content over the named files, which is the window the rollback used to ignore: it put every snapshot back, silently
+  // destroying the edit. config.json is the migration's own final write, so a failure there is never blamed on another
+  // writer: it is restored even when the failed write tore the file. Fault injection is a JS-level replacement of
+  // fs.writeFileSync, uid-independent like the test above.
+  describe('#6351: rollback leaves a file another writer changed', () => {
+    // `onFail(realWrite)` runs when the guarded write is attempted, then the write throws. `guarded` names the file whose
+    // write fails (config.json by default).
+    function failWrite(t, cwd, plan, { guarded = 'config.json', onFail = () => {} } = {}) {
+      const guardedPath = path.join(cwd, '.planning', guarded);
+      const realWrite = fs.writeFileSync;
+      let failed = false; // only the migration's own write fails: the rollback's restore must be able to write
+      const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+        if (!failed && path.resolve(String(target)) === guardedPath) {
+          failed = true;
+          onFail((file, text) => realWrite.call(fs, file, text, 'utf8'));
+          throw Object.assign(new Error(`ENOSPC: no space left on device, write '${guardedPath}'`), { code: 'ENOSPC' });
+        }
+        return realWrite.call(fs, target, data, opts);
+      });
+      t.after(() => writeMock.mock.restore());
+      let caught;
+      try {
+        applyMigration(cwd, plan, { dryRun: false });
+      } catch (err) {
+        caught = err;
+      }
+      writeMock.mock.restore();
+      assert.ok(caught, 'the injected write failure must throw');
+      assert.match(caught.message, /Migration failed and rolled back/);
+      return caught;
+    }
+
+    const concurrentWriter = (writes) => (write) => { for (const [file, text] of writes) write(file, text); };
+    const asBytes = (text) => Buffer.from(text).toString('base64');
+    const withBytes = (tree, relPath, text) => tree.map((entry) => (entry.path === relPath ? { ...entry, bytes: asBytes(text) } : entry));
+
+    // STATE.md and PROJECT.md carry cross-references only on the legacy (milestone-prefixed) path.
+    const SEEDED = {
+      'STATE.md': ['---', 'gsd_state_version: "1.0"', 'status: executing', '---', '', '# Project State', '', '## Current Position', '',
+        'Phase: 1 (Alpha) — EXECUTING', 'Plan: 1 of 1', 'Status: Executing', '', 'See Phase 1: Alpha for the plan.', ''].join('\n'),
+      'PROJECT.md': ['# Project', '', '## Context', '', 'Phase 1: Alpha is first.', ''].join('\n'),
+    };
+    function legacyFixtureWithStateAndProject() {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      for (const [name, text] of Object.entries(SEEDED)) fs.writeFileSync(path.join(cwd, '.planning', name), text, 'utf8');
+      const plan = computeMigrationPlan(cwd, {});
+      assert.deepEqual([...new Set(plan.crossRefEdits.map((e) => e.file))].sort(), ['PROJECT.md', 'STATE.md'], 'precondition: both files are rewritten');
+      return { cwd, plan };
+    }
+
+    test('an external edit to ROADMAP.md survives, is named, and every other file is restored', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      const before = snapshotTree(planningPath);
+      const external = '# Roadmap rewritten by another writer\n';
+
+      const caught = failWrite(t, cwd, plan, { onFail: concurrentWriter([[path.join(planningPath, 'ROADMAP.md'), external]]) });
+
+      assert.match(caught.message, /NOT restored \(changed by another writer after the migration wrote them, left as found\): ROADMAP\.md \(modified\)/);
+      assert.deepEqual(snapshotTree(planningPath), withBytes(before, 'ROADMAP.md', external),
+        'ROADMAP.md keeps the external edit; renames are reversed and config.json is back to its snapshot');
+    });
+
+    for (const name of ['STATE.md', 'PROJECT.md']) {
+      test(`an external edit to ${name} survives and is named; the other file is restored`, (t) => {
+        const { cwd, plan } = legacyFixtureWithStateAndProject();
+        const planningPath = path.join(cwd, '.planning');
+        const before = snapshotTree(planningPath);
+        const external = `${SEEDED[name]}\nAn edit saved by another writer.\n`;
+
+        const caught = failWrite(t, cwd, plan, { onFail: concurrentWriter([[path.join(planningPath, name), external]]) });
+
+        assert.ok(caught.message.includes(`${name} (modified)`), `the message names ${name}: ${caught.message}`);
+        assert.deepEqual(snapshotTree(planningPath), withBytes(before, name, external));
+      });
+    }
+
+    test('with no concurrent writer the rollback is byte-identical and reports nothing as not restored, STATE.md and PROJECT.md included', (t) => {
+      const { cwd, plan } = legacyFixtureWithStateAndProject();
+      const planningPath = path.join(cwd, '.planning');
+      const before = snapshotTree(planningPath);
+
+      const caught = failWrite(t, cwd, plan);
+
+      assert.doesNotMatch(caught.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(planningPath), before);
+    });
+
+    test('an external edit to a file the migration rewrote under a renamed phase directory survives at its original path', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      const entry = plan.phases.find((phase) => (phase.dependsOnRewrites ?? []).length > 0);
+      assert.ok(entry, 'fixture must provide a depends_on rewrite');
+      const rewrite = entry.dependsOnRewrites[0];
+      const renamedPath = path.join(planningPath, 'phases', entry.newDir, rewrite.finalName);
+      const originalRel = path.posix.join('phases', entry.oldDir, rewrite.oldName);
+      const external = '---\nphase: edited elsewhere\n---\n# edited\n';
+
+      const caught = failWrite(t, cwd, plan, { onFail: concurrentWriter([[renamedPath, external]]) });
+
+      assert.ok(caught.message.includes(`${originalRel} (modified)`), `the message names the file at its restored path: ${caught.message}`);
+      assert.equal(fs.readFileSync(path.join(planningPath, originalRel), 'utf8'), external);
+    });
+
+    test('a write that fails partway tears the file but is the migration\'s own: ROADMAP.md is restored, not blamed on another writer', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      const before = snapshotTree(planningPath);
+
+      const caught = failWrite(t, cwd, plan, {
+        guarded: 'ROADMAP.md',
+        onFail: concurrentWriter([[path.join(planningPath, 'ROADMAP.md'), '# half a roadm']]),
+      });
+
+      assert.doesNotMatch(caught.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(planningPath), before);
+    });
+
+    test('a config.json write that fails partway is restored to its snapshot, and a config.json the migration was creating is removed', (t) => {
+      const existing = materializeFixture('legacy-multi-milestone');
+      const existingPlanning = path.join(existing, '.planning');
+      const existingPlan = computeMigrationPlan(existing, { convention: 'bracket' });
+      const existingBefore = snapshotTree(existingPlanning);
+      const torn = failWrite(t, existing, existingPlan, { onFail: concurrentWriter([[path.join(existingPlanning, 'config.json'), '{"proj']]) });
+      assert.doesNotMatch(torn.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(existingPlanning), existingBefore, 'the torn config.json is back to its snapshot');
+
+      const created = materializeFixture('legacy-multi-milestone');
+      const createdPlanning = path.join(created, '.planning');
+      // the plan needs project_code from config.json, so it is computed first; the file then goes missing, so the
+      // migration creates it
+      const createdPlan = computeMigrationPlan(created, { convention: 'bracket' });
+      fs.unlinkSync(path.join(createdPlanning, 'config.json'));
+      const createdBefore = snapshotTree(createdPlanning);
+      const tornCreate = failWrite(t, created, createdPlan, { onFail: concurrentWriter([[path.join(createdPlanning, 'config.json'), '{"proj']]) });
+      assert.doesNotMatch(tornCreate.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(createdPlanning), createdBefore, 'the partial config.json the failed write created is removed');
+    });
   });
 
   test('an applied migration is idempotent on re-run', () => {
@@ -2173,7 +2316,7 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(applied, 0, 'sentinel apply');
       const analyzed = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.deepEqual(
         analyzed.phases.map((p) => p.number).sort(),
@@ -2256,7 +2399,7 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(applied, 0, 'sentinel checklist bullet apply');
       const analyzed = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.deepEqual(analyzed.phases.map((p) => p.number).sort(), ['01', '02']);
       assert.equal(analyzed.missing_phase_details, null);
@@ -3412,7 +3555,7 @@ describe('roadmap upgrade --convention bracket', () => {
       const cwd = buildChecklistShapesFixture();
       const before = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.equal(before.missing_phase_details, null, 'the reader must not report any missing detail before migration');
 
@@ -3429,7 +3572,7 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(applied, 0, 'checklist-shapes apply');
       const after = JSON.parse(runNode(
         [TOOLS_PATH, 'roadmap', 'analyze'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
       assert.equal(
         after.missing_phase_details,
@@ -3716,7 +3859,7 @@ describe('roadmap upgrade --convention bracket', () => {
     function runHistoryDigest(cwd) {
       return JSON.parse(runNode(
         [TOOLS_PATH, 'history-digest'],
-        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+        { cwd, env: isolatedEnv({ home: cwd }), timeoutMs: COMMAND_TIMEOUT_MS },
       ).stdout);
     }
 
@@ -4084,5 +4227,434 @@ describe('roadmap upgrade --convention bracket: transform properties', () => {
 
     assert.deepEqual([...kinds].sort(), ['legacy', 'mnn', 'mnn-deep']);
     assert.deepEqual([...bullets].sort(), ['bold', 'none', 'plain']);
+  });
+});
+
+// ── #4751 — STATE.md and PROJECT.md phase labels ride the bracket migration ────────────────────────────────────────
+//
+// The bracket target migrates ROADMAP headings, checklist bullets and phase directories. These tests pin that it also
+// rewrites the `Phase N:` labels in STATE.md and PROJECT.md prose, through the planner's own ROADMAP-order mapping, and
+// that a label which cannot be resolved without guessing a milestone is reported instead of rewritten.
+
+describe('roadmap upgrade --convention bracket: STATE.md and PROJECT.md labels (#4751)', () => {
+  const { parsePlanningDoc, replaceProse } = require('../gsd-core/bin/lib/planning-document.cjs');
+
+  const STATE_HEAD = ['---', 'gsd_state_version: "1.0"', 'status: executing', '---', '', '# Project State', ''];
+  const planningFile = (cwd, name) => path.join(cwd, '.planning', name);
+  const readPlanning = (cwd, name) => fs.readFileSync(planningFile(cwd, name), 'utf8');
+  const seed = (cwd, files) => {
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(planningFile(cwd, name), text, 'utf8');
+  };
+  const planBracket = (cwd) => computeMigrationPlan(cwd, { convention: 'bracket' });
+  const editKeys = (plan) => plan.crossRefEdits.map(({ file, from, to }) => `${file}|${from}|${to}`).sort();
+  const stateText = (...bodyLines) => [...STATE_HEAD, ...bodyLines, ''].join('\n');
+  // STATE.md is written through its own read-modify-write seam, which resyncs the frontmatter (timestamps, progress),
+  // so a rewritten STATE.md is compared by its body: everything after the closing frontmatter fence.
+  const stateBody = (text) => text.slice(text.indexOf('\n---\n', 4) + '\n---\n'.length);
+  const projectText = (...bodyLines) => ['# Project', '', ...bodyLines, ''].join('\n');
+
+  // A project with no phase directories: the roadmap is the only source of phase identity.
+  function roadmapOnlyProject(label, roadmapLines) {
+    const cwd = materializeEmptyFixture(label);
+    fs.writeFileSync(planningFile(cwd, 'config.json'), '{\n  "project_code": "GSD"\n}\n', 'utf8');
+    fs.writeFileSync(planningFile(cwd, 'ROADMAP.md'), `${roadmapLines.join('\n')}\n`, 'utf8');
+    return cwd;
+  }
+
+  test('rewrites legacy Phase N: labels in STATE.md and PROJECT.md to canonical bracket displays', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, {
+      'STATE.md': stateText('Stopped at: Phase 1: Alpha review, Phase 01: padded and Phase 2.1: Beta.', '', 'Next: Phase 3: Gamma'),
+      'PROJECT.md': projectText('Phase 3: Gamma ships last.'),
+    });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(editKeys(plan), [
+      'PROJECT.md|Phase 3:|[GSD.02] 01:',
+      'STATE.md|Phase 01:|[GSD.01] 01:',
+      'STATE.md|Phase 1:|[GSD.01] 01:',
+      'STATE.md|Phase 2.1:|[GSD.01] 02:',
+      'STATE.md|Phase 3:|[GSD.02] 01:',
+    ].sort());
+    assert.deepEqual(plan.crossRefSkipped, []);
+
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Stopped at: [GSD.01] 01: Alpha review, [GSD.01] 01: padded and [GSD.01] 02: Beta.', '', 'Next: [GSD.02] 01: Gamma')),
+    );
+    // The STATE.md seam resyncs the frontmatter from the rewritten body, so the frontmatter carries the new labels too
+    // and keeps the status the file already had.
+    const frontmatter = extractFrontmatter(readPlanning(cwd, 'STATE.md'));
+    assert.equal(frontmatter.status, 'executing');
+    assert.equal(frontmatter.stopped_at, '[GSD.01] 01: Alpha review, [GSD.01] 01: padded and [GSD.01] 02: Beta.');
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), projectText('[GSD.02] 01: Gamma ships last.'));
+  });
+
+  test('rewrites M-NN labels, keeping the lifted milestone integer', () => {
+    const cwd = materializeFixture('mnn-multi-milestone');
+    seed(cwd, {
+      'STATE.md': stateText('Done: Phase 2-01: Foundation. Next: Phase 2-04-01: Deep slice.'),
+      'PROJECT.md': projectText('Phase 2-04-01: Deep slice is the long pole.'),
+    });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(editKeys(plan), [
+      'PROJECT.md|Phase 2-04-01:|[GSD.02] 04.01:',
+      'STATE.md|Phase 2-01:|[GSD.02] 01:',
+      'STATE.md|Phase 2-04-01:|[GSD.02] 04.01:',
+    ].sort());
+
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Done: [GSD.02] 01: Foundation. Next: [GSD.02] 04.01: Deep slice.')),
+    );
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), projectText('[GSD.02] 04.01: Deep slice is the long pole.'));
+  });
+
+  test('skips and reports a label whose number exists in two milestones', () => {
+    const cwd = roadmapOnlyProject('xref-ambiguous', [
+      '# Roadmap', '', '## v1.0 — Foundation', '', '### Phase 1: Alpha', '',
+      '## v2.0 — Scale', '', '### Phase 1: Beta', '', '### Phase 2: Gamma',
+    ]);
+    const state = stateText('Phase 1: shared number and Phase 2: unique number');
+    seed(cwd, { 'STATE.md': state });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(editKeys(plan), ['STATE.md|Phase 2:|[GSD.02] 02:']);
+    assert.deepEqual(plan.crossRefSkipped, [{ file: 'STATE.md', from: 'Phase 1:', reason: 'ambiguous-milestone' }]);
+
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Phase 1: shared number and [GSD.02] 02: unique number')),
+    );
+  });
+
+  test('rewrites a sentinel label into the sentinel milestone the heading moved to', () => {
+    const cwd = roadmapOnlyProject('xref-sentinel', [
+      '# Roadmap', '', '## v1.0 — Foundation', '', '### Phase 1: Alpha', '', '### Phase 999.1: Icebox',
+    ]);
+    seed(cwd, { 'STATE.md': stateText('Parked: Phase 999.1: later') });
+
+    const plan = planBracket(cwd);
+
+    const heading = plan.roadmapEdits.find((edit) => edit.from.includes('Phase 999.1')).to;
+    const headingId = heading.replace(/^#+\s+/, '').replace(/:.*$/, '');
+    assert.match(headingId, /^\[GSD\.999\] \d{2}$/);
+    assert.deepEqual(editKeys(plan), [`STATE.md|Phase 999.1:|${headingId}:`]);
+  });
+
+  test('rewrites a backlog sentinel label into the 0 milestone the heading moved to', () => {
+    const cwd = roadmapOnlyProject('xref-backlog', [
+      '# Roadmap', '', '## v1.0 — Foundation', '', '### Phase 1: Alpha', '', '### Phase 0.1: Backlog',
+    ]);
+    seed(cwd, { 'STATE.md': stateText('Parked: Phase 0.1: someday') });
+
+    const plan = planBracket(cwd);
+
+    const heading = plan.roadmapEdits.find((edit) => edit.from.includes('Phase 0.1')).to;
+    const headingId = heading.replace(/^#+\s+/, '').replace(/:.*$/, '');
+    assert.match(headingId, /^\[GSD\.00\] \d{2}$/);
+    assert.deepEqual(editKeys(plan), [`STATE.md|Phase 0.1:|${headingId}:`]);
+  });
+
+  test('plans edits only for the files that exist', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    let plan = planBracket(cwd);
+    assert.deepEqual(plan.crossRefEdits, []);
+    assert.deepEqual(plan.crossRefSkipped, []);
+
+    seed(cwd, { 'PROJECT.md': projectText('Phase 1: Alpha') });
+    plan = planBracket(cwd);
+    assert.deepEqual(editKeys(plan), ['PROJECT.md|Phase 1:|[GSD.01] 01:']);
+    assert.deepEqual(plan.crossRefSkipped, []);
+  });
+
+  test('leaves a file with no Phase N: label alone', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Phase: 1 (Alpha) — EXECUTING', 'Plan: 1 of 1') });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(plan.crossRefEdits, []);
+    assert.deepEqual(plan.crossRefSkipped, []);
+  });
+
+  test('leaves a label no roadmap phase maps to untouched and unreported', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Phase 9: an orphan nobody planned') });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(plan.crossRefEdits, []);
+    assert.deepEqual(plan.crossRefSkipped, []);
+  });
+
+  test('does not touch text that is not a Phase N: label', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, {
+      'STATE.md': stateText(
+        '[GSD.01] 01: already a bracket display',
+        'Phase 3 shipped', 'phase 3: lowercase', 'Phase 3 - dash', 'Phase 03 shipped', 'Phase 11: not in the roadmap',
+      ),
+    });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(plan.crossRefEdits, []);
+    assert.deepEqual(plan.crossRefSkipped, []);
+  });
+
+  test('never rewrites a label inside a fenced code block', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('```', 'Phase 1: inside the fence', '```', '', 'Phase 1: Alpha in prose') });
+
+    applyMigration(cwd, planBracket(cwd), { dryRun: false });
+
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('```', 'Phase 1: inside the fence', '```', '', '[GSD.01] 01: Alpha in prose')),
+    );
+  });
+
+  test('neither scans nor reports a label that appears only inside a fenced code block', () => {
+    const fenced = (label) => stateText('```', label, '```');
+    const legacy = materializeFixture('legacy-multi-milestone');
+    seed(legacy, { 'STATE.md': fenced('Phase 3: only in the fence') });
+    const legacyPlan = planBracket(legacy);
+    assert.deepEqual(legacyPlan.crossRefEdits, []);
+    assert.deepEqual(legacyPlan.crossRefSkipped, []);
+
+    const ambiguous = roadmapOnlyProject('xref-fenced-ambiguous', [
+      '# Roadmap', '', '## v1.0 — Foundation', '', '### Phase 1: Alpha', '', '## v2.0 — Scale', '', '### Phase 1: Beta',
+    ]);
+    seed(ambiguous, { 'STATE.md': fenced('Phase 1: only in the fence') });
+    const ambiguousPlan = planBracket(ambiguous);
+    assert.deepEqual(ambiguousPlan.crossRefEdits, []);
+    assert.deepEqual(ambiguousPlan.crossRefSkipped, [], 'a fenced label is not an ambiguity the owner has to resolve');
+  });
+
+  test('reports a file the apply could not parse instead of failing after a clean dry-run', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const unterminated = ['---', 'name: x', 'Phase 1: Alpha', ''].join('\n');
+    seed(cwd, { 'PROJECT.md': unterminated, 'STATE.md': stateText('Phase 3: Gamma') });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(plan.crossRefSkipped, [{ file: 'PROJECT.md', reason: 'file-unreadable' }]);
+    assert.deepEqual(editKeys(plan), ['STATE.md|Phase 3:|[GSD.02] 01:']);
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), unterminated, 'the unparseable file is left byte-intact');
+  });
+
+  test('apply refuses a dirty tracked working tree before writing the STATE.md and PROJECT.md edits', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Phase 3: Gamma'), 'PROJECT.md': projectText('Phase 1: Alpha') });
+    fs.appendFileSync(path.join(cwd, 'README.md'), '\ndirty\n', 'utf8');
+    const before = snapshotTree(cwd, { skipGit: true });
+
+    const result = runBracketUpgrade(cwd, ['--apply']);
+
+    assertExited(result, 1, 'dirty-tree refusal over cross-reference edits');
+    assert.match(result.stderr, /Working tree is dirty/);
+    assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'the refusal must precede every write');
+  });
+
+  test('preserves CRLF line terminators when rewriting labels', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const crlf = (text) => text.replaceAll('\n', '\r\n');
+    seed(cwd, { 'PROJECT.md': crlf(['# Project', '', 'Phase 1: Alpha first', 'Phase 3: Gamma last', ''].join('\n')) });
+
+    applyMigration(cwd, planBracket(cwd), { dryRun: false });
+
+    assert.equal(
+      readPlanning(cwd, 'PROJECT.md'),
+      crlf(['# Project', '', '[GSD.01] 01: Alpha first', '[GSD.02] 01: Gamma last', ''].join('\n')),
+    );
+  });
+
+  test('reports a non-regular STATE.md instead of reading it, and still rewrites PROJECT.md', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    fs.mkdirSync(planningFile(cwd, 'STATE.md'));
+    seed(cwd, { 'PROJECT.md': projectText('Phase 1: Alpha') });
+
+    const plan = planBracket(cwd);
+
+    assert.deepEqual(plan.crossRefSkipped, [{ file: 'STATE.md', reason: 'file-unreadable' }]);
+    assert.deepEqual(editKeys(plan), ['PROJECT.md|Phase 1:|[GSD.01] 01:']);
+
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(readPlanning(cwd, 'PROJECT.md'), projectText('[GSD.01] 01: Alpha'));
+  });
+
+  test('rewrites each spelling in a crowded line and leaves an unmapped neighbor untouched', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Phase 1: a, Phase 11: b, Phase 2.1: c, Phase 1: d') });
+
+    const plan = planBracket(cwd);
+    assert.deepEqual(editKeys(plan), ['STATE.md|Phase 1:|[GSD.01] 01:', 'STATE.md|Phase 2.1:|[GSD.01] 02:'].sort());
+
+    applyMigration(cwd, plan, { dryRun: false });
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('[GSD.01] 01: a, Phase 11: b, [GSD.01] 02: c, [GSD.01] 01: d')),
+    );
+  });
+
+  test('dry-run prints the cross-reference edits and writes zero bytes', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, {
+      'STATE.md': stateText('Stopped at: Phase 3: Gamma'),
+      'PROJECT.md': projectText('Phase 1: Alpha'),
+    });
+    const before = snapshotTree(cwd, { skipGit: true });
+
+    const plan = parseDryRun(runBracketUpgrade(cwd), 'cross-reference dry-run');
+
+    assert.deepEqual(editKeys(plan), ['PROJECT.md|Phase 1:|[GSD.01] 01:', 'STATE.md|Phase 3:|[GSD.02] 01:'].sort());
+    assert.deepEqual(plan.crossRefSkipped, []);
+    assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run must write nothing');
+  });
+
+  test('a config write failure restores STATE.md and PROJECT.md', (t) => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, {
+      'STATE.md': stateText('Stopped at: Phase 3: Gamma'),
+      'PROJECT.md': projectText('Phase 1: Alpha'),
+    });
+    const plan = planBracket(cwd);
+    assert.equal(plan.crossRefEdits.length, 2, 'precondition: both files carry an edit');
+    const before = snapshotTree(path.join(cwd, '.planning'));
+
+    const configPath = planningFile(cwd, 'config.json');
+    const realWrite = fs.writeFileSync;
+    const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+      if (path.resolve(String(target)) === configPath) {
+        throw Object.assign(new Error(`EACCES: permission denied, open '${configPath}'`), { code: 'EACCES' });
+      }
+      return realWrite.call(fs, target, data, opts);
+    });
+    t.after(() => writeMock.mock.restore());
+    assert.throws(() => fs.writeFileSync(configPath, 'probe'), /EACCES/, 'the injection must block config.json');
+
+    assert.throws(() => applyMigration(cwd, plan, { dryRun: false }), /Migration failed and rolled back/);
+    writeMock.mock.restore();
+
+    assert.deepEqual(snapshotTree(path.join(cwd, '.planning')), before, 'the ignored planning tree is byte-restored');
+  });
+
+  test('an applied migration plans no cross-reference edits on re-run', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Stopped at: Phase 3: Gamma') });
+    applyMigration(cwd, planBracket(cwd), { dryRun: false });
+    assert.equal(
+      stateBody(readPlanning(cwd, 'STATE.md')),
+      stateBody(stateText('Stopped at: [GSD.02] 01: Gamma')),
+      'precondition: the first apply rewrote the label',
+    );
+
+    const again = planBracket(cwd);
+
+    assert.equal(again.alreadyMigrated, true);
+    assert.deepEqual(again.crossRefEdits, []);
+    assert.deepEqual(again.crossRefSkipped, []);
+  });
+
+  test('leaves the milestone-prefixed plan shape unchanged', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    seed(cwd, { 'STATE.md': stateText('Stopped at: Phase 3: Gamma') });
+
+    const plan = computeMigrationPlan(cwd, {});
+
+    assert.equal(Object.hasOwn(plan, 'crossRefSkipped'), false);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md' && edit.to === 'Phase 2-01:'));
+  });
+
+  describe('property', () => {
+    const KINDS = ['legacy', 'mnn', 'mnn-deep'];
+    const phaseSpecArb = fc.record({
+      kind: fc.constantFrom(...KINDS),
+      padded: fc.boolean(),
+      inState: fc.boolean(),
+      inProject: fc.boolean(),
+    });
+    const docSpecArb = fc.array(fc.array(phaseSpecArb, { minLength: 1, maxLength: 3 }), { minLength: 1, maxLength: 3 });
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const HEADING_RE = /^#{2,4}\s+(\[[A-Z][A-Z0-9_]*\.\d+\] \d+(?:\.\d+)?): /;
+
+    test('property: every label becomes the id of the heading emitted for its own phase', () => {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bracket-xref-prop-'));
+      tempRoots.push(cwd);
+      fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+      fs.writeFileSync(planningFile(cwd, 'config.json'), '{\n  "project_code": "GSD"\n}\n', 'utf8');
+      const covered = { kinds: new Set(), files: new Set() };
+
+      fc.assert(
+        fc.property(docSpecArb, (milestones) => {
+          const roadmap = ['# Roadmap', ''];
+          const phases = [];
+          let legacyCounter = 0;
+          milestones.forEach((specs, mi) => {
+            const milestoneInt = mi + 1;
+            roadmap.push(`## v${milestoneInt}.0 — Milestone ${milestoneInt}`, '');
+            let mnnCounter = 0;
+            specs.forEach((spec) => {
+              let token;
+              if (spec.kind === 'legacy') {
+                legacyCounter += 1;
+                token = String(legacyCounter);
+              } else {
+                mnnCounter += 1;
+                token = `${milestoneInt}-${pad2(mnnCounter)}${spec.kind === 'mnn-deep' ? '-01' : ''}`;
+              }
+              roadmap.push(`### Phase ${token}: Name ${phases.length + 1}`, '');
+              const spelling = spec.kind === 'legacy' && spec.padded ? pad2(legacyCounter) : token;
+              phases.push({ ...spec, label: `Phase ${spelling}:` });
+              covered.kinds.add(spec.kind);
+            });
+          });
+          fs.writeFileSync(planningFile(cwd, 'ROADMAP.md'), `${roadmap.join('\n')}\n`, 'utf8');
+          const bodyFor = (flag) => phases.filter((p) => p[flag]).map((p, i) => `${p.label} note ${i}`);
+          const files = { 'STATE.md': bodyFor('inState'), 'PROJECT.md': bodyFor('inProject') };
+          for (const [name, lines] of Object.entries(files)) {
+            fs.writeFileSync(planningFile(cwd, name), `${['# Doc', '', ...lines].join('\n')}\n`, 'utf8');
+            if (lines.length > 0) covered.files.add(name);
+          }
+
+          const plan = planBracket(cwd);
+          assert.ok(!plan.alreadyMigrated, 'the generated roadmap must be migratable');
+          assert.deepEqual(plan.crossRefSkipped, [], 'unique source tokens are never ambiguous');
+
+          // The oracle is the heading the ROADMAP migration itself emitted for each phase, in document order.
+          const migrated = rewriteRoadmapLines(readPlanning(cwd, 'ROADMAP.md'), plan.roadmapEdits);
+          const ids = migrated.split('\n').map((line) => line.match(HEADING_RE)).filter(Boolean).map((m) => m[1]);
+          assert.equal(ids.length, phases.length, 'one emitted heading per generated phase');
+          const idByLabel = new Map(phases.map((p, i) => [p.label, `${ids[i]}:`]));
+
+          for (const [name, lines] of Object.entries(files)) {
+            const original = readPlanning(cwd, name);
+            let doc = parsePlanningDoc(original, name).value;
+            for (const edit of plan.crossRefEdits.filter((e) => e.file === name)) {
+              const next = replaceProse(doc, edit.from, edit.to);
+              assert.ok(next.ok, `replaceProse refused ${edit.from}`);
+              doc = next.value;
+            }
+            const want = lines.map((line) => {
+              const label = [...idByLabel.keys()].find((k) => line.startsWith(`${k} `));
+              return line.replace(label, idByLabel.get(label));
+            });
+            assert.equal(doc.source, `${['# Doc', '', ...want].join('\n')}\n`, `${name} rewritten label for label`);
+          }
+        }),
+      );
+
+      assert.deepEqual([...covered.kinds].sort(), [...KINDS].sort());
+      assert.deepEqual([...covered.files].sort(), ['PROJECT.md', 'STATE.md']);
+    });
   });
 });

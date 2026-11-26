@@ -30,6 +30,8 @@ const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig } = configLoaderMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 config-value-resolver.cjs is an export= CommonJS module
+import configValueResolver = require('./config-value-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 // #2528: `extractCanonicalPlanId` used to exist here as a byte-identical second
@@ -98,6 +100,8 @@ const { SCOPE } = planningScopeMod;
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const {
   stripShippedMilestones,
+  // #6271: moved to roadmap-parser.cts so state.cts shares the one sanitizer for echoed STATE.md milestone text.
+  echoStateMilestone,
   extractCurrentMilestone,
   extractCurrentMilestoneScoped,
   currentMilestoneRawRanges,
@@ -2047,31 +2051,6 @@ function assertBracketGeneratedIdentity(
         'Custom naming precedence under the bracket convention lands with #5067.',
     );
   }
-}
-
-const STATE_MILESTONE_ECHO_LIMIT = 80;
-
-/**
- * #5726: STATE.md's `milestone:` value is untrusted text. Cap it at
- * `STATE_MILESTONE_ECHO_LIMIT` characters (ellipsis past the cap), then quote it
- * with `JSON.stringify` (the `phase.cts` precedent for echoed user text), which
- * escapes ESC/BEL/newlines; the characters JSON leaves raw but a terminal acts on
- * are escaped too: DEL and C1 controls, zero-width and direction marks
- * (U+200B-U+200F), line/paragraph separators and bidi embeddings/overrides
- * (U+2028-U+202E), the invisible-format block (U+2060-U+206F, incl. bidi
- * isolates), soft hyphen (U+00AD), Arabic letter mark (U+061C), Mongolian
- * vowel separator (U+180E), interlinear annotations (U+FFF9-U+FFFB) and the
- * BOM (U+FEFF).
- */
-function echoStateMilestone(value: string): string {
-  const chars = Array.from(value);
-  const capped = chars.length > STATE_MILESTONE_ECHO_LIMIT
-    ? `${chars.slice(0, STATE_MILESTONE_ECHO_LIMIT).join('')}…`
-    : value;
-  return JSON.stringify(capped).replace(
-    /[\u007f-\u009f\u{ad}\u{61c}\u{180e}\u{200b}-\u{200f}\u{2028}-\u{202e}\u{2060}-\u{206f}\u{feff}\u{fff9}-\u{fffb}]/gu,
-    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
-  );
 }
 
 /**
@@ -8261,27 +8240,24 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   // when it cannot write the archive, and that must reach the user.
   let autoPruneError: string | null = null;
   try {
-    const configPath = path.join(planningDir(cwd), 'config.json');
-    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
-    // best-effort catch below.
-    const rawConfigText = configLoaderMod.readConfigFileBounded(configPath);
-    if (rawConfigText !== null) {
-      const rawConfig = JSON.parse(rawConfigText) as Record<string, unknown>;
-      const workflow = rawConfig['workflow'] as Record<string, unknown> | undefined;
-      const autoPruneEnabled = workflow && workflow['auto_prune_state'] === true;
-      if (autoPruneEnabled && fs.existsSync(statePath)) {
-        // Non-hoisted: load-order matters (stateMod must be fully resolved first).
-        const { cmdStatePrune } = stateMod;
-        try {
-          const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
-          // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
-          autoPruned = pruneResult.pruned === true;
-        } catch (err) {
-          // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
-          // the failed prune left them (it never loses entries).
-          autoPruneError = err instanceof Error ? err.message : String(err);
-          warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
-        }
+    // #6030: the resolver owns the layers, so the switch is honored from the workstream and the
+    // root config (the global file supplies only the loader's own key set). An unusable layer
+    // reads as "not enabled", quietly, as before.
+    const autoPruneEnabled = configValueResolver.resolveConfigValue(
+      'workflow.auto_prune_state', { cwd, family: 'A', quiet: true, honorGlobal: configLoaderMod.honorsGlobalDefaults },
+    ).value === true;
+    if (autoPruneEnabled && fs.existsSync(statePath)) {
+      // Non-hoisted: load-order matters (stateMod must be fully resolved first).
+      const { cmdStatePrune } = stateMod;
+      try {
+        const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
+        // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
+        autoPruned = pruneResult.pruned === true;
+      } catch (err) {
+        // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
+        // the failed prune left them (it never loses entries).
+        autoPruneError = err instanceof Error ? err.message : String(err);
+        warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
       }
     }
   } catch {

@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { readInstallState } = require('../gsd-core/bin/lib/installer-migrations.cjs');
@@ -52,7 +53,7 @@ else if (a[0] === 'debug' && a[1] === 'paths') console.log('data       ' + ${JSO
 
 function install({ home, bin, configDir }) {
   const result = runNode([INSTALL_SCRIPT, '--opencode', '--global', '--config-dir', configDir], {
-    env: installerEnv({ HOME: home, USERPROFILE: home, PATH: `${bin}${path.delimiter}${process.env.PATH}` }),
+    env: installerEnv(isolatedEnv({ home, path: `${bin}${path.delimiter}${process.env.PATH}` })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `installer failed\n${result.stdout}\n${result.stderr}`);
@@ -109,7 +110,7 @@ test('2.x installed: no deprecation notice (#5339)', { skip: SKIP }, (t) => {
 test('Kilo install on a machine whose opencode is 1.x: no deprecation notice (#5339)', { skip: SKIP }, (t) => {
   const sb = sandbox(t, { version: '1.19.0', tables: ['project', 'session'] });
   const result = runNode([INSTALL_SCRIPT, '--kilo', '--global', '--config-dir', path.join(sb.home, 'cfg', 'kilo')], {
-    env: installerEnv({ HOME: sb.home, USERPROFILE: sb.home, PATH: `${sb.bin}${path.delimiter}${process.env.PATH}` }),
+    env: installerEnv(isolatedEnv({ home: sb.home, path: `${sb.bin}${path.delimiter}${process.env.PATH}` })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `installer failed\n${result.stdout}\n${result.stderr}`);

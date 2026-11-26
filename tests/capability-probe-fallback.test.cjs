@@ -18,7 +18,10 @@
  *
  * BEHAVIORAL, not source-grep: each test extracts the fragment's own fenced
  * bash block, executes it under `bash` with the surrounding contract stubbed
- * (`gsd_run`, `PHASE_DIR`, `PHASE`), and asserts on the captured variable.
+ * (`gsd_run`, `PHASE_DIR`, `PHASE`, `GSD_TOOLS`), and asserts on the captured
+ * variable. Since #6503 the api-coverage snippet locates the detector through
+ * the gsd_run launcher / $GSD_TOOLS rather than the cwd, so the prelude
+ * supplies what the real workflow preamble supplies in the same shell.
  */
 
 const { describe, test, afterEach } = require('node:test');
@@ -132,7 +135,7 @@ describe('api-coverage fragment probe fallback is honest (#3909)', () => {
   // The fragment's snippet builds SCOPE from `${PHASE_DIR}/*-PLAN.md` plus a
   // `gsd_run query roadmap.get-phase` call. Both are stubbed so the test
   // controls exactly what reaches the detector.
-  function preludeFor(planBody) {
+  function preludeFor(planBody, gsdTools = TOOLS_PATH) {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-apifrag-'));
     if (planBody !== null) {
       fs.writeFileSync(path.join(tmpDir, '01-PLAN.md'), planBody, 'utf8');
@@ -140,15 +143,16 @@ describe('api-coverage fragment probe fallback is honest (#3909)', () => {
     return [
       `PHASE_DIR=${JSON.stringify(tmpDir)}`,
       'PHASE=01',
+      `GSD_TOOLS=${JSON.stringify(gsdTools)}`,
       'gsd_run() { return 0; }',
     ].join('\n');
   }
 
-  function capture(planBody, { cwd = REPO_ROOT } = {}) {
+  function capture(planBody, { cwd = REPO_ROOT, gsdTools = TOOLS_PATH } = {}) {
     return runSnippet({
       block: extractProbeBlock(API_FRAGMENT, 'API_COVERAGE_JSON'),
       varName: 'API_COVERAGE_JSON',
-      prelude: preludeFor(planBody),
+      prelude: preludeFor(planBody, gsdTools),
       cwd,
     });
   }
@@ -180,12 +184,15 @@ describe('api-coverage fragment probe fallback is honest (#3909)', () => {
   });
 
   test('a probe that CANNOT LAUNCH reports skipped, never detected:false', () => {
-    // cwd without the module → node fails, stdout empty. The fragment must not
-    // manufacture a verdict from that.
+    // Since #6503 reachability is the install lookup, not the cwd: point the
+    // resolver at an install that is not there → node fails, stdout empty.
+    // The fragment must not manufacture a verdict from that.
     const away = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-nomodule-'));
     try {
       const j = parseSingleObject(
-        capture('# Plan\nIntegrate the Stripe API.', { cwd: away }), 'probe unavailable');
+        capture('# Plan\nIntegrate the Stripe API.', {
+          gsdTools: path.join(away, 'gsd-core', 'bin', 'gsd-tools.cjs'),
+        }), 'probe unavailable');
       assert.strictEqual(j.skipped, true, 'a probe that could not run must report skipped');
       assert.strictEqual(j.reason, 'probe_unavailable');
       assert.strictEqual(

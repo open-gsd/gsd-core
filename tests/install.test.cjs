@@ -39,6 +39,7 @@ const os = require('node:os');
 
 const { createTempDir, createTempProject, cleanup, parseFrontmatter, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const pkg = require('../package.json');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -7478,7 +7479,7 @@ function installAndRead(runtime) {
   const res = spawnSync(
     process.execPath,
     [INSTALL, `--${runtime}`, '--global', '--config-dir', dir],
-    { encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, env: { ...process.env, HOME: dir, USERPROFILE: dir, GSD_HOME: dir } },
+    { encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, env: isolatedEnv({ home: dir, override: { GSD_HOME: dir } }) },
   );
   assert.strictEqual(res.status, 0, `install --${runtime} failed: ${res.stderr || res.stdout}`);
   const wf = path.join(dir, 'gsd-core', 'workflows', 'execute-phase.md');
@@ -7584,7 +7585,7 @@ test('real install: cursor negotiates --worktree through its own emitted gate an
     // vars otherwise leak in and make capability discovery host-dependent.
     const res = seamRunNode(
       [INSTALL, '--cursor', '--global', '--config-dir', dir],
-      { env: installSpawnEnv({ HOME: dir, USERPROFILE: dir }), timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: installSpawnEnv(isolatedEnv({ home: dir })), timeoutMs: INSTALL_TIMEOUT_MS },
     );
     assert.strictEqual(res.outcome, 'exited', `install --cursor did not complete: ${res.outcome}`);
     assert.strictEqual(res.exitCode, 0, `install --cursor failed: ${res.stderr || res.stdout}`);
@@ -7662,7 +7663,7 @@ test('real install: cursor negotiates --worktree through its own emitted gate an
       // GSD_RUNTIME outranks the config tier in resolveRuntime, so an ambient
       // one in the developer's shell would satisfy this test without the
       // install's own config ever being read. Blank it explicitly.
-      const hermeticEnv = { ...process.env, HOME: dir, USERPROFILE: dir, GSD_HOME: dir };
+      const hermeticEnv = isolatedEnv({ home: dir, override: { GSD_HOME: dir } });
       delete hermeticEnv.GSD_RUNTIME;
 
       // Seam again — `runHook` documents `interpreter: 'bash'` for a shell
@@ -8074,18 +8075,12 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
       process.execPath,
       [INSTALL_BIN, '--claude', '--global', '--dry-run'],
       {
-        env: {
-          ...process.env,
-          HOME: tmpHome,
-          USERPROFILE: tmpHome,
-          GSD_HOME: tmpHome,
-          // Redirect Claude config dir into isolated tmp home
-          CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
-          // Suppress slow stale-SDK npm check
-          GSD_SKIP_STALE_SDK_CHECK: '1',
-          // Do NOT set GSD_TEST_MODE — we want the main() block to run
-          GSD_TEST_MODE: undefined,
-        },
+        // GSD_TEST_MODE is stripped by isolatedEnv, so main() runs; stale-SDK npm check suppressed
+        env: isolatedEnv({
+          home: tmpHome,
+          claudeConfigDir: path.join(tmpHome, '.claude'),
+          override: { GSD_HOME: tmpHome, GSD_SKIP_STALE_SDK_CHECK: '1' },
+        }),
         cwd: REPO_ROOT,
         encoding: 'utf8',
         timeout: DRY_RUN_INSTALL_TIMEOUT_MS,
@@ -8153,15 +8148,11 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
       process.execPath,
       [INSTALL_BIN, '--claude', '--uninstall', '--dry-run'],
       {
-        env: {
-          ...process.env,
-          HOME: tmpHome,
-          USERPROFILE: tmpHome,
-          GSD_HOME: tmpHome,
-          CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
-          GSD_SKIP_STALE_SDK_CHECK: '1',
-          GSD_TEST_MODE: undefined,
-        },
+        env: isolatedEnv({
+          home: tmpHome,
+          claudeConfigDir: path.join(tmpHome, '.claude'),
+          override: { GSD_HOME: tmpHome, GSD_SKIP_STALE_SDK_CHECK: '1' },
+        }),
         cwd: REPO_ROOT,
         encoding: 'utf8',
         timeout: DRY_RUN_INSTALL_TIMEOUT_MS,

@@ -158,7 +158,7 @@ jobs:
       # on both steps below keeps the ancestry PR unconditional: a sync failure
       # is surfaced (the step shows red) but only costs a stale `next` version,
       # which is trivially re-synced — never a broken back-merge. Do not remove;
-      # a required-steps test (release-backmerge-invariants.test.cjs) enforces it.
+      # the release-backmerge-invariants text contract (and its step-guard test) enforces it.
       - name: Install dependencies and build (required by the version-sync hook)
         if: steps.check.outputs.next_exists == 'true'
         continue-on-error: true

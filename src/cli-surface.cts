@@ -26,6 +26,8 @@ type NamedArgSpec = projection.NamedArgSpec;
 export interface VerbSpec extends NamedArgSpec {
   /** The verb's result depends on the active workstream (#4772). */
   workstreamScoped?: boolean;
+  /** Global value flags this mutation must reject before main consumes them. */
+  rejectedGlobalFlags?: readonly string[];
   /** Flags belong to a third party the owner does not control (overlay path). */
   thirdParty?: boolean;
 }
@@ -97,7 +99,9 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     unknownFlagMessage: 'Unknown flag for config-new-project: {flag}',
   },
   'config-path': { positionals: 1 },
-  'migrate-config': { positionals: 1 },
+  'config-ensure-section': { positionals: 1, rejectShortFlags: true, unknownFlagMessage: 'Unknown flag for config-ensure-section: {flag}', rejectedGlobalFlags: ['pick', 'default'] },
+  'config-set-model-profile': { positionals: 2, rejectShortFlags: true, unknownFlagMessage: 'Unknown flag for config-set-model-profile: {flag}', rejectedGlobalFlags: ['pick', 'default'] },
+  'migrate-config': { positionals: 1, rejectShortFlags: true, unknownFlagMessage: 'Unknown flag for migrate-config: {flag}', rejectedGlobalFlags: ['pick', 'default'] },
 
   // ─── research ──────────────────────────────────────────────────────────────
   // The usage line names `[--kind <k>]` for get; the handler never reads it but callers pass it (research-cli tests).
@@ -166,9 +170,12 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
 
   // ─── dispatch ──────────────────────────────────────────────────────────────
   'dispatch-should-flatten': { positionals: 1, booleanFlags: JSON_FLAG },
+  // `--renew-held <ms>` carries a held answer's `decidedAt` (#4904). `plan` reads '' when bare,
+  // because the #4222 base check treats any `--plan`, empty or not, as a plan-scoped write.
   'dispatch-isolation': {
     positionals: 1,
-    valueFlags: ['cwd-target', 'force-isolation', 'phase', 'plan', 'prompt'],
+    valueFlags: ['cwd-target', 'force-isolation', 'phase', 'plan', 'prompt', 'renew-held'],
+    bareEmptyFlags: ['plan'],
     booleanFlags: JSON_FLAG,
   },
   'dispatch-capacity': { positionals: 1, booleanFlags: JSON_FLAG },
@@ -404,9 +411,7 @@ export const UNDECLARED_VERBS: readonly string[] = deepFreeze([
   'check.decision-coverage-plan',
   'check.decision-coverage-verify',
   'claude-orchestration',
-  'config-ensure-section',
   'config-get',
-  'config-set-model-profile',
   'docs-init',
   'estimate-calibrate',
   'estimate-calibration',

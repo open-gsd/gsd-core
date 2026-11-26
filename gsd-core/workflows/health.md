@@ -251,6 +251,7 @@ Report final status.
 | W029 | warning | .planning/ matches a gitignore rule but is still tracked by git (gitignore has no effect on already-tracked files) | No |
 | W030 | warning | Phase verification report status is outside the closed set | Yes (known legacy statuses only) |
 | W031 | warning | STATE.md is more than 3x its 100-line target | No |
+| W032 | warning | The gsd-core Claude Code plugin is enabled but no statusline feeds the context monitor, so context warnings are inactive | No |
 | I001 | info | Plan without SUMMARY (may be in progress) | No |
 | I010 | info | Resolved CWD reported alongside the E010 home-directory guard | No |
 

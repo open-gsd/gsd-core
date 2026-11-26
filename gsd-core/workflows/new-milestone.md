@@ -97,7 +97,9 @@ ls .planning/seeds/SEED-*.md 2>/dev/null
 - **Trigger conditions** — the `trigger_when` frontmatter field and the "When to Surface" section's bullet list
 - **Planted during** — the `planted_during` frontmatter field (for context)
 
-Compare each seed's trigger conditions against the milestone goals from step 2. A seed matches when its trigger conditions are relevant to any of the milestone's target features or goals.
+**Open seeds only:** Also read each seed's `status` frontmatter field. Only a seed whose `status` is `dormant`, `active` or `triggered` is a candidate, compared case-insensitively and ignoring surrounding whitespace; a missing, empty or non-text `status` counts as `dormant`. Skip every other seed silently, whatever its trigger: a seed that was closed or acted on is not new scope. This is the same set the milestone-close audit (`audit-open`) treats as open.
+
+Compare each remaining seed's trigger conditions against the milestone goals from step 2. A seed matches when its trigger conditions are relevant to any of the milestone's target features or goals.
 
 **If no seeds match:** Skip silently — do not prompt the user.
 
