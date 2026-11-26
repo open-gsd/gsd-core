@@ -12,6 +12,7 @@ const {
   INCLUDE,
   REFERENCE_MAX_BYTES,
   DISCOVERY_FILES,
+  SPAWN_PROMPT_FILES,
 } = require('./lib/project-skills-discovery.cjs');
 
 // The first non-blank line under the include is the agent's own application line: a bullet that
@@ -24,6 +25,25 @@ function roleStatementUnderInclude(text) {
   const next = lines.slice(at + 1).find((line) => line.trim() !== '') ?? '';
   if (/^- .*\bskills?\b/i.test(next)) return true;
   return `the line under the include is not a bullet that names skills: ${JSON.stringify(next.slice(0, 60))}`;
+}
+
+// A spawn prompt that names the project skill directories states the scoped read (#5248): the
+// frontmatter first, the full SKILL.md only where the description fits, never every SKILL.md. Lines
+// are found by the "<.claude dir> or <.agents dir>" pair plus a SKILL.md mention, so the spike/sketch
+// lookups and the plan checker line, which ask for no read, are not read as project-skills lines.
+const SKILL_DIRS_LINE = /\.claude\/skills\/ or [^\n]*\.agents\/skills\//;
+const READ_EVERY_SKILL = /read SKILL\.md(?: for each| files)/i;
+
+function spawnLinesAreScoped(text) {
+  const lines = text.split(/\r?\n/).filter((line) => SKILL_DIRS_LINE.test(line) && line.includes('SKILL.md'));
+  if (lines.length === 0) return 'no project-skills line found';
+  for (const line of lines) {
+    const shown = JSON.stringify(line.trim().slice(0, 70));
+    if (READ_EVERY_SKILL.test(line)) return `a project-skills line asks to read every SKILL.md: ${shown}`;
+    if (!/frontmatter/i.test(line)) return `a project-skills line does not scope the read to the frontmatter: ${shown}`;
+    if (!/\bdescription\b/.test(line)) return `a project-skills line does not gate the full read on the description: ${shown}`;
+  }
+  return true;
 }
 
 module.exports = {
@@ -47,6 +67,11 @@ module.exports = {
         .lacks(/(?:do not|never) load full `?AGENTS\.md`?/i, `${rel} tells the reader not to load AGENTS.md`)
         .lacks(/Load specific `rules\/\*\.md`|load `rules\/\*\.md`/i, `${rel} restates the rules/*.md step inline`)
         .satisfies(roleStatementUnderInclude, `${rel} needs its own application line under the include`);
+    }
+
+    // The spawn prompts agree with the reference (#5248).
+    for (const rel of SPAWN_PROMPT_FILES) {
+      ctx.doc(rel).satisfies(spawnLinesAreScoped, `${rel} spawn prompt must state the scoped project-skills read`);
     }
 
     // The reverse leg: an agent that includes the reference is on the list, so a new includer
