@@ -7,6 +7,8 @@
 // frontmatter read through the canonical parser). Dropped as implied: the exa/tavily and firecrawl/jina parity checks and
 // the repeated `mcp__ref__*` check (the required list demands all six tools), and the `MCP tool` alternative (it contains
 // `mcp`). The old patterns with a dot, a lazy or a plain `+` are linear walks with the same stops. Was tests/mcp-tool-inheritance.test.cjs.
+// The bare-name side (#6455): an agent that calls its tools as `mempalace_<tool>(` hides them from `referencedServers` (it
+// reads literal `mcp__<server>__` namespaces), so a second rule pins that a body naming such calls grants MemPalace.
 
 const path = require('node:path');
 const { loadLib } = require('./lib/load-lib.cjs');
@@ -22,10 +24,13 @@ const STEP_C_RESEARCHERS = ['agents/gsd-phase-researcher.md', 'agents/gsd-projec
 const REQUIRED_TOOLS = ['mcp__context7__*', 'mcp__exa__*', 'mcp__firecrawl__*', 'mcp__tavily__*', 'mcp__ref__*', 'mcp__jina__*'];
 const MIN_AGENTS = 20;
 const GRANT_ALL = '*';
+const MEMPALACE_SERVER = 'mempalace';
 
 const isBlank = (ch) => ch !== undefined && /\s/.test(ch);
 const isAlnum = (ch) => ch !== undefined && /[a-z0-9]/.test(ch);
 const isIdChar = (ch) => ch !== undefined && /[A-Za-z0-9_-]/.test(ch);
+const isLowerIdChar = (ch) => ch !== undefined && /[a-z_]/.test(ch);
+const isWordChar = (ch) => ch !== undefined && /[A-Za-z0-9_]/.test(ch);
 
 // The `tools:` line of a document: the walk of /^tools:\s*(.+)$/m. After `tools:` the pattern's `\s*` may cross lines, and
 // the `.+` then takes the rest of the line it lands on; at the end of the text the `\s*` gives back whitespace that is not a
@@ -169,12 +174,43 @@ function ungrantedServers(content, lib) {
   return { tokens, granted, ungranted: [...referencedServers(documented)].filter((server) => !granted.has(server)).sort() };
 }
 
+// The tool names a body calls bare as `mempalace_<name>(`: the walk of /\bmempalace_([a-z_]+)\s*\(/g. The word boundary
+// means a longer identifier (xmempalace_foo() is not a call); the run needs one character, so a bare `mempalace_(` is not
+// one either; what precedes `(` is the pattern's `\s*`. An underscore-spelled config word in parentheses (e.g.
+// `mempalace_enabled(true)`) counts as a call: accepted, none exists in the shipped agents (real keys are dotted,
+// `mempalace.enabled`) and the failure message names the remedy (#6455 review note).
+function bareMempalaceCalls(text) {
+  const names = new Set();
+  for (let at = text.indexOf('mempalace_'); at !== -1; at = text.indexOf('mempalace_', at + 1)) {
+    if (at > 0 && isWordChar(text[at - 1])) continue;
+    let end = at + 'mempalace_'.length;
+    while (isLowerIdChar(text[end])) end += 1;
+    if (end === at + 'mempalace_'.length) continue;
+    let gap = end;
+    while (isBlank(text[gap])) gap += 1;
+    if (text[gap] === '(') names.add(text.slice(at + 'mempalace_'.length, end));
+  }
+  return [...names].sort();
+}
+
+// The bare MemPalace calls an agent makes while its `tools:` allowlist withholds the grant; [] when the grant is present
+// or the `tools:` key is absent (inherits everything). `lib` is the canonical frontmatter parser; the scanned surface is
+// the body plus the frontmatter description, never `tools:` itself — the bare-name side of #2526 (#6455).
+function ungrantedMempalaceCalls(content, lib) {
+  const fm = lib.parseFrontmatter(content) || {};
+  const tokens = toolTokens(fm.tools);
+  if (tokens === null) return [];
+  const granted = grantedServers(tokens);
+  if (granted.has(GRANT_ALL) || granted.has(MEMPALACE_SERVER)) return [];
+  return bareMempalaceCalls(`${String(fm.description ?? '')}\n${lib.stripFrontmatter(content)}`);
+}
+
 const mentionsMcp = (text) => asciiLower(text).includes('mcp') || text.includes('context7') || text.includes('available tools');
 const namesMcpTools = (text) => text.includes('MCP') || text.includes('mcp__');
 
 module.exports = {
-  // The linear walks, exported for the differential properties of tests/text-contracts.batch12.test.cjs.
-  walkers: { toolsLine, mcpServersIn, stepCTableRows, referencedServers, stripInlineComment, toolTokens, grantedServers, ungrantedServers, mentionsMcp, namesMcpTools },
+  // The linear walks, exported for the differential properties of tests/text-contracts.batch12.test.cjs and the #6455 rule rows of tests/6455-mempalace-curator-grant.test.cjs.
+  walkers: { toolsLine, mcpServersIn, stepCTableRows, referencedServers, stripInlineComment, toolTokens, grantedServers, ungrantedServers, bareMempalaceCalls, ungrantedMempalaceCalls, mentionsMcp, namesMcpTools },
   id: 'mcp-tool-inheritance',
   issue: '#2526',
   check(ctx, load = () => require(path.join(__dirname, '..', '..', '..', FRONTMATTER_LIB))) {
@@ -245,6 +281,17 @@ module.exports = {
         if (result.tokens !== null && result.granted.size > 0) anyGrant = true;
         return result.ungranted.length === 0 || `documents mcp__${result.ungranted.join('__*, mcp__')}__* but its tools: allowlist grants none of them`;
       }, `${path.basename(rel)}: those calls can never dispatch, so the instruction is dead (#2526): grant the namespace, drop the block, or spell a placeholder mcp__<SERVER>__*`);
+      // No agent calls bare `mempalace_*` tools its tools: allowlist withholds (#6455, the bare-name side of #2526).
+      docOf(rel).satisfies((text) => {
+        let calls;
+        try {
+          calls = ungrantedMempalaceCalls(text, loaded.lib);
+        } catch {
+          // The #2526 arm above already reports this file; a second copy would double its findings.
+          return true;
+        }
+        return calls.length === 0 || `calls ${calls.map((name) => `mempalace_${name}()`).join(', ')}`;
+      }, `${path.basename(rel)}: those calls can never dispatch, so the instruction is dead (#6455): grant mcp__mempalace__* or mcp__* in tools:, or drop the calls`);
     }
     if (analyzed > 0 && !anyGrant) ctx.fail(AGENTS_DIR, 'no agent grants any mcp__ namespace: the grant parser is not matching');
   },

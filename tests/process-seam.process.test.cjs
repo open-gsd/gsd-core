@@ -336,6 +336,27 @@ describe('process-seam', () => {
     assert.equal(result.exitCode, 0);
   });
 
+  test('toSeamResult classifies a raced status+overflow code as BUFFER_OVERFLOW, not EXITED (#4696)', () => {
+    // Synthetic reproduction of the exit-before-kill race: the child wrote past maxBuffer and exited
+    // 0 before spawnSync's SIGTERM landed, so the result carries the overflow code with status 0 and
+    // no signal. Measured on the v1.9.2 tester image: about 1 in 900 spawns of a child writing
+    // maxBuffer + 1 bytes, more often under load. The overflow is a fact about the output and must
+    // outrank the exit, or a caller reads truncated output as a clean run.
+    for (const code of BUFFER_OVERFLOW_CODES) {
+      const result = toSeamResult({
+        status: 0,
+        error: { code },
+        signal: null,
+        stdout: 'x',
+        stderr: '',
+      });
+      assert.equal(result.outcome, OUTCOME.BUFFER_OVERFLOW, code);
+      assert.equal(result.code, code);
+      assert.equal(result.timedOut, false);
+      assert.equal(result.killed, false);
+    }
+  });
+
   test('child overrunning the bound is TIMED_OUT', () => {
     const fixture = writeFixture(tmpDir, 'sleeper.cjs', FIXTURE_SLEEPER);
     const result = runNode([fixture, '5000'], { timeoutMs: SEAM_TIGHT_TIMEOUT_MS });

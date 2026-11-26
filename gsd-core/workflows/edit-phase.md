@@ -216,7 +216,7 @@ Build the updated phase section by applying the changes to the original `section
 
 - For `title`: replace the heading text after `Phase {N}:`
 - For `goal`: replace the `**Goal:**` line value
-- For `depends_on`: replace or add the `**Depends on:**` line
+- For `depends_on`: replace or add the `**Depends on:**` line — the line is machine-read: either `Nothing` with no phase references, or a plain list such as `Phase 4, Phase 5`; rationale belongs in `**Goal:**` or the Overview
 - For `requirements`: replace or add the requirements block
 - For `success_criteria`: replace the numbered list under `**Success Criteria**:`
 - For full regeneration: rebuild the entire section from the new field values

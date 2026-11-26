@@ -304,6 +304,30 @@ describe('#4020 — run-tests temp root', () => {
         'the runner leaves the real-home guard marker unset so a test that forgot sandboxHome() still fails loudly');
     });
 
+    test('a real runner invocation leaves GSD_REQUIRE_BASH_TOOLS alone, so a host can make a missing tool fail (#6677)', (t) => {
+      const sandbox = createTempDir('gsd-6677-spawn-');
+      t.after(() => cleanup(sandbox));
+      const out = path.join(sandbox, 'switch.json');
+      const testDir = path.join(sandbox, 'probe-tests');
+      fs.mkdirSync(testDir);
+      fs.writeFileSync(path.join(testDir, 'probe.test.cjs'), [
+        "const fs = require('node:fs');",
+        "require('node:test').test('probe #6677', () => {",
+        '  fs.writeFileSync(process.env.GSD_PROBE_OUT, JSON.stringify({ value: process.env.GSD_REQUIRE_BASH_TOOLS ?? null }));',
+        '});',
+        '',
+      ].join('\n'));
+      const r = runNode([RUNNER], {
+        timeoutMs: RUN_TESTS_HARNESS_SPAWN_TIMEOUT_MS,
+        env: {
+          ...nestedRunnerEnv(sandbox), TMPDIR: sandbox, TEMP: sandbox, TMP: sandbox,
+          GSD_TEST_DIR: testDir, GSD_PROBE_OUT: out, GSD_REQUIRE_BASH_TOOLS: '1',
+        },
+      });
+      assert.equal(r.exitCode, 0, `runner should pass: ${r.stderr.slice(-400)}`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(out, 'utf8')), { value: '1' });
+    });
+
     test('setupRunHermeticEnv deletes exactly the listed keys and reuses an inherited sandbox home', (t) => {
       const root = createTempDir('gsd-4635-unit-');
       t.after(() => cleanup(root));

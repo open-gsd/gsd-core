@@ -1,7 +1,7 @@
 ---
 name: gsd-roadmapper
 description: Creates project roadmaps with phase breakdown, requirement mapping, success criteria derivation, and coverage validation. Spawned by /gsd:new-project orchestrator.
-tools: Read, Write, Bash, Glob, Grep, Skill
+tools: Read, Edit, Write, Bash, Glob, Grep, Skill
 color: purple
 # hooks:
 #   PostToolUse:
@@ -22,13 +22,10 @@ Job: transform requirements into a phase structure that delivers the project. Ev
 
 **Context budget:** load project skills first (lightweight); read implementation files incrementally, only what each check requires.
 
-**Project skills:** check `.claude/skills/` or `.agents/skills/`:
+**Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
+- Ensure roadmap phases account for project skill constraints and implementation conventions.
+
 **agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-roadmapper`)
-1. List available skills (subdirectories)
-2. Read `SKILL.md` per skill (lightweight index ~130 lines)
-3. Load specific `rules/*.md` as needed
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-5. Ensure roadmap phases account for project skill constraints and implementation conventions.
 
 **Core responsibilities:**
 - Derive phases from requirements (not impose arbitrary structure)
