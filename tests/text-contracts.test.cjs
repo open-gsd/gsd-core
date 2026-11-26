@@ -576,6 +576,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/references/untrusted-input-boundary.md', 'package-lock.json', '.github/workflows/test.yml',
     // agent-skills-awareness (#4649): the 21 canonical agents, their 15 compact variants and the shared reference.
     ...PROJECT_SKILLS.DISCOVERY_FILES, PROJECT_SKILLS.REFERENCE,
+    // the spawn-prompt files whose project-skills lines must state the same scoped read (#5248).
+    ...PROJECT_SKILLS.SPAWN_PROMPT_FILES,
   ];
 
   function copyOfRepoFiles(t) {
