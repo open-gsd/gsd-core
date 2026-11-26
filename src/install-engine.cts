@@ -501,26 +501,17 @@ const SYMLINKED_LEAF_REFUSAL = Object.freeze({
 /**
  * The path a temp-file-and-rename save (`atomicWriteFileSync`,
  * `platformWriteSync`) should be handed for `targetPath`, a file under
- * `installRoot` that may be a user-owned symlink (#5037).
+ * `installRoot` that may be a user-owned symlink (#5037): a rename onto a
+ * link replaces it with a plain file, and the real file stops getting changes.
  *
- * A rename onto a symlink replaces the link with a plain file, so the user's
- * real file silently stops receiving changes. A symlinked `targetPath` is
- * therefore refused unless `GSD_ALLOW_SYMLINKED_DEST` is set, and with the
- * opt-in the link's real target is returned, so the rename lands there and the
- * link stays in place. A plain or missing file is returned unchanged. A
- * dangling link is refused either way (`tryLstat` sees it where `existsSync`
- * would not), the same as `hasExistingSymlinkBetween` treats one elsewhere in
- * the installer.
- *
- * `label` starts the refusal message and names the writer, e.g.
- * `writeSettings: settings file`. Each refusal says what would let the write
- * go ahead, so the helper first asks whether the link could be followed at
- * all. A link `hasExistingSymlinkBetween` refuses even with following allowed
- * (a missing target, a loop, a link to the install root itself) is refused
- * with that reason whether or not the opt-in is set, because setting it would
- * not help. Only a link the opt-in would let through asks for the opt-in.
- *
- * Each refusal sets a `SYMLINKED_LEAF_REFUSAL` code on the error.
+ * A plain or missing file is returned unchanged. A symlinked `targetPath` is
+ * refused unless `GSD_ALLOW_SYMLINKED_DEST` is set; with it, the link's real
+ * target is returned, so the rename lands there and the link stays. A link
+ * `hasExistingSymlinkBetween` refuses even with following allowed (dangling,
+ * looped, or pointing at the install root) is refused with that reason either
+ * way, since the opt-in would not help; `tryLstat` sees a dangling link where
+ * `existsSync` would not. `label` names the writer at the start of each
+ * refusal, and each refusal sets a `SYMLINKED_LEAF_REFUSAL` code.
  */
 function resolveSymlinkedLeafWritePath(installRoot: string, targetPath: string, label: string): string {
   const stat = tryLstat(targetPath);
