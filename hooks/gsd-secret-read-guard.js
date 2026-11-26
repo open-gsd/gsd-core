@@ -5135,9 +5135,9 @@ function curlCertOpensSecretUnquoted(words, k) {
 // The text an xargs in segment `s` reads on stdin from a here-string or a
 // heredoc: its own (`xargs cat <<< .env`, `xargs curl x <<EOF`), or one that a
 // bare `cat` upstream prints, through any `tee` or bare `cat` that passes it
-// on (`cat <<EOF | xargs curl x`); null for any other stdin. A pipe from
-// printf or echo is read as printedWords reads it, and a file
-// (`xargs cat < list`) is not read.
+// on (`cat <<EOF | xargs curl x`), as { text, own }, `own` true for the
+// first; null for any other stdin. A pipe from printf or echo is read as
+// printedWords reads it, and a file (`xargs cat < list`) is not read.
 // It is found once per segment (xargsFedTextBySegMap): `find` runs many xargs
 // in one segment, and each would walk the same tokens again.
 const xargsFedTextBySegMap = new WeakMap();
@@ -5149,7 +5149,7 @@ function xargsFedText(s, bySeg, sepAfter) {
 }
 function findXargsFedText(s, bySeg, sepAfter) {
   const own = segmentFedText(s, bySeg);
-  if (own !== null) return own;
+  if (own !== null) return { text: own, own: true };
   let seg = s;
   for (;;) {
     const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
@@ -5157,7 +5157,7 @@ function findXargsFedText(s, bySeg, sepAfter) {
     const cmd = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
     if (!cmd || (cmd.base !== 'cat' && cmd.base !== 'tee')) return null;
     const fed = segmentFedText(prevSeg, bySeg);
-    if (fed !== null) return cmd.base === 'tee' || catPrintedText(cmd, { heredocs: [fed], hereStrings: [] }) !== null ? fed : null;
+    if (fed !== null) return cmd.base === 'tee' || catPrintedText(cmd, { heredocs: [fed], hereStrings: [] }) !== null ? { text: fed, own: false } : null;
     if (cmd.base === 'cat' && !cmd.operands.every((w) => w.text.startsWith('-'))) return null;
     seg = prevSeg;
   }
@@ -5461,12 +5461,15 @@ function xargsReplaceStr(operands, subIdx) {
 
 // The words xargsReadWords cuts from the fed text of segment `s`, kept per
 // segment and cut (delimiter, -I) and charged per cut, or null with no fed
-// text: `find` can run many xargs in one segment. They are marked `fed`, so a
-// shell reads one as its whole script and does not put it into one.
+// text: `find` can run many xargs in one segment. A word of xargs's own feed
+// that judgeStdinWords has put into a shell's script already (ownFeedWords)
+// is marked `judged` and not put in again; a whole line under -I, a word cut
+// at a -d delimiter and every word a bare `cat` or `tee` passes on are.
 const xargsFedWordsBySegMap = new WeakMap();
 function xargsFedWords(operands, s, bySeg, sepAfter, runs) {
-  const text = xargsFedText(s, bySeg, sepAfter);
-  if (text === null) return null;
+  const fed = xargsFedText(s, bySeg, sepAfter);
+  if (fed === null) return null;
+  const { text } = fed;
   let bySegCuts = xargsFedWordsBySegMap.get(bySeg);
   if (!bySegCuts) xargsFedWordsBySegMap.set(bySeg, (bySegCuts = new Map()));
   const to = runs === -1 ? operands.length : runs;
@@ -5474,10 +5477,17 @@ function xargsFedWords(operands, s, bySeg, sepAfter, runs) {
   if (!bySegCuts.has(key)) {
     chargeReader(text.length * PRINTED_WORD_COST);
     const words = xargsReadWords(text, operands, runs);
-    words.fed = true;
+    if (fed.own) markJudgedWords(words, s, bySeg);
     bySegCuts.set(key, words);
   }
   return bySegCuts.get(key);
+}
+
+// Marks each of `words` that ownFeedWords also cut from segment `s`'s own feed.
+function markJudgedWords(words, s, bySeg) {
+  const { hereWords, bodyWords } = ownFeedWords(s, bySeg);
+  const judged = new Set(hereWords.concat(bodyWords).map((w) => w.text));
+  for (const w of words) if (judged.has(w.text)) w.judged = true;
 }
 
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
@@ -5520,15 +5530,22 @@ function xargsShellScriptsRead(script, replaceStr, upstream, depth) {
 function findXargsShellScriptRead(script, replaceStr, upstream, depth) {
   const whole = !script || (replaceStr !== null && script.text === replaceStr);
   const parts = whole || replaceStr === null || replaceStr === '' ? null : script.text.split(replaceStr);
-  if (!whole && (parts === null || parts.length < 2 || upstream.fed)) return null;
+  if (!whole && (parts === null || parts.length < 2)) return null;
+  // Past the nesting limit a script is not read, only held as too deep
+  // (readEachWay): the first one that is not blank does that, and a blank one
+  // nothing, so a blank word put into blank parts is not built at all.
+  const deep = depth >= MAX_NESTING_DEPTH;
+  const blankParts = whole || parts.every((p) => p.trim() === '');
   const seen = new Set();
   for (const w of upstream) {
+    if (!whole && w.judged) continue;
     const word = xargsUnquoted(w.text);
     if (seen.has(word)) continue;
     seen.add(word);
     if (whole) chargeReader((word.length + 1) * PRINTED_WORD_COST);
+    if (deep && blankParts && word.trim() === '') continue;
     const hit = findSecretRead(whole ? word : parts.join(word), depth + 1);
-    if (hit) return hit;
+    if (hit || deep) return hit;
   }
   return null;
 }

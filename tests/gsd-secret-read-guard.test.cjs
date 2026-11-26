@@ -6481,6 +6481,17 @@ describe('gsd-secret-read-guard: the text a here-string or heredoc feeds xargs (
     // A fed word put into a shell's script by the replace string.
     ["xargs -I{} sh -c 'cat .{}' <<< env", '.env'],
     ["xargs -I{} sh -c 'cat .{}' <<EOF\nenv\nEOF", '.env'],
+    // Under -I a line of the feed is one word, blanks and all, put in whole; so is a word cut at a -d delimiter.
+    ["xargs -I{} sh -c 'echo {}nv' <<< 'x; cat .e'", '.env'],
+    ["xargs -I{} sh -c 'echo {}nv' <<EOF\nx; cat .e\nEOF", '.env'],
+    ["xargs -I{} sh -c 'ls {}nv' <<< 'x; cat .e'", '.env'],
+    ["xargs -d, -I{} sh -c 'cat .{}' <<< 'a,env'", '.env'],
+    // The same, fed by a bare cat, a tee or a second cat that passes the text on.
+    ["cat <<< env | xargs -I{} sh -c 'cat .{}'", '.env'],
+    ["cat <<< . | xargs -I{} sh -c 'cat {}env'", '.env'],
+    ["cat <<EOF | xargs -I{} sh -c 'cat .{}'\nenv\nEOF", '.env'],
+    ["cat <<< env | tee f | xargs -I{} sh -c 'cat .{}'", '.env'],
+    ["cat <<< env | cat | xargs -I{} sh -c 'cat .{}'", '.env'],
     // The replace string as a shell's whole script, filled from the feed.
     ["xargs -I{} sh -c {} <<< 'cat .env;ls'", '.env'],
     ["xargs -I{} sh -c '{}' <<< 'cat<.env'", '.env'],
@@ -6504,6 +6515,9 @@ describe('gsd-secret-read-guard: the text a here-string or heredoc feeds xargs (
     // A cat that prints a file, not its stdin, hands nothing of the feed on.
     'cat <<< .env | cat notes.txt | xargs cat',
     "cat notes.txt <<EOF | xargs cat\n.env\nEOF",
+    "cat <<< txt | xargs -I{} sh -c 'cat notes.{}'",
+    "xargs -I{} sh -c 'echo {}txt' <<< 'x; cat notes.'",
+    "cat <<EOF | xargs -I{} sh -c 'cat {}'\nnotes.txt\nEOF",
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
@@ -6881,6 +6895,19 @@ describe('gsd-secret-read-guard: a long line read once per xargs action or word 
     const cmd = `xargs -I{} sh -c 'ls {} ${`${BS}${BS} `.repeat(100)}| find . ${actions}' <<'EOF'\n${Array.from({ length: 1150 }, (_, i) => `a${i}`).join('\n')}\nEOF\ncat .env`;
     assertBlockedEitherCode(runHookWithin(bash(cmd), KILL_BOUND_MS), 'fed lines into a script');
   });
+  test('blocks 8,000 fed lines into a script nested past the limit inside the kill bound', () => {
+    const lines = Array.from({ length: 8000 }, (_, i) => `a${String(i).padStart(4, '0')}`).join('\n');
+    const cmd = `$($($(cat <<EOF | xargs -I{} sh -c 'a${'{}'.repeat(150000)}'\n${lines}\nEOF\n)))`;
+    const r = runHookWithin(bash(cmd), KILL_BOUND_MS);
+    assert.equal(r.status, 2, `nested fed lines: ${r.stderr}`);
+  });
+  test('blocks 2,000 blank fed lines into a blank script nested past the limit inside the kill bound', () => {
+    const blank = (i) => Array.from({ length: 12 }, (_, b) => ((i >> b) & 1 ? '\f' : '\v')).join('');
+    const lines = Array.from({ length: 2000 }, (_, i) => blank(i)).join('\n');
+    const cmd = `$($($(cat <<EOF | xargs -I{} sh -c '${'{}'.repeat(200000)}'\n${lines}\nEOF\n)))`;
+    const r = runHookWithin(bash(cmd), KILL_BOUND_MS);
+    assert.equal(r.status, 2, `nested blank fed lines: ${r.stderr}`);
+  });
   test('denies a read after 400 xargs actions with distinct delimiters over one printf text inside the kill bound', () => {
     const actions = Array.from({ length: 400 }, (_, i) => `-exec xargs -d${String.fromCharCode(0x4e00 + i)} cat \\; `).join('');
     const cmd = `printf '${'a '.repeat(2500)}%s' ${'x '.repeat(90)}| find . ${actions}; cat .env`;
@@ -6932,6 +6959,8 @@ describe('gsd-secret-read-guard: a long line read once per xargs action or word 
   for (const [what, cmd] of [
     ['417 distinct words into a 1,245-character -I script', `echo ${Array.from({ length: 417 }, (_, i) => `a${i}`).join(' ')} | xargs -I{} sh -c 'echo {} ${'x'.repeat(1245)}'`],
     ['2,033 fed names into an -I script', `xargs -I{} sh -c 'test -f {} && wc -l {} | sort -n | tail -n 1 >> out.txt' <<EOF\n${Array.from({ length: 2033 }, (_, i) => `f${String(i).padStart(4, '0')}.md`).join('\n')}\nEOF`],
+    ['2,033 names with a blank in xargs\'s own heredoc, into an -I script', `xargs -I{} sh -c 'test -f "{}" && wc -l "{}" >> out.txt' <<EOF\n${Array.from({ length: 2033 }, (_, i) => `docs/f${String(i).padStart(4, '0')} copy.md`).join('\n')}\nEOF`],
+    ['2,033 names a bare cat feeds into an -I script', `cat <<EOF | xargs -I{} sh -c 'test -f {} && wc -l {} | sort -n | tail -n 1 >> out.txt'\n${Array.from({ length: 2033 }, (_, i) => `f${String(i).padStart(4, '0')}.md`).join('\n')}\nEOF`],
   ]) {
     test(`allows ${what}`, () => {
       assertAllowed(runHook(bash(cmd)), what);
