@@ -149,6 +149,7 @@ const TARGETS = Object.freeze([
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/post-wave-requirements.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/regression-gate.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md', kind: 'workflow' }),
+  Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/threat-id-gate.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/verify-phase-goal.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md', kind: 'workflow' }),
