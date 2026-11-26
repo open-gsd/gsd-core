@@ -579,6 +579,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     ...PROJECT_SKILLS.DISCOVERY_FILES, PROJECT_SKILLS.REFERENCE,
     // advisor-prefilter (#4795): the fragment and the two workflows that deliver it.
     'capabilities/advisor-prefilter/fragments/advisor-prefilter.md', 'gsd-core/workflows/verify-work.md', 'gsd-core/workflows/ship.md',
+    // the spawn-prompt files whose project-skills lines must state the same scoped read (#5248).
+    ...PROJECT_SKILLS.SPAWN_PROMPT_FILES,
   ];
 
   function copyOfRepoFiles(t) {
