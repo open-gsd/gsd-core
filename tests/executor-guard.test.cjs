@@ -871,7 +871,7 @@ describe('#6216: seams and properties', () => {
     );
   });
 
-  test('property: --path passes exactly when the landing the kernel resolves is inside the worktree root', { skip: process.platform === 'win32' ? 'POSIX path resolution is the oracle' : false }, (t) => {
+  test('property: --path passes exactly when the landing the kernel resolves is inside the worktree root', { skip: process.platform !== 'linux' ? "glibc's realpath is the oracle" : false }, (t) => {
     const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-prop-')));
     t.after(() => cleanup(tmp));
     const root = path.join(tmp, 'wt');
@@ -888,7 +888,8 @@ describe('#6216: seams and properties', () => {
     // Resolved by the filesystem, not by the module: realpath of the longest prefix that exists
     // (each link followed where it stands, `..` applied after it), then the segments that do not
     // exist yet, as written. null when there is no landing: a segment below a file, or `..` below
-    // a missing one.
+    // a missing one. glibc's realpath refuses `.` and `..` below a file, as a write would be
+    // refused; the property runs where that holds.
     function kernelLanding(segments) {
       for (let n = segments.length; n >= 0; n--) {
         let real;
