@@ -1244,6 +1244,10 @@ function firstPartyRegistry(): CapabilityRegistry | undefined {
   }
 }
 
+/** The surface state file name `surface.cts` owns (`SURFACE_FILE_NAME`); duplicated here so a marker-only install does
+ *  not load that module. `tests/agent-install-surface-expected.test.cjs` pins parity with `writeSurface`. */
+const SURFACE_STATE_FILE = '.gsd-surface.json';
+
 interface SurfaceStateShape {
   baseProfile: string;
   disabledClusters: string[];
@@ -1280,12 +1284,21 @@ interface AgentsStagedByMarkerOpts {
  */
 function agentsStagedByMarker(configDir: string, opts: AgentsStagedByMarkerOpts = {}): Set<string> | null {
   const marker = readActiveProfile(configDir);
-  // #4761: `/gsd:surface` re-stages agents from the surface-resolved skills and prunes the rest (`applySurface`), so a
-  // `.gsd-surface.json` state, when present, decides the staged set instead of the marker alone. Lazy: surface.cts
-  // imports this module.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4761 lazy: surface.cts imports this module
-  const surfaceModule = require('./surface.cjs') as SurfaceModule;
-  const surface = surfaceModule.readSurface(configDir);
+  // #6715: `/gsd:surface` re-stages agents from the surface-resolved skills and prunes the rest (`applySurface`), so a
+  // `.gsd-surface.json` state, when present, decides the staged set instead of the marker alone. surface.cts imports
+  // this module, so it is required lazily, and only for a config dir that carries a state file: a marker-only install
+  // never loads it, and a module that cannot load leaves the marker-derived set in force instead of the full list.
+  let surfaceModule: SurfaceModule | null = null;
+  let surface: SurfaceStateShape | null = null;
+  if (fs.existsSync(path.join(configDir, SURFACE_STATE_FILE))) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6715 lazy: surface.cts imports this module
+      surfaceModule = require('./surface.cjs') as SurfaceModule;
+      surface = surfaceModule.readSurface(configDir);
+    } catch {
+      surface = null;
+    }
+  }
   if (!marker && !surface) return null;
   // Installed layout first: `<runtime config>/gsd-core/commands/gsd` is the full copy, while the runtime's own
   // `<runtime config>/commands/gsd` (what DEFAULT_COMMANDS_DIR resolves to there) holds only the staged subset and
@@ -1299,7 +1312,7 @@ function agentsStagedByMarker(configDir: string, opts: AgentsStagedByMarkerOpts 
   const fullManifest = loadSkillsManifest(commandsDir, opts.workflowsDir ?? DEFAULT_WORKFLOWS_DIR);
   if (fullManifest.size === 0) return null;
   const registry = opts.registry ?? firstPartyRegistry();
-  if (surface) {
+  if (surface && surfaceModule) {
     // applySurface stages every agent for an unmodified `full` surface (the `'*'` sentinel); any other state stages
     // exactly `resolveSurface(...).agents`.
     const modified = surface.disabledClusters.length > 0 || surface.explicitAdds.length > 0 || surface.explicitRemoves.length > 0;

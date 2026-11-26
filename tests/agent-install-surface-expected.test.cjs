@@ -36,6 +36,11 @@ function baseSkills(profile) {
   return [...resolved.skills].sort();
 }
 
+/** The derivation bin/install.js performs for `core`: an empty skill manifest, the real one for agents. */
+function installerCoreAgents() {
+  return installProfiles.resolveProfile({ modes: ['core'], manifest: new Map(), agentManifest: FULL_MANIFEST, registry }).agents;
+}
+
 /** Independent oracle: the catalog agents the given skills spawn, read straight from the manifest. */
 function agentsOfSkills(skills) {
   const agents = new Set();
@@ -119,9 +124,9 @@ describe('#4761 W010 expected set follows /gsd:surface', () => {
     const cfg = makeConfigDir(t);
     installProfiles.writeActiveProfile(cfg, 'core');
     fs.writeFileSync(path.join(cfg, '.gsd-surface.json'), '{not json');
-    const viaMarker = [...installProfiles.agentsStagedByMarker(cfg)].sort();
-    fs.unlinkSync(path.join(cfg, '.gsd-surface.json'));
-    assert.deepEqual([...installProfiles.agentsStagedByMarker(cfg)].sort(), viaMarker);
+    const viaMarker = installProfiles.agentsStagedByMarker(cfg);
+    assert.ok(viaMarker instanceof Set && viaMarker.size > 0 && viaMarker.size < ALL_AGENTS.length, 'a filtered marker set');
+    assert.deepEqual([...viaMarker].sort(), [...installerCoreAgents()].sort());
   });
 
   test('#4761 a surface-pruned install is not degraded, and a missing agent is still flagged', (t) => {
@@ -144,16 +149,51 @@ describe('#4761 W010 expected set follows /gsd:surface', () => {
     }
   });
 
-  test('#4761 expected set equals what applySurface stages (parity with the writer)', (t) => {
+  for (const { baseProfile, withMarker } of [
+    { baseProfile: 'standard', withMarker: true },
+    { baseProfile: 'core', withMarker: true },
+    { baseProfile: 'core', withMarker: false },
+  ]) {
+    test(`#6715 the check agrees with the agent files the surface writer leaves (${baseProfile}, marker: ${withMarker})`, (t) => {
+      const cfg = makeConfigDir(t);
+      stage(cfg, ALL_AGENTS); // a full install, as the surface writer finds it
+      if (withMarker) installProfiles.writeActiveProfile(cfg, baseProfile);
+      const state = {
+        baseProfile,
+        disabledClusters: [],
+        explicitAdds: [],
+        explicitRemoves: baseSkills(baseProfile).filter((_, i) => i % 2 === 0),
+      };
+      writeState(cfg, state);
+      // The writer's own pieces: the agent stager and the pruning sync applySurface calls, fed what applySurface feeds them.
+      const resolved = surface.resolveSurface(cfg, FULL_MANIFEST, undefined, registry, state);
+      const staged = installProfiles.stageAgentsForProfile(AGENTS_SRC, resolved);
+      const agentsDir = path.join(cfg, 'agents');
+      surface._syncGsdDir(staged, agentsDir, 'agents', FULL_MANIFEST);
+      const onDisk = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort();
+      assert.ok(onDisk.length > 0 && onDisk.length < ALL_AGENTS.length, 'fixture must prune some agents and keep some');
+      const r = check(cfg);
+      assert.deepEqual(r.missing_agents, [], 'no pruned agent is reported missing');
+      assert.equal(r.agents_installed, true);
+      assert.deepEqual([...r.installed_agents].sort(), onDisk.filter((a) => ALL_AGENTS.includes(a)));
+      // And a kept agent that goes missing is still reported.
+      const kept = onDisk.filter((a) => ALL_AGENTS.includes(a))[0];
+      fs.unlinkSync(path.join(agentsDir, `${kept}.md`));
+      assert.deepEqual(check(cfg).missing_agents, [kept]);
+    });
+  }
+
+  test('#6715 the surface state file name matches the one the writer produces', (t) => {
     const cfg = makeConfigDir(t);
-    const skills = baseSkills('standard');
-    const state = { baseProfile: 'standard', disabledClusters: [], explicitAdds: [], explicitRemoves: skills.slice(3) };
-    writeState(cfg, state);
-    const resolved = surface.resolveSurface(cfg, FULL_MANIFEST, undefined, registry, state);
-    assert.deepEqual(
-      [...installProfiles.agentsStagedByMarker(cfg)].sort(),
-      [...resolved.agents].sort(),
-    );
+    writeState(cfg, { baseProfile: 'standard', explicitRemoves: ['help'] });
+    assert.ok(fs.existsSync(path.join(cfg, '.gsd-surface.json')));
+  });
+
+  test('#6715 a marker-only install is unchanged by the surface lookup', (t) => {
+    const cfg = makeConfigDir(t);
+    installProfiles.writeActiveProfile(cfg, 'core');
+    const got = [...installProfiles.agentsStagedByMarker(cfg)].sort();
+    assert.deepEqual(got, [...installerCoreAgents()].sort());
   });
 
   test('#4761 property: expected agents are exactly those the remaining skills spawn', () => {
@@ -170,6 +210,10 @@ describe('#4761 W010 expected set follows /gsd:surface', () => {
           const r = check(cfg);
           assert.deepEqual(r.missing_agents, []);
           assert.equal(r.agents_installed, true);
+          if (expected.length > 0) {
+            fs.unlinkSync(path.join(cfg, 'agents', `${expected[0]}.md`));
+            assert.deepEqual(check(cfg).missing_agents, [expected[0]]);
+          }
         } finally {
           cleanup(cfg);
         }
