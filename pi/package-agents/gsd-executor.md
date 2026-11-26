@@ -437,7 +437,7 @@ After each task completes (verification passed, done criteria met), commit immed
 **0a. cwd-drift assertion (worktree mode only, MANDATORY before staging — #3097, #6216):**
 A prior Bash call may have `cd`'d out of the worktree into the main repo. Keep the
 `worktree_root` that step 0's guard printed on its first run in this plan as a literal path,
-and pass it back as `--toplevel` on every later run: the guard refuses a cwd whose worktree
+and pass it back as `--toplevel` on every later step 0 run: the guard refuses a cwd whose worktree
 root is anywhere else.
 
 **0b. absolute-path safety (worktree mode only, MANDATORY before Edit/Write — #3099):**

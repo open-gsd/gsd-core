@@ -62,4 +62,24 @@ describe('#4799 the orchestrator tells each sequential executor, in its own prom
     );
     assert.match(window, /fail(s)? closed/i);
   });
+
+  test('worktree-path-safety.md: step 0a carries the --sequential rule, step 0b says --path alone runs only its check (#6216)', () => {
+    const between = (doc, from, to) => {
+      const start = doc.indexOf(from);
+      const end = doc.indexOf(to, start);
+      assert.ok(start !== -1 && end > start, `section ${from} … ${to} not found`);
+      return doc.slice(start, end);
+    };
+    const safety = read('gsd-core/references/worktree-path-safety.md');
+    const step0a = between(safety, '## cwd-drift check — step 0a', '## Absolute-path guard — step 0b');
+    assert.match(step0a, /add `--sequential`\s+only when the executor's prompt has a `<sequential_execution>` block/);
+    const step0b = between(safety, '## Absolute-path guard — step 0b', '## `<automated>` command guard — step 0c');
+    assert.match(step0b, /Given alone, `--path` runs only this check/);
+    assert.doesNotMatch(step0b, /--sequential/);
+  });
+
+  test('step 0a passes --toplevel back on step 0 runs, in the executor and in worktree-path-safety.md (#6216)', () => {
+    assert.match(read('agents/gsd-executor.md'), /pass it back as `--toplevel` on every later step 0 run/);
+    assert.match(read('gsd-core/references/worktree-path-safety.md'), /pass it on every later step 0 run, before every commit/);
+  });
 });

@@ -128,7 +128,7 @@ If your prompt contains a `<worktree_branch_check>` embed instruction rather tha
 
 A prior Bash call may have `cd`'d out of the worktree into the main repo. Keep the
 `worktree_root` that the executor's first `executor.guard` run printed as a literal
-path, and pass it on every later run, before every commit:
+path, and pass it on every later step 0 run, before every commit:
 
 ```bash
 gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
@@ -136,6 +136,10 @@ gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
 
 The guard exits 42 when the current directory's worktree root is anywhere else;
 `cd` back to that root and re-run the commit.
+
+This is step 0's pre-commit command, so its branch checks run too: add `--sequential`
+only when the executor's prompt has a `<sequential_execution>` block (#4799). Without it
+the guard requires the agent branch namespace in a linked worktree.
 
 ---
 
@@ -154,6 +158,9 @@ gsd_run query executor.guard --path "<absolute path>"
 
 It exits 42 when the path lands outside the worktree root, or cannot be resolved,
 judging a file not yet created by where it would land.
+
+Given alone, `--path` runs only this check: the branch checks of step 0 are not run,
+so the command is the same in a sequential dispatch.
 
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the

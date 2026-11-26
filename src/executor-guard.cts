@@ -224,45 +224,55 @@ export function evaluateGuard(
   const headResult = facts.root === null ? null : git(deps, cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']);
   const head = headResult && headResult.exitCode === 0 ? headResult.stdout : '';
 
-  checks.push({
-    name: 'head-attached',
-    ok: attached && head !== '',
-    detail: facts.root === null
-      ? `${opts.invokedFrom} is not inside a git worktree`
-      : attached && head !== '' ? `HEAD is on '${branch}'` : 'HEAD is detached or unreadable',
-  });
+  const expectedBase = opts.expectedBase ?? null;
+  const given = (v: string | null | undefined): boolean => v !== undefined && v !== null;
+  // `--path` given alone asks where a write would land (step 0b), which no branch decides: the
+  // branch checks run on the spawn-time and pre-commit calls.
+  const branchChecks = !given(opts.path) || given(opts.toplevel) || expectedBase !== null ||
+    Boolean(opts.expectedBaseAlternate);
+
+  if (branchChecks) {
+    checks.push({
+      name: 'head-attached',
+      ok: attached && head !== '',
+      detail: facts.root === null
+        ? `${opts.invokedFrom} is not inside a git worktree`
+        : attached && head !== '' ? `HEAD is on '${branch}'` : 'HEAD is detached or unreadable',
+    });
+  }
 
   // Spawn-time (an expected base was passed): the block's own protected names, no resolver call.
   // Pre-commit: the git.base-branch --is-protected rule, an unverifiable base branch counting as
   // protected (#3057, #3819).
-  const expectedBase = opts.expectedBase ?? null;
-  let protectedOk = false;
-  let protectedDetail = 'no branch to test';
-  if (attached && expectedBase !== null) {
-    protectedOk = !SPAWN_PROTECTED_RE.test(branch);
-    protectedDetail = protectedOk
-      ? `'${branch}' is not main, master, develop, trunk or release/*`
-      : `'${branch}' is a protected branch; refusing to commit or self-recover via 'git update-ref' (#2924)`;
-  } else if (attached) {
-    try {
-      const status = (deps?.protectedStatus ?? resolveProtectedBranchStatus)(ctx.projectRoot, branch);
-      protectedOk = status.verified && !status.isProtected;
-      protectedDetail = !status.verified
-        ? 'could not verify the repository\'s branch metadata; treated as protected (#3057)'
-        : status.isProtected
-          ? `'${branch}' is a protected/default branch (#2924, #3819)`
-          : `'${branch}' is not protected`;
-    } catch (err) {
-      protectedDetail = `protected-branch check failed: ${(err as Error).message}`;
+  if (branchChecks) {
+    let protectedOk = false;
+    let protectedDetail = 'no branch to test';
+    if (attached && expectedBase !== null) {
+      protectedOk = !SPAWN_PROTECTED_RE.test(branch);
+      protectedDetail = protectedOk
+        ? `'${branch}' is not main, master, develop, trunk or release/*`
+        : `'${branch}' is a protected branch; refusing to commit or self-recover via 'git update-ref' (#2924)`;
+    } else if (attached) {
+      try {
+        const status = (deps?.protectedStatus ?? resolveProtectedBranchStatus)(ctx.projectRoot, branch);
+        protectedOk = status.verified && !status.isProtected;
+        protectedDetail = !status.verified
+          ? 'could not verify the repository\'s branch metadata; treated as protected (#3057)'
+          : status.isProtected
+            ? `'${branch}' is a protected/default branch (#2924, #3819)`
+            : `'${branch}' is not protected`;
+      } catch (err) {
+        protectedDetail = `protected-branch check failed: ${(err as Error).message}`;
+      }
     }
+    checks.push({ name: 'not-protected', ok: protectedOk, detail: protectedDetail });
   }
-  checks.push({ name: 'not-protected', ok: protectedOk, detail: protectedDetail });
 
   // The namespace is required at spawn time, and before a commit in any worktree whose `.git` is
   // a file or whose git dir is not the common dir, unless the executor was dispatched onto the
   // orchestrator's tree (#4799). A layout that cannot be read requires it.
-  const namespaceRequired = expectedBase !== null ||
-    (!opts.sequential && (!facts.layoutKnown || facts.isolatedLayout));
+  const namespaceRequired = branchChecks && (expectedBase !== null ||
+    (!opts.sequential && (!facts.layoutKnown || facts.isolatedLayout)));
   if (namespaceRequired) {
     const ok = attached && AGENT_BRANCH_RE.test(branch);
     checks.push({

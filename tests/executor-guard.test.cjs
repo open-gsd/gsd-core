@@ -333,6 +333,65 @@ describe('#4799 / #3819 / #2924 behaviours, now held by executor.guard', () => {
     });
   }
 
+  test('#4799 --path given alone on a feature/* linked worktree runs only the path check, with and without --sequential', (t) => {
+    const { tmp, main, wt } = mkFixture(t, { agentBranch: 'feature/phase-48' });
+    const inside = path.join(wt, 'src', 'new', 'file.ts');
+    for (const extra of [[], ['--sequential']]) {
+      const res = run(['executor.guard', '--path', inside, ...extra], wt, tmp);
+      assert.equal(res.exitCode, 0, `${JSON.stringify(extra)}: ${res.error}`);
+      assert.deepEqual(json(res).checks.map((c) => c.name), ['path']);
+
+      const outside = run(['executor.guard', '--path', path.join(main, 'README.md'), ...extra], wt, tmp);
+      assert.equal(outside.exitCode, GUARD_EXIT_CODE);
+      assert.deepEqual(json(outside).checks.map((c) => c.name), ['path']);
+      assert.deepEqual(failed(outside), ['path']);
+    }
+  });
+
+  test('#4799 --toplevel on a feature/* linked worktree is the pre-commit check: the namespace applies unless --sequential, also beside --path', (t) => {
+    const { tmp, wt } = mkFixture(t, { agentBranch: 'feature/phase-48' });
+    const inside = path.join(wt, 'src', 'new', 'file.ts');
+    for (const flags of [['--toplevel', wt], ['--toplevel', wt, '--path', inside]]) {
+      const isolated = run(['executor.guard', ...flags], wt, tmp);
+      assert.equal(isolated.exitCode, GUARD_EXIT_CODE, JSON.stringify(flags));
+      assert.deepEqual(failed(isolated), ['agent-namespace'], JSON.stringify(flags));
+
+      const sequential = run(['executor.guard', ...flags, '--sequential'], wt, tmp);
+      assert.equal(sequential.exitCode, 0, sequential.error);
+      assert.deepEqual(
+        json(sequential).checks.map((c) => c.name),
+        ['head-attached', 'not-protected', 'toplevel', ...(flags.includes('--path') ? ['path'] : [])],
+      );
+    }
+  });
+
+  test('--path given alone reports the path on a protected branch and on a detached HEAD; step 0 still refuses both', (t) => {
+    const { tmp, main } = mkFixture(t);
+    const target = path.join(main, 'src', 'x.ts');
+    const onMain = run(['executor.guard', '--path', target], main, tmp);
+    assert.equal(onMain.exitCode, 0, onMain.error);
+    assert.deepEqual(json(onMain).checks.map((c) => c.name), ['path']);
+    assert.deepEqual(failed(run(['executor.guard'], main, tmp)), ['not-protected']);
+
+    git(['checkout', '-q', '--detach'], main);
+    const detached = run(['executor.guard', '--path', target], main, tmp);
+    assert.equal(detached.exitCode, 0, detached.error);
+    assert.ok(failed(run(['executor.guard'], main, tmp)).includes('head-attached'));
+  });
+
+  test('--path beside an empty --expected-base-alternate is --path alone; beside a non-empty one the branch checks run and base fails', (t) => {
+    const { tmp, wt } = mkFixture(t, { agentBranch: 'feature/phase-48' });
+    const inside = path.join(wt, 'src', 'x.ts');
+    const empty = run(['executor.guard', '--path', inside, '--expected-base-alternate', ''], wt, tmp);
+    assert.equal(empty.exitCode, 0, empty.error);
+    assert.deepEqual(json(empty).checks.map((c) => c.name), ['path']);
+
+    const named = run(['executor.guard', '--path', inside, '--expected-base-alternate', git(['rev-parse', 'HEAD'], wt)], wt, tmp);
+    assert.equal(named.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(json(named).checks.map((c) => c.name), ['head-attached', 'not-protected', 'agent-namespace', 'base', 'path']);
+    assert.deepEqual(failed(named), ['agent-namespace', 'base']);
+  });
+
   test('#4799 a main checkout is not subject to the allow-list in either mode', (t) => {
     const { tmp, main } = mkFixture(t);
     git(['checkout', '-q', '-b', 'feature/phase-48'], main);
