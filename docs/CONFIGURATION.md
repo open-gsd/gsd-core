@@ -1731,6 +1731,30 @@ OpenCode's `task` interface do not accept an inline `model` parameter, so
 running `gsd install <runtime>` after editing `model_overrides` is required
 for the change to take effect. See issue #2256.
 
+#### Runtime-keyed entries (one config, two hosts)
+
+`.planning/config.json` is committed, so it is the same file for every host working the repository. A per-agent model id is a claim only one runtime can be right about: a Codex id handed to Claude Code fails at spawn, not at resolution. An entry may therefore be an object keyed by runtime, the same shape `model_profile_overrides.<runtime>.<tier>` uses ([#4669](https://github.com/open-gsd/gsd-core/issues/4669)):
+
+```json
+{
+  "model_overrides": {
+    "gsd-planner":  { "claude": "opus", "codex": "gpt-6-astra" },
+    "gsd-debugger": { "codex": "gpt-6-astra" },
+    "gsd-verifier": "gpt-5.6-sol"
+  }
+}
+```
+
+| Entry | Result for the runtime that is resolving or being installed |
+|---|---|
+| a string | That string, on every runtime. Unchanged from before. |
+| an object with a non-empty string under the runtime's key | That value. On Claude it is mapped exactly like the string form (full Claude ids collapse to a tier alias, `fable` passes through). |
+| an object with no key for the runtime, or an unusable value under it (empty string, number, `null`, object, array) | No override for this agent on this runtime. It resolves by tier, exactly as if it had no entry. Above, `gsd-debugger` keeps its Codex pin and routes by tier on Claude. |
+
+The runtime that selects the key is the one that is actually resolving, in the order `GSD_RUNTIME`, then the `runtime` config key, then the per-install marker, then `claude`. It is not the raw `runtime` key alone, which is usually absent. At install time (`gsd install <runtime>`) the key is the runtime being installed, so the same file bakes a Codex id into the Codex agent files and an OpenCode id into the OpenCode ones. Keys are the exact runtime ids (`claude`, `codex`, `opencode`, `kilo`, ...), compared case-sensitively.
+
+Global and project files merge per runtime key: a project object replaces a global string, a project string replaces a global object, and two objects merge key by key with the project winning a conflict. Set an object with `config-set model_overrides.<agent> '{"codex":"gpt-6-astra"}'`. A per-runtime dotted path such as `model_overrides.<agent>.codex` is not an addressable key, so write the whole object. A runtime whose dispatch surface cannot carry a per-agent model at all ignores the entry; that is a no-op, not an error.
+
 ### Per-Phase-Type Models (`models`) — added in v1.41
 
 > Express tuning at the **phase** level (planning, research, execution, verification) without learning the agent taxonomy. Added in [#3023](https://github.com/open-gsd/gsd-core/pull/3030).
