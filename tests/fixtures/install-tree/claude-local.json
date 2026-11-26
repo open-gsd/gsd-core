@@ -37,6 +37,7 @@
   "agents/gsd-user-profiler.md",
   "agents/gsd-verifier.md",
   "commands/gsd-add-tests.md",
+  "commands/gsd-advisor-prefilter.md",
   "commands/gsd-ai-integration-phase.md",
   "commands/gsd-audit-fix.md",
   "commands/gsd-audit-milestone.md",

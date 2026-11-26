@@ -302,6 +302,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
 | [ADR-4650](4650-path-containment-and-filename-classification-seam.md) | One path-containment predicate and one filename-classification helper | Proposed | — |
+| [ADR-4795](4795-advisor-prefilter-in-review-pipeline.md) | Advisor pre-filter in the review pipeline — a same-context consult before the cold-subagent gates | Proposed | — |
 | [ADR-4908](4908-project-context.md) | One resolved ProjectContext — which checkout a process acts in is decided once | Proposed | — |
 | [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
 | [ADR-5182](5182-stall-watch-return-receipt.md) | A plan-phase return receipt holds the agent's complete return | Proposed | — |

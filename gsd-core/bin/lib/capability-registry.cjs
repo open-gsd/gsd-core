@@ -7,6 +7,70 @@
  */
 
 const capabilities = {
+  "advisor-prefilter": {
+    "id": "advisor-prefilter",
+    "role": "feature",
+    "version": "1.23.0",
+    "title": "Advisor pre-filter",
+    "description": "Opt-in, advisory consult of the Claude Code session advisor before the next review gate: asks whether the phase output is final and internally consistent given everything already reviewed this session. A same-context pre-filter that runs before the cold-subagent reviewers (gsd-code-reviewer, gsd-verifier, gsd-security-auditor, gsd-plan-checker) and never replaces or blocks them. Silent no-op when the session has no advisor tool.",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.23.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [
+      "advisor-prefilter"
+    ],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.advisor_prefilter": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the advisor pre-filter step at execute:wave:post, verify:post and ship:pre. Each enabled run sends the full session transcript to the advisor model once per point (billed at the advisor's rate), so it is off by default. Advisory only; a no-op when no advisor is configured."
+      }
+    },
+    "steps": [
+      {
+        "point": "execute:wave:post",
+        "ref": {
+          "skill": "advisor-prefilter"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      },
+      {
+        "point": "verify:post",
+        "ref": {
+          "skill": "advisor-prefilter"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      },
+      {
+        "point": "ship:pre",
+        "ref": {
+          "skill": "advisor-prefilter"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      }
+    ],
+    "contributions": [],
+    "gates": []
+  },
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
@@ -4426,6 +4490,7 @@ const capabilities = {
 };
 
 const bySkill = {
+  "advisor-prefilter": "advisor-prefilter",
   "ai-integration-phase": "ai-integration",
   "code-review": "code-review",
   "graphify": "graphify",
@@ -4779,6 +4844,17 @@ const byLoopPoint = {
   "execute:wave:post": {
     "steps": [
       {
+        "capId": "advisor-prefilter",
+        "point": "execute:wave:post",
+        "ref": {
+          "skill": "advisor-prefilter"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      },
+      {
         "capId": "code-review",
         "point": "execute:wave:post",
         "ref": {
@@ -4965,6 +5041,17 @@ const byLoopPoint = {
   "verify:post": {
     "steps": [
       {
+        "capId": "advisor-prefilter",
+        "point": "verify:post",
+        "ref": {
+          "skill": "advisor-prefilter"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      },
+      {
         "capId": "mempalace",
         "point": "verify:post",
         "ref": {
@@ -5027,7 +5114,19 @@ const byLoopPoint = {
     "gates": []
   },
   "ship:pre": {
-    "steps": [],
+    "steps": [
+      {
+        "capId": "advisor-prefilter",
+        "point": "ship:pre",
+        "ref": {
+          "skill": "advisor-prefilter"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      }
+    ],
     "contributions": [],
     "gates": [
       {
@@ -5089,6 +5188,7 @@ const byLoopPoint = {
 };
 
 const configKeys = {
+  "workflow.advisor_prefilter": "advisor-prefilter",
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.api_coverage_gate": "ai-integration",
   "review.models.agy": "antigravity",
@@ -5190,6 +5290,12 @@ const configKeys = {
 };
 
 const configSchema = {
+  "workflow.advisor_prefilter": {
+    "owner": "advisor-prefilter",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the advisor pre-filter step at execute:wave:post, verify:post and ship:pre. Each enabled run sends the full session transcript to the advisor model once per point (billed at the advisor's rate), so it is off by default. Advisory only; a no-op when no advisor is configured."
+  },
   "workflow.ai_integration_phase": {
     "owner": "ai-integration",
     "type": "boolean",
@@ -8459,6 +8565,9 @@ const commandFamilies = {
 };
 
 const capabilityClusters = {
+  "advisor-prefilter": [
+    "advisor-prefilter"
+  ],
   "ai-integration": [
     "ai-integration-phase"
   ],
@@ -8488,6 +8597,12 @@ const capabilityClusters = {
 };
 
 const profileMembership = {
+  "advisor-prefilter": {
+    "tier": "full",
+    "profiles": [
+      "full"
+    ]
+  },
   "ai-integration": {
     "tier": "full",
     "profiles": [
@@ -8539,6 +8654,7 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
+  "advisor-prefilter": [],
   "ai-integration": [],
   "antigravity": [],
   "assumption-delta": [],

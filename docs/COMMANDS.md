@@ -2062,6 +2062,22 @@ Three operating modes:
 
 ---
 
+### `/gsd-advisor-prefilter`
+
+Ask the Claude Code session advisor whether the phase output is final and internally consistent before the next review gate. Dispatched automatically as a `step` by the `advisor-prefilter` capability at `execute:wave:post`, `verify:post` and `ship:pre` when `workflow.advisor_prefilter` is `true`; you rarely run it by hand.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `phase number` | No | Phase whose review artifacts are named in the consult |
+
+**Prerequisites:** An advisor configured in the session (`claude --advisor <model>` or `/advisor <model>`). Without one the command is a silent no-op.
+**Produces:** One advisory line, `advisor-prefilter (<point>): consistent|drift-suspected`; no files
+**Spawns:** Nothing. Runs in the calling session and never blocks the workflow.
+
+See [How to enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md).
+
+---
+
 ### `/gsd-docs-update`
 
 Generate or update project documentation verified against the codebase.

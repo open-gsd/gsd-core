@@ -69,6 +69,7 @@
     ],
     "commands": [
       "/gsd-add-tests",
+      "/gsd-advisor-prefilter",
       "/gsd-ai-integration-phase",
       "/gsd-audit-fix",
       "/gsd-audit-milestone",

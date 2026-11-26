@@ -188,6 +188,7 @@ These six routers are descriptor-only entries that the model picks first; the bo
 | Command | Role | Source |
 |---------|------|--------|
 | `/gsd-review` | Request cross-AI peer review of phase plans from external AI CLIs. | [commands/gsd/review.md](../commands/gsd/review.md) |
+| `/gsd-advisor-prefilter` | Ask the session advisor whether the phase output is final and consistent before the next review gate (opt-in, advisory). | [commands/gsd/advisor-prefilter.md](../commands/gsd/advisor-prefilter.md) |
 | `/gsd-debug` | Systematic debugging with persistent state across context resets. | [commands/gsd/debug.md](../commands/gsd/debug.md) |
 | `/gsd-forensics` | Post-mortem investigation for failed GSD workflows — analyzes git, artifacts, state. | [commands/gsd/forensics.md](../commands/gsd/forensics.md) |
 | `/gsd-health` | Diagnose planning directory health and optionally repair issues. | [commands/gsd/health.md](../commands/gsd/health.md) |
