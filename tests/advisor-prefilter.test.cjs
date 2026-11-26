@@ -3,13 +3,14 @@
 /**
  * advisor-prefilter.test.cjs — #4795.
  *
- * The optional first-party `advisor-prefilter` capability dispatches one `kind:"step"` hook
- * (`ref.skill:"advisor-prefilter"`) at exactly three loop points — `execute:wave:post`,
- * `verify:post`, `ship:pre` — and only when `workflow.advisor_prefilter` is true (default false).
+ * The optional first-party `advisor-prefilter` capability dispatches one `kind:"contribution"` hook
+ * (`into:"orchestrator"`) at exactly two loop points — `verify:post` and `ship:pre` — and only when
+ * `workflow.advisor_prefilter` is on (default false). `orchestrator` is published only for discuss,
+ * verify and ship, so the execute points cannot carry it.
  *
- * Behavioral: the real generated registry, the pure resolver the three host workflows reach
- * through `gsd_run loop render-hooks`, and that CLI itself in a sandboxed temp project (the
- * shape the shipping callers use). The skill's prose contract lives in
+ * Behavioral: the real generated registry, the pure resolver the host workflows reach through
+ * `gsd_run loop render-hooks`, and that CLI itself in a hermetic temp project (the shape the shipping
+ * callers use). The fragment's prose contract lives in
  * scripts/static-checks/text-contracts/advisor-prefilter.cjs.
  */
 
@@ -21,18 +22,18 @@ const path = require('node:path');
 const { cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { createHermeticRoot } = require('./helpers/isolated-env.cjs');
 
-const ROOT = path.join(__dirname, '..');
-
 const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
 const { isValidConfigKey, getCapabilityConfigSchema } = require('../gsd-core/bin/lib/config-schema.cjs');
-const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const CAP_ID = 'advisor-prefilter';
 const KEY = 'workflow.advisor_prefilter';
-const DECLARED_POINTS = ['execute:wave:post', 'verify:post', 'ship:pre'];
+const DECLARED_POINTS = ['verify:post', 'ship:pre'];
 const ALL_POINTS = LOOP_HOST_CONTRACT.flatMap((step) => step.points);
+const ORCHESTRATOR_POINTS = LOOP_HOST_CONTRACT
+  .filter((step) => step.agentRoles.includes('orchestrator'))
+  .flatMap((step) => step.points);
 
 const tmpDirs = [];
 after(() => { for (const dir of tmpDirs) cleanup(dir); });
@@ -75,22 +76,38 @@ describe('advisor-prefilter: default off', () => {
       for (const point of DECLARED_POINTS) assert.deepEqual(mineAt(point, value), []);
     });
   }
+
+  // A hand-edited config can spell the switch as a string; "false" must not turn it on (#4795).
+  for (const value of ['false', 'FALSE', ' off ', 'no', '0']) {
+    test(`stringOffSpellingEmitsNothing (${JSON.stringify(value)})`, () => {
+      for (const point of DECLARED_POINTS) assert.deepEqual(mineAt(point, value), []);
+    });
+  }
 });
 
 describe('advisor-prefilter: enabled', () => {
   for (const point of DECLARED_POINTS) {
-    test(`enabledEmitsStepAt ${point}`, () => {
+    test(`enabledEmitsContributionAt ${point}`, () => {
       const hooks = mineAt(point, true);
       assert.equal(hooks.length, 1);
       const [hook] = hooks;
-      assert.equal(hook.kind, 'step');
-      assert.deepEqual(hook.ref, { skill: 'advisor-prefilter' });
+      assert.equal(hook.kind, 'contribution');
+      assert.equal(hook.into, 'orchestrator');
       assert.equal(hook.onError, 'skip');
       assert.equal(hook.when, KEY);
+      assert.equal(hook.ref, undefined, 'a contribution carries no ref');
+      assert.equal(typeof hook.fragment.inline, 'string');
+      assert.ok(hook.fragment.inline.length > 0, 'the fragment text is resolved into the registry');
     });
   }
 
-  test('stepCarriesNoArtifactContract', () => {
+  for (const value of ['true', 'yes', 1]) {
+    test(`truthyEnableSpellingEmitsTheHook (${JSON.stringify(value)})`, () => {
+      for (const point of DECLARED_POINTS) assert.equal(mineAt(point, value).length, 1);
+    });
+  }
+
+  test('contributionCarriesNoArtifactContract', () => {
     for (const point of DECLARED_POINTS) {
       const [hook] = mineAt(point, true);
       assert.equal(hook.produces, undefined);
@@ -98,37 +115,32 @@ describe('advisor-prefilter: enabled', () => {
     }
   });
 
-  test('verifyPostDispatchesEachStepStemOnce', () => {
-    const stems = resolve('verify:post', true).activeHooks
-      .filter((hook) => hook.kind === 'step')
-      .map((hook) => hook.ref && hook.ref.skill);
-    assert.ok(stems.includes('advisor-prefilter'));
-    assert.equal(new Set(stems).size, stems.length, 'a step stem must not be dispatched twice at one point');
+  test('theCapabilityContributesNoStepOrGate', () => {
+    for (const point of ALL_POINTS) {
+      const kinds = resolve(point, true).activeHooks.filter((hook) => hook.capId === CAP_ID).map((hook) => hook.kind);
+      assert.ok(kinds.every((kind) => kind === 'contribution'), `${point} emitted ${kinds.join(',')}`);
+    }
   });
 
-  // limit-1 / limit / limit+1: 2 declared points would miss one, 4 would add a stray one.
-  test('declaresExactlyTheThreePoints', () => {
+  // limit-1 / limit / limit+1: one declared point would miss one, three would add a stray one.
+  test('declaresExactlyTheTwoPoints', () => {
     const emitting = ALL_POINTS.filter((point) => mineAt(point, true).length > 0);
     assert.deepEqual([...emitting].sort(), [...DECLARED_POINTS].sort());
-    assert.equal(emitting.length, 3);
+    assert.equal(emitting.length, 2);
     const silent = ALL_POINTS.filter((point) => !DECLARED_POINTS.includes(point));
     assert.ok(silent.length > 0);
     for (const point of silent) assert.deepEqual(mineAt(point, true), [], `${point} must stay silent`);
   });
+
+  test('everyDeclaredPointPublishesTheOrchestratorRole', () => {
+    for (const point of DECLARED_POINTS) {
+      assert.ok(ORCHESTRATOR_POINTS.includes(point), `${point} must publish the orchestrator role`);
+    }
+    assert.ok(!ORCHESTRATOR_POINTS.includes('execute:wave:post'), 'execute points publish no orchestrator role');
+  });
 });
 
-describe('advisor-prefilter: manifest parity', () => {
-  test('skillStemParityWithCommandFile', () => {
-    const owned = DECLARED_POINTS.flatMap((point) =>
-      ((registry.byLoopPoint[point] || {}).steps || []).filter((step) => step.capId === CAP_ID));
-    assert.equal(owned.length, 3);
-    for (const step of owned) assert.equal(step.ref.skill, 'advisor-prefilter');
-    const commandFile = path.join(ROOT, 'commands', 'gsd', 'advisor-prefilter.md');
-    assert.ok(fs.existsSync(commandFile), 'ref.skill needs commands/gsd/advisor-prefilter.md');
-    const front = extractFrontmatter(fs.readFileSync(commandFile, 'utf8'));
-    assert.equal(front.name, 'gsd:advisor-prefilter');
-  });
-
+describe('advisor-prefilter: config key', () => {
   test('configKeyFederatesWithDefaultFalse', () => {
     assert.equal(isValidConfigKey(KEY), true);
     const entry = getCapabilityConfigSchema()[KEY];
@@ -139,22 +151,25 @@ describe('advisor-prefilter: manifest parity', () => {
 });
 
 describe('advisor-prefilter: shipping caller shape (gsd_run loop render-hooks)', () => {
-  test('cliEmitsTheStepWhenTheProjectEnablesIt', () => {
+  test('cliEmitsTheContributionWhenTheProjectEnablesIt', () => {
     const dir = makeProject({ workflow: { advisor_prefilter: true } });
     for (const point of DECLARED_POINTS) {
       const hooks = renderHooks(dir, point);
-      assert.equal(hooks.length, 1, `${point} must render the step`);
-      assert.deepEqual(hooks[0].ref, { skill: 'advisor-prefilter' });
+      assert.equal(hooks.length, 1, `${point} must render the contribution`);
+      assert.equal(hooks[0].kind, 'contribution');
+      assert.equal(hooks[0].into, 'orchestrator');
     }
   });
 
   test('projectsDoNotLeakIntoEachOther', () => {
     const on = makeProject({ workflow: { advisor_prefilter: true } });
     const off = makeProject({ workflow: { advisor_prefilter: false } });
+    const stringOff = makeProject({ workflow: { advisor_prefilter: 'false' } });
     const unset = makeProject();
     for (const point of DECLARED_POINTS) {
       assert.equal(renderHooks(on, point).length, 1);
       assert.equal(renderHooks(off, point).length, 0);
+      assert.equal(renderHooks(stringOff, point).length, 0);
       assert.equal(renderHooks(unset, point).length, 0);
     }
   });

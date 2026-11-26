@@ -24,7 +24,7 @@ or run `/advisor <model>` in the session, or set `advisorModel` in your Claude C
 gsd config-set workflow.advisor_prefilter true
 ```
 
-From the next run, a step fires at three points: after each execute wave (`execute:wave:post`), after verification passes (`verify:post`), and before shipping (`ship:pre`).
+From the next run, the orchestrator consults the advisor at two points: after verification passes (`verify:post`) and before shipping (`ship:pre`).
 
 ## 3. Read the result
 
@@ -42,8 +42,8 @@ Silence has two causes, and they are different:
 
 | What you see | Cause |
 |---|---|
-| No `advisor-prefilter` line at any point | The key is `false` or unset, or the point is not one of the three. Check `gsd config-get workflow.advisor_prefilter`. |
-| The key is `true` and still no line | The session has no advisor tool (no advisor configured, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`, or a non-Claude-Code runtime), or the advisor call failed. The step is a silent no-op by design. |
+| No `advisor-prefilter` line at any point | The key is `false` or unset (a string `"false"`, `"0"`, `"no"` or `"off"` also counts as off), or the point is not one of the two. Check `gsd config-get workflow.advisor_prefilter`. |
+| The key is `true` and still no line | The session has no advisor tool (no advisor configured, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`, or a non-Claude-Code runtime), or the advisor call failed. The consult is a silent no-op by design. |
 
 To confirm the hook is wired without running a phase:
 
@@ -51,7 +51,7 @@ To confirm the hook is wired without running a phase:
 node gsd-tools.cjs loop render-hooks verify:post --raw
 ```
 
-An `activeHooks` entry with `"ref":{"skill":"advisor-prefilter"}` means the step will be dispatched.
+An `activeHooks` entry with `"kind":"contribution"` and `"capId":"advisor-prefilter"` means the consult will be injected.
 
 ## Cost
 

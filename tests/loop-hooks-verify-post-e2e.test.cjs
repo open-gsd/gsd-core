@@ -530,14 +530,15 @@ describe('verify:post — envelope shape pins Hyrum\'s Law contract', () => {
 
 // ─── 10. Real registry byLoopPoint shape check (no drift guard) ───────────────
 
-describe('verify:post — real registry has exactly 4 steps and 0 contributions+gates', () => {
-  test('[happy] realRegistry.byLoopPoint[verify:post] has 4 steps, 0 contributions, 0 gates', () => {
+describe('verify:post — real registry has exactly 4 steps, the advisor-prefilter contribution and 0 gates', () => {
+  test('[happy] realRegistry.byLoopPoint[verify:post] has 4 steps, 1 contribution (advisor-prefilter), 0 gates', () => {
     const entry = realRegistry.byLoopPoint['verify:post'];
     assert.ok(entry, 'verify:post must exist in registry');
     assert.strictEqual(entry.steps.length, 4,
       `Expected 4 steps at verify:post, got ${entry.steps.length}`);
-    assert.strictEqual(entry.contributions.length, 0,
-      `Expected 0 contributions at verify:post, got ${entry.contributions.length}`);
+    // #4795: the opt-in advisor-prefilter capability contributes one orchestrator fragment here.
+    assert.deepEqual(entry.contributions.map(c => [c.capId, c.into]), [['advisor-prefilter', 'orchestrator']],
+      `Expected 1 contribution (advisor-prefilter into orchestrator) at verify:post, got ${entry.contributions.length}`);
     assert.strictEqual(entry.gates.length, 0,
       `Expected 0 gates at verify:post, got ${entry.gates.length}`);
   });

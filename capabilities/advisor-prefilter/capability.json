@@ -15,33 +15,23 @@
     ],
     "unsupported": []
   },
-  "skills": [
-    "advisor-prefilter"
-  ],
+  "skills": [],
   "agents": [],
   "hooks": [],
   "config": {
     "workflow.advisor_prefilter": {
       "type": "boolean",
       "default": false,
-      "description": "Enable the advisor pre-filter step at execute:wave:post, verify:post and ship:pre. Each enabled run sends the full session transcript to the advisor model once per point (billed at the advisor's rate), so it is off by default. Advisory only; a no-op when no advisor is configured."
+      "description": "Enable the advisor pre-filter contribution at verify:post and ship:pre. Each enabled run sends the full session transcript to the advisor model once per point (billed at the advisor's rate), so it is off by default. Advisory only; a no-op when no advisor is configured."
     }
   },
-  "steps": [
-    {
-      "point": "execute:wave:post",
-      "ref": {
-        "skill": "advisor-prefilter"
-      },
-      "produces": [],
-      "consumes": [],
-      "when": "workflow.advisor_prefilter",
-      "onError": "skip"
-    },
+  "steps": [],
+  "contributions": [
     {
       "point": "verify:post",
-      "ref": {
-        "skill": "advisor-prefilter"
+      "into": "orchestrator",
+      "fragment": {
+        "path": "fragments/advisor-prefilter.md"
       },
       "produces": [],
       "consumes": [],
@@ -50,8 +40,9 @@
     },
     {
       "point": "ship:pre",
-      "ref": {
-        "skill": "advisor-prefilter"
+      "into": "orchestrator",
+      "fragment": {
+        "path": "fragments/advisor-prefilter.md"
       },
       "produces": [],
       "consumes": [],
@@ -59,6 +50,5 @@
       "onError": "skip"
     }
   ],
-  "contributions": [],
   "gates": []
 }

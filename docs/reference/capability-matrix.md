@@ -52,7 +52,7 @@ points.
 
 | id | role | tier | engines.gsd | extension points | hook kinds | source |
 |---|---|---|---|---|---|---|
-| `advisor-prefilter` | feature | full | `>=1.23.0` | `execute:wave:post`, `verify:post`, `ship:pre` | step | first-party |
+| `advisor-prefilter` | feature | full | `>=1.23.0` | `verify:post`, `ship:pre` | contribution | first-party |
 | `ai-integration` | feature | full | `>=1.6.0` | `plan:pre`, `verify:pre` | step, contribution, gate | first-party |
 | `assumption-delta` | feature | full | `>=1.6.0` | `plan:pre` | contribution | first-party |
 | `audit` | feature | full | `>=1.6.0` | — | — | first-party |

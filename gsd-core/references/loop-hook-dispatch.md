@@ -100,7 +100,7 @@ A `step` is **advisory by construction**: it never blocks or redirects the host 
 that is what a `gate` is for. Each dispatch is best-effort; on error record a warning and
 continue, honoring `onError`.
 
-**Advisor pre-filter step (#4795).** The optional `advisor-prefilter` capability registers a `ref.skill` step at `execute:wave:post`, `verify:post` and `ship:pre`, gated by `workflow.advisor_prefilter` (default off). Dispatch it like any other step: it runs in the orchestrator's own context, consults the session advisor tool once, and is a silent no-op when the session has none. It never blocks and does not replace the reviewer subagents. See [ADR-4795](../../docs/adr/4795-advisor-prefilter-in-review-pipeline.md).
+**Advisor pre-filter contribution (#4795).** The optional `advisor-prefilter` capability registers a `contribution` `into: orchestrator` at `verify:post` and `ship:pre`, gated by `workflow.advisor_prefilter` (default off). `verify-work.md` and `ship.md` inject it like any orchestrator contribution: the fragment tells the orchestrator to consult the session advisor tool once and to skip silently when the session has none. It never blocks and does not replace the reviewer subagents. `execute:*` publishes no `orchestrator` role, so the capability declares nothing there. See [ADR-4795](../../docs/adr/4795-advisor-prefilter-in-review-pipeline.md).
 
 **A point whose workflow hand-rolls one `kind` does not implement this contract.** Several
 host workflows historically matched a single hook (e.g. `execute:post` matched only
