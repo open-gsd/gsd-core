@@ -1,8 +1,8 @@
 'use strict';
 
-// `gsd_run check predicate` resolves ${PHASE_DIR}/${PHASE_NUMBER}/${PHASE_REQ_IDS} in a command-exit-zero gate from
-// the --phase-dir/--phase-number/--phase-req-ids flags the calling workflow passes (#4483). A dispatch line that
-// omits a value the workflow already holds makes a capability gate silently resolve that placeholder to ''. Every
+// `gsd_run check predicate` receives phase context through the --phase-dir/--phase-number/--phase-req-ids flags the
+// calling workflow passes (#4483) and exposes it to a command-exit-zero gate as GSD_GATE_PHASE_* environment data
+// (#5318). A dispatch line that omits a value the workflow already holds leaves that environment entry empty. Every
 // dispatch line of each listed workflow passes the values that workflow holds; no unlisted workflow dispatches a
 // check predicate; and verify-work.md assigns PHASE_DIR and PHASE_NUMBER before dispatching with them (#5289).
 // Was tests/check-predicate-dispatch-phase-flags-4483.test.cjs.
