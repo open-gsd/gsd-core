@@ -42,7 +42,7 @@ export const LEDGER_DIR = 'executor-ledger';
 const RECORD_MAX_BYTES = 4096;
 
 type GitResult = { exitCode: number; stdout: string; stderr?: string };
-type ExecGitFn = (args: string[], opts?: { cwd?: string; timeout?: number }) => GitResult;
+type ExecGitFn = (args: string[], opts?: { cwd?: string }) => GitResult;
 
 export interface ExecutorGuardDeps {
   execGit?: ExecGitFn;
@@ -85,7 +85,7 @@ export interface GuardResult {
 function git(deps: ExecutorGuardDeps | undefined, cwd: string, args: string[]): GitResult {
   const exec: ExecGitFn = deps?.execGit ?? execGitSeam;
   try {
-    const r = exec(args, { cwd, timeout: 15_000 });
+    const r = exec(args, { cwd });
     return { exitCode: r.exitCode, stdout: String(r.stdout ?? '').trim(), stderr: String(r.stderr ?? '') };
   } catch (err) {
     return { exitCode: 1, stdout: '', stderr: (err as Error).message };

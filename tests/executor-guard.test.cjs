@@ -812,4 +812,28 @@ describe('#6216: seams and properties', () => {
     assert.equal(typeof guardModule.resolveLanding, 'function');
     assert.equal(guardModule.isContained, undefined);
   });
+
+  /** A main-checkout layout at `root`, on an unprotected branch. */
+  function stubGit(root, seen = []) {
+    return (args, opts) => {
+      seen.push(opts);
+      if (args[1] === '--show-toplevel') return { exitCode: 0, stdout: `${root}\n` };
+      if (args[1] === '--absolute-git-dir') return { exitCode: 0, stdout: `${root}/.git\n${root}/.git\n` };
+      if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/heads/feature/x\n' };
+      return { exitCode: 0, stdout: `${'d'.repeat(40)}\n` };
+    };
+  }
+  const unprotectedStatus = () => ({ isProtected: false, verified: true });
+
+  test('executor.guard hands the git seam a cwd and no timeout of its own', () => {
+    const seen = [];
+    const result = evaluateGuard(
+      { projectRoot: '/w' },
+      { invokedFrom: '/w' },
+      { execGit: stubGit('/w', seen), protectedStatus: unprotectedStatus, realpath: (p) => p },
+    );
+    assert.equal(result.ok, true, JSON.stringify(result.checks));
+    assert.equal(seen.length, 4, 'the two layout reads, the branch read and the HEAD read');
+    for (const opts of seen) assert.deepEqual(opts, { cwd: '/w' });
+  });
 });
