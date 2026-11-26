@@ -353,6 +353,68 @@ test('#5721 property: classname "Test suite failed to run" is always flagged, wh
   }));
 });
 
+// #6641: pytest's JUnit writer reports a collection crash and a fixture that failed in setup or
+// teardown as <error> with three fixed message shapes. They are modelled here on their own: the
+// parser's regex is not exported and must not be consulted by its own tests.
+const pytestFreeText = fc.string({ unit: fc.constantFrom('a', 'Z', '7', ' ', '.', '"', "'", '<', '>', '&', 'ü'), maxLength: 30 });
+const pytestHarnessMessage = fc.oneof(
+  fc.constant('collection failure'),
+  fc.tuple(fc.constantFrom('setup', 'teardown'), pytestFreeText).map(([phase, text]) => `failed on ${phase} with "${text}"`),
+);
+const isPytestHarnessShaped = message => message === 'collection failure'
+  || message.startsWith('failed on setup with "') || message.startsWith('failed on teardown with "');
+// Any other <error> message (or none at all) is the Surefire/Failsafe shape: a plain failed test.
+const otherErrorMessage = fc.oneof(
+  pytestFreeText,
+  fc.constantFrom('collection failure.', ' collection failure', 'Collection failure', 'failed on call with "x"',
+    'failed on setup', 'failed on setup with x', 'boom', ''),
+  fc.constant(undefined),
+).filter(message => message === undefined || !isPytestHarnessShaped(message));
+const errorTag = message => message === undefined ? '<error/>' : `<error message="${xmlEscape(message)}"/>`;
+const pytestCase = (children, name = 'target') =>
+  `<testsuite tests="1"><testcase classname="tests.test_mod" name="${name}">${children}</testcase></testsuite>`;
+
+test('#6641 property: a harness-only <error> is always a load failure, never a RED target; a real failure beside it still is', () => {
+  fc.assert(fc.property(pytestHarnessMessage, (message) => {
+    const single = pytestCase(errorTag(message));
+    const report = parseTestReport(single);
+    assert.equal(report.valid, true, single);
+    assert.deepEqual(report.tests.map(t => [t.status, t.loadFailure === true]), [['failed', true]], single);
+    const load = classifyRedEvidence(evidence(single));
+    assert.equal(load.verdict, 'INVALID_RED', single);
+    assert.equal(load.reason, 'fixture_or_load_failure', single);
+    assert.equal(load.evidence.matched_test, null, single);
+    const output = `<testsuites>${single}${pytestCase('<failure/>', 'other')}</testsuites>`;
+    assert.equal(classifyRedEvidence(evidence(output, 'target')).verdict, 'INVALID_RED', output);
+    assert.equal(classifyRedEvidence(evidence(output, 'other')).verdict, 'RED_EVIDENCE_OK', output);
+  }));
+});
+
+test('#6641 property: any other <error> message stays a plain failed test and a valid RED target', () => {
+  fc.assert(fc.property(otherErrorMessage, (message) => {
+    const output = pytestCase(errorTag(message));
+    const report = parseTestReport(output);
+    assert.equal(report.valid, true, output);
+    assert.deepEqual(report.tests.map(t => [t.status, t.loadFailure === true]), [['failed', false]], output);
+    const result = classifyRedEvidence(evidence(output));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK', output);
+    assert.equal(result.reason, 'target_test_failed', output);
+    assert.ok(result.evidence.matched_test, output);
+  }));
+});
+
+test('#6641 property: a <failure> beside a harness <error> in one testcase is not a load failure, in either order', () => {
+  fc.assert(fc.property(pytestHarnessMessage, fc.boolean(), (message, failureFirst) => {
+    const children = failureFirst ? `<failure/>${errorTag(message)}` : `${errorTag(message)}<failure/>`;
+    const output = pytestCase(children);
+    const report = parseTestReport(output);
+    assert.deepEqual(report.tests.map(t => [t.status, t.loadFailure === true]), [['failed', false]], output);
+    const result = classifyRedEvidence(evidence(output));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK', output);
+    assert.equal(result.reason, 'target_test_failed', output);
+  }));
+});
+
 // #5819: node:test repeats error/stack keys in an assert.throws(fn, /re/)
 // diagnostic block. Tolerance for exactly that defect must not change the
 // target-failure judgment (accept), must not soften interruption refusals, and

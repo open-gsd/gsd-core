@@ -2319,4 +2319,16 @@ describe('#6641 — pytest JUnit harness errors are never a RED target', () => {
     const other = parseTestReport(surefireError);
     assert.deepEqual(other.tests.map((t) => [t.status, Boolean(t.loadFailure)]), [['failed', false]]);
   });
+
+  test('classifier: a Surefire <error> classifies exactly as before, by method name and by class#method', () => {
+    const output = '<testsuite tests="1"><testcase classname="com.example.AppTest" name="explodes">'
+      + '<error message="boom" type="java.lang.IllegalStateException">java.lang.IllegalStateException: boom\n'
+      + '\tat com.example.App.run(App.java:12)\n\tat com.example.AppTest.explodes(AppTest.java:9)</error>'
+      + '</testcase></testsuite>';
+    for (const target of ['explodes', 'com.example.AppTest#explodes']) {
+      const result = classifyRedEvidence({ command: 'mvn test', exitCode: 1, output, targetTest: target });
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.reason, 'target_test_failed', target);
+    }
+  });
 });
