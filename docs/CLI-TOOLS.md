@@ -1515,6 +1515,93 @@ Returns JSON mapping of all available GSD skills with their metadata (name, desc
 
 ---
 
+## Drift Guard, Workstream, UAT, Todo and Stats Verbs
+
+These verbs run as `node gsd-tools.cjs <verb>` or `node gsd-tools.cjs query <verb>`; the dotted manifest name (`workstream.status`) and the spaced form (`workstream status`) are interchangeable where both are listed. Output is JSON unless stated; the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `drift-guard authority`
+
+Prints the effective source-grounding authority for plan review, one of `grep`, `intel`, `treesitter`, `lsp`, `scip`. The configured value is `plan_review.source_grounding_authority` in `config.json` (default `grep`; an unknown value is an error naming the valid ones). A configured `grep` is upgraded to `intel` when `intel.enabled` is `true`; every other configured value is returned unchanged. Takes no flags.
+
+### `drift-guard severity --status <status> [--authority <authority>]`
+
+Classifies one source-grounding verdict. `--status` is required and is one of `VERIFIED`, `MISSING`, `AMBIGUOUS`, `UNCHECKABLE`; `--authority` defaults to the effective authority above. Output: `{severity, hardBlock}`.
+
+| Status | Authority | Severity | `hardBlock` |
+|--------|-----------|----------|-------------|
+| `VERIFIED` | any | `none` | `false` |
+| `MISSING` | `lsp` or `scip` | `HIGH` | `true` |
+| `MISSING` | `grep`, `intel` or `treesitter` | `needs-acknowledgement` | `false` |
+| `AMBIGUOUS` | any | `MEDIUM` | `false` |
+| `UNCHECKABLE` | any | `INFO` | `false` |
+
+### `drift-guard phase-status [--phase <N>]`
+
+Compares the `Status:` line in STATE.md's `## Current Position` section with the Status cell of that phase's row in ROADMAP.md's `## Progress` table. `--phase` defaults to the phase named by `Phase:` in the same section. Output: `{verdict, phase, stateStatus, roadmapStatus, stateRank, roadmapRank, authority}` with `authority` always `STATE.md`.
+
+| `verdict` | Meaning |
+|-----------|---------|
+| `consistent` | Both statuses sit on the same lifecycle rung |
+| `lag` | The two statuses are one rung apart |
+| `drifted` | Two or more rungs apart; or exactly one side is terminal; or exactly one side is `deferred` and the other is past rung 0 |
+| `uncheckable` | A status was not recognised, or a source is missing (see `reason`) |
+
+An `uncheckable` verdict caused by a missing source also carries `reason`: `missing_state` (no STATE.md), `no_current_position` (STATE.md has no Current Position section; the verb never guesses from the rest of the file), `missing_roadmap` (no ROADMAP.md) or `phase_not_in_roadmap` (no Progress row for the phase).
+
+### `workstream status <name>`
+
+Reports one workstream. Output when it exists: `{found: true, workstream, path, files: {roadmap, state, requirements}, phases, phase_count, completed_phases, status, milestone_shipped_unverified, current_phase, last_activity}`; otherwise `{found: false, workstream}`. `<name>` is required and must be a valid workstream name.
+
+### `workstream complete <name>`
+
+Archives a workstream: every entry of `.planning/workstreams/<name>/` moves to `.planning/milestones/ws-<name>-<YYYY-MM-DD>/` (a numeric suffix `-1`, `-2`, … is appended when that directory exists), and the workstream is cleared as the active one if it was. Output: `{completed: true, workstream, archived_to, remaining_workstreams, reverted_to_flat}`; `reverted_to_flat` is `true` when no workstream remains, in which case the empty `workstreams/` directory is removed. A name with no directory returns `{completed: false, error: "not_found", workstream}`. If a move fails, moved entries are put back and the result is `{completed: false, error: "archive_failed", message, workstream}`.
+
+### `uat render-checkpoint --file <path>`
+
+Renders the pending checkpoint of a UAT file as the text a verifier presents. `--file` is required and must resolve inside the project root. Output: `{file_path, test_number, test_name, checkpoint}`, where `checkpoint` is a Markdown block (`### CHECKPOINT: Verification Required`, the test name, its expected behavior, and the prompt `Type pass or describe what's wrong.`); the banner and prompt follow the configured `response_language`. A UAT file whose `## Current Test` section reads `[testing complete]` is an error: `UAT session is already complete; no pending checkpoint to render`.
+
+### `uat complete-session <uat-file> [--message <text>]`
+
+Closes a UAT session. The file must resolve inside the project root. The verb sets the frontmatter `status` to `complete`, or to `partial` when the `## Tests` section holds a test with result `pending`, result `blocked`, result `skipped` with no reason, or a `###` test heading with no `result:` line; and replaces the `## Current Test` body with `[testing complete]`. Output:
+
+| Case | Output |
+|------|--------|
+| Nothing material changed (ignoring the `updated:` line) | `{changed: false, status}`; with `restored: true` when the live file differed from its committed form and was reset to it. Nothing is committed |
+| The file changed | The file is written and committed alone, with `--message` or `test: complete UAT session (<path>)`: `{changed: true, status, committed}`, plus `reason` when `committed` is `false` |
+
+A frontmatter block that cannot be parsed is refused: nothing is written or committed.
+
+### `todo match-phase <phase>`
+
+Ranks the pending todos in `.planning/todos/pending/*.md` by relevance to a phase. Each todo's `title:` (default `Untitled`), `area:` (default `general`) and `files:` lines are read; the rest of the body contributes its first 200 characters. Output: `{phase, matches, todo_count}`, where `matches` is `[{file, title, area, score, reasons}]` for every todo scoring above zero, highest score first, and `todo_count` is the number of pending todos read. The score is the sum of:
+
+| Signal | Score |
+|--------|-------|
+| Words of more than two letters shared between the todo's title and body and the phase's name, goal and ROADMAP section (stop words excluded): 0.2 each | up to 0.6 |
+| The todo's `area` (when not `general`) appears in the phase text | 0.3 |
+| A path in the todo's `files:` overlaps a path in a phase plan's `files_modified` | 0.4 |
+
+`<phase>` is required.
+
+### `stats json`
+
+Prints project statistics as JSON; bare `stats` does the same, and `stats table` prints a Markdown summary instead (`{rendered}`). Output fields:
+
+| Field | Meaning |
+|-------|---------|
+| `milestone_version`, `milestone_name` | The current milestone; `null` when none |
+| `phases` | `[{number, display_id?, name, plans, summaries, status}]`; `status` is a display label such as `Not Started`, `Planned`, `Complete` |
+| `phases_completed`, `phases_total` | Phases at the `Complete` rung, and all phases |
+| `total_plans`, `total_summaries` | Plan and summary counts across the phases |
+| `percent` | `phases_completed` as a percentage of `phases_total` |
+| `plan_percent` | `total_summaries` as a percentage of `total_plans` |
+| `requirements_total`, `requirements_complete` | Count of `- [x] **` and `- [ ] **` lines in REQUIREMENTS.md |
+| `git_commits`, `git_first_commit_date` | Commits reachable from `HEAD`, and the date of the root commit (`YYYY-MM-DD`) |
+| `last_activity` | The last-activity line of STATE.md; `null` when absent |
+| `phase_scope` | `complete` when every phase was enumerated; any other value means the phase list could not be fully read |
+
+`percent` and `plan_percent` are `null` unless `phase_scope` is `complete`, so an unreadable phase directory is never reported as `0%`.
+
 ## Utility Commands
 
 ```bash
