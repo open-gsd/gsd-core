@@ -129,6 +129,7 @@ const {
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
   extractPhaseDependencyTokens,
+  isNegatedDependencyLead,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   extractPhaseToken,
@@ -3417,23 +3418,26 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       phase['deps_satisfied'] = true;
     } else {
       const prose = phase['depends_on'] as string;
-      // #6507: a LEAD negation is the decision itself — "Nothing (independent
-      // of Phases 1 and 3)" must yield no dependencies. The rule lives INSIDE
-      // this branch on purpose: the exact-none short-circuit above keeps its
-      // payload shape (no dep_phases key), and bare "Nothing" keeps the empty
-      // array the extraction path always produced for it.
-      const negatedLead = /^(nothing|none)\b/i.test(prose);
       const ownNumber = normalizePhaseNumber(phase['number'] as string);
       const ownIdentity = typeof phase['display_id'] === 'string'
         ? bracketIdentityKey(phase['display_id'])
         : null;
       const depNums: string[] = [];
       const seen = new Set<string>();
-      const dependencyTokens = negatedLead
-        ? []
-        : phaseIdConvention === 'bracket'
-          ? extractPhaseDependencyTokens(prose, phaseIdConvention)
-          : legacyManagerDependencyTokens(prose);
+      let dependencyTokens: string[];
+      if (phaseIdConvention === 'bracket') {
+        // #6507: the shared owner returns [] for a Nothing/None lead itself.
+        dependencyTokens = extractPhaseDependencyTokens(prose, phaseIdConvention);
+      } else if (isNegatedDependencyLead(prose)) {
+        // #6507: a lead negation is the writer's decision, not prose to mine —
+        // even "Nothing except Phase 1" resolves to no dependencies; guidance
+        // tells writers to use a plain list when a dependency exists. The gate
+        // stays inside this branch so the exact-none short-circuit above keeps
+        // its payload shape (no dep_phases key).
+        dependencyTokens = [];
+      } else {
+        dependencyTokens = legacyManagerDependencyTokens(prose);
+      }
       for (const token of dependencyTokens) {
         const identity = bracketIdentityKey(token);
         if (identity) {
