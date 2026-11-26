@@ -5682,7 +5682,7 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
   }
 });
 
-// ─── config-set hooks.secret_read_exempt (#4432)────────────────────────────
+// ─── config-set hooks.secret_read_exempt (#4432) ────────────────────────────
 //
 // Matrix rows covered (50-test-matrix.md, suite C): 26 39 40.
 // The hook (hooks/lib/secret-read-exemptions.js) cannot require src/, so
