@@ -131,8 +131,6 @@ describe('#4649: the discovery agents share one project-skills reference', () =>
 });
 
 describe('#4649: the shared reference states the scoped read', () => {
-  const dropFrom = (phrase) => (text) => text.split(phrase).join('');
-
   test('a reference that reads every SKILL.md in full again is named (no frontmatter scoping)', (t) => {
     const root = copyOfFiles(t);
     edit(root, REFERENCE, (text) => text.replace(/only the (?:YAML )?frontmatter/i, 'each'));
@@ -178,7 +176,6 @@ describe('#4649: the shared reference states the scoped read', () => {
 
   test('a reference that loses the resource-loading step is named', (t) => {
     const root = copyOfFiles(t);
-    edit(root, REFERENCE, dropFrom('references'));
     edit(root, REFERENCE, (text) => text.replace(/a `SKILL\.md` references/, 'a `SKILL.md` lists'));
     const found = messages(root);
     assert.ok(found.some((line) => line.includes('resource loading')), found.join('\n'));
