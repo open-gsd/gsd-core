@@ -391,7 +391,7 @@ function fail(message: string): never {
 }
 
 /** `+` is outside the id alphabet, so two different phase/plan pairs never share a file. */
-function ledgerFileName(phase: string, plan: string): string {
+export function ledgerFileName(phase: string, plan: string): string {
   return `${phase}+${plan}.json`;
 }
 

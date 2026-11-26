@@ -20,8 +20,10 @@ const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
+const fc = require('./helpers/fast-check-setup.cjs');
+
 const guardModule = require('../gsd-core/bin/lib/executor-guard.cjs');
-const { evaluateGuard, cmdExecutorGuard, GUARD_EXIT_CODE } = guardModule;
+const { evaluateGuard, cmdExecutorGuard, resolveLanding, ledgerFileName, GUARD_EXIT_CODE } = guardModule;
 
 const GIT_CFG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-gitcfg-'));
 const EMPTY_GITCONFIG = path.join(GIT_CFG_DIR, 'gitconfig');
@@ -271,7 +273,7 @@ describe('executor.ledger (#6216): the plan base, recorded once in the worktree'
 
   test('refuses phase and plan ids that are not plain names, and unknown actions', (t) => {
     const { tmp, wt } = mkFixture(t);
-    for (const phase of ['../x', '', 'a/b', '.hidden']) {
+    for (const phase of ['../x', '', 'a/b', '.hidden', 'a+b']) {
       const res = run(['executor.ledger', 'record', '--phase', phase, '--plan', '01'], wt, tmp);
       assert.notEqual(res.exitCode, 0, `phase ${JSON.stringify(phase)} must be refused`);
     }
@@ -835,5 +837,93 @@ describe('#6216: seams and properties', () => {
     assert.equal(result.ok, true, JSON.stringify(result.checks));
     assert.equal(seen.length, 4, 'the two layout reads, the branch read and the HEAD read');
     for (const opts of seen) assert.deepEqual(opts, { cwd: '/w' });
+  });
+
+  const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  // The ledger's id alphabet: a letter or digit, then letters, digits, `.`, `_`, `-`.
+  const id = fc
+    .tuple(fc.constantFrom(...ALNUM), fc.array(fc.constantFrom(...ALNUM, '.', '_', '-'), { maxLength: 8 }))
+    .map(([head, tail]) => head + tail.join(''));
+  const pair = fc.tuple(id, id);
+  // Two different pairs made of the same ids cut at another point: they would share a name
+  // under a joiner taken from the id alphabet.
+  const recut = fc
+    .tuple(id, id, id, fc.constantFrom('.', '_', '-'))
+    .map(([x, y, z, joiner]) => [[`${x}${joiner}${y}`, z], [x, `${y}${joiner}${z}`]]);
+  const twoPairs = fc.oneof(fc.tuple(pair, pair), recut, pair.map((p) => [p, p]));
+
+  test('property: two phase/plan pairs share a ledger file name exactly when they are the same pair', () => {
+    fc.assert(
+      fc.property(twoPairs, ([[phaseA, planA], [phaseB, planB]]) => {
+        const samePair = phaseA === phaseB && planA === planB;
+        assert.equal(ledgerFileName(phaseA, planA) === ledgerFileName(phaseB, planB), samePair);
+      }),
+    );
+  });
+
+  test('property: a ledger file name reads back as its phase and plan', () => {
+    fc.assert(
+      fc.property(pair, ([phase, plan]) => {
+        const name = ledgerFileName(phase, plan);
+        assert.ok(name.endsWith('.json'), name);
+        assert.deepEqual(name.slice(0, -'.json'.length).split('+'), [phase, plan]);
+      }),
+    );
+  });
+
+  test('property: --path passes exactly when the landing the kernel resolves is inside the worktree root', { skip: process.platform === 'win32' ? 'POSIX path resolution is the oracle' : false }, (t) => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-prop-')));
+    t.after(() => cleanup(tmp));
+    const root = path.join(tmp, 'wt');
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(path.join(root, 'a', 'b'), { recursive: true });
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(root, 'a', 'f.txt'), 'x\n');
+    fs.symlinkSync(path.join(root, 'a', 'b'), path.join(root, 'in'));
+    fs.symlinkSync(outside, path.join(root, 'out'));
+    fs.symlinkSync(path.join(root, 'a', 'f.txt'), path.join(root, 'lf'));
+    const deps = { execGit: stubGit(root), protectedStatus: unprotectedStatus };
+
+    // Resolved by the filesystem, not by the module: realpath of the longest prefix that exists
+    // (each link followed where it stands, `..` applied after it), then the segments that do not
+    // exist yet, as written. null when there is no landing: a segment below a file, or `..` below
+    // a missing one.
+    function kernelLanding(segments) {
+      for (let n = segments.length; n >= 0; n--) {
+        let real;
+        try {
+          real = fs.realpathSync.native([root, ...segments.slice(0, n)].join('/'));
+        } catch (err) {
+          if (err.code === 'ENOENT') continue;
+          return null;
+        }
+        const rest = segments.slice(n);
+        if (rest.includes('..')) return null;
+        return path.join(real, ...rest.filter((s) => s !== '.' && s !== ''));
+      }
+      return null;
+    }
+
+    // An empty segment is a doubled or trailing separator.
+    const segment = fc.constantFrom('a', 'b', 'f.txt', 'in', 'out', 'lf', 'wt', 'new', '.', '..', '');
+    // As many `..` as the root is deep reach `/`, wherever the temporary directory is.
+    const toFilesystemRoot = root.split('/').filter((s) => s !== '').map(() => '..');
+    fc.assert(
+      fc.property(fc.array(segment, { minLength: 1, maxLength: 6 }), (segments) => {
+        const target = `${root}/${segments.join('/')}`;
+        const landed = kernelLanding(segments);
+        const rel = landed === null ? null : path.relative(root, landed);
+        const inside = rel !== null && rel !== '..' && !rel.startsWith('../');
+
+        const resolved = resolveLanding(target);
+        assert.equal('landing' in resolved ? resolved.landing : null, landed, target);
+
+        const result = evaluateGuard({ projectRoot: root }, { invokedFrom: root, path: target }, deps);
+        assert.deepEqual(result.checks.map((c) => c.name), ['path']);
+        assert.equal(result.ok, inside, target);
+      }),
+      { examples: [[toFilesystemRoot], [[...toFilesystemRoot, 'a']], [[...toFilesystemRoot, 'new', 'x']]] },
+    );
   });
 });
