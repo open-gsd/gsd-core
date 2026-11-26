@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 import cliExitModule = require('./cli-exit.cjs');
 import { resolveProtectedBranchStatus } from './git-base-branch.cjs';
 import { execGit as execGitSeam } from './shell-command-projection.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 
 const { output, error, ERROR_REASON } = io;
 const { ExitError } = cliExitModule;
@@ -103,12 +104,9 @@ function errCode(err: unknown): string | undefined {
   return (err as { code?: string }).code;
 }
 
-/** True when `candidate` is `root` or below it; `..cache` is a name, `..` is a parent. */
-export function isContained(root: string, candidate: string): boolean {
-  const rel = path.relative(root, candidate);
-  if (rel === '') return true;
-  if (path.isAbsolute(rel)) return false;
-  return rel.split(path.sep)[0] !== '..';
+/** Windows names a place whatever the letter case; POSIX paths are compared as written. */
+function comparable(p: string): string {
+  return process.platform === 'win32' ? p.toLowerCase() : p;
 }
 
 /**
@@ -305,7 +303,7 @@ export function evaluateGuard(
 
   if (opts.toplevel !== undefined && opts.toplevel !== null) {
     const want = realpathOr(deps, path.resolve(opts.invokedFrom, opts.toplevel));
-    const ok = want !== null && realRoot !== null && want === realRoot;
+    const ok = want !== null && realRoot !== null && comparable(want) === comparable(realRoot);
     checks.push({
       name: 'toplevel',
       ok,
@@ -326,7 +324,8 @@ export function evaluateGuard(
       if ('reason' in resolved) {
         detail = `${opts.path}: ${resolved.reason}`;
       } else {
-        ok = isContained(realRoot, resolved.landing);
+        // Both sides are already resolved, so the shared lexical predicate decides (ADR-4650).
+        ok = tryWithinRootLexical(comparable(resolved.landing), comparable(realRoot)) !== null;
         detail = ok
           ? `${opts.path} lands inside the worktree`
           : `${opts.path} lands at ${resolved.landing}, outside the worktree (${realRoot}); use a path inside it (#3099)`;

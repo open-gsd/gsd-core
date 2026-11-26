@@ -20,7 +20,8 @@ const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
-const { evaluateGuard, cmdExecutorGuard, GUARD_EXIT_CODE } = require('../gsd-core/bin/lib/executor-guard.cjs');
+const guardModule = require('../gsd-core/bin/lib/executor-guard.cjs');
+const { evaluateGuard, cmdExecutorGuard, GUARD_EXIT_CODE } = guardModule;
 
 const GIT_CFG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-gitcfg-'));
 const EMPTY_GITCONFIG = path.join(GIT_CFG_DIR, 'gitconfig');
@@ -560,6 +561,50 @@ describe('#6216 fix review: layouts, path resolution and ledger confinement', ()
     assert.equal(dotted.exitCode, 0, dotted.error);
   });
 
+  test('on Windows a path names the same place in another letter case; the drive root and the parent stay outside', { skip: process.platform !== 'win32' }, (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const target = path.join(wt, 'src', 'new', 'file.ts');
+    const swapFirst = (p) => (p[0] === p[0].toUpperCase() ? p[0].toLowerCase() : p[0].toUpperCase()) + p.slice(1);
+    for (const spelled of [swapFirst(target), target.toLowerCase(), target.toUpperCase()]) {
+      const res = run(['executor.guard', '--path', spelled], wt, tmp);
+      assert.equal(res.exitCode, 0, `${spelled}: ${res.error}`);
+    }
+    const fromLowerCwd = run(['executor.guard', '--path', 'src/new/file.ts'], wt.toLowerCase(), tmp);
+    assert.equal(fromLowerCwd.exitCode, 0, fromLowerCwd.error);
+
+    const driveRoot = path.parse(wt).root;
+    for (const outside of [driveRoot, swapFirst(driveRoot), path.dirname(wt), path.dirname(wt).toLowerCase(), '..']) {
+      const res = run(['executor.guard', '--path', outside], wt, tmp);
+      assert.equal(res.exitCode, GUARD_EXIT_CODE, outside);
+      assert.deepEqual(failed(res), ['path'], outside);
+    }
+
+    for (const root of [wt.toLowerCase(), swapFirst(wt)]) {
+      const res = run(['executor.guard', '--toplevel', root], wt, tmp);
+      assert.equal(res.exitCode, 0, `${root}: ${res.error}`);
+    }
+    const elsewhere = run(['executor.guard', '--toplevel', path.dirname(wt).toLowerCase()], wt, tmp);
+    assert.equal(elsewhere.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(elsewhere), ['toplevel']);
+  });
+
+  test('--path on POSIX refuses a sibling directory named as the worktree plus a backslash', { skip: process.platform === 'win32' }, (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const sibling = `${wt}\\x`;
+    fs.mkdirSync(sibling);
+    const res = run(['executor.guard', '--path', `${sibling}/new.txt`], wt, tmp);
+    assert.equal(res.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(res), ['path']);
+  });
+
+  test('--path on Linux reads letter case as part of a name', { skip: process.platform !== 'linux' }, (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const otherCase = path.join(path.dirname(wt), path.basename(wt).toUpperCase(), 'new.txt');
+    const res = run(['executor.guard', '--path', otherCase], wt, tmp);
+    assert.equal(res.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(failed(res), ['path']);
+  });
+
   test('record refuses a linked .gsd/executor-ledger and writes nothing through it', (t) => {
     const { tmp, wt } = mkFixture(t);
     const escaped = path.join(tmp, 'escaped');
@@ -759,5 +804,12 @@ describe('#6216 fix review, pass 2: separators, layouts, ledger ignore file, fai
     const res = run(['executor.ledger', 'read', '--phase', '01', '--plan', '01'], wt, tmp);
     assert.equal(res.exitCode, 1);
     assert.match(res.error, /is not this plan's ledger record/);
+  });
+});
+
+describe('#6216: seams and properties', () => {
+  test('the module exports its landing resolver and no containment predicate of its own', () => {
+    assert.equal(typeof guardModule.resolveLanding, 'function');
+    assert.equal(guardModule.isContained, undefined);
   });
 });
