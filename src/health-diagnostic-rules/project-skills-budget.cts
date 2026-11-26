@@ -87,7 +87,7 @@ function skillDirNames(rootPath: string): string[] {
   return names.sort().slice(0, ROOT_ENTRY_LIMIT);
 }
 
-function readSkill(file: string): string | null {
+function readSkillOrNull(file: string): string | null {
   try {
     return capabilityLedger.readSkillFile(file);
   } catch {
@@ -99,8 +99,9 @@ function readSkill(file: string): string | null {
 function checkProjectSkillsBudget(snapshot: PlanningSnapshot): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   for (const root of SKILL_ROOTS) {
-    for (const name of skillDirNames(path.join(snapshot.cwd, ...root.split('/')))) {
-      const content = readSkill(path.join(snapshot.cwd, ...root.split('/'), name, 'SKILL.md'));
+    const rootPath = path.join(snapshot.cwd, ...root.split('/'));
+    for (const name of skillDirNames(rootPath)) {
+      const content = readSkillOrNull(path.join(rootPath, name, 'SKILL.md'));
       if (content === null) continue;
       const skillPath = `${root}/${name}/SKILL.md`;
 

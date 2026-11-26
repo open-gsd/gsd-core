@@ -6,7 +6,7 @@
  *
  * The rule reads real files under `snapshot.cwd`, so every case writes a real temp project and calls
  * `rule.check({ cwd })` — the shape `evaluateRules` passes in production. No owner is stubbed except the one
- * IO-failure case, which monkeypatches `fs.openSync` and restores it in `finally`.
+ * IO-failure case, which mocks `fs.openSync` with `t.mock.method` (restored by the harness).
  */
 
 const { test, describe } = require('node:test');
@@ -83,8 +83,6 @@ describe('W033 (project skills that defeat the scoped discovery read)', () => {
     for (const [label, line] of [
       ['empty', 'description:'],
       ['whitespace-only', 'description: "   "'],
-      ['null', 'description: null'],
-      ['a number', 'description: 42'],
       ['a list', 'description:\n  - one\n  - two'],
       ['a map', 'description:\n  k: v'],
     ]) {
@@ -97,7 +95,11 @@ describe('W033 (project skills that defeat the scoped discovery read)', () => {
       });
     }
 
+    // The frontmatter parser (FAILSAFE_SCHEMA) reads every scalar as a string, so `null` and `42` are the strings
+    // "null" and "42": a non-blank string, which discovery reads as the description text. Pinned so it is not a surprise.
     for (const [label, text] of [
+      ['literal null', 'description: null'],
+      ['numeric', 'description: 42'],
       ['literal block scalar', 'description: |\n  Does a thing.\n  Use when asked.'],
       ['folded block scalar', 'description: >\n  Does a thing.\n  Use when asked.'],
       ['plain scalar', 'description: Does a thing'],
@@ -252,8 +254,8 @@ describe('W033 (project skills that defeat the scoped discovery read)', () => {
       assert.match(ds[0].message, /\.agents\/skills\/a/);
     });
 
-    test('a nonexistent cwd yields no findings', () => {
-      assert.deepEqual(rule.check({ cwd: path.join(createTempDir('gsd-5249-gone-'), 'missing', 'deeper') }), []);
+    test('a nonexistent cwd yields no findings', (t) => {
+      assert.deepEqual(rule.check({ cwd: path.join(project(t), 'missing', 'deeper') }), []);
     });
 
     test('a directory without SKILL.md and a plain file in the root are ignored', (t) => {
@@ -281,21 +283,17 @@ describe('W033 (project skills that defeat the scoped discovery read)', () => {
       writeSkill(cwd, '.claude/skills', 'other', 'x\n');
       const badFile = path.join(bad, 'SKILL.md');
       const real = fs.openSync;
-      fs.openSync = function patched(file, ...rest) {
+      t.mock.method(fs, 'openSync', function patched(file, ...rest) {
         if (String(file) === badFile) {
           const err = new Error('EACCES: permission denied');
           err.code = 'EACCES';
           throw err;
         }
         return real.call(fs, file, ...rest);
-      };
-      try {
-        const ds = rule.check({ cwd });
-        assert.equal(ds.length, 1, JSON.stringify(ds));
-        assert.match(ds[0].message, /other/);
-      } finally {
-        fs.openSync = real;
-      }
+      });
+      const ds = rule.check({ cwd });
+      assert.equal(ds.length, 1, JSON.stringify(ds));
+      assert.match(ds[0].message, /other/);
     });
 
     test('a directory name outside the safe charset is never rendered', (t) => {
