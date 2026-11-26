@@ -3045,3 +3045,47 @@ describe('mergeCodexConfig', () => {
     assert.ok(content.indexOf('notify = ') < content.indexOf('[agents]'), 'hoist holds under CRLF');
   });
 });
+
+// ─── #4669: a runtime-keyed model_overrides entry selects the `codex` key ────────
+//
+// generateCodexAgentToml IS the codex install, so `codex` is the key it selects by, and the value
+// policy it already applies (trim, drop Anthropic-flavored ids) still governs the selected value.
+describe('#4669: generateCodexAgentToml with a runtime-keyed model_overrides entry', () => {
+  const agent = [
+    '---',
+    'name: gsd-planner',
+    'description: Plans phases',
+    'tools: Read, Bash',
+    '---',
+    '<role>You plan.</role>',
+  ].join('\n');
+
+  function bakedModel(t, entry) {
+    t.mock.method(process.stderr, 'write', () => true);
+    const parsed = parseTomlToObject(generateCodexAgentToml('gsd-planner', agent, { 'gsd-planner': entry }));
+    return parsed.model ?? null;
+  }
+
+  test('the codex key is baked', (t) => {
+    assert.strictEqual(bakedModel(t, { codex: 'gpt-6-astra', claude: 'opus' }), 'gpt-6-astra');
+  });
+
+  test('an entry naming only another runtime bakes nothing', (t) => {
+    assert.strictEqual(bakedModel(t, { claude: 'opus' }), null);
+  });
+
+  test('an Anthropic-flavored id under the codex key is still dropped', (t) => {
+    assert.strictEqual(bakedModel(t, { codex: 'opus' }), null);
+    assert.strictEqual(bakedModel(t, { codex: 'claude-opus-4-8' }), null);
+  });
+
+  test('a string entry is unchanged', (t) => {
+    assert.strictEqual(bakedModel(t, 'gpt-6-astra'), 'gpt-6-astra');
+  });
+
+  test('an unusable value under the codex key bakes nothing and does not throw', (t) => {
+    for (const value of ['', '   ', 5, null, {}, []]) {
+      assert.strictEqual(bakedModel(t, { codex: value }), null, JSON.stringify(value));
+    }
+  });
+});
