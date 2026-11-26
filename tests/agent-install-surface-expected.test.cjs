@@ -33,6 +33,8 @@ const AGENT_KEY = '_calls_agents_';
 function baseSkills(profile) {
   const manifest = profile === 'core' ? new Map() : FULL_MANIFEST;
   const resolved = installProfiles.resolveProfile({ modes: [profile], manifest, agentManifest: FULL_MANIFEST, registry });
+  // `full` resolves to the '*' sentinel: every skill stem in the manifest.
+  if (resolved.skills === '*') return [...FULL_MANIFEST.keys()].filter((k) => !k.startsWith(AGENT_KEY)).sort();
   return [...resolved.skills].sort();
 }
 
@@ -117,7 +119,9 @@ describe('#4761 W010 expected set follows /gsd:surface', () => {
     const cfg = makeConfigDir(t);
     writeState(cfg, { baseProfile: 'core', explicitAdds: [] });
     const got = installProfiles.agentsStagedByMarker(cfg);
-    assert.ok(got instanceof Set && got.size < ALL_AGENTS.length);
+    assert.ok(got instanceof Set);
+    const catalog = [...got].filter((a) => ALL_AGENTS.includes(a));
+    assert.ok(catalog.length > 0 && catalog.length < ALL_AGENTS.length, 'a strict, non-empty subset of the catalog');
   });
 
   test('#4761 an unreadable surface file falls back to the marker', (t) => {
@@ -125,7 +129,9 @@ describe('#4761 W010 expected set follows /gsd:surface', () => {
     installProfiles.writeActiveProfile(cfg, 'core');
     fs.writeFileSync(path.join(cfg, '.gsd-surface.json'), '{not json');
     const viaMarker = installProfiles.agentsStagedByMarker(cfg);
-    assert.ok(viaMarker instanceof Set && viaMarker.size > 0 && viaMarker.size < ALL_AGENTS.length, 'a filtered marker set');
+    assert.ok(viaMarker instanceof Set);
+    const catalog = [...viaMarker].filter((a) => ALL_AGENTS.includes(a));
+    assert.ok(catalog.length > 0 && catalog.length < ALL_AGENTS.length, 'a filtered marker set');
     assert.deepEqual([...viaMarker].sort(), [...installerCoreAgents()].sort());
   });
 
