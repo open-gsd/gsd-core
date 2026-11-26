@@ -419,7 +419,7 @@ Set via `manager.*` namespace (e.g., `"manager": { "flags": { "discuss": "--auto
 | Key | Type | Default | Allowed Values | Description |
 |-----|------|---------|----------------|-------------|
 | `parallelization` | boolean\|object | `true` | `true`, `false`, `{ "enabled": true }` | Enable parallel wave execution; object form allows additional sub-keys |
-| `model_overrides` | object\|null | `null` | `{ "<agent-type>": "<model-id>" }` | Override model selection per agent type |
+| `model_overrides` | object\|null | `null` | `{ "<agent-type>": "<model-id>" }` or `{ "<agent-type>": { "<runtime>": "<model-id>" } }` | Override model selection per agent type. An entry is a model id (used on every runtime) or an object keyed by runtime (used only on that runtime; an object with no key for the active runtime falls through to tier resolution) (#4669) |
 | `agent_skills` | object | `{}` | `{ "<agent-type>": "<skill-set>" }` or `{ "<agent-type>": ["<skill-set>", "<skill-set>", ...] }` | Assign skill sets to specific agent types. Each value is a single skill-set path (string) or an array of skill-set paths — the array form assigns multiple skill sets to one agent type. Paths cannot be comma-joined into one string; each path must be its own array element |
 | `sub_repos` | array | `[]` | Array of relative path strings | Child directories with independent `.git` repos (auto-detected) |
 

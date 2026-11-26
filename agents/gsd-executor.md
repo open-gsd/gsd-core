@@ -771,7 +771,7 @@ After SUMMARY.md, update ROADMAP.md progress FIRST, then STATE.md. The ROADMAP w
 
 ```bash
 # Update ROADMAP.md progress for this phase (plan counts, status). A decline stops here, before STATE.md moves.
-PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && [ -n "$PROGRESS" ] && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 ```
 
 Then update STATE.md using `gsd-tools query` state handlers (named flags):
