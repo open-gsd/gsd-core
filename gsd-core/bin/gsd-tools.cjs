@@ -5943,10 +5943,34 @@ function isRefusedGlobalFlagValue(value, { allowEmpty = false } = {}) {
   return value.startsWith('--');
 }
 
+// The value-taking global options in the order main() reads them, so the first
+// one refused is the one the usage error names. `eqForm`: an `--flag=<value>`
+// token wins over `--flag <value>`, so the space form is not judged beside it.
+const GLOBAL_VALUE_FLAG_RULES = {
+  '--cwd': { eqForm: true },
+  '--project-dir': { eqForm: true },
+  '--ws': { eqForm: true },
+  '--pick': {},
+  '--default': { allowEmpty: true },
+};
+
+function refuseFlagShapedGlobalValues(argv, flags) {
+  for (const flag of flags) {
+    const { eqForm = false, allowEmpty = false } = GLOBAL_VALUE_FLAG_RULES[flag];
+    if (eqForm && argv.some((arg) => arg.startsWith(`${flag}=`))) continue;
+    const idx = argv.indexOf(flag);
+    if (idx !== -1 && isRefusedGlobalFlagValue(argv[idx + 1], { allowEmpty })) {
+      error(`Missing value for ${flag}`, ERROR_REASON.USAGE);
+    }
+  }
+}
+
 // Not an `async function` (#6333): it returns a promise only when the command
 // it dispatched did, so a synchronous command finishes before it returns.
 function main() {
   let args = process.argv.slice(2);
+  // The argv as given, before any global flag is removed (#5933).
+  const argvAsGiven = args.slice();
 
   // These two global-flag blocks (--json-errors, --exit-contract) MUST run
   // BEFORE the run-with-timeout interception below. run-with-timeout treats
@@ -6017,6 +6041,14 @@ function main() {
       return runWithTimeout(rwt.slice(1));
     }
   }
+
+  // #5933: a value-taking global option is judged on the argv as given. The
+  // blocks below remove --raw, --cwd, --project-dir, --ws and --pick before
+  // they reach the later options, so judged only there, `--default --raw cmd`
+  // would skip the removed `--raw` and take `cmd` as the value. --pick and
+  // --default are judged after the #5286 refusal below, which names them first
+  // for the config mutation verbs that don't take them.
+  refuseFlagShapedGlobalValues(argvAsGiven, ['--cwd', '--project-dir', '--ws']);
 
   // Optional cwd override for sandboxed subagents running outside project root.
   let cwd = process.cwd();
@@ -6099,9 +6131,9 @@ function main() {
   // --ws is refused like the other value-taking global options (#5933), before
   // resolution; `--ws=<name>` takes precedence over `--ws <name>`, as in parseCliWorkstream.
   // Only an empty `--ws=` is a missing value: `--ws=--x` names a workstream.
-  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts); #5933
   const wsEqArg = args.find((arg) => arg.startsWith('--ws='));
-  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts); #5933
   const wsIdx = args.indexOf('--ws');
   const wsRefused = wsEqArg !== undefined
     ? wsEqArg.slice('--ws='.length).trim() === ''
@@ -6151,6 +6183,7 @@ function main() {
   let prefixEnd = 0;
   while (typeof args[prefixEnd] === 'string' && isFlagToken(args[prefixEnd]) && restrictedGlobalNames.has(args[prefixEnd].slice(2))) prefixEnd += 2;
   rejectConfigMutationValueFlags(args[prefixEnd] === 'query' ? args[prefixEnd + 1] : args[prefixEnd]);
+  refuseFlagShapedGlobalValues(argvAsGiven, ['--pick', '--default']);
 
   // --pick <name>: extract a single field from JSON output (replaces jq dependency).
   // Supports dot-notation (e.g., --pick workflow.research) and bracket notation

@@ -739,7 +739,8 @@ not valid JSON), and anything else is a string, including ` 5`, `0x10` and a num
 represent (`1e400`). So `--default '[]'` prints `[]`,
 the same as a key set to an empty array. `--default` needs a value: a missing value, or one that
 starts with `--` (another flag), is a usage error, as it is for `--cwd`, `--project-dir`, `--ws`
-and `--pick`. Pass `--default ""` for an empty default. Some PowerShell versions (Windows PowerShell 5.1,
+and `--pick`. The value is the word right after the flag as you typed it, so a global flag there,
+such as `--raw` or `--help`, is a missing value too. Pass `--default ""` for an empty default. Some PowerShell versions (Windows PowerShell 5.1,
 PowerShell 7.0 to 7.2, and later versions in `Legacy` argument mode) drop an empty argument when
 they run a program, so `--default ""` arrives as a bare `--default` there; write `--default '""'`
 instead.
