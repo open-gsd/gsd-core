@@ -1244,6 +1244,24 @@ function firstPartyRegistry(): CapabilityRegistry | undefined {
   }
 }
 
+interface SurfaceStateShape {
+  baseProfile: string;
+  disabledClusters: string[];
+  explicitAdds: string[];
+  explicitRemoves: string[];
+}
+
+interface SurfaceModule {
+  readSurface: (configDir: string) => SurfaceStateShape | null;
+  resolveSurface: (
+    configDir: string,
+    manifest: Map<string, string[]>,
+    clusterMap: undefined,
+    registry: CapabilityRegistry | undefined,
+    surfaceOverride: SurfaceStateShape,
+  ) => { agents: Set<string> };
+}
+
 interface AgentsStagedByMarkerOpts {
   /** Candidate `commands/gsd` source dirs, first existing wins. Default: the repo layout, then the installed
    *  layout (`<runtime config>/gsd-core/commands/gsd`, where `__dirname` is `gsd-core/bin/lib`). */
@@ -1262,7 +1280,13 @@ interface AgentsStagedByMarkerOpts {
  */
 function agentsStagedByMarker(configDir: string, opts: AgentsStagedByMarkerOpts = {}): Set<string> | null {
   const marker = readActiveProfile(configDir);
-  if (!marker) return null;
+  // #4761: `/gsd:surface` re-stages agents from the surface-resolved skills and prunes the rest (`applySurface`), so a
+  // `.gsd-surface.json` state, when present, decides the staged set instead of the marker alone. Lazy: surface.cts
+  // imports this module.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4761 lazy: surface.cts imports this module
+  const surfaceModule = require('./surface.cjs') as SurfaceModule;
+  const surface = surfaceModule.readSurface(configDir);
+  if (!marker && !surface) return null;
   // Installed layout first: `<runtime config>/gsd-core/commands/gsd` is the full copy, while the runtime's own
   // `<runtime config>/commands/gsd` (what DEFAULT_COMMANDS_DIR resolves to there) holds only the staged subset and
   // would shrink the derived agent set. In the repo layout the first path does not exist and the second is the source.
@@ -1274,11 +1298,19 @@ function agentsStagedByMarker(configDir: string, opts: AgentsStagedByMarkerOpts 
   if (commandsDir === undefined) return null;
   const fullManifest = loadSkillsManifest(commandsDir, opts.workflowsDir ?? DEFAULT_WORKFLOWS_DIR);
   if (fullManifest.size === 0) return null;
+  const registry = opts.registry ?? firstPartyRegistry();
+  if (surface) {
+    // applySurface stages every agent for an unmodified `full` surface (the `'*'` sentinel); any other state stages
+    // exactly `resolveSurface(...).agents`.
+    const modified = surface.disabledClusters.length > 0 || surface.explicitAdds.length > 0 || surface.explicitRemoves.length > 0;
+    if (surface.baseProfile === 'full' && !modified) return null;
+    return surfaceModule.resolveSurface(configDir, fullManifest, undefined, registry, surface).agents;
+  }
   const resolved = resolveProfile({
-    modes: [marker],
+    modes: [marker as string],
     manifest: marker === 'core' ? new Map() : fullManifest,
     agentManifest: fullManifest,
-    registry: opts.registry ?? firstPartyRegistry(),
+    registry,
   });
   return resolved.skills === '*' ? null : resolved.agents;
 }
