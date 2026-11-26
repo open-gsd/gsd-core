@@ -1,5 +1,8 @@
 # TDD gate split dispatch (#4696)
 
+Apply response_language to all user-facing prose — narration between tool calls, status
+updates, progress notes, and findings included; preserve code, paths, and identifiers.
+
 A `type: tdd` plan normally runs as ONE executor dispatch. When `model_overrides` gives its RED gate and
 its GREEN/REFACTOR gates different models, the plan instead runs as TWO sequential dispatches: a RED
 dispatch, then a GREEN/REFACTOR dispatch, each on its own model. This file has two parts that run at
@@ -53,11 +56,11 @@ if [ "$TDD_MODE" = "true" ] && [ "$TDD_PLAN_TYPE" = "tdd" ]; then
       [ "$(tdd_norm_model "$1")" = "$(tdd_norm_model "$2")" ]
     }
     TDD_EXECUTOR_TYPE=$(gsd_run query resolve-agent --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --raw 2>/dev/null) || TDD_EXECUTOR_TYPE="gsd-executor"
-    if TDD_BASE_MODEL=$(gsd_run query resolve-model "$TDD_EXECUTOR_TYPE" --fallback-agent gsd-executor --raw 2>/dev/null) \
+    if TDD_BASE=$(gsd_run query resolve-model "$TDD_EXECUTOR_TYPE" --fallback-agent gsd-executor --raw 2>/dev/null) \
       && TDD_RED_KEY_MODEL=$(tdd_gate_model "${TDD_EXECUTOR_TYPE}:tdd-red") \
       && TDD_GREEN_KEY_MODEL=$(tdd_gate_model "${TDD_EXECUTOR_TYPE}:tdd-green-refactor"); then
-      TDD_RED_MODEL="${TDD_RED_KEY_MODEL:-$TDD_BASE_MODEL}"
-      TDD_GREEN_MODEL="${TDD_GREEN_KEY_MODEL:-$TDD_BASE_MODEL}"
+      TDD_RED_MODEL="${TDD_RED_KEY_MODEL:-$TDD_BASE}"
+      TDD_GREEN_MODEL="${TDD_GREEN_KEY_MODEL:-$TDD_BASE}"
       if ! tdd_same_model "$TDD_RED_MODEL" "$TDD_GREEN_MODEL"; then
         TDD_GATE_SPLIT=true
         USE_WORKTREES_FOR_PLAN=false
@@ -83,7 +86,7 @@ Sequential-mode instructions for BOTH dispatches below: omit `isolation="worktre
 `sequential-root-pin.md`, and embed the `<sequential_execution>` and `<project_root_pin>` blocks. Both
 dispatches are foreground: do not set `run_in_background`, because the second dispatch needs the first one's commit.
 
-1. **Resume check.** Before the RED dispatch, run the RED-commit lookup of `references/tdd.md` ("Executor Gate
+1. **Resume check.** Before the RED dispatch, run the RED-commit lookup of `gsd-core/references/tdd.md` ("Executor Gate
    Validation", the first `git log` command) with `PHASE` and `PLAN` set to this plan's numbers. If it already
    prints a RED commit and no `SUMMARY.md` exists for the plan, the RED gate already ran (a resumed plan): skip
    straight to step 4.

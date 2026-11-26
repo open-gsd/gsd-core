@@ -17,11 +17,15 @@ const { isolatedEnv, createHermeticRoot } = require('./helpers/isolated-env.cjs'
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const GSD_TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+// Forward slashes: the path is spliced into a bash script, where a Windows backslash would be an escape.
+const GSD_TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs').replace(/\\/g, '/');
 const EXECUTE_PHASE = 'gsd-core/workflows/execute-phase.md';
 const STEP = 'gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md';
+const PLAN_GATE = 'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md';
+const ROOT_PIN = 'gsd-core/workflows/execute-phase/steps/sequential-root-pin.md';
 const GATE_REF = 'gsd-core/references/tdd-gate-dispatch.md';
 const EXECUTOR = 'agents/gsd-executor.md';
 const PLAN_REL = '.planning/phases/01-x/01-01-PLAN.md';
@@ -104,7 +108,7 @@ function decide(t, root, vars = {}, stub) {
 
 const SPLIT_CONFIG = { model_overrides: { 'gsd-executor:tdd-red': 'opus', 'gsd-executor': 'sonnet' } };
 
-describe('#4696 Part 1 decides the split', () => {
+describe('#4696 Part 1 decides the split', { skip: skipUnless('bash', 'node') }, () => {
   test('different gate models split the plan, take it out of its worktree, and name both models', (t) => {
     const { out } = decide(t, project(t, { config: SPLIT_CONFIG }));
     assert.equal(out.TDD_GATE_SPLIT, 'true');
@@ -237,14 +241,20 @@ describe('#4696 Part 2 dispatches in order', () => {
     assert.ok(text.includes('Sequential-mode'));
   });
 
-  test('execute-phase runs Part 1 in step 2.5 and Part 2 in step 3', () => {
-    const text = read(EXECUTE_PHASE);
-    const step25 = text.indexOf('2.5. **Per-plan worktree decision');
-    const step275 = text.indexOf('2.75. **Execute:wave:pre');
-    const part1At = text.indexOf('run Part 1 of `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`');
-    const part2At = text.indexOf('run Part 2 of `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`');
-    assert.ok(step25 < part1At && part1At < step275, 'Part 1 sits inside step 2.5');
-    assert.ok(part2At > step275, 'Part 2 sits in step 3');
+  test('the per-plan gate runs Part 1 before a plan joins the worktree accumulator', () => {
+    const gate = read(PLAN_GATE);
+    const part1At = gate.indexOf('run Part 1 of `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`');
+    const accumulatorAt = gate.indexOf('After running this for the plan, the dispatch branches');
+    assert.notEqual(part1At, -1, 'the gate points at Part 1');
+    assert.ok(part1At < accumulatorAt, 'Part 1 runs before the accumulator rule');
+  });
+
+  test('Sequential mode points at Part 2', () => {
+    assert.ok(read(ROOT_PIN).includes('Part 2 of\n`gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`'));
+  });
+
+  test('execute-phase.md itself is untouched by this change', () => {
+    assert.ok(!read(EXECUTE_PHASE).includes('tdd-gate-split-dispatch'));
   });
 });
 

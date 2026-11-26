@@ -15,30 +15,36 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { runGsdTools, createTempDir, cleanup, scrubConfigLocationEnv } = require('./helpers.cjs');
-const { createHermeticRoot, setEnvForTest, withHome } = require('./helpers/isolated-env.cjs');
+const { createHermeticRoot, withHome } = require('./helpers/isolated-env.cjs');
 
 const EXECUTOR = 'gsd-executor';
 const RED = (type) => `${type}:tdd-red`;
 const GREEN = (type) => `${type}:tdd-green-refactor`;
 
-function setup(t, config, runtime = 'claude') {
+// One home sandbox and one scrub per test context: a second scrub would restore the first scrub's cleared state.
+const SANDBOXED = new WeakSet();
+
+function setup(t, config) {
   const root = createHermeticRoot('tdd-gate-');
   t.after(() => cleanup(root));
-  const home = createTempDir('tdd-gate-home-');
-  t.after(() => cleanup(home));
-  withHome(t, home);
-  t.after(scrubConfigLocationEnv());
-  setEnvForTest(t, { GSD_RUNTIME: runtime });
+  if (!SANDBOXED.has(t)) {
+    SANDBOXED.add(t);
+    const home = createTempDir('tdd-gate-home-');
+    t.after(() => cleanup(home));
+    withHome(t, home);
+    t.after(scrubConfigLocationEnv());
+  }
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify(config));
   return root;
 }
 
 /**
  * What the split step reads for one gate: the model the key sets, or null when the key set nothing
- * (the answer carries `fallback_agent`), exactly the call the step file runs.
+ * (the answer carries `fallback_agent`), exactly the call the step file runs. The active runtime
+ * reaches the CLI the way a host sets it: GSD_RUNTIME in the call's environment, config.runtime absent.
  */
-function gateModel(root, gateKey) {
-  const r = runGsdTools(['resolve-model', gateKey, '--fallback-agent', EXECUTOR], root);
+function gateModel(root, gateKey, runtime = 'claude') {
+  const r = runGsdTools(['resolve-model', gateKey, '--fallback-agent', EXECUTOR], root, { GSD_RUNTIME: runtime });
   assert.ok(r.success, r.error);
   const answer = JSON.parse(r.output);
   return 'fallback_agent' in answer ? null : answer.model;
@@ -86,10 +92,11 @@ describe('#4696 gate-keyed model_overrides', () => {
 
   test('a runtime-keyed gate entry resolves for the active runtime only', (t) => {
     const config = { model_overrides: { [RED(EXECUTOR)]: { claude: 'opus', codex: 'gpt-6-astra' } } };
-    assert.equal(gateModel(setup(t, config, 'claude'), RED(EXECUTOR)), 'opus');
-    assert.equal(gateModel(setup(t, config, 'codex'), RED(EXECUTOR)), 'gpt-6-astra');
-    const other = { model_overrides: { [RED(EXECUTOR)]: { codex: 'gpt-6-astra' } } };
-    assert.equal(gateModel(setup(t, other, 'claude'), RED(EXECUTOR)), null);
+    const root = setup(t, config);
+    assert.equal(gateModel(root, RED(EXECUTOR), 'claude'), 'opus');
+    assert.equal(gateModel(root, RED(EXECUTOR), 'codex'), 'gpt-6-astra');
+    const other = setup(t, { model_overrides: { [RED(EXECUTOR)]: { codex: 'gpt-6-astra' } } });
+    assert.equal(gateModel(other, RED(EXECUTOR), 'claude'), null);
   });
 
   test('an empty object entry sets nothing', (t) => {
