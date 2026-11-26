@@ -27,6 +27,38 @@ These commands were exposed through the capture project's npm scripts and run
 with `npm run --silent` so the stored stdout is the original reporter stream.
 Vitest is not needed to run GSD's regression suite.
 
+- `node-throws-regexp.tap`, `node-rejects-regexp.tap`,
+  `node-throws-regexp-nested.tap` (captured 2026-11-04, Node 24.19.0): the
+  standard RED shape for a "should reject X" test — `assert.throws(fn, /re/)`
+  or `await assert.rejects(promise, /re/)` where the thrown message does not
+  match, so the assertion itself fails (#5819). node:test repeats `error` and
+  `stack` in that test's diagnostic block, which strict YAML rejects as
+  duplicate mapping keys. The nested capture wraps the same test in
+  `describe('token validation', …)` so the diagnostic block arrives indented.
+  Source (`throws-red.test.cjs`; the others vary only in assertion/structure;
+  excerpt abridged — the captured file carries ~5 preamble lines, hence the
+  `8:1`/`9:31` locations):
+
+```js
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+test('rejects a malformed token', () => {
+  assert.throws(() => { throw new Error('boom: token accepted'); }, /rejected token/);
+});
+```
+
+  Command: `node --test --test-reporter=tap <file>.test.cjs` (exit 1 each). The
+  capture machine's absolute source paths (`D:\AI\…`) were neutralized to
+  `C:\work\repro\…` (Windows-style, backslashes kept) in `location:` and stack
+  lines. Test names, source line numbers and TAP structure were preserved.
+  The counts and SHA-256 hashes below use the Git blobs with LF line endings.
+
+| Fixture | Lines | SHA-256 |
+| --- | ---: | --- |
+| `node-throws-regexp.tap` | 44 | `6e9dc19cee65317fea3eb70dce5d4a6e8b3322f7ccc9f35762764c271deeb8ed` |
+| `node-rejects-regexp.tap` | 39 | `173cabd84fd6c5515cfefd85d2e7f92fb435e4b53a5dd3f4487faa3291679abb` |
+| `node-throws-regexp-nested.tap` | 62 | `ccdd9de0f10cb117247acf5a558cdf3fd582db59aa4a7751d85be8cf1f889c17` |
+
 ## Other formats
 
 Captured unchanged on 2026-10-02; each run exited 1. Paths, timings and JVM

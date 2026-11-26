@@ -32,7 +32,6 @@ const SUITE_SENTINELS = ['all', 'unit', 'integration', 'install', 'security', 's
 const FALLBACK = [
   'tests/command-contract.test.cjs',
   'tests/commands.test.cjs',
-  'tests/package-manifest.test.cjs',
 ];
 
 // Last-resort selector when every FALLBACK entry has been deleted: the whole

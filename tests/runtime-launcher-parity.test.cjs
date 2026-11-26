@@ -51,12 +51,12 @@ after(() => cleanup(SNIPPET_HOME));
  * the registry-derived config-location blanks, the CLAUDE_ENV_FILE / BASH_ENV
  * scrub and the Windows key-case canonicalization.
  *
- * HOME and PATH are lifted out of `overrides` into the helper's own options; every
+ * `home` and `path` are lifted out of `overrides` into the helper's own options; every
  * other key (RUNTIME_DIR, HERMES_HOME, CLAUDE_ENV_FILE, ...) is an `override`.
  */
 function snippetEnv(overrides = {}) {
-  const { HOME, PATH, ...rest } = overrides;
-  return isolatedEnv({ home: HOME ?? SNIPPET_HOME, path: PATH, override: rest });
+  const { home, path: pathValue, ...rest } = overrides;
+  return isolatedEnv({ home: home ?? SNIPPET_HOME, path: pathValue, override: rest });
 }
 
 /**
@@ -494,7 +494,7 @@ describe('runtime-launcher-parity (#373)', () => {
       // Loud-guard requires every runtime-home arm to genuinely miss, not
       // just PATH (#4205 class: an ambient config-dir var pointing at a
       // real install would resolve here instead of the hard error).
-      env: snippetEnv({ PATH: isolatedBinPath, HOME: base }),
+      env: snippetEnv({ path: isolatedBinPath, home: base }),
     });
     const threw = r.exitCode !== 0;
     const stderrOutput = r.stderr || '';
@@ -561,8 +561,8 @@ describe('runtime-launcher-parity (#373)', () => {
 
     const stdout = runBashFile(scriptPath, {
       env: {
-        PATH: `${pathBinDir}${path.delimiter}${process.env.PATH || ''}`,
-        HOME: emptyHome,
+        path: `${pathBinDir}${path.delimiter}${process.env.PATH || ''}`,
+        home: emptyHome,
       },
     });
 
@@ -620,7 +620,7 @@ describe('runtime-launcher-parity (#373)', () => {
     const testPath = [foreignBin, isolatedBinPath].join(path.delimiter);
 
     const stdout = runBashFile(scriptPath, {
-      env: { PATH: testPath, HOME: fakeHome },
+      env: { path: testPath, home: fakeHome },
     });
 
     const normStdout = stdout.replace(/\\/g, '/');
@@ -697,7 +697,7 @@ describe('runtime-launcher-parity (#373)', () => {
       const testPath = [foreignBin, isolatedBinPath].join(path.delimiter);
       return runHookSeam(scriptPath, [], {
         interpreter: 'bash',
-        env: snippetEnv({ PATH: testPath, HOME: fakeHome }),
+        env: snippetEnv({ path: testPath, home: fakeHome }),
       });
     };
 
@@ -748,7 +748,7 @@ describe('runtime-launcher-parity (#373)', () => {
 
     const r = runHookSeam(scriptPath, [], {
       interpreter: 'bash',
-      env: snippetEnv({ PATH: testPath, HOME: fakeHome }),
+      env: snippetEnv({ path: testPath, home: fakeHome }),
     });
 
     assert.ok(r.exitCode !== 0, 'Expected non-zero exit when only a foreign gsd_run resolves and no local install exists');
@@ -797,7 +797,7 @@ describe('runtime-launcher-parity (#373)', () => {
     const testPath = [pathBinDir, isolatedBinPath].join(path.delimiter);
 
     const stdout = runBashFile(scriptPath, {
-      env: { PATH: testPath, HOME: fakeHome },
+      env: { path: testPath, home: fakeHome },
     });
 
     const normStdout = stdout.replace(/\\/g, '/');
@@ -1004,7 +1004,7 @@ describe('runtime-launcher-parity (#373)', () => {
       // bug, this time via config-dir vars rather than PATH). snippetEnv()'s
       // derived testEnvBase() clears all four, so only HOME's default
       // $HOME/.codex fallback can win.
-      env: { PATH: isolatedBinPath, HOME: fakeHome },
+      env: { path: isolatedBinPath, home: fakeHome },
     });
 
     const normStdout = stdout.replace(/\\/g, '/');
@@ -1022,7 +1022,7 @@ describe('runtime-launcher-parity (#373)', () => {
   //
   // Regression for the #3841 red matrix run. The preamble is inlined into 112
   // shipped files, and several downstream guards balance braces by scanning raw
-  // TEXT with no string-context awareness — tests/new-project-mvp-prompt.test.cjs's
+  // TEXT with no string-context awareness — the new-project-mvp-prompt text contract's
   // "balanced braces" guard (mirroring #3784 bd53925f) counts every `{` and `}`
   // across new-project.md plus its steps/. new-project.md and
   // new-project/steps/auto-mode-config.md each carry one preamble copy, so a
@@ -1048,7 +1048,7 @@ describe('runtime-launcher-parity (#373)', () => {
       0,
       `_runtime-launcher.snippet.sh has unbalanced braces: net depth ${depth}. ` +
         `The preamble is inlined into 112 shipped files, and downstream guards ` +
-        `(tests/new-project-mvp-prompt.test.cjs) balance braces over raw text with no ` +
+        `(the new-project-mvp-prompt text contract) balance braces over raw text with no ` +
         `awareness of shell quoting — an unpaired brace here fails there instead, ` +
         `multiplied by the number of inlined copies in the scanned file set. ` +
         `Pair the brace in the snippet; do not relax the downstream guard.`,
@@ -1376,7 +1376,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
     const stdout = runBashFile(scriptPath, {
       // Ambient CLAUDE_CONFIG_DIR would override the $HOME/.claude default
       // this test relies on (#4205 class: env-leak, not PATH-leak).
-      env: { PATH: isolatedBinPath, HOME: fakeHome },
+      env: { path: isolatedBinPath, home: fakeHome },
     });
 
     // GSD_TOOLS must point into the fake ~/.claude dir
@@ -1419,7 +1419,7 @@ describe('bug-211: launcher ~/.claude home fallback', () => {
       // "All three miss" requires every runtime-home arm to genuinely miss,
       // not just the first (#4205 class: an ambient config-dir var pointing
       // at a real install would resolve here instead of the hard error).
-      env: snippetEnv({ PATH: isolatedBinPath, HOME: fakeHome }),
+      env: snippetEnv({ path: isolatedBinPath, home: fakeHome }),
     });
     const threw = r.exitCode !== 0;
     const stderrOutput = r.stderr || '';
@@ -1644,7 +1644,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
     fs.writeFileSync(scriptPath, scriptContent);
 
     const stdout = runBashFile(scriptPath, {
-      env: { PATH: isolatedBinPath, HOME: fakeHome, HERMES_HOME: fakeHermesHome },
+      env: { path: isolatedBinPath, home: fakeHome, HERMES_HOME: fakeHermesHome },
     });
 
     const normStdout = stdout.replace(/\\/g, '/');
@@ -1710,7 +1710,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
       // (#4205 class, env vector); script-level `unset HERMES_HOME` above
       // already handles that var, and snippetEnv()'s derived testEnvBase()
       // clears CLAUDE_CONFIG_DIR before bash ever sees it.
-      env: { PATH: isolatedBinPath, HOME: fakeHome },
+      env: { path: isolatedBinPath, home: fakeHome },
     });
 
     const normStdout = stdout.replace(/\\/g, '/');
@@ -1897,10 +1897,10 @@ function runResolver({ cwd, runtimeDir, pathDir, home }) {
   ].join('\n');
 
   const envOverrides = {
-    PATH: `${pathDir}${path.delimiter}${process.env.PATH || ''}`,
+    path: `${pathDir}${path.delimiter}${process.env.PATH || ''}`,
     RUNTIME_DIR: runtimeDir,
   };
-  if (home !== undefined) envOverrides.HOME = home;
+  if (home !== undefined) envOverrides.home = home;
   const r = runHookSeam('-c', [script], {
     interpreter: 'bash',
     cwd,
@@ -2122,7 +2122,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
     const isolatedBinPath = leanPath;
 
     const stdout = runBashFile(scriptPath, {
-      env: { PATH: isolatedBinPath, HOME: fakeHome },
+      env: { path: isolatedBinPath, home: fakeHome },
     });
 
     // Must have resolved to the local .claude stub
@@ -2182,7 +2182,7 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
     const isolatedBinPath = leanPath;
 
     const stdout = runBashFile(scriptPath, {
-      env: { PATH: isolatedBinPath, HOME: fakeHome },
+      env: { path: isolatedBinPath, home: fakeHome },
     });
 
     assert.ok(

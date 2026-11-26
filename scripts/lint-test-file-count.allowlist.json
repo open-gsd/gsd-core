@@ -1,15 +1,6 @@
 {
   "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
-    "ui-consideration-probe": {
-      "files": [
-        "ui-consideration-probe-docs-fixtures.test.cjs",
-        "ui-consideration-probe-ui-phase-contract.test.cjs",
-        "ui-consideration-probe.test.cjs"
-      ],
-      "issue": "4657",
-      "justification": "The ui-consideration-probe cluster gains its workflow-prose contract file (tests/ui-consideration-probe-ui-phase-contract.test.cjs, #4657), mirroring the edge probe's split (edge-probe.test.cjs / edge-probe-docs-fixtures.test.cjs / edge-probe-spec-phase-contract.test.cjs). The contract file reads shipped gsd-core/workflows/ui-phase.md under the source-text-is-the-product exception, which the unit file deliberately does not carry (it asserts typed returns only)."
-    },
     "adr-parser": {
       "files": [
         "adr-parser.property.test.cjs",
@@ -24,7 +15,6 @@
         "config-defaults-runtime-exclusion.test.cjs",
         "config-field-docs.test.cjs",
         "config-get-default.test.cjs",
-        "config-get-raw-guard.test.cjs",
         "config-validation.test.cjs",
         "config.test.cjs"
       ],
@@ -64,7 +54,6 @@
     },
     "init": {
       "files": [
-        "init-debug-workflow-contract.test.cjs",
         "init-debug.test.cjs",
         "init-manager.test.cjs",
         "init.test.cjs"
@@ -147,7 +136,6 @@
         "verify-archive-dirs-live-path.test.cjs",
         "verify-health.test.cjs",
         "verify-lifecycle-writes-e2e.test.cjs",
-        "verify-mvp-uat.test.cjs",
         "verify-npm-publish.test.cjs",
         "verify-test-quality.test.cjs",
         "verify-work-auto-transition.test.cjs",
@@ -171,15 +159,6 @@
       ],
       "issue": "#3798 — the profile-closure spawn test reads the real repo surface (commands+workflows+agents); consolidating it into install.test.cjs would put a whole-repo scan behind the suite's heaviest file"
     },
-    "edge-probe": {
-      "files": [
-        "edge-probe-docs-fixtures.test.cjs",
-        "edge-probe-planner-contract.test.cjs",
-        "edge-probe-spec-phase-contract.test.cjs",
-        "edge-probe.test.cjs"
-      ],
-      "issue": "550"
-    },
     "federated-config": {
       "files": [
         "federated-config.test.cjs",
@@ -192,9 +171,11 @@
       "files": [
         "host-integration.test.cjs",
         "host-integration-validator-parity.test.cjs",
-        "host-integration-descriptors.test.cjs"
+        "host-integration-descriptors.test.cjs",
+        "host-integration-validator-parity.process.test.cjs"
       ],
-      "issue": "1684"
+      "issue": "1684",
+      "justification": "ADR-6315 item 15 (#6333): runGsdTools runs in the test's process and refuses a per-call NODE_OPTIONS preload, so the #4561 stale-lib case, which needs a process that loads gsd-tools fresh, is a separate .process.test.cjs file (TESTING-STANDARDS.md, tests rule 2)."
     },
     "prompt-budget": {
       "files": [
@@ -264,7 +245,6 @@
       "files": [
         "docs-hooks-table-parity.test.cjs",
         "docs-parity-live-registry.test.cjs",
-        "docs-state-md-locale-parity.test.cjs",
         "docs-update.test.cjs"
       ],
       "issue": "3873 | #3839 — the hook-event parity suite cross-checks the four docs hook tables against src/runtime-hooks-surface.cts registrations; a generated-docs concern distinct from content freshness and registry parity",
@@ -273,8 +253,6 @@
     "audit": {
       "files": [
         "audit-command-cutover.test.cjs",
-        "audit-fix-command.test.cjs",
-        "audit-milestone-filename-guard.test.cjs",
         "audit-open-remainder-count.test.cjs",
         "audit-uat-acknowledged.test.cjs",
         "audit-uat-summary-segmentation.test.cjs",
@@ -289,24 +267,6 @@
         "shell-command-projection-path-sep.test.cjs"
       ],
       "issue": "#3854 — the tight-list suite pins the markdown write-normalizer's blank-line policy through the exported normalizeContent/platformWriteSync seam; a distinct concern from dispatch routing and path separation"
-    },
-    "ui-consideration-probe": {
-      "files": [
-        "ui-consideration-probe-docs-fixtures.test.cjs",
-        "ui-consideration-probe-ui-phase-contract.test.cjs",
-        "ui-consideration-probe.test.cjs"
-      ],
-      "issue": "4657",
-      "justification": "The ui-consideration-probe cluster gains its workflow-prose contract file (tests/ui-consideration-probe-ui-phase-contract.test.cjs, #4657), mirroring the edge probe's split (edge-probe.test.cjs / edge-probe-docs-fixtures.test.cjs / edge-probe-spec-phase-contract.test.cjs). The contract file reads shipped gsd-core/workflows/ui-phase.md under the source-text-is-the-product exception, which the unit file deliberately does not carry (it asserts typed returns only)."
-    },
-    "verification": {
-      "files": [
-        "verification-append-audit.test.cjs",
-        "verification-overrides.test.cjs",
-        "verification-status.test.cjs"
-      ],
-      "issue": "5105",
-      "justification": "#5105 (Phase 3 of #5056) adds verification-append-audit.test.cjs for the new `verification.append-audit` verb (deny-by-default audit-block append/no-op, #4887) — a distinct concern from verification-status.test.cjs's status/fingerprint suite and verification-overrides.test.cjs's override handling."
     }
   }
 }

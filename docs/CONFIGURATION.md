@@ -158,6 +158,26 @@ replaced your entire configuration with built-in defaults, and nothing said so (
 
 The warning is printed once per file per run, so a repeated command will not spam it.
 
+A section that is present but is not an object (for example, `"git": null`) is an explicit
+inheritance barrier. GSD does not silently recreate that section's flattened values from lower
+files or built-in defaults. This applies to project and global-defaults loading. The planner
+watchdog is the fail-safe exception: `"planner": null` still leaves
+`planner_stall_detection_enabled` enabled, while the raw per-key resolver reports
+`planner.stall_detection_enabled` as not configured.
+
+An explicit `workflow: null` removes every `workflow.*` default, including research,
+plan-checker, verifier, Nyquist validation, TDD, subagent timeout and the security settings
+`security_enforcement`, `security_asvs_level` and `security_block_on`. Init payloads report
+absent gate flags as `false`. An explicit `review: null`
+removes the prompt-budget default, so reviewer lanes run without default prompt trimming.
+Use an object with explicit settings when those safeguards should remain enabled.
+
+An explicit `planning: null` removes planning defaults, including `commit_docs`, so planning commits are skipped unless a flat `commit_docs: true` in the effective config (the root file merged with the active workstream file) explicitly enables them. An explicit `git: null` removes inherited/default branching strategy, base branch and branch templates. Explicit flat keys in that effective config retain precedence over their blocked nested aliases, including a flat `max_prompt_tokens` under `review: null`. Only a flat key the loader actually reads keeps its value: a top-level `repo_tagging` or `tdd_mode` is not read, so it does not keep the projection that `git: null` or `workflow: null` removes.
+
+A workstream section that is an object replaces a non-object section in the root file, the way the loader merges the two files. With root `"workflow": null` and workstream `"workflow": {}`, `workflow.*` defaults apply. The reverse (root object, workstream `"workflow": null`) still blocks them.
+
+`parallelization` is outside this barrier. Its flat spelling is a legitimate boolean (`"parallelization": true`), so `"parallelization": null` falls back to the default for the assembled config, while the per-key resolver reports `parallelization.enabled` as not configured in every state, because it is not an eligible resolver key.
+
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
 
@@ -256,6 +276,7 @@ derived from the shipped agent declaration.
 | `ref_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Ref search API availability. When unset, GSD checks for `REF_API_KEY` env var or `$GSD_HOME/.gsd/ref_api_key` file |
 | `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `$GSD_HOME/.gsd/perplexity_api_key` file |
 | `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `$GSD_HOME/.gsd/jina_api_key` file when an explicit override is needed |
+| `serply_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Serply search availability. When unset, GSD checks for `SERPLY_API_KEY` env var or `$GSD_HOME/.gsd/serply_api_key` file. Off unless a key is present or you set it to `true`, so nothing is sent to Serply by default. Research calls go through the Serply MCP server registered as `serply` (`mcp__serply__google_search`; [setup](https://github.com/serply-inc/mcp)) |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
 ### Custom phase directories
@@ -323,6 +344,7 @@ API key fields accept a string value (the key itself). They can also be set to t
 | `ref_search` | string \| boolean \| null | `null` | Ref search API key used in the docs-discovery waterfall. Masked in display |
 | `perplexity` | string \| boolean \| null | `null` | Perplexity API key used in the web-discovery waterfall. Masked in display |
 | `jina` | string \| boolean \| null | `null` | Jina API key (docs / scrape fallback). Masked in display |
+| `serply_search` | string \| boolean \| null | `null` | Serply API key used in the web-discovery waterfall |
 
 **Masking convention (`gsd-core/bin/lib/secrets.cjs`):** keys 8+ characters render as `****<last-4>`; shorter keys render as `****`; `null`/empty renders as `(unset)`. Plaintext is written as-is to `.planning/config.json` — that file is the security boundary — but the CLI, confirmation tables, logs, and `AskUserQuestion` descriptions never display the plaintext. This applies to the `config-set` command output itself: `config-set brave_search <key>` returns a JSON payload with the value masked.
 
@@ -631,6 +653,8 @@ gsd-tools query inspect-dispatch-isolation --json
 ```
 
 (`inspect-dispatch-isolation` is the read-only form. The `dispatch-isolation` query is the executor-dispatch resolver: it records its decision to the isolation sentinel as a deliberate side effect, so it is not an inspection command.)
+
+A dispatch step that degrades to sequential execution records `none` with `--force-isolation none`. For ten minutes after that, a plain `dispatch-isolation` query holds the recorded decision and answers `none`, not your runtime's capability, when each non-empty `--phase` or `--plan` it passes equals the one the record carries; an empty value, which the workflows pass when no phase is set, counts as not passed. A query that passes neither holds the record whatever scope it carries; a query that passes a phase or plan the record does not carry, including against a record that carries none, is not held. Its `--json` form marks that answer `held: true` with `decidedAt`, the epoch ms the held decision was made, and gives `held: false` and `decidedAt: null` whenever it is not holding. `inspect-dispatch-isolation` is never held, so read it, not `dispatch-isolation`, when a script needs the runtime's own capability. The ten minutes run from when the degrade was decided: a dispatch step that re-records a held `none` passes that answer's `decidedAt` back as `--renew-held <decidedAt>`, which the record keeps as its `decided_at` field, so following a hold does not extend it. A step that decides a sequential degrade itself (an `execute-plan` Pattern B segment run, the gate's orchestrator-worktree fallback) records a new `none` with its own ten minutes, so such steps run less than ten minutes apart keep a query that names no phase or plan answering `none`. With parallel orchestrators, a query that passes a phase reads that phase's own records under `.gsd/dispatch-isolation/`, so another orchestrator's later write does not end its hold. A query that passes neither reads only the last-written record, so it can hold another orchestrator's `none` and run sequentially for the rest of that record's ten minutes. The isolation guard has a longer window of its own: it keeps honouring a recorded `none` for its own phase for up to 24 hours.
 
 ## Code Quality Settings
 
@@ -1127,6 +1151,8 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 ### MemPalace Settings
 
 MemPalace is an opt-in, default-resilient memory capability. Every hook is `onError: skip` — a missing or unreachable MemPalace installation never halts or fails the loop. Enable with `mempalace.enabled: true` after installing MemPalace (`pip install mempalace`).
+
+The shipped `gsd-mempalace-curator` agent carries the tool grant `mcp__mempalace__*`: MemPalace's MCP server registers under the name `mempalace`, and the grant follows that registration, so on tool-allowlist runtimes the curator can call the `mempalace_*` MCP tools its instructions name. When the server is unreachable the agent falls back to the `mempalace` CLI, and every capability hook stays `onError: skip` — a missing MemPalace never fails `ship:post`. The `agent_tools` override path (above) keeps working for per-host adjustments.
 
 `mempalace.enabled` is the **master gate**: all five loop hooks (discuss, plan, execute-wave, verify, ship) and both curator contributions are gated on this key. When it is `false` (the default), nothing fires and the GSD loop is byte-for-byte unchanged. The remaining keys only refine behavior when `mempalace.enabled` is `true`; they are honored at runtime by the skills, curator, and fragments — they do not add independent hook gating.
 
@@ -1704,6 +1730,60 @@ into each agent's static config at install time — `spawn_agent` and
 OpenCode's `task` interface do not accept an inline `model` parameter, so
 running `gsd install <runtime>` after editing `model_overrides` is required
 for the change to take effect. See issue #2256.
+
+#### Runtime-keyed entries (one config, two hosts)
+
+`.planning/config.json` is committed, so it is the same file for every host working the repository. A per-agent model id is a claim only one runtime can be right about: a Codex id handed to Claude Code fails at spawn, not at resolution. An entry may therefore be an object keyed by runtime, the same shape `model_profile_overrides.<runtime>.<tier>` uses ([#4669](https://github.com/open-gsd/gsd-core/issues/4669)):
+
+```json
+{
+  "model_overrides": {
+    "gsd-planner":  { "claude": "opus", "codex": "gpt-6-astra" },
+    "gsd-debugger": { "codex": "gpt-6-astra" },
+    "gsd-verifier": "gpt-5.6-sol"
+  }
+}
+```
+
+| Entry | Result for the runtime that is resolving or being installed |
+|---|---|
+| a string | That string, on every runtime. Unchanged from before. |
+| an object with a non-empty string under the runtime's key | That value. On Claude it is mapped exactly like the string form (full Claude ids collapse to a tier alias, `fable` passes through). |
+| an object with no key for the runtime, or an unusable value under it (empty string, number, `null`, object, array) | No override for this agent on this runtime. It resolves by tier, exactly as if it had no entry. Above, `gsd-debugger` keeps its Codex pin and routes by tier on Claude. |
+
+The runtime that selects the key is the one that is actually resolving, in the order `GSD_RUNTIME`, then the `runtime` config key, then the per-install marker, then `claude`. It is not the raw `runtime` key alone, which is usually absent. At install time (`gsd install <runtime>`) the key is the runtime being installed, so the same file bakes a Codex id into the Codex agent files and an OpenCode id into the OpenCode ones. Keys are the exact runtime ids (`claude`, `codex`, `opencode`, `kilo`, ...), compared case-sensitively.
+
+Global and project files merge per runtime key: a project object replaces a global string, a project string replaces a global object, and two objects merge key by key with the project winning a conflict. Set an object with `config-set model_overrides.<agent> '{"codex":"gpt-6-astra"}'`. A per-runtime dotted path such as `model_overrides.<agent>.codex` is not an addressable key, so write the whole object. A runtime whose dispatch surface cannot carry a per-agent model at all ignores the entry; that is a no-op, not an error.
+
+#### TDD gate models (`<executor>:tdd-red`, `<executor>:tdd-green-refactor`)
+
+A `type: tdd` plan normally runs RED, GREEN and REFACTOR in one executor dispatch on one model. Two optional `model_overrides` keys give the RED gate and the GREEN/REFACTOR gates their own models ([#4696](https://github.com/open-gsd/gsd-core/issues/4696)):
+
+```json
+{
+  "workflow": { "tdd_mode": true },
+  "model_overrides": {
+    "gsd-executor:tdd-red": "opus",
+    "gsd-executor": "sonnet"
+  }
+}
+```
+
+| Key | Gate it governs | When unset |
+|---|---|---|
+| `<executor-type>:tdd-red` | The RED dispatch: the failing test and its RED evidence | The routed executor's own model |
+| `<executor-type>:tdd-green-refactor` | The GREEN/REFACTOR dispatch | The routed executor's own model |
+
+`<executor-type>` is `gsd-executor`, or the specialist a plan names with `agent_hint`. Each entry takes every form an agent entry takes: a model string, or an object keyed by runtime. A blank string, a non-string value, or an object without the active runtime's key counts as no entry, so that gate uses the routed executor's own model. `inherit` is a real value: that gate runs on the session's model.
+
+`execute-phase` splits a plan into a RED dispatch and a GREEN/REFACTOR dispatch only when all of these hold:
+
+- `workflow.tdd_mode` is `true`
+- the plan's frontmatter says `type: tdd`
+- the two gate models resolve to different models (`inherit` and an empty model count as the same)
+- the plan declares no `executor_runtime`, and the phase does not use the `orchestrator-worktree` backend
+
+With neither key set the two models are equal and dispatch is unchanged. A split plan runs in the orchestrator's own working tree in sequential mode, one dispatch after the other, instead of in a worktree, so that GREEN starts from the RED commit. Like any sequential-mode plan it is serialized against the other plans of its wave. Reasoning effort is not switched per gate: effort still comes from the agent's own configuration. See [How to run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md).
 
 ### Per-Phase-Type Models (`models`) — added in v1.41
 
@@ -2459,21 +2539,22 @@ When `/gsd-new-project` creates a new `config.json`, it reads global defaults an
 
 ### What a global file can and cannot set at runtime
 
-Two different rules apply, and the difference is deliberate ([#3532](https://github.com/open-gsd/gsd-core/issues/3532)):
+The global file is the lowest file layer of the precedence ladder, and it merges **per key** ([#4071](https://github.com/open-gsd/gsd-core/issues/4071)):
 
 - **In a directory with no `.planning/` at all**, `$GSD_HOME/.gsd/defaults.json` is the active
   configuration — model resolution reads it directly. A setting with a legacy flat spelling
   (`research` for `workflow.research`, `commit_docs` for `planning.commit_docs`) is read under
   either spelling there, flat first, as in a project config (#5681).
-- **In a real project (`.planning/config.json` present, even if empty)**, the global file is
-  **not read for model resolution** — every model-side key it sets (`model_profile`,
-  `model_overrides`, `models`, `dynamic_routing`, `runtime`, and the rest of the resolution
-  set) is inert there. GSD prints a one-time stderr warning naming the shadowed keys when it
-  detects this, instead of failing silently. To apply a global model setting to a project,
-  put it in that project's `.planning/config.json`.
-- **`effort` is the exception**: the install-time effort channel always merges
-  the global defaults store with the project config (that is how `effort sync` works), so a
-  global `effort` block keeps working in projects and does not trigger the warning.
+- **In a real project (`.planning/config.json` present, even if empty)**, each key the global file
+  sets is honored unless the project config sets that key itself. A key the project sets wins on
+  collision; an object such as `effort` or `model_overrides` merges field by field; a project
+  section that is present but not an object (`null`, a string) still blocks the global value
+  beneath it. The keys covered are the model-resolution set (`model_profile`, `model_overrides`,
+  `models`, `dynamic_routing`, `granularity`, `effort`, and the rest of that set). `runtime` is the
+  exception: the installer stamps it with whichever runtime installed first, so it names an
+  install and never fills in under a project.
+- **The install-time effort, model and tool channels** (`effort sync`, the agent installers) merge the
+  global defaults store with the project config in the same way, per key.
 - **The whole `git.*` namespace is project-scoped and never resolves from the global file**,
   in either directory shape — not `git.base_branch`, not `git.protected_branches`, not
   `git.allow_default_branch_commits`, not
@@ -2481,8 +2562,7 @@ Two different rules apply, and the difference is deliberate ([#3532](https://git
   repository, not of the machine, so it is read only from that project's
   `.planning/config.json`. A `git` block in `$GSD_HOME/.gsd/defaults.json` still seeds new projects
   (`/gsd-new-project` copies globals into the new `config.json`), but it never takes effect
-  at runtime on its own. It is outside the shadowed-key warning above, which covers the
-  model-resolution set only.
+  at runtime on its own. It is outside the model-resolution set above.
 
 ---
 

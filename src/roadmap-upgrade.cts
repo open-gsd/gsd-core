@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, retryRenameSync } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync, toPosixPath } from './shell-command-projection.cjs';
 import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
@@ -36,8 +36,12 @@ import markdownSectionizerMod = require('./markdown-sectionizer.cjs');
 import planScanMod = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id-display.cjs is an export= CommonJS module (#4751)
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
 import { parsePlanningDoc, replaceProse } from './planning-document.cjs';
+import { splitLines } from './text-lines.cjs';
 const { planningDir } = planningWorkspace;
+const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
 // #4698 Blocker 1 (round 2): reuse the shared frontmatter reader/writer
@@ -289,11 +293,22 @@ interface CrossRefEdit {
   to: string;
 }
 
+/**
+ * #4751: a STATE.md / PROJECT.md reference the bracket migration did not rewrite, and why. `from` is the label
+ * as written (absent when the whole file was skipped). Populated only by the bracket target.
+ */
+interface CrossRefSkip {
+  file: string;
+  from?: string;
+  reason: 'ambiguous-milestone' | 'file-unreadable';
+}
+
 interface MigrationPlan {
   alreadyMigrated: boolean;
   phases: PhaseRename[];
   roadmapEdits: RoadmapEdit[];
   crossRefEdits: CrossRefEdit[];
+  crossRefSkipped?: CrossRefSkip[];
   targetConvention?: 'milestone-prefixed' | 'bracket';
 }
 
@@ -1110,6 +1125,106 @@ function buildBracketDirName(
   }
 }
 
+// ─── Bracket cross-reference labels in STATE.md / PROJECT.md (#4751) ──────────
+
+const CROSS_REF_FILES = ['STATE.md', 'PROJECT.md'] as const;
+
+type CrossRefDocument = { state: 'absent' } | { state: 'unreadable' } | { state: 'ok'; content: string };
+
+// `Phase <token>:` with the token spelled as an M-NN or a legacy phase number (both from their grammar owners). Only the
+// capitalized word is a label; the case-insensitive flag exists for a lowercase token suffix, checked by the caller.
+const CROSS_REF_LABEL_RE = new RegExp(
+  `(?<![A-Za-z0-9_])Phase[ \\t]+(${MNN_SOURCE_TOKEN_SOURCE}|${PHASE_NUMBER_TOKEN_SOURCE}):`,
+  'gi',
+);
+
+/**
+ * Read one cross-reference file without ever blocking on it: only a regular file is read, so a FIFO or device
+ * named STATE.md cannot hang the planner. Absent (no such file) is not a failure; anything else unreadable is.
+ */
+function readCrossRefDocument(filePath: string): CrossRefDocument {
+  try {
+    if (!fs.statSync(filePath).isFile()) return { state: 'unreadable' };
+    return { state: 'ok', content: fs.readFileSync(filePath, 'utf8') };
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
+  }
+}
+
+/**
+ * The identity a source token answers to, for a mapping's heading token and a label's prose token alike so the two
+ * cannot drift: a hyphenated token is M-NN (compared by integer segments), anything else is a legacy number.
+ */
+function crossRefKey(token: string): string {
+  return token.includes('-')
+    ? `mnn:${token.split('-').map((segment) => parseInt(segment, 10)).join('-')}`
+    : `legacy:${legacyLookupKey(token)}`;
+}
+
+/**
+ * #4751: the `Phase N:` labels in STATE.md and PROJECT.md that the bracket migration rewrites, each rendered through the
+ * canonical display (`[CODE.MM] NN:`, the shape the migrated ROADMAP heading has). A label is resolved through the
+ * planner's own mapping, never through a guessed milestone: a label whose number is carried by more than one phase
+ * (restarted numbering across milestones) is reported in `crossRefSkipped` and left byte-intact; a label no roadmap
+ * phase answers to is left alone. Only the exact `Phase <token>:` spelling is a label, matching the milestone-prefixed path.
+ */
+function computeBracketCrossRefs(
+  pDir: string,
+  projectCode: string,
+  mappings: BracketMapping[],
+): { crossRefEdits: CrossRefEdit[]; crossRefSkipped: CrossRefSkip[] } {
+  const crossRefEdits: CrossRefEdit[] = [];
+  const crossRefSkipped: CrossRefSkip[] = [];
+
+  const byKey = new Map<string, BracketMapping[]>();
+  for (const mapping of mappings) {
+    const key = crossRefKey(mapping.sourceToken);
+    byKey.set(key, [...(byKey.get(key) ?? []), mapping]);
+  }
+
+  for (const file of CROSS_REF_FILES) {
+    const doc = readCrossRefDocument(path.join(pDir, file));
+    if (doc.state === 'absent') continue;
+    // A file the apply could not rewrite is reported now: `applyMigration` runs the same parse and would otherwise
+    // throw and roll everything back after a dry-run that looked clean.
+    if (doc.state === 'unreadable' || !parsePlanningDoc(doc.content, file).ok) {
+      crossRefSkipped.push({ file, reason: 'file-unreadable' });
+      continue;
+    }
+
+    // Fenced lines are never rewritten, so they are neither scanned for labels nor reported as ambiguous.
+    const lines = splitLines(doc.content);
+    const fenced = fencedLineIndices(lines);
+    const prose = lines.filter((_, index) => !fenced.has(index)).join('\n');
+    const seen = new Set<string>();
+    for (const match of prose.matchAll(CROSS_REF_LABEL_RE)) {
+      const label = match[0];
+      // Only the capitalized word is a label; `phase 3:` in prose is left alone.
+      if (!label.startsWith('Phase') || seen.has(label)) continue;
+      seen.add(label);
+
+      const candidates = byKey.get(crossRefKey(match[1])) ?? [];
+      if (candidates.length === 0) continue;
+      if (candidates.length > 1) {
+        crossRefSkipped.push({ file, from: label, reason: 'ambiguous-milestone' });
+        continue;
+      }
+      const display = renderBracketPhaseDisplay(candidates[0].milestoneInt, candidates[0].token, projectCode);
+      if (display === null) {
+        // The planner has already validated this identity (project code, milestone and token) for the heading it
+        // rewrites, so a null here is a broken invariant. Refuse before any write rather than skip it silently.
+        throw new Error(
+          `Cannot render the bracket identity for ${JSON.stringify(label)} in ${file}: `
+          + `milestone ${candidates[0].milestoneInt}, token ${JSON.stringify(candidates[0].token)}.`,
+        );
+      }
+      crossRefEdits.push({ file, from: label, to: `${display}:` });
+    }
+  }
+
+  return { crossRefEdits, crossRefSkipped };
+}
+
 function computeBracketPlan(cwd: string): MigrationPlan {
   const pDir = planningDir(cwd);
   const roadmapPath = path.join(pDir, 'ROADMAP.md');
@@ -1120,6 +1235,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     phases: [],
     roadmapEdits: [],
     crossRefEdits: [],
+    crossRefSkipped: [],
     targetConvention: 'bracket',
   };
 
@@ -1897,16 +2013,16 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     });
   }
 
-  // Bare STATE.md / PROJECT.md `Phase N` prose carries no milestone context in
-  // multi-milestone repositories. That emit concern remains deferred; guessing
-  // here would recreate the ambiguity this migration removes.
-  const crossRefEdits: CrossRefEdit[] = [];
+  // Bare STATE.md / PROJECT.md `Phase N:` prose carries no milestone context of its own, so each label is resolved
+  // only through the mapping this planner just computed, and only when exactly one phase answers to it (#4751).
+  const { crossRefEdits, crossRefSkipped } = computeBracketCrossRefs(pDir, code, [...idMapping.values()]);
 
   return {
     alreadyMigrated: false,
     phases,
     roadmapEdits,
     crossRefEdits,
+    crossRefSkipped,
     targetConvention: 'bracket',
   };
 }
@@ -2333,6 +2449,12 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // `.planning/` is git-tracked or ignored.
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
   const fileBackups = new Map<string, { existed: boolean; content: string }>();
+  // #6351: what the migration itself wrote to each snapshotted file (keyed like `fileBackups`). Rollback restores a
+  // file only while it still holds that; a file another writer changed since is left as found and reported.
+  const migrationWrote = new Map<string, string>();
+  // The files whose migration write has begun and not yet completed. A write that fails partway leaves a torn file
+  // that is the migration's own doing, not another writer's, so rollback restores such a path unconditionally.
+  const writeInFlight = new Set<string>();
   const snapshotFile = (filePath: string): void => {
     if (fileBackups.has(filePath)) return;
     try {
@@ -2401,7 +2523,10 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
             if (!fileBackups.has(originalPath)) {
               fileBackups.set(originalPath, { existed: true, content: rewrite.from });
             }
+            writeInFlight.add(originalPath);
             fs.writeFileSync(currentPath, rewrite.to, 'utf8');
+            writeInFlight.delete(originalPath);
+            migrationWrote.set(originalPath, rewrite.to);
             editedFiles.push(path.join('phases', phaseEntry.newDir, rewrite.finalName));
           }
         }
@@ -2414,7 +2539,10 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       const newRoadmapContent = rewriteRoadmapLines(roadmapContent, plan.roadmapEdits);
 
       snapshotFile(roadmapPath);
+      writeInFlight.add(roadmapPath);
       fs.writeFileSync(roadmapPath, newRoadmapContent, 'utf8');
+      writeInFlight.delete(roadmapPath);
+      migrationWrote.set(roadmapPath, newRoadmapContent);
       editedFiles.push('ROADMAP.md');
     }
 
@@ -2432,7 +2560,10 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       const rewritten = substituteCrossRefs(original, 'PROJECT.md', projectEdits);
       if (rewritten !== original) {
         snapshotFile(projectPath);
+        writeInFlight.add(projectPath);
         fs.writeFileSync(projectPath, rewritten, 'utf8');
+        writeInFlight.delete(projectPath);
+        migrationWrote.set(projectPath, rewritten);
         editedFiles.push('PROJECT.md');
       }
     }
@@ -2443,12 +2574,16 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       const original = fs.readFileSync(stateMdPath, 'utf8');
       if (substituteCrossRefs(original, 'STATE.md', stateEdits) !== original) {
         snapshotFile(stateMdPath);
+        writeInFlight.add(stateMdPath);
         readModifyWriteStateMd(
           stateMdPath,
           (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
           cwd,
           { resync: false },
         );
+        writeInFlight.delete(stateMdPath);
+        // The seam normalises what it writes, so the file is read back to learn what the migration left there.
+        migrationWrote.set(stateMdPath, fs.readFileSync(stateMdPath, 'utf8'));
         editedFiles.push('STATE.md');
       }
     }
@@ -2486,8 +2621,12 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
 
       configData['phase_id_convention'] = plan.targetConvention ?? 'milestone-prefixed';
       snapshotFile(configPath);
+      const configText = JSON.stringify(configData, null, 2) + '\n';
+      writeInFlight.add(configPath);
       try {
-        fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
+        fs.writeFileSync(configPath, configText, 'utf8');
+        writeInFlight.delete(configPath);
+        migrationWrote.set(configPath, configText);
       } catch (err) {
         throw new Error(`config.json write phase failed: ${(err as Error).message}`);
       }
@@ -2499,19 +2638,48 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // file we snapshotted (deleting files that did not previously exist). This
     // actually restores `.planning/` regardless of git tracking — so the
     // "rolled back" claim is truthful — and never touches anything else.
+    const notReversed: string[] = [];
     for (let i = performedRenames.length - 1; i >= 0; i--) {
       const { oldPath, newPath } = performedRenames[i];
       try {
         if (fs.existsSync(newPath)) retryRenameSync(newPath, oldPath);
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+        notReversed.push(toPosixPath(path.relative(pDir, newPath)));
+      }
     }
+    // #6351: a file is restored only while it still holds what the migration wrote, was torn by the migration's own
+    // failed write, or is already back at its snapshot (which needs no write). Anything else was changed by another
+    // writer after the migration touched it: overwriting it with the snapshot would silently destroy that edit, so it
+    // is left as found and named below.
+    const notRestored: string[] = [];
     for (const [filePath, backup] of fileBackups) {
       try {
+        let current: string | null = null;
+        let readFailure: string | null = null;
+        try {
+          current = fs.readFileSync(filePath, 'utf8');
+        } catch (readErr) {
+          const code = (readErr as NodeJS.ErrnoException).code;
+          readFailure = code === 'ENOENT' ? 'removed' : `unreadable (${code ?? 'unknown'})`;
+        }
+        if (backup.existed ? current === backup.content : readFailure === 'removed') continue;
+        const wrote = migrationWrote.get(filePath);
+        const torn = writeInFlight.has(filePath);
+        if (!torn && (current === null || wrote === undefined || current !== wrote)) {
+          notRestored.push(`${toPosixPath(path.relative(pDir, filePath))} (${readFailure ?? 'modified'})`);
+          continue;
+        }
         if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       } catch { /* best-effort */ }
     }
-    throw new Error(`Migration failed and rolled back: ${(err as Error).message}`);
+    const conflicts = (notRestored.length > 0
+      ? `. NOT restored (changed by another writer after the migration wrote them, left as found): ${notRestored.join(', ')}`
+      : '') + (notReversed.length > 0
+      ? `. Directory renames NOT reversed: ${notReversed.join(', ')}`
+      : '');
+    throw new Error(`Migration failed and rolled back: ${(err as Error).message}${conflicts}`);
   }
 
   return { applied: true, renamedDirs, editedFiles };

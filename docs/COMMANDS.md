@@ -277,6 +277,9 @@ Cross-AI plan convergence loop — replan with review feedback until no HIGH con
 | Reviewer flags | No | Pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
 | `--all` | No | Run every configured reviewer. Lanes are dispatched **sequentially by default**; set `review.parallel_lanes` to `true` to dispatch them concurrently within a single review pass |
 | `--max-cycles N` | No | Override cycle cap (default 3) |
+| `--on-escalation ask\|exit` | No | What happens when cycles run out without converging. `ask` (default) shows the Proceed anyway / Manual review question. `exit` asks nothing, writes no state, prints the final `CYCLE_SUMMARY` line and both concern sections, and ends with `CONVERGENCE_STATUS: <status> cycles=<n> current_high=<N> current_actionable=<M> open_conflicts=<K>` where `<status>` is `open_conflicts`, `stalled` or `max_cycles` (a converged run ends with `converged`). Any other value is refused before cycle 1. See [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md) |
+
+`/gsd-review --cycle-summary` returns the same `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` counters and concern sections for callers that assemble review and replanning themselves; the loop's counting rules live there once. Absent when no review ran.
 
 **Exit behavior:** Loop exits when `current_high` and `current_actionable` hit zero; open `## Plan-Revision Conflicts` entries in REVIEWS.md must also be zero. Stall detection warns when the total unresolved review count is not decreasing across cycles. At `--max-cycles`, the escalation gate offers proceed-or-review-manually for HIGH or actionable non-HIGH concerns, but only manual review when a plan-revision conflict is still open — "Proceed anyway" is never offered over an unresolved conflict.
 
@@ -327,6 +330,7 @@ Execute all plans in a phase with wave-based parallelization, or run a specific 
 | `--wave N` | No | Execute only Wave `N` in the phase |
 | `--cross-ai` | No | Delegate execution to an external AI CLI (uses `workflow.cross_ai_command`) |
 | `--no-cross-ai` | No | Force local execution even if cross-AI is enabled in config |
+| `--force-mvp-gate "<reason>"` | No | Record an attributed acceptance for the phase's TDD review violations (reason required) and re-run the review |
 
 **Prerequisites:** Phase has PLAN.md files
 **Produces:** per-plan `{phase}-{N}-SUMMARY.md`, git commits, and `{phase}-VERIFICATION.md` when the phase is fully complete
@@ -512,7 +516,7 @@ Archive milestone, tag release.
 | Quick tasks | `.planning/quick/` | SUMMARY missing or not `complete` |
 | Threads | `.planning/threads/` | status not terminal |
 | Pending todos | `.planning/todos/pending/` | present |
-| Seeds | `.planning/seeds/` | not yet implemented |
+| Seeds | `.planning/seeds/` | status `dormant` / `active` / `triggered` (any other status, such as `closed`, is not open) |
 | UAT gaps | `*-UAT.md` | scenarios still pending |
 | Verification gaps | `*-VERIFICATION.md` | verdict `gaps_found` / `human_needed` |
 | CONTEXT questions | `*-CONTEXT.md` | questions left open |
@@ -1200,6 +1204,8 @@ pass/fail status, and stays silent when the stamp is absent or the project isn't
 a git repo — "unknown" is reported as unknown, not as fresh.
 
 **Cross-scope install shadowing (`W028`).** When a runtime is installed at both `global` and `local` scope and the host's trigger-resolution rules make one scope's `/gsd-*` surface unreachable — the Claude Code case: personal skill always beats project command — health adds a WARNING-severity advisory naming the shadowed triggers, the winning scope, and the losing scope. It never changes health's pass/fail status and is never auto-fixable (there is no single correct scope to remove), so `--repair` never touches it. Identical to the same advisory GSD Core prints at install time. See [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md).
+
+**Context warnings inactive on a plugin-only Claude Code install (`W032`).** The gsd-core Claude Code plugin registers the context monitor hook (`gsd-context-monitor.js`) but not the statusline that feeds it: the monitor reads `/tmp/claude-ctx-{session_id}.json`, and `gsd-statusline.js` is the only writer, so on a plugin-only install the 35% and 25% remaining warnings never fire. `W032` fires when Claude Code's settings (the global config dir, then the project's `.claude/settings.json` and `settings.local.json`, later scopes overriding earlier ones; managed settings are not read) enable the `gsd-core` plugin — or the plugin is auto-discovered under `<config dir>/skills/` — and the effective `statusLine` command does not contain `gsd-statusline`. An npm install wires the statusline and reports nothing; a statusline of another tool still reports because it does not write the bridge, and so does a wrapper script that calls `gsd-statusline` under a name that does not contain it. The same gap covers the opt-in hooks (`hooks.workflow_guard`, `hooks.community`, `graphify.auto_update`), which only the npm installer registers. Fix: run the npm installer with `npx @opengsd/gsd-core@latest --global`; add `--force-statusline` to replace a statusLine that is already set (a `--local` install skips the statusLine without it). A warning, so it makes the health status `degraded`; other runtimes are not checked.
 
 **Verification report status outside the closed set (`W030`).** A phase's `*-VERIFICATION.md` may carry only `status: passed`, `gaps_found`, or `human_needed`. Any other value — `verified`, `Passed`, `stale`, a number — is a hard error for every other command that reads the report (`verification_status_invalid`); `/gsd-health` instead reports the file as a WARNING naming the value and the accepted set, so the check itself never fails on the defect it diagnoses. Set the report's frontmatter `status:` to an accepted value, or delete the report and re-run the phase's verification with `/gsd-execute-phase` (a deleted report reads `missing`, which routes there). Not auto-fixable. See [`verification status`](CLI-TOOLS.md#verification-status-the-verification-verdict-5118).
 
@@ -2090,12 +2096,13 @@ Capture ideas, tasks, notes, and seeds to their appropriate destination. Default
 | `--note [text]` | Zero-friction note — append, list (`--note list`), or promote (`--note promote N`) |
 | `--backlog <description>` | Add to the backlog parking lot using 999.x numbering |
 | `--seed [idea summary]` | Capture a forward-looking idea with trigger conditions |
+| `--seed --close <SEED-ID> (--promoted <REQ-ID> \| --built <PHASE> \| --dropped "<why>")` | Close a seed and record what it became: sets `status: closed` plus `outcome_kind`, `outcome_ref` and `outcome`. Exactly one outcome flag; refuses an already-closed seed |
 | `--list` | List pending todos and select one to work on |
 | `--list-seeds [status]` | List/audit captured seeds, optionally filtered by status (read-only) |
 | `--global` | Use global scope (for note operations) |
 
 **Backlog:** 999.x numbering keeps items outside the active phase sequence; phase directories are created immediately so `/gsd-discuss-phase` and `/gsd-plan-phase` work on them.
-**Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`).
+**Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`). A seed is open while its `status` is `dormant`, `active` or `triggered`; `--seed --close` sets the one closed value, `closed`, which `/gsd-new-milestone` and `audit-open` both skip.
 
 **Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-YYMMDD-xxx-slug.md` (--seed)
 
@@ -2193,6 +2200,15 @@ scores `missing_phase_details` against (no colon required after the token),
 attributed to their own milestone section when two sections share a leading
 major integer, and skipped inside a fenced code block the same way a fenced
 heading is skipped.
+The bracket target also rewrites the `Phase N:` labels in `STATE.md` and
+`PROJECT.md` prose (legacy `Phase 3:` and M-NN `Phase 2-01:`) to the same
+canonical display the migrated ROADMAP heading has (`[GSD.02] 01:`), resolving
+each label through the ROADMAP-order mapping the planner already computes. A
+label whose number is carried by phases in more than one milestone is not
+guessed at: it is left as written and listed in the plan's `crossRefSkipped`
+(`ambiguous-milestone`), as is an unreadable `STATE.md` or `PROJECT.md`
+(`file-unreadable`). See
+[How to migrate to bracket phase IDs](how-to/migrate-to-bracket-phase-ids.md).
 It refuses before writing when: a source phase has no bracket spelling; a
 multi-milestone phase (or a checklist bullet outside every section) has no
 unambiguous reader-recognized milestone section; the same legacy phase
@@ -2210,7 +2226,7 @@ and is not itself part of the same migration.
 | `--apply` | No | Write changes to disk (default: dry-run only) |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
-**Produces:** Dry-run JSON plan (default) or in-place ROADMAP/config updates and phase-directory renames (`--apply`)
+**Produces:** Dry-run JSON plan (default) or in-place ROADMAP/config/STATE/PROJECT updates and phase-directory renames (`--apply`)
 
 An apply refuses a dirty tracked working tree. If a later migration operation
 fails, it reverses completed renames and restores the exact files it changed;

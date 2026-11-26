@@ -49,6 +49,13 @@
  *   leaking in (windows-env-var)
  * - "detects Jina from file-based key" — reads jina_api_key from the sandboxed home
  *   directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "detects Serply Search from env var" — asserts SERPLY_API_KEY detection
+ *   resolved against the sandboxed home directory (windows-env-var)
+ * - "serply_search is false when env var absent and no key file" — asserts the
+ *   opt-in default against the sandboxed home — on Windows only USERPROFILE keeps
+ *   a real key file from leaking in (windows-env-var)
+ * - "detects Serply Search from file-based key" — reads serply_api_key from the
+ *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
  * - "merges user defaults from defaults.json" — reads defaults.json from the
  *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
  * - "merges nested workflow keys from defaults.json preserving unset keys" — same
@@ -78,6 +85,7 @@ const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { defaultsStoreHome } = require('./helpers/defaults-store.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 function readConfig(tmpDir) {
   const configPath = path.join(tmpDir, '.planning', 'config.json');
@@ -113,6 +121,7 @@ describe('#4976: config-new-project resolves the global-defaults store through G
     { file: 'ref_api_key', key: 'ref_search', env: 'REF_API_KEY' },
     { file: 'perplexity_api_key', key: 'perplexity', env: 'PERPLEXITY_API_KEY' },
     { file: 'jina_api_key', key: 'jina', env: 'JINA_API_KEY' },
+    { file: 'serply_api_key', key: 'serply_search', env: 'SERPLY_API_KEY' },
   ];
 
   function writeStoreFile(home, name, content) {
@@ -124,13 +133,14 @@ describe('#4976: config-new-project resolves the global-defaults store through G
     return JSON.parse(fs.readFileSync(path.join(home, '.gsd', 'defaults.json'), 'utf-8'));
   }
 
-  // withGsdHome: false leaves GSD_HOME to runGsdTools, which blanks it for
-  // every child — and a blank GSD_HOME is unset under `GSD_HOME || homedir()`.
+  // withGsdHome: false leaves GSD_HOME blank: isolatedEnv strips the ambient
+  // GSD_* and testEnvBase blanks GSD_HOME — and a blank GSD_HOME is unset
+  // under `GSD_HOME || homedir()`.
   function storeEnv({ withGsdHome = true } = {}) {
-    const env = { HOME: decoyHome, USERPROFILE: decoyHome };
-    if (withGsdHome) env.GSD_HOME = gsdHome;
-    for (const probe of API_KEY_PROBES) env[probe.env] = '';
-    return env;
+    const override = {};
+    if (withGsdHome) override.GSD_HOME = gsdHome;
+    for (const probe of API_KEY_PROBES) override[probe.env] = '';
+    return isolatedEnv({ home: decoyHome, override });
   }
 
   test('seeds the project config from $GSD_HOME/.gsd/defaults.json, not the home directory copy', () => {
@@ -376,9 +386,9 @@ describe('cmdInitNewProject: API-key probes resolve through GSD_HOME (#4976)', (
   }
 
   function probeEnv() {
-    const env = { GSD_HOME: gsdHome, HOME: decoyHome, USERPROFILE: decoyHome };
-    for (const probe of API_KEY_PROBES) env[probe.env] = '';
-    return env;
+    const override = { GSD_HOME: gsdHome };
+    for (const probe of API_KEY_PROBES) override[probe.env] = '';
+    return isolatedEnv({ home: decoyHome, override });
   }
 
   test('reports a provider available from a key file under $GSD_HOME/.gsd', () => {
@@ -426,7 +436,7 @@ describe('config-ensure-section command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'brave_api_key'), 'test-key', 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -434,7 +444,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('detects Tavily Search from env var', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, TAVILY_API_KEY: 'test-key' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { TAVILY_API_KEY: 'test-key' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -442,7 +452,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('tavily_search is false when env var absent and no key file', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, TAVILY_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { TAVILY_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -454,7 +464,7 @@ describe('config-ensure-section command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'tavily_api_key'), 'test-key', 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, TAVILY_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { TAVILY_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -462,7 +472,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('detects Ref Search from env var', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, REF_API_KEY: 'test-key' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { REF_API_KEY: 'test-key' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -470,7 +480,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('ref_search is false when env var absent and no key file', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, REF_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { REF_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -482,7 +492,7 @@ describe('config-ensure-section command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'ref_api_key'), 'test-key', 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, REF_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { REF_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -490,7 +500,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('detects Perplexity from env var', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, PERPLEXITY_API_KEY: 'test-key' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { PERPLEXITY_API_KEY: 'test-key' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -498,7 +508,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('perplexity is false when env var absent and no key file', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, PERPLEXITY_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { PERPLEXITY_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -510,7 +520,7 @@ describe('config-ensure-section command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'perplexity_api_key'), 'test-key', 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, PERPLEXITY_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { PERPLEXITY_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -518,7 +528,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('detects Jina from env var', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, JINA_API_KEY: 'test-key' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { JINA_API_KEY: 'test-key' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -526,7 +536,7 @@ describe('config-ensure-section command', () => {
   });
 
   test('jina is false when env var absent and no key file', () => {
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, JINA_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { JINA_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -538,11 +548,39 @@ describe('config-ensure-section command', () => {
     fs.mkdirSync(gsdDir, { recursive: true });
     fs.writeFileSync(path.join(gsdDir, 'jina_api_key'), 'test-key', 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir, JINA_API_KEY: '' });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { JINA_API_KEY: '' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
     assert.strictEqual(config.jina, true);
+  });
+
+  test('detects Serply Search from env var', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { SERPLY_API_KEY: 'test-key' } }));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.serply_search, true);
+  });
+
+  test('serply_search is false when env var absent and no key file', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { SERPLY_API_KEY: '' } }));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.serply_search, false);
+  });
+
+  test('detects Serply Search from file-based key', () => {
+    const gsdDir = path.join(tmpDir, '.gsd');
+    fs.mkdirSync(gsdDir, { recursive: true });
+    fs.writeFileSync(path.join(gsdDir, 'serply_api_key'), 'test-key', 'utf-8');
+
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { SERPLY_API_KEY: '' } }));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.serply_search, true);
   });
 
   test('merges user defaults from defaults.json', () => {
@@ -555,7 +593,7 @@ describe('config-ensure-section command', () => {
       commit_docs: false,
     }), 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
@@ -574,7 +612,7 @@ describe('config-ensure-section command', () => {
       workflow: { research: false },
     }), 'utf-8');
 
-    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = readConfig(tmpDir);
