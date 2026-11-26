@@ -247,6 +247,36 @@ describe('#4649: the shared reference states the scoped read', () => {
     assert.ok(found.some((line) => line.includes('resource loading')), found.join('\n'));
   });
 
+  // #6719: the listing step is code-produced, so the reference must name the command, its scope,
+  // the failure fallback, and must not pull the launcher into every spawn.
+  test('a reference that drops the skill-manifest command is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => text.replace(/skill-manifest/g, 'list'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('skill-manifest')), found.join('\n'));
+  });
+
+  test('a reference that scans more than the project skills dir is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => text.replace(/ --skills-dir <dir>/g, ''));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('--skills-dir')), found.join('\n'));
+  });
+
+  test('a reference with no fallback when the command fails is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => text.replace(/If the launcher or the command fails/g, 'When it works'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('fallback')), found.join('\n'));
+  });
+
+  test('a reference that @-includes the launcher is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => `${text}\n@~/.claude/gsd-core/references/gsd-run-resolver.md\n`);
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('launcher')), found.join('\n'));
+  });
+
   // The cap: at limit - 1 and at the limit the reference passes; one byte over it is a finding.
   for (const [delta, passes] of [[-1, true], [0, true], [1, false]]) {
     test(`a reference of ${CAP + delta} bytes ${passes ? 'passes' : 'fails'} the cap (limit ${delta >= 0 ? '+' : '-'} ${Math.abs(delta)})`, (t) => {

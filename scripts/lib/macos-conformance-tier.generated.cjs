@@ -223,6 +223,7 @@ module.exports = {
   "tests/project-context-cli.test.cjs",
   "tests/project-context.test.cjs",
   "tests/project-root.test.cjs",
+  "tests/project-skills-manifest.test.cjs",
   "tests/prune-orphaned-worktrees.test.cjs",
   "tests/quick-batch-command-router.stdin.test.cjs",
   "tests/quick-batch.test.cjs",
