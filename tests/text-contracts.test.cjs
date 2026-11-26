@@ -539,6 +539,7 @@ const SHIPPED = [
   'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
   'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
   'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
+  'advisor-prefilter',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
