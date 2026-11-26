@@ -180,7 +180,7 @@ rewrite the prefix silently (#3050) — a rewritten command hides the defective 
 next executor meets it again.
 
 ```bash
-# WT_ROOT as in step 0b. MAIN_ROOT is the checkout this worktree was created from — the one an
+# WT_ROOT is this worktree's root. MAIN_ROOT is the checkout this worktree was created from — the one an
 # orchestrator-cwd path points at.
 WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 MAIN_ROOT=$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd -P)

@@ -82,4 +82,10 @@ describe('#4799 the orchestrator tells each sequential executor, in its own prom
     assert.match(read('agents/gsd-executor.md'), /pass it back as `--toplevel` on every later step 0 run/);
     assert.match(read('gsd-core/references/worktree-path-safety.md'), /pass it on every later step 0 run, before every commit/);
   });
+
+  test('the sequential blocks name the --sequential flag of the Step 0 guard command (#6216)', () => {
+    for (const rel of ['gsd-core/workflows/execute-phase.md', 'gsd-core/workflows/quick.md', 'gsd-core/workflows/execute-plan.md']) {
+      assert.match(read(rel), /SEQUENTIAL executor agent on the main working tree \(add --sequential to your Step 0 commit guard/, rel);
+    }
+  });
 });
