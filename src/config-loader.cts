@@ -293,22 +293,6 @@ function readResolvedAlias(config: Record<string, unknown>, alias: ConfigKeyAlia
   return value;
 }
 
-/**
- * Every setting a flat key and a nested `<section>.<field>` spelling both name
- * in `~/.gsd/defaults.json`: each CONFIG_KEY_ALIASES entry whose nested field
- * sits in another section, and `research_before_questions`, which only the
- * global-defaults branch reads nested (#3894). `parallelization` is not one:
- * its nested field lives under the flat key itself. The global-defaults branch
- * reads these, `config-save-defaults` keeps one spelling of each, and
- * new-project creation resolves them, all from this list (#5681).
- */
-const NESTED_TWINS: readonly { key: string; section: string; field: string }[] = Object.freeze([
-  ...CONFIG_KEY_ALIASES
-    .filter((alias) => alias.section !== alias.key)
-    .map(({ key, section, field }) => ({ key, section, field })),
-  { key: 'research_before_questions', section: 'workflow', field: 'research_before_questions' },
-]);
-
 /** The NESTED_TWINS entry for a flat key, or undefined when it has no nested spelling. */
 function nestedTwinOf(key: string): { key: string; section: string; field: string } | undefined {
   return NESTED_TWINS.find((twin) => twin.key === key);
@@ -328,8 +312,9 @@ const FLAT_WRITTEN_TWIN_KEYS: readonly string[] = Object.freeze(['commit_docs', 
  * stored (a null included), else the nested spelling (not a null), else
  * undefined. For FLAT_WRITTEN_TWIN_KEYS a nested value of another type than
  * the setting's default is no setting. Every other twin is read as stored,
- * as new-project creation copies it, so the global-defaults branch below and a
- * new project made from the same store read the same value (#5681).
+ * as new-project creation copies it, so the loader's two readers of the store
+ * (the global-defaults branch and the global layer under a project) and a new
+ * project made from the same store read the same value (#5681).
  */
 function _getGlobalTwinValue(
   parsed: Record<string, unknown>,
@@ -637,6 +622,23 @@ const _NESTED_ONLY_GLOBAL_KEYS: Readonly<Record<string, { section: string; field
 });
 
 /**
+ * Every setting a flat key and a nested `<section>.<field>` spelling both name
+ * in `~/.gsd/defaults.json`: each CONFIG_KEY_ALIASES entry whose nested field
+ * sits in another section, and each _NESTED_ONLY_GLOBAL_KEYS entry, a nested
+ * spelling read only from the global defaults (#3894). `parallelization` is not
+ * one: its nested field lives under the flat key itself. The global-defaults
+ * branch and the global layer under a project read these, `config-save-defaults`
+ * keeps one spelling of each, and new-project creation resolves them, all from
+ * this list (#5681).
+ */
+const NESTED_TWINS: readonly { key: string; section: string; field: string }[] = Object.freeze([
+  ...CONFIG_KEY_ALIASES
+    .filter((alias) => alias.section !== alias.key)
+    .map(({ key, section, field }) => ({ key, section, field })),
+  ...Object.entries(_NESTED_ONLY_GLOBAL_KEYS).map(([key, { section, field }]) => ({ key, section, field })),
+]);
+
+/**
  * #4071: the part of ~/.gsd/defaults.json that sits under a project config, restated in the
  * canonical nested spelling so a flat global key can never outrank a nested project key.
  * `runtime` is left out: the installer stamps it with whichever runtime installed first, which
@@ -653,9 +655,15 @@ function _globalDefaultsLayer(globalDefaults: Record<string, unknown>): Record<s
       if (Object.hasOwn(globalDefaults, key)) layer = _deepMergeConfig(layer, { [key]: globalDefaults[key] }) as Record<string, unknown>;
       continue;
     }
-    const value = _getConfigValue(globalDefaults, key, { section: alias.section, field: alias.field });
+    // A setting with a nested twin is read as Branch D and new-project creation read it (#5681).
+    const twin = nestedTwinOf(key);
+    const value = twin
+      ? _getGlobalTwinValue(globalDefaults, twin)
+      : _getConfigValue(globalDefaults, key, { section: alias.section, field: alias.field });
     // A null alias value is "not set", as Branch D's `??` reads it.
     if (value === undefined || value === null) continue;
+    // A `parallelization` scalar that is not a boolean is no setting, as Branch D reads it (#5681).
+    if (key === 'parallelization' && !isConfigSection(value) && typeof value !== 'boolean') continue;
     // `parallelization` is a boolean or an object holding `enabled`; the object is already nested.
     const nested = key === 'parallelization' && isConfigSection(value)
       ? { [alias.section]: value }
