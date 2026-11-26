@@ -24,7 +24,7 @@ or run `/advisor <model>` in the session, or set `advisorModel` in your Claude C
 gsd config-set workflow.advisor_prefilter true
 ```
 
-From the next run, the orchestrator consults the advisor at two points: after verification passes (`verify:post`) and before shipping (`ship:pre`).
+From the next run, the orchestrator consults the advisor at two points: after `/gsd-verify-work` finds no unresolved issues (`verify:post`) and before shipping (`ship:pre`). A verification run that ends with issues to diagnose does not consult it, and neither does a standalone `/gsd-secure-phase` run.
 
 ## 3. Read the result
 

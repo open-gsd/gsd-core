@@ -55,7 +55,7 @@ describe('capability activation: string switches', () => {
 
   // Property: any casing and surrounding whitespace of an off spelling is off.
   test('everyCasingAndPaddingOfAnOffSpellingIsOff', () => {
-    const pad = fc.stringOf(fc.constantFrom(' ', '\t', '\n'), { maxLength: 3 });
+    const pad = fc.string({ unit: fc.constantFrom(' ', '\t', '\n'), maxLength: 3 });
     const casing = fc.tuple(fc.constantFrom(...OFF), fc.array(fc.boolean(), { minLength: 5, maxLength: 5 }));
     fc.assert(
       fc.property(pad, casing, pad, (left, [base, flips], right) => {

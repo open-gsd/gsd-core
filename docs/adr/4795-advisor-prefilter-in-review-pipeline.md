@@ -24,7 +24,7 @@ Claude Code can pair the session's executor with a stronger advisor model that r
 
 **D5 — Advisory by construction.** The consult never blocks, edits, spawns a subagent or re-runs a reviewer; `onError: skip`. Its answer is text for the reviewers that follow. It does not replace any reviewer or any cross-AI lane (Goodhart: it must not become a gate input).
 
-**D6 — A string switch is read for its meaning.** `_resolveActivationValue` used `Boolean(value)`, so a hand-edited `"false"` turned a capability on. Empty, `"false"`, `"0"`, `"no"` and `"off"` (any case, trimmed) now read as off for every capability switch; every other string stays on, and non-strings keep plain truthiness. Found while testing this capability and fixed here because the defect sits under every capability gate.
+**D6 — A string switch is read for its meaning.** `_resolveActivationValue` used `Boolean(value)`, so a hand-edited `"false"` turned a capability on. Empty, `"false"`, `"0"`, `"no"` and `"off"` (any case, trimmed) now read as off for every capability activation switch (a hook's `when` key); every other string stays on, and non-strings keep plain truthiness. Found while testing this capability and fixed here because the defect sits under every capability gate.
 
 ## Alternatives rejected
 
@@ -39,7 +39,7 @@ Claude Code can pair the session's executor with a stronger advisor model that r
 - Every enabled consult sends the full transcript to the advisor model, billed at the advisor's rate; the key is off by default and the how-to states the cost.
 - Non-Claude-Code runtimes get a silent no-op.
 - `execute:wave:post` is not covered, so a wave's output is not pre-filtered; the phase output is checked at `verify:post`. The plan-checker loop is not hooked either: `plan:post` publishes `planner` and `checker`.
-- `secure-phase` needs no call site of its own: it is itself a `verify:post` step, so the `verify:post` consult already covers its point.
+- `verify:post` is reached by `verify-work.md` only when verification finds no unresolved issues, so a verify run that ends in `diagnose_issues` gets no consult; that is the point where the next gate (phase advancement) is about to open. `secure-phase` has no call site of its own: it runs as a `verify:post` step of that same flow, and a standalone `/gsd-secure-phase` run does not consult the advisor.
 - The no-op is an instruction the model follows, not a check a test can run; the behavioral tests pin the manifest, registry, dispatch and string-switch contract, and a text contract pins the fragment and the two dispatch lines.
 - Whether the orchestrator model exposes the advisor tool in a given host is host behavior this repository cannot assert; the fragment's silent no-op covers the case where it does not.
 - The Claude Code advisor interface is experimental upstream; drift is a standing maintenance tail, bounded by taking no dependency beyond tool presence.

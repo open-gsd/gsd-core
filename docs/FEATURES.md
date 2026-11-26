@@ -5031,7 +5031,7 @@ See [ADR-3997](adr/3997-review-prompt-capability-contributions.md), the [capabil
 - REQ-ADVISOR-03: When the session has no advisor tool, the fragment's instruction is to print nothing and write nothing (silent no-op).
 - REQ-ADVISOR-04: The consult never blocks, never edits files and never spawns a subagent; the next gate runs whatever the advisor answers.
 - REQ-ADVISOR-05: The capability does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor` or the cross-AI lanes of `/gsd-plan-review-convergence`.
-- REQ-ADVISOR-06: Empty, `"false"`, `"0"`, `"no"` and `"off"` strings (any case, trimmed) read as off for every capability config switch.
+- REQ-ADVISOR-06: Empty, `"false"`, `"0"`, `"no"` and `"off"` strings (any case, trimmed) read as off for every capability activation switch (a hook's `when` key; a step's `pointFrom` gate is unchanged).
 
 **Cost and limits:** Each consult sends the full session transcript to the advisor model, billed at the advisor's rate, so the key is off by default. The advisor is a single session-wide model (per-agent control is tracked upstream in anthropics/claude-code#73072) and may share a family with the executor, so the answer is an early warning rather than decorrelated review. The Claude Code advisor is an experimental host feature; GSD takes no dependency on its interface beyond the tool being present.
 
