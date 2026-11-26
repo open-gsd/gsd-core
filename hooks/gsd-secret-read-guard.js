@@ -5006,10 +5006,20 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   if (subIsShell) {
     // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
     // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
+    const hit = pipedShellScriptsRead(operands, subIdx, subOperands, prevCmd, depth);
     if (hit) return hit;
   }
   return xargsPipedReadsSecret(operands, prevCmd, curl);
+}
+
+// The block for a word piped into `xargs … SHELL -c` that the shell runs as
+// its script or with the word put into it (scanXargsShellScripts), or null:
+// the upstream command's words as written, then the words a printf or echo
+// prints (printedWords: `printf 'env\n' | xargs -I{} sh -c 'cat .{}'`).
+function pipedShellScriptsRead(operands, subIdx, subOperands, prev, depth) {
+  const replaceStr = xargsReplaceStr(operands, subIdx);
+  return scanXargsShellScripts(subOperands, replaceStr, prev.operands, depth)
+    || scanXargsShellScripts(subOperands, replaceStr, printedWords(prev, operands, xargsCommandIndex(operands, 0, operands.length)), depth);
 }
 
 // precedingOp for an xargs segment, found once per segment: `find` runs many
