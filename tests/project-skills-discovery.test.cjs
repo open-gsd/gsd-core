@@ -19,25 +19,16 @@ const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 const textContracts = require('../scripts/static-checks/text-contracts.cjs');
 
+const {
+  REFERENCE,
+  INCLUDE,
+  REFERENCE_MAX_BYTES: CAP,
+  DISCOVERY_FILES,
+} = require('../scripts/static-checks/text-contracts/lib/project-skills-discovery.cjs');
+
 const REPO_ROOT = path.join(__dirname, '..');
 const CONTRACT = 'agent-skills-awareness';
-const REFERENCE = 'gsd-core/references/project-skills-discovery.md';
-const INCLUDE = '@~/.claude/gsd-core/references/project-skills-discovery.md';
-const CAP = 1600;
-
-const DISCOVERY = [
-  'gsd-code-fixer', 'gsd-code-reviewer', 'gsd-codebase-mapper', 'gsd-debugger', 'gsd-doc-verifier',
-  'gsd-doc-writer', 'gsd-eval-auditor', 'gsd-executor', 'gsd-integration-checker', 'gsd-intel-updater',
-  'gsd-nyquist-auditor', 'gsd-pattern-mapper', 'gsd-phase-researcher', 'gsd-plan-checker', 'gsd-planner',
-  'gsd-roadmapper', 'gsd-security-auditor', 'gsd-ui-auditor', 'gsd-ui-checker', 'gsd-ui-researcher',
-  'gsd-verifier',
-];
-const NO_COMPACT = ['gsd-debugger', 'gsd-executor', 'gsd-phase-researcher', 'gsd-plan-checker', 'gsd-planner', 'gsd-verifier'];
-const FILES = [
-  REFERENCE,
-  ...DISCOVERY.map((name) => `agents/${name}.md`),
-  ...DISCOVERY.filter((name) => !NO_COMPACT.includes(name)).map((name) => `agents/${name}.compact.md`),
-];
+const FILES = [REFERENCE, ...DISCOVERY_FILES];
 
 function copyOfFiles(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4649-'));
