@@ -24,11 +24,12 @@ const {
   INCLUDE,
   REFERENCE_MAX_BYTES: CAP,
   DISCOVERY_FILES,
+  SPAWN_PROMPT_FILES,
 } = require('../scripts/static-checks/text-contracts/lib/project-skills-discovery.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const CONTRACT = 'agent-skills-awareness';
-const FILES = [REFERENCE, ...DISCOVERY_FILES];
+const FILES = [REFERENCE, ...DISCOVERY_FILES, ...SPAWN_PROMPT_FILES];
 
 function copyOfFiles(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4649-'));
@@ -57,8 +58,8 @@ describe('#4649: the discovery agents share one project-skills reference', () =>
     assert.deepEqual(messages(copyOfFiles(t)), []);
   });
 
-  test('21 canonical agents and 15 compact variants are covered', () => {
-    assert.equal(FILES.length, 1 + 21 + 15);
+  test('21 canonical agents, 15 compact variants and 5 spawn-prompt files are covered', () => {
+    assert.equal(FILES.length, 1 + 21 + 15 + 5);
   });
 
   test('an agent that drops the include is named', (t) => {
@@ -130,6 +131,71 @@ describe('#4649: the discovery agents share one project-skills reference', () =>
   });
 });
 
+describe('#5248: the spawn prompts state the same scoped read as the reference', () => {
+  const EXEC = 'gsd-core/workflows/execute-phase.md';
+  const ISOLATION = 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md';
+  const QUICK = 'gsd-core/workflows/quick.md';
+  const PLAN = 'gsd-core/workflows/plan-phase.md';
+  const PRE = 'capabilities/research/fragments/plan-pre.md';
+  const named = (found, rel, needle) => found.some((line) => line.startsWith(rel) && line.includes(needle));
+
+  const OLD_EXECUTOR_LINE = 'list skills, read SKILL.md for each, follow relevant rules during implementation';
+
+  // Every spawn file: a project-skills line that restores the old read is named.
+  for (const [rel, oldLine] of [
+    [EXEC, OLD_EXECUTOR_LINE],
+    [ISOLATION, OLD_EXECUTOR_LINE],
+    [QUICK, OLD_EXECUTOR_LINE],
+    [PLAN, 'read SKILL.md files, plans should account for project skill rules'],
+    [PRE, 'Read SKILL.md files and account for project skill patterns.'],
+  ]) {
+    test(`${rel}: a spawn prompt that asks for every SKILL.md is named`, (t) => {
+      const root = copyOfFiles(t);
+      edit(root, rel, (text) => text.replace(/(\.claude\/skills\/ or [^\n]*\.agents\/skills\/[^\n]*?)(?:—|\.) ?[^\n]*/, (m, head) => `${head}— ${oldLine}`));
+      const found = messages(root);
+      assert.ok(named(found, rel, 'spawn prompt'), found.join('\n'));
+      assert.ok(found.some((line) => line.includes('asks to read every SKILL.md')), found.join('\n'));
+    });
+  }
+
+  test('a project-skills line with no frontmatter scoping is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, PLAN, (text) => text.replace(/frontmatter/g, 'header'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.startsWith(PLAN) && line.includes('frontmatter')), found.join('\n'));
+  });
+
+  test('a project-skills line with no description gate is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, PRE, (text) => text.replace(/description/g, 'summary'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.startsWith(PRE) && line.includes('description')), found.join('\n'));
+  });
+
+  test('a project-skills line with no fallback for a skill without a description is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, ISOLATION, (text) => text.replace(/ or is missing/, ''));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.startsWith(ISOLATION) && line.includes('without a description')), found.join('\n'));
+  });
+
+  test('a spawn file with no project-skills line is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, EXEC, (text) => text.replace(/\.agents\/skills\//g, '.agents/other/'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.startsWith(EXEC) && line.includes('no project-skills line')), found.join('\n'));
+  });
+
+  test('one regressed line among the two in quick.md is named', (t) => {
+    const root = copyOfFiles(t);
+    let seen = 0;
+    edit(root, QUICK, (text) => text.replace(/(\.claude\/skills\/ or [^\n]*\.agents\/skills\/[^\n]*)/g, (line) => (++seen === 2 ? `${line} read SKILL.md files` : line)));
+    assert.equal(seen, 2, 'quick.md carries the executor and the planner line');
+    const found = messages(root);
+    assert.ok(named(found, QUICK, 'spawn prompt'), found.join('\n'));
+  });
+});
+
 describe('#4649: the shared reference states the scoped read', () => {
   test('a reference that reads every SKILL.md in full again is named (no frontmatter scoping)', (t) => {
     const root = copyOfFiles(t);
@@ -179,6 +245,36 @@ describe('#4649: the shared reference states the scoped read', () => {
     edit(root, REFERENCE, (text) => text.replace(/a `SKILL\.md` references/, 'a `SKILL.md` lists'));
     const found = messages(root);
     assert.ok(found.some((line) => line.includes('resource loading')), found.join('\n'));
+  });
+
+  // #6719: the listing step is code-produced, so the reference must name the command, its scope,
+  // the failure fallback, and must not pull the launcher into every spawn.
+  test('a reference that drops the skill-manifest command is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => text.replace(/skill-manifest/g, 'list'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('skill-manifest')), found.join('\n'));
+  });
+
+  test('a reference that scans more than the project skills dir is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => text.replace(/ --skills-dir <dir>/g, ''));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('--skills-dir')), found.join('\n'));
+  });
+
+  test('a reference with no fallback when the command fails is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => text.replace(/If the launcher or the command fails/g, 'When it works'));
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('fallback')), found.join('\n'));
+  });
+
+  test('a reference that @-includes the launcher is named', (t) => {
+    const root = copyOfFiles(t);
+    edit(root, REFERENCE, (text) => `${text}\n@~/.claude/gsd-core/references/gsd-run-resolver.md\n`);
+    const found = messages(root);
+    assert.ok(found.some((line) => line.includes('launcher')), found.join('\n'));
   });
 
   // The cap: at limit - 1 and at the limit the reference passes; one byte over it is a finding.

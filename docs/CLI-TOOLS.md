@@ -1504,12 +1504,17 @@ The command anchors to the project root via `findProjectRoot` before loading con
 Pre-compute and cache skill discovery for faster command loading.
 
 ```bash
-# Generate skill manifest (writes to .claude/skill-manifest.json)
+# Print the manifest of every skill root (project, global and legacy)
 node gsd-tools.cjs skill-manifest
 
-# Generate with custom output path
-node gsd-tools.cjs skill-manifest --output <path>
+# Also write it to skill-manifest.json in the planning directory (when that directory exists)
+node gsd-tools.cjs skill-manifest --write
+
+# List one directory only: this is what the project-skills discovery step runs per directory
+node gsd-tools.cjs skill-manifest --skills-dir .claude/skills
 ```
+
+Each entry carries the skill's `name`, `description`, `triggers`, `path` and `file_path` from its `SKILL.md` frontmatter. The body is not emitted, apart from lines that start `TRIGGER when:`, which are collected into `triggers`; `description` and `triggers` are not length-limited. Within one directory a skill is keyed by its frontmatter `name`: two skill folders that declare the same `name` are listed once. A skill directory that is a symlink is listed; a dangling link or a link to a file is skipped. A skill with no usable `description` (missing key, unparseable or unterminated frontmatter) is listed with `description: ""`. `--skills-dir` replaces the default roots with that one directory (scope `custom`); a directory that does not exist is reported with `present: false`.
 
 Returns JSON mapping of all available GSD skills with their metadata (name, description, file path, argument hints). Used by the installer and session-start hooks to avoid repeated filesystem scans.
 
@@ -1829,6 +1834,80 @@ node gsd-tools.cjs graphify snapshot [name]
 User-facing entry point: `/gsd-graphify` (see [Command Reference](COMMANDS.md#gsd-graphify)).
 
 ---
+
+## Knowledge Store, Research Cache and Resolver Commands
+
+Every verb below is invoked as `node gsd-tools.cjs <verb> [args]` or `node gsd-tools.cjs query <verb> [args]`; the dotted manifest names (`learnings.list`) and the spaced forms (`learnings list`) are both accepted. Output is JSON unless stated; the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `learnings` — the global knowledge store
+
+Learnings are JSON records in `~/.gsd/knowledge/<id>.json` (one file per learning), shared across projects. Each record carries `id`, `source_project`, `date`, `context`, `learning`, `tags` and `content_hash` (SHA-256 of the learning text plus the source project; a second write with the same hash is skipped).
+
+| Verb | Arguments | Output | Behavior |
+|------|-----------|--------|----------|
+| `learnings list` | none | `{learnings, count}` | Every record, newest first. A malformed file is skipped with a warning on stderr. |
+| `learnings query --tag <tag>` | `--tag` required | `{learnings, count, tag}` | Records whose `tags` array contains `<tag>` exactly, newest first. |
+| `learnings copy` | none | `{total, created, skipped}` | Copies the current project's learnings into the store. Reads the most recently modified `.planning/phases/*/*-LEARNINGS.md`, falling back to `.planning/LEARNINGS.md`; returns zeros when neither exists. Each `###` item under a `##` category becomes one record (a `##` section with no `###` items becomes one record); tags are the first word of the category plus the words of the item title longer than two characters. `source_project` is the name of the directory that contains `.planning`. Records whose hash is already stored count as `skipped`. |
+| `learnings prune --older-than <Nd>` | `--older-than` required, format `<digits>d` (for example `90d`) | `{removed, kept}` | Deletes records older than `N` days. Any other format exits with `Invalid duration format`. |
+| `learnings delete <id>` | the record id (`<base36>-<hex>`) | `{id, deleted}` | Deletes one record; `deleted` is `false` when no such file exists. An id that does not match `^[a-z0-9]+-[a-f0-9]+$` exits with `Invalid learning ID`. |
+
+```bash
+node gsd-tools.cjs learnings copy
+node gsd-tools.cjs learnings query --tag testing
+node gsd-tools.cjs learnings prune --older-than 90d
+```
+
+### `research-plan`, `research-store get`, `research-store put` — the research cache
+
+The research cache keeps fetched research so a repeated question is not fetched again. A key is a 64-character lowercase hex SHA-256 of the lower-cased, trimmed `ecosystem`, `library`, `version`, `query` and `kind`; `research-plan` computes it, and the store rejects any other key shape.
+
+`research-plan --input <file>` reads a JSON file `{"questions": [{"text", "kind", "library"?, "version"?}], "ecosystem"?}` and prints `{items: [{question, key, cache?, fetch?}]}`. A question with a fresh cache entry yields `{question, key, cache: {hit: true, stale: false}}` and no `fetch`. A cache miss yields `{question, key, fetch: {provider, query}}`; a stale entry yields the same plus `cache: {hit: true, stale: true}`. A question whose `text` is missing or empty is dropped from `items`. `fetch.provider` is the first available provider in the waterfall for the question's `kind`: `docs` → `context7`, `ref`, `jina`, `websearch`; `web` → `exa`, `tavily`, `perplexity`, `brave`, `serply`, `websearch`; `scrape` → `firecrawl`, `jina`. Any other `kind` uses the `web` waterfall, and `websearch` is the fallback. `context7`, `jina` (unless the `jina` config value is falsy) and `websearch` are always available; `exa`, `tavily`, `brave`, `firecrawl`, `ref`, `perplexity` and `serply` are available when the config keys `exa_search`, `tavily_search`, `brave_search`, `firecrawl`, `ref_search`, `perplexity` and `serply_search` respectively are truthy.
+
+| Verb | Arguments | Output |
+|------|-----------|--------|
+| `research-store get <key> [--kind <k>]` | 64-hex key; `--kind` optional | `{hit, stale, entry}`; `entry` is `null` on a miss and for a key that is not 64-hex. Both tiers are searched, whatever the entry's source. A file that is not valid JSON, or whose `fetched_at` or `ttl` is invalid, is a miss |
+| `research-store put <key> --content <text> --source <s> --provider <p> --kind <k> --confidence <level>` | all five flags required | the stored entry `{content, source, provider, confidence, fetched_at, ttl, kind}` |
+
+`--content` is stored as the string given (a JSON argument is not parsed). The entry lives at `<key>.json` in one of two tiers, chosen by `--source`: `curated` entries go to the user tier `~/.gsd/research-cache/`, every other source to the project tier `.planning/research/.cache/`. The `ttl` is 30 days for `curated` with confidence `HIGH`, 7 days for `curated` with `MEDIUM`, and 1 day otherwise; `stale` is `true` once the entry is older than its `ttl`.
+
+### `classify-confidence`
+
+```bash
+node gsd-tools.cjs query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--provider <id>` | Yes | The research provider that produced the finding |
+| `--package <name>`, `--ecosystem <npm\|pypi\|crates>` | Together or not at all | Look up the package's legitimacy verdict (`OK`, `SUS`, `SLOP`) on its registry and use it as ground truth; giving only one of the two is a usage error |
+| `--verified` | No | The finding was corroborated against the official source |
+
+Output: `{provider, package, ecosystem, legitimacyVerdict, verified, confidence}`, with `confidence` one of `HIGH`, `MEDIUM`, `LOW`. Provider authority: `context7` and `ref` are `official`; `jina` and `firecrawl` are `scrape`; `exa`, `tavily`, `perplexity`, `brave`, `serply` and `websearch` are `web`; any other id is `none`. The first matching rule wins:
+
+| Rule | Confidence |
+|------|------------|
+| verdict is `SLOP` | `LOW` |
+| verdict is `OK` and authority is not `none` | `HIGH` |
+| authority is `official` or `scrape` | `MEDIUM` |
+| verdict is `OK` (authority `none`) | `MEDIUM` |
+| authority is `web` and `--verified` | `MEDIUM` |
+| anything else | `LOW` |
+
+### `resolve-package-manager <script>`
+
+Prints, as plain text, the command that runs package script `<script>` with the project's package manager, or nothing when `<script>` is not a plain identifier (`[A-Za-z0-9_][A-Za-z0-9:_-]{0,63}`). The manager is the `packageManager` field of `package.json` (read only when the file is at most 1 MiB), else the first lockfile found in the order `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `bun.lockb`, else `npm`. `test` prints `<manager> test` except under `bun`; every other case prints `<manager> run <script>`.
+
+### `resolve-granularity <phase-type> [--granularity <coarse|standard|fine>]`
+
+Resolves the planning granularity for a phase type. Precedence: the `--granularity` override (an invalid value exits with `invalid granularity`), then `granularities.<phase-type>` in config, then top-level `granularity`, then `planning.granularity`, then `standard`. Output: `{granularity, phase_type}`, plus `unknown_phase_type: true` when `<phase-type>` is not one of `planning`, `discuss`, `research`, `execution`, `verification`, `completion`. The phase type is required.
+
+### `user-story.validate --story "<text>"`
+
+Checks a user story against `As a [role], I want to [capability], so that [outcome].` Output: `{valid, errors, slots}`, where `slots` is `{role, capability, outcome}` when valid and `null` otherwise. Each failed requirement adds one entry to `errors`: the `As a` opening, the `, I want to` clause, the `, so that` clause, a non-empty value in each slot, and a closing period.
+
+### `project-instruction-file [--runtime <id>]`
+
+Prints, as plain text, the project instruction file a runtime reads: `.claude/CLAUDE.md` for `claude`, `.github/copilot-instructions.md` for `copilot`, `.trae/rules/rules.md` for `trae`, `GEMINI.md` for `antigravity`, and `AGENTS.md` for every other runtime and when `--runtime` is omitted. The retired runtime `gemini` is refused with an error that names its replacement.
 
 ## Module Architecture
 
