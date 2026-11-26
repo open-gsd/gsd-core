@@ -42,6 +42,11 @@ function installerComposedAgents(marker) {
   return installProfiles.resolveProfile({ modes: [marker], manifest: full, agentManifest: full }).agents;
 }
 
+/** A staged-agent set restricted to catalog agents (the set the check iterates). */
+function catalogAgents(agents) {
+  return [...agents].filter((a) => ALL_AGENTS.includes(a));
+}
+
 function makeConfigDir(t) {
   const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4761-'));
   t.after(() => cleanup(cfg));
@@ -73,11 +78,15 @@ describe('#4761 intel capability claims gsd-intel-updater', () => {
     assert.ok(reg.capabilities.intel.agents.includes('gsd-intel-updater'));
   });
 
-  test('#4761 claim does not alter staged agents', () => {
-    const full = installProfiles.stageAgentsForProfile(AGENTS_SRC, installProfiles.resolveProfile({ modes: ['full'] }));
-    assert.equal(full, AGENTS_SRC, 'full stages the source dir untouched');
-    assert.ok(fs.existsSync(path.join(AGENTS_SRC, 'gsd-intel-updater.md')));
-    assert.equal(installerAgents('core').has('gsd-intel-updater'), false, 'claims never drive tiered staging');
+  test('#4761 claim does not alter tiered staging', () => {
+    const reg = registryMod.CAPABILITY_REGISTRY || registryMod;
+    const full = installProfiles.loadSkillsManifest(COMMANDS_DIR, WORKFLOWS_DIR);
+    for (const mode of ['core', 'standard']) {
+      const manifest = mode === 'core' ? new Map() : full;
+      const without = installProfiles.resolveProfile({ modes: [mode], manifest, agentManifest: full }).agents;
+      const withRegistry = installProfiles.resolveProfile({ modes: [mode], manifest, agentManifest: full, registry: reg }).agents;
+      assert.deepEqual([...withRegistry].sort(), [...without].sort(), `${mode}: the shipped registry (claims included) adds no agents`);
+    }
   });
 });
 
@@ -103,7 +112,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
   for (const profile of ['core', 'standard']) {
     test(`#4761 ${profile} install is not degraded`, (t) => {
       const cfg = makeConfigDir(t);
-      const staged = [...installerAgents(profile)].filter((a) => ALL_AGENTS.includes(a));
+      const staged = catalogAgents(installerAgents(profile));
       assert.ok(staged.length > 0 && staged.length < ALL_AGENTS.length, 'fixture must be a strict tiered subset');
       stage(cfg, staged);
       installProfiles.writeActiveProfile(cfg, profile);
@@ -116,7 +125,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
 
   test('#4761 tiered install still flags a missing staged agent', (t) => {
     const cfg = makeConfigDir(t);
-    const staged = [...installerAgents('core')].filter((a) => ALL_AGENTS.includes(a)).sort();
+    const staged = catalogAgents(installerAgents('core')).sort();
     const dropped = staged[0];
     stage(cfg, staged.filter((a) => a !== dropped));
     installProfiles.writeActiveProfile(cfg, 'core');
@@ -127,7 +136,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
 
   test('#4761 tiered incomplete detection survives', (t) => {
     const cfg = makeConfigDir(t);
-    const staged = [...installerAgents('core')].filter((a) => ALL_AGENTS.includes(a)).sort();
+    const staged = catalogAgents(installerAgents('core')).sort();
     stage(cfg, staged);
     installProfiles.writeActiveProfile(cfg, 'core');
     const tracked = staged[0];
@@ -142,7 +151,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
 
   test('#4761 composed marker expects union', (t) => {
     const cfg = makeConfigDir(t);
-    const staged = [...installerComposedAgents('core,standard')].filter((a) => ALL_AGENTS.includes(a));
+    const staged = catalogAgents(installerComposedAgents('core,standard'));
     stage(cfg, staged);
     installProfiles.writeActiveProfile(cfg, 'core,standard');
     const r = check(cfg);
@@ -153,7 +162,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
   for (const marker of ['!!bad', '', '   ', 'nosuch']) {
     test(`#4761 unusable marker ${JSON.stringify(marker)} falls back to every agent`, (t) => {
       const cfg = makeConfigDir(t);
-      stage(cfg, [...installerAgents('core')].filter((a) => ALL_AGENTS.includes(a)));
+      stage(cfg, catalogAgents(installerAgents('core')));
       fs.writeFileSync(path.join(cfg, '.gsd-profile'), `${marker}\n`);
       const r = check(cfg);
       assert.equal(r.agents_installed, false);
@@ -168,7 +177,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
     installProfiles.writeActiveProfile(cfg, 'core');
     const r = check(cfg);
     assert.equal(r.agents_installed, false);
-    assert.deepEqual([...r.missing_agents].sort(), [...installerAgents('core')].filter((a) => ALL_AGENTS.includes(a)).sort());
+    assert.deepEqual([...r.missing_agents].sort(), catalogAgents(installerAgents('core')).sort());
   });
 
   test('#4761 empty expected set is healthy', (t) => {
@@ -203,7 +212,7 @@ describe('#4761 W010 expected set follows the install profile', () => {
 
   test('#4761 W010 silent on a healthy core install', (t) => {
     const cfg = makeConfigDir(t);
-    stage(cfg, [...installerAgents('core')].filter((a) => ALL_AGENTS.includes(a)));
+    stage(cfg, catalogAgents(installerAgents('core')));
     installProfiles.writeActiveProfile(cfg, 'core');
     const status = check(cfg);
     const rule = healthRule.RULES[0];
@@ -233,6 +242,36 @@ describe('#4761 agentsStagedByMarker', () => {
     assert.deepEqual([...got].sort(), [...installerAgents('standard')].sort());
   });
 
+  test('#4761 a capability with core membership widens the expected set like the installer', (t) => {
+    const cfg = makeConfigDir(t);
+    installProfiles.writeActiveProfile(cfg, 'core');
+    const registry = {
+      capabilityClusters: { widen: ['review'] },
+      profileMembership: { widen: { tier: 'core', profiles: ['core'] } },
+    };
+    const full = installProfiles.loadSkillsManifest(COMMANDS_DIR, WORKFLOWS_DIR);
+    const installer = installProfiles.resolveProfile({ modes: ['core'], manifest: new Map(), agentManifest: full, registry }).agents;
+    const got = installProfiles.agentsStagedByMarker(cfg, { registry });
+    assert.deepEqual([...got].sort(), [...installer].sort());
+    for (const agent of installerAgents('core')) assert.ok(got.has(agent), `${agent} still expected`);
+  });
+
+  test('#4761 marker read boundary: limit, limit+1, directory, empty', (t) => {
+    const cfg = makeConfigDir(t);
+    const marker = path.join(cfg, '.gsd-profile');
+    const limit = 4096;
+    fs.writeFileSync(marker, `${'a'.repeat(limit - 1)}\n`);
+    assert.equal(installProfiles.readActiveProfile(cfg), 'a'.repeat(limit - 1), 'at the limit is read');
+    fs.writeFileSync(marker, `${'a'.repeat(limit)}\n`);
+    assert.equal(installProfiles.readActiveProfile(cfg), null, 'limit+1 is refused');
+    fs.unlinkSync(marker);
+    fs.mkdirSync(marker);
+    assert.equal(installProfiles.readActiveProfile(cfg), null, 'a non-regular marker is refused');
+    fs.rmdirSync(marker);
+    fs.writeFileSync(marker, '');
+    assert.equal(installProfiles.readActiveProfile(cfg), null, 'empty is no marker');
+  });
+
   test('#4761 no marker and full marker mean no filtering', (t) => {
     const cfg = makeConfigDir(t);
     assert.equal(installProfiles.agentsStagedByMarker(cfg), null);
@@ -251,7 +290,7 @@ describe('#4761 agentsStagedByMarker', () => {
   });
 
   test('#4761 property: missing equals removed staged agents', () => {
-    const staged = [...installerAgents('standard')].filter((a) => ALL_AGENTS.includes(a)).sort();
+    const staged = catalogAgents(installerAgents('standard')).sort();
     fc.assert(
       fc.property(fc.subarray(staged), (removed) => {
         const cfg = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4761-p-'));
@@ -266,7 +305,6 @@ describe('#4761 agentsStagedByMarker', () => {
           cleanup(cfg);
         }
       }),
-      { numRuns: 25 },
     );
   });
 });
