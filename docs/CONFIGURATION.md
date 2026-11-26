@@ -1068,6 +1068,21 @@ gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 
 See [How to attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) for a step-by-step walkthrough of the `global:plugin:skill` form.
 
+### Project skills discovery (no configuration)
+
+Separately from `agent_skills`, skills in `.claude/skills/` or `.agents/skills/` are found without any setting. The 21 agents that read project skills, and their compact variants, all `@`-include one instruction, [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md), and add one line of their own saying how they apply the rules. The rule is stated once instead of in 36 copies.
+
+The read is scoped (#4649):
+
+1. The agent lists the skill directories and reads only each `SKILL.md` frontmatter (`name`, `description`).
+2. It reads the whole `SKILL.md` when the `description` fits the task, or when the skill has no `description`.
+3. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
+4. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
+
+For skill authors: write a `description` that says when the skill applies. A `SKILL.md` without one is read in full on every spawn.
+
+Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The spawn prompts in `execute-phase`, `plan-phase` and `quick` still ask the agent to read every project `SKILL.md`, so the saving does not reach those paths until #5248 lands. A size warning for large skills is tracked in #5249.
+
 ---
 
 ## Trusted Global Skill Roots (`agent_skills_security.trusted_global_roots`)

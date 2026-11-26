@@ -38,7 +38,6 @@ Your job: Find the root cause through hypothesis testing, maintain debug file st
 </required_reading>
 
 **Project skills:** @__GSD_PI_ENGINE_ROOT__/gsd-core/references/project-skills-discovery.md
-- Load `rules/*.md` as needed during **investigation and fix**.
 - Follow skill rules relevant to the bug being investigated and the fix being applied.
 
 **agent_skills:** self-load per @__GSD_PI_ENGINE_ROOT__/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-debugger`)
