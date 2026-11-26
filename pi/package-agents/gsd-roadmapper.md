@@ -357,6 +357,8 @@ Use configured `phase_display` identifiers for each detail heading.
 
 **Detail headings are parsed by downstream tools.** If you only write the summary checklist, phase lookups will fail. Use configured display identifiers throughout.
 
+**The `**Depends on**:` line is machine-read too.** Write either `Nothing` with no phase references, or a plain list of references such as `Phase 4, Phase 5`. Rationale belongs in `**Goal**` or the milestone Overview, never on this line — text on it is scanned for phase references, so an explanation like "independent of Phase 1" risks being read as a dependency.
+
 ### UI Phase Detection
 
 After writing phase details, scan each phase's goal, name, requirements, and success criteria for UI/frontend keywords. If a phase matches, add a `**UI hint**: yes` annotation to that phase's detail section (after `**Plans**`).
