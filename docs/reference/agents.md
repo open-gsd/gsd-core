@@ -196,7 +196,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-new-project` |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Write, Bash, Glob, Grep, Skill |
+| **Tools** | Read, Edit, Write, Bash, Glob, Grep, Skill |
 | **Model (balanced)** | Sonnet |
 | **Color** | Purple |
 | **Produces** | `ROADMAP.md` |
@@ -877,7 +877,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 |----------|-------|
 | **Spawned by** | MemPalace capability at `ship:post` (when `mempalace.enabled = true`); diary/tunnels/KG-mirror are then refined by their own toggles |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Bash, Grep, Glob |
+| **Tools** | Read, Bash, Grep, Glob, mcp__mempalace__* |
 | **Model (balanced)** | Sonnet |
 | **Produces** | Diary entry in MemPalace, wing tunnel proposals, KG provenance records |
 
@@ -903,7 +903,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 | advisor-researcher | ✓ | | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | research-synthesizer | ✓ | ✓ | | ✓ | | | | | |
 | planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
-| roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
+| roadmapper | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
 | executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
 | plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |

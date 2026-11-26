@@ -1059,6 +1059,21 @@ gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 
 See [How to attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) for a step-by-step walkthrough of the `global:plugin:skill` form.
 
+### Project skills discovery (no configuration)
+
+Separately from `agent_skills`, skills in `.claude/skills/` or `.agents/skills/` are found without any setting. The 21 agents that read project skills, and their compact variants, all `@`-include one instruction, [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md), and add one line of their own saying how they apply the rules. The rule is stated once instead of in 36 copies.
+
+The read is scoped (#4649):
+
+1. The agent lists the skill directories and reads only each `SKILL.md` frontmatter (`name`, `description`).
+2. It reads the whole `SKILL.md` when the `description` fits the task, or when the skill has no `description`.
+3. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
+4. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
+
+For skill authors: write a `description` that says when the skill applies. A `SKILL.md` without one is read in full on every spawn.
+
+Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The spawn prompts in `execute-phase`, `plan-phase` and `quick` still ask the agent to read every project `SKILL.md`, so the saving does not reach those paths until #5248 lands. A size warning for large skills is tracked in #5249.
+
 ---
 
 ## Trusted Global Skill Roots (`agent_skills_security.trusted_global_roots`)
@@ -1151,6 +1166,8 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 ### MemPalace Settings
 
 MemPalace is an opt-in, default-resilient memory capability. Every hook is `onError: skip` — a missing or unreachable MemPalace installation never halts or fails the loop. Enable with `mempalace.enabled: true` after installing MemPalace (`pip install mempalace`).
+
+The shipped `gsd-mempalace-curator` agent carries the tool grant `mcp__mempalace__*`: MemPalace's MCP server registers under the name `mempalace`, and the grant follows that registration, so on tool-allowlist runtimes the curator can call the `mempalace_*` MCP tools its instructions name. When the server is unreachable the agent falls back to the `mempalace` CLI, and every capability hook stays `onError: skip` — a missing MemPalace never fails `ship:post`. The `agent_tools` override path (above) keeps working for per-host adjustments.
 
 `mempalace.enabled` is the **master gate**: all five loop hooks (discuss, plan, execute-wave, verify, ship) and both curator contributions are gated on this key. When it is `false` (the default), nothing fires and the GSD loop is byte-for-byte unchanged. The remaining keys only refine behavior when `mempalace.enabled` is `true`; they are honored at runtime by the skills, curator, and fragments — they do not add independent hook gating.
 
@@ -1728,6 +1745,60 @@ into each agent's static config at install time — `spawn_agent` and
 OpenCode's `task` interface do not accept an inline `model` parameter, so
 running `gsd install <runtime>` after editing `model_overrides` is required
 for the change to take effect. See issue #2256.
+
+#### Runtime-keyed entries (one config, two hosts)
+
+`.planning/config.json` is committed, so it is the same file for every host working the repository. A per-agent model id is a claim only one runtime can be right about: a Codex id handed to Claude Code fails at spawn, not at resolution. An entry may therefore be an object keyed by runtime, the same shape `model_profile_overrides.<runtime>.<tier>` uses ([#4669](https://github.com/open-gsd/gsd-core/issues/4669)):
+
+```json
+{
+  "model_overrides": {
+    "gsd-planner":  { "claude": "opus", "codex": "gpt-6-astra" },
+    "gsd-debugger": { "codex": "gpt-6-astra" },
+    "gsd-verifier": "gpt-5.6-sol"
+  }
+}
+```
+
+| Entry | Result for the runtime that is resolving or being installed |
+|---|---|
+| a string | That string, on every runtime. Unchanged from before. |
+| an object with a non-empty string under the runtime's key | That value. On Claude it is mapped exactly like the string form (full Claude ids collapse to a tier alias, `fable` passes through). |
+| an object with no key for the runtime, or an unusable value under it (empty string, number, `null`, object, array) | No override for this agent on this runtime. It resolves by tier, exactly as if it had no entry. Above, `gsd-debugger` keeps its Codex pin and routes by tier on Claude. |
+
+The runtime that selects the key is the one that is actually resolving, in the order `GSD_RUNTIME`, then the `runtime` config key, then the per-install marker, then `claude`. It is not the raw `runtime` key alone, which is usually absent. At install time (`gsd install <runtime>`) the key is the runtime being installed, so the same file bakes a Codex id into the Codex agent files and an OpenCode id into the OpenCode ones. Keys are the exact runtime ids (`claude`, `codex`, `opencode`, `kilo`, ...), compared case-sensitively.
+
+Global and project files merge per runtime key: a project object replaces a global string, a project string replaces a global object, and two objects merge key by key with the project winning a conflict. Set an object with `config-set model_overrides.<agent> '{"codex":"gpt-6-astra"}'`. A per-runtime dotted path such as `model_overrides.<agent>.codex` is not an addressable key, so write the whole object. A runtime whose dispatch surface cannot carry a per-agent model at all ignores the entry; that is a no-op, not an error.
+
+#### TDD gate models (`<executor>:tdd-red`, `<executor>:tdd-green-refactor`)
+
+A `type: tdd` plan normally runs RED, GREEN and REFACTOR in one executor dispatch on one model. Two optional `model_overrides` keys give the RED gate and the GREEN/REFACTOR gates their own models ([#4696](https://github.com/open-gsd/gsd-core/issues/4696)):
+
+```json
+{
+  "workflow": { "tdd_mode": true },
+  "model_overrides": {
+    "gsd-executor:tdd-red": "opus",
+    "gsd-executor": "sonnet"
+  }
+}
+```
+
+| Key | Gate it governs | When unset |
+|---|---|---|
+| `<executor-type>:tdd-red` | The RED dispatch: the failing test and its RED evidence | The routed executor's own model |
+| `<executor-type>:tdd-green-refactor` | The GREEN/REFACTOR dispatch | The routed executor's own model |
+
+`<executor-type>` is `gsd-executor`, or the specialist a plan names with `agent_hint`. Each entry takes every form an agent entry takes: a model string, or an object keyed by runtime. A blank string, a non-string value, or an object without the active runtime's key counts as no entry, so that gate uses the routed executor's own model. `inherit` is a real value: that gate runs on the session's model.
+
+`execute-phase` splits a plan into a RED dispatch and a GREEN/REFACTOR dispatch only when all of these hold:
+
+- `workflow.tdd_mode` is `true`
+- the plan's frontmatter says `type: tdd`
+- the two gate models resolve to different models (`inherit` and an empty model count as the same)
+- the plan declares no `executor_runtime`, and the phase does not use the `orchestrator-worktree` backend
+
+With neither key set the two models are equal and dispatch is unchanged. A split plan runs in the orchestrator's own working tree in sequential mode, one dispatch after the other, instead of in a worktree, so that GREEN starts from the RED commit. Like any sequential-mode plan it is serialized against the other plans of its wave. Reasoning effort is not switched per gate: effort still comes from the agent's own configuration. See [How to run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md).
 
 ### Per-Phase-Type Models (`models`) — added in v1.41
 

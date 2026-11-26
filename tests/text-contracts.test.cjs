@@ -16,6 +16,7 @@ const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
 const textContracts = require('../scripts/static-checks/text-contracts.cjs');
+const PROJECT_SKILLS = require('../scripts/static-checks/text-contracts/lib/project-skills-discovery.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -576,6 +577,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/references/untrusted-input-boundary.md', 'package-lock.json', '.github/workflows/test.yml',
     // #6532.
     'gsd-core/workflows/quick-batch/steps/verification-wave.md', 'gsd-core/workflows/quick-batch/steps/research-phase.md',
+    // agent-skills-awareness (#4649): the 21 canonical agents, their 15 compact variants and the shared reference.
+    ...PROJECT_SKILLS.DISCOVERY_FILES, PROJECT_SKILLS.REFERENCE,
   ];
 
   function copyOfRepoFiles(t) {
