@@ -2181,11 +2181,10 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
       : false;
 
   function runInstaller(root, args, { optIn }) {
-    const env = installSpawnEnv({
-      HOME: root,
-      USERPROFILE: root,
-      ...(optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {}),
-    });
+    const env = installSpawnEnv(isolatedEnv({
+      home: root,
+      override: optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {},
+    }));
     delete env.GSD_TEST_MODE;
     return runNode([INSTALL_SCRIPT, ...args], { cwd: root, env, timeoutMs: SCOPED_INSTALL_TIMEOUT_MS });
   }
