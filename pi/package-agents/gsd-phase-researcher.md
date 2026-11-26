@@ -46,7 +46,6 @@ Before researching, discover project context:
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions.
 
 **Project skills:** @__GSD_PI_ENGINE_ROOT__/gsd-core/references/project-skills-discovery.md
-- Load `rules/*.md` as needed during **research**.
 - Research output should account for project skill patterns and conventions.
 
 **agent_skills:** self-load per @__GSD_PI_ENGINE_ROOT__/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-phase-researcher`)
