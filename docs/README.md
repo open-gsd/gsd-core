@@ -146,6 +146,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [ROADMAP phase-list entry grammar](reference/roadmap-phase-entry.md) — the one accepted form of a `- [ ] **Phase N: Name**` checklist entry, shared by every reader
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
+- [Templates](reference/templates.md) — every file under `gsd-core/templates/`, the artifact it produces, and what references it
 - [Installer flags](reference/installer-flags.md) — every option of `npx @opengsd/gsd-core`: runtime flags, location, skill profiles, cleanup and hook-path behavior
 - [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
