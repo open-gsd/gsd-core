@@ -23,6 +23,35 @@ const NO_KEYS = Object.fromEntries(store.SESSION_ENV_KEYS.map((k) => [k, '']));
 
 const followers = table.followers.map((f) => ({ ...f, mod: require(path.join(ROOT, f.file)) }));
 
+/**
+ * Every way `mod` (a follower) disagrees with the store: each case-table row, and the length bounds (159/160/161 for a
+ * session id, 79/80/81 for a role) that a random string almost never reaches. Empty means in step.
+ */
+function divergences(mod) {
+  const out = [];
+  const same = (label, a, b) => { if (JSON.stringify(a) !== JSON.stringify(b)) out.push(label); };
+  for (const row of table.cases) {
+    same(`classify ${row.file}`, mod.classifyHandoffName(row.file), store.classifyHandoffName(row.file));
+    const parsed = store.classifyHandoffName(row.file);
+    if (parsed !== null) {
+      const entry = { file: row.file, ...parsed, body: row.body };
+      same(`own ${row.name}`, mod.isOwnHandoff(entry, row.identity), store.isOwnHandoff(entry, row.identity));
+    }
+  }
+  for (const n of [159, 160, 161]) {
+    const id = 'a'.repeat(n);
+    same(`sanitizeSessionId length ${n}`, mod.sanitizeSessionId(id), store.sanitizeSessionId(id));
+    same(`classify session length ${n}`, mod.classifyHandoffName(`HANDOFF.${id}.json`), store.classifyHandoffName(`HANDOFF.${id}.json`));
+    same(`classify claimed session length ${n}`, mod.classifyHandoffName(`HANDOFF.claimed.r.${id}.json`), store.classifyHandoffName(`HANDOFF.claimed.r.${id}.json`));
+  }
+  for (const n of [79, 80, 81]) {
+    const role = 'a'.repeat(n);
+    same(`classify latest role length ${n}`, mod.classifyHandoffName(`HANDOFF.latest.${role}.json`), store.classifyHandoffName(`HANDOFF.latest.${role}.json`));
+    same(`classify claimed role length ${n}`, mod.classifyHandoffName(`HANDOFF.claimed.${role}.s.json`), store.classifyHandoffName(`HANDOFF.claimed.${role}.s.json`));
+  }
+  return out;
+}
+
 describe('the follower registry', () => {
   test('followerRegistryIsWellFormed: at least one follower, unique ids, existing files, every required export', () => {
     assert.ok(followers.length >= 1);
@@ -48,6 +77,19 @@ for (const f of followers) {
         assert.equal(f.mod.isOwnHandoff(entry, row.identity), store.isOwnHandoff(entry, row.identity));
       });
     }
+
+    test('followersMatchStoreAtTheLengthBounds: no divergence over the case table and the 159/160/161 and 79/80/81 bounds', () => {
+      assert.deepEqual(divergences(f.mod), []);
+    });
+
+    test('theGuardFailsWhenAFollowerDiverges: a follower mutated on one behavior is reported (negative control)', () => {
+      const wrongKind = { ...f.mod, classifyHandoffName: (name) => { const p = f.mod.classifyHandoffName(name); return p && p.kind === 'latest' ? { ...p, kind: 'session' } : p; } };
+      assert.ok(divergences(wrongKind).length > 0, 'a mutated classify must be caught by the case table');
+      const ownsEverything = { ...f.mod, isOwnHandoff: () => true };
+      assert.ok(divergences(ownsEverything).length > 0, 'a follower that owns every handoff must be caught');
+      const longerIds = { ...f.mod, sanitizeSessionId: (v) => { const s = f.mod.sanitizeSessionId(v); return typeof v === 'string' && v.length > 160 ? v.slice(0, 161) : s; } };
+      assert.ok(divergences(longerIds).length > 0, 'an off-by-one in the id bound must be caught');
+    });
 
     test('followersShareSessionEnvKeys: the same keys in the same order', () => {
       assert.deepEqual([...f.mod.SESSION_ENV_KEYS], [...store.SESSION_ENV_KEYS]);

@@ -205,14 +205,17 @@ function readHandoffs(root, identity) {
   } catch {
     return { own: false, others: 0 };
   }
-  let own = false;
-  let others = 0;
-  let scanned = 0;
+  // Names the caller could own are read FIRST (a name-owned file, or the legacy file whose ownership its body decides),
+  // so the per-render cap can never hide the caller's own handoff behind many other sessions' files.
+  const named = [];
   for (const name of names) {
     const parsed = classifyHandoffName(name);
-    if (parsed === null) continue;
-    if (scanned >= HANDOFF_ENTRY_CAP) break;
-    scanned += 1;
+    if (parsed !== null) named.push({ name, parsed, mine: parsed.kind === 'legacy' || isOwnHandoff({ file: name, ...parsed, body: {} }, identity) });
+  }
+  named.sort((a, b) => Number(b.mine) - Number(a.mine));
+  let own = false;
+  let others = 0;
+  for (const { name, parsed } of named.slice(0, HANDOFF_ENTRY_CAP)) {
     const body = readHandoffBody(path.join(root, '.planning', name));
     if (body === null) continue;
     if (isOwnHandoff({ file: name, ...parsed, body }, identity)) own = true;
@@ -884,6 +887,9 @@ function formatGsdState(s, opts = {}) {
   // Phase-lifecycle scenes (issue #2833) — first match wins; falls through to
   // the original "<status> · <phase>" path when none of the new fields apply.
   const phasesStr = (s.nextPhases && s.nextPhases.length > 0) ? s.nextPhases.join('/') : null;
+  // #6797: whether the scenes below printed the status at all (some scenes print none), so the own-pause marker
+  // is added exactly when the status line would not already say `paused`.
+  let statusPrinted = false;
 
   if (s.activePhase) {
     // Scene 1: an orchestrator is mid-flight on this phase.
@@ -891,6 +897,7 @@ function formatGsdState(s, opts = {}) {
     //   (discussing / planning / executing / verifying)
     const stage = s.status || '';
     const phase = phaseLabel(s.activePhase);
+    statusPrinted = stage !== '';
     parts.push(stage ? `${phase} ${stage}` : phase);
   } else if (s.nextAction && phasesStr) {
     // Scene 2: idle + a recommended next command is visible to the user.
@@ -907,7 +914,7 @@ function formatGsdState(s, opts = {}) {
     // Backward-compatible default — preserved EXACTLY for STATE.md files that
     // don't carry the new lifecycle fields. Identical output to v1.38.x and
     // earlier so no existing project's status-line changes shape.
-    if (s.status) parts.push(s.status);
+    if (s.status) { parts.push(s.status); statusPrinted = true; }
     if (s.phaseNum && s.phaseTotal) {
       const bracketPhase = bracket
         ? renderBracketPhaseDisplay(s.milestone, s.phaseNum, opts.projectCode)
@@ -925,7 +932,7 @@ function formatGsdState(s, opts = {}) {
 
   // #6797: the per-session pause marker. An own handoff always reads `paused` (the scenes above print the
   // status only on some paths); other sessions' handoffs add `⏸N`. No handoff adds nothing.
-  if (s.handoffs && s.handoffs.own === true && !parts.some((p) => /(^|\s)paused$/.test(p))) parts.push('paused');
+  if (s.handoffs && s.handoffs.own === true && !(statusPrinted && s.status === 'paused')) parts.push('paused');
   if (s.handoffs && s.handoffs.others > 0) parts.push(`⏸${s.handoffs.others}`);
 
   // #2734: STATE.md freshness marker — opt-in, appended last.
@@ -1049,7 +1056,7 @@ function formatGsdStateCompact(s, opts = {}) {
   }
 
   // #6797: the per-session pause marker, as in formatGsdState.
-  if (s.handoffs && s.handoffs.own === true && !parts.includes('PAUSED')) parts.push('PAUSED');
+  if (s.handoffs && s.handoffs.own === true && !(!done && shortGsdStatus(s.status) === 'PAUSED')) parts.push('PAUSED');
   if (s.handoffs && s.handoffs.others > 0) parts.push(`\u23f8${s.handoffs.others}`);
 
   // #2734: STATE.md freshness marker \u2014 opt-in, appended last.

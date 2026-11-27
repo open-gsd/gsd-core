@@ -279,6 +279,22 @@ export function listHandoffs(planningDir: string): { handoffs: HandoffEntry[]; s
   return { handoffs, skipped };
 }
 
+/**
+ * Whether the caller owns any handoff. Reads only the files whose NAME could be the caller's (a name-owned file, or the
+ * legacy file whose ownership its body decides), so the cost does not grow with other sessions' handoffs.
+ */
+export function hasOwnHandoff(planningDir: string, identity: Identity): boolean {
+  if (identity.session_id === null) return false;
+  for (const file of readDirNames(planningDir)) {
+    const parsed = classifyHandoffName(file);
+    if (parsed === null) continue;
+    if (parsed.kind !== 'legacy' && !isOwnHandoff({ ...parsed, body: {} }, identity)) continue;
+    const read = readJsonObject(path.join(planningDir, file));
+    if (read.ok && isOwnHandoff({ ...parsed, body: read.value }, identity)) return true;
+  }
+  return false;
+}
+
 function sessionsDirIsUsable(planningDir: string): boolean {
   try {
     const st = fs.lstatSync(path.join(planningDir, SESSIONS_DIR));

@@ -87,13 +87,11 @@ describe('statusline: the per-session pause marker (#6797)', () => {
       assert.ok(out.includes(PAUSED) && out.includes('⏸1'), out);
     });
 
-    test(`statuslineWithoutHandoffIsByteIdentical (${format}): with no handoff the output is what it was before this feature`, () => {
-      const without = render({ sessionId: 'me' }, format);
-      const before = format === 'compact'
-        ? statusline.formatGsdStateCompact(statusline.readGsdState(dir, {}) || {}, {})
-        : statusline.formatGsdState(statusline.readGsdState(dir, {}) || {}, {});
-      assert.equal(without, before);
-      assert.ok(!without.includes('⏸') && !/paused/i.test(without));
+    test(`statuslineWithoutHandoffIsByteIdentical (${format}): with no handoff the output is the pinned string this fixture rendered before the feature`, () => {
+      // Literals, not a second render by the new code: the pre-feature formatters printed exactly these for this STATE.md.
+      const GOLDEN = { full: 'v1.0 Demo · executing · Build (2/5)', compact: 'v1.0 · P2/5 · executing' };
+      assert.equal(render({ sessionId: 'me' }, format), GOLDEN[format]);
+      assert.equal(render({}, format), GOLDEN[format], 'the default call shape (no session option) renders the same');
     });
   }
 
@@ -189,6 +187,15 @@ describe('statusline: the per-session pause marker (#6797)', () => {
     });
   }
 
+  test('statuslineReadsOwnHandoffBeyondTheCap: 70 claimed files held by others sort ahead of the caller\'s own file, which is still found', () => {
+    for (let i = 0; i < 70; i++) put(`HANDOFF.claimed.r${String(i).padStart(3, '0')}.other${i}.json`);
+    put('HANDOFF.me.json');
+    const state = statusline.readGsdState(dir, { env: {}, sessionId: 'me' });
+    assert.equal(state.handoffs.own, true, 'the own handoff is read before the cap applies');
+    assert.equal(state.handoffs.others, statusline.HANDOFF_ENTRY_CAP - 1);
+    assert.ok(/paused/i.test(statusline.formatGsdState(state, {})));
+  });
+
   test('statuslineSurvivesReaddirFailure: an unreadable .planning listing renders as no handoff and never throws (fs patch restored)', () => {
     put('HANDOFF.other.json');
     const real = fs.readdirSync;
@@ -223,6 +230,50 @@ describe('legacy handoff ownership keys on a valid role_id only (#6797)', () => 
       assert.equal(statusline.isOwnHandoff(legacy(body), identity), expected);
     });
   }
+});
+
+describe('hasOwnHandoff reads only names that could be the caller\'s (#6797)', () => {
+  let dir;
+  beforeEach(() => { dir = createTempProject(); });
+  afterEach(() => { mock.restoreAll(); cleanup(dir); });
+  const planning = () => path.join(dir, '.planning');
+  const put = (name, body = {}) => fs.writeFileSync(path.join(planning(), name), typeof body === 'string' ? body : JSON.stringify(body));
+  const me = { session_id: 's1', role_id: 'coordinator' };
+
+  test('hasOwnHandoffTrueForOwnNames: its session file, its role slot, a legacy file that names no other role', () => {
+    for (const name of ['HANDOFF.s1.json', 'HANDOFF.latest.coordinator.json', 'HANDOFF.json']) {
+      const fresh = createTempProject();
+      try {
+        fs.writeFileSync(path.join(fresh, '.planning', name), '{}');
+        assert.equal(store.hasOwnHandoff(path.join(fresh, '.planning'), me), true, name);
+      } finally { cleanup(fresh); }
+    }
+  });
+
+  test('hasOwnHandoffFalseForOthersAndNoIdentity', () => {
+    put('HANDOFF.s2.json');
+    put('HANDOFF.latest.implementer.json');
+    put('HANDOFF.json', { role_id: 'reviewer' });
+    assert.equal(store.hasOwnHandoff(planning(), me), false);
+    assert.equal(store.hasOwnHandoff(planning(), { session_id: null, role_id: null }), false);
+  });
+
+  test('hasOwnHandoffNeverOpensOtherSessionsFiles: a file whose name is not the caller\'s is not read (fs patch restored)', () => {
+    put('HANDOFF.s2.json');
+    put('HANDOFF.s1.json');
+    const opened = [];
+    const real = fs.openSync;
+    mock.method(fs, 'openSync', (p, ...rest) => { opened.push(path.basename(String(p))); return real.call(fs, p, ...rest); });
+    let result;
+    try { result = store.hasOwnHandoff(planning(), me); } finally { mock.restoreAll(); }
+    assert.equal(result, true);
+    assert.ok(!opened.includes('HANDOFF.s2.json'), `opened: ${opened.join(',')}`);
+  });
+
+  test('hasOwnHandoffIgnoresUnreadableOwnFile: an invalid own file is not a pause', () => {
+    put('HANDOFF.s1.json', '{nope');
+    assert.equal(store.hasOwnHandoff(planning(), me), false);
+  });
 });
 
 describe('artifacts: every handoff-grammar name is a canonical planning file (#6797)', () => {

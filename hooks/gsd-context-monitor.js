@@ -503,7 +503,8 @@ const handleStdinEnd = () => {
           process.execPath,
           // #6797 (ADR-4962): attribute the breadcrumb to the session that ran out of context, so a second
           // session on this .planning/ is not read as the one that did. argv, never a shell: the id is data.
-          [gsdTools, 'state', 'record-session', '--stopped-at', stoppedAt, '--session', sessionId],
+          // A dash-led id would be read as a flag by the CLI's argument parser and lose the breadcrumb, so it is not passed.
+          [gsdTools, 'state', 'record-session', '--stopped-at', stoppedAt, ...(String(sessionId).startsWith('-') ? [] : ['--session', sessionId])],
           { cwd, detached: true, stdio: 'ignore', windowsHide: true }
         ).unref();
         warnData.criticalRecorded = true;

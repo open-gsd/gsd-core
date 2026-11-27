@@ -37,7 +37,7 @@ import { collectSection } from './markdown-sectionizer.cjs';
 import { readOnlyGitEnv } from './read-only-git-env.cjs';
 import { formatGsdSlash, resolveRuntime, runtimeCommand } from './runtime-slash.cjs';
 // #6797 (ADR-4962): the pause is per session; the store owns the handoff grammar, identity and ownership.
-import { listHandoffs, resolveIdentity, isOwnHandoff } from './session-store.cjs';
+import { hasOwnHandoff, resolveIdentity } from './session-store.cjs';
 // #3696: the calendar-validity predicate moved to the STATE.md document module
 // so `state validate` can assert the same `last_activity` invariant this reader
 // already enforces (ADR-227). Two copies would let the two surfaces disagree
@@ -455,8 +455,7 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
   const planningRootDir = path.join(cwd, '.planning');
   let handoffPresent = false;
   if (hasPlanning) {
-    const identity = resolveIdentity(planningRootDir, {});
-    handoffPresent = identity.session_id !== null && listHandoffs(planningRootDir).handoffs.some((h) => isOwnHandoff(h, identity));
+    handoffPresent = hasOwnHandoff(planningRootDir, resolveIdentity(planningRootDir, {}));
   }
 
   const empty: SmartEntrySignals = {

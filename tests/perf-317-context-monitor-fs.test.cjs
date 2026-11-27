@@ -2398,6 +2398,7 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
   describe('#6360 context-monitor: subagent inputs (agent_id) are silent and touch no session file', () => {
     const SUBAGENT = { agent_id: 'a4653ce68d3a4418c', agent_type: 'general-purpose' };
     const WARNING_70 = /^CONTEXT WARNING: Usage at 70%/;
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
     test('a subagent input at CRITICAL in a GSD project emits nothing and never reaches the record-session spawn', (t) => {
       const s = makeSession(t, { gsdActive: true });
@@ -2437,7 +2438,6 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
       const sessionId = path.basename(s.metricsPath).slice('claude-ctx-'.length, -'.json'.length);
       const top = s.call('PostToolUse', 20, { spawnLog, timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS });
       assert.strictEqual(top.exitCode, 0);
-      const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
       const spawns = splitLines(fs.readFileSync(spawnLog, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
         .filter((argv) => argv.includes('state') && argv.includes('record-session'));
       assert.strictEqual(spawns.length, 1);
