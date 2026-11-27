@@ -38,4 +38,4 @@ against the mapping point, not HEAD.
 treats a directory as mapped when its path appears in any of the seven
 documents, flags modified and deleted files inside mapped directories as well
 as new structure outside them, and withholds paths that are unsafe to pass to
-the mapper. See [Post-Execute Codebase Drift Detection](post-execute-codebase-drift-detection.md).
+the mapper. See [Post-Execute Codebase Drift Detection](../FEATURES.md#27a-post-execute-codebase-drift-detection).

@@ -52,7 +52,19 @@ const DISCOVERY_FILES = [
   ...COMPACT_AGENTS.map((name) => `agents/${name}.compact.md`),
 ];
 
+// The files whose spawn prompts carry a "Project skills" line for the executor, planner or phase
+// researcher (#5248). Each line must state the same scoped read as the reference, because on a
+// runtime where the agent's @-include does not resolve the line is the only discovery instruction.
+const SPAWN_PROMPT_FILES = [
+  'gsd-core/workflows/execute-phase.md',
+  'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
+  'gsd-core/workflows/plan-phase.md',
+  'gsd-core/workflows/quick.md',
+  'capabilities/research/fragments/plan-pre.md',
+];
+
 module.exports = {
+  SPAWN_PROMPT_FILES,
   REFERENCE,
   INCLUDE,
   REFERENCE_MAX_BYTES,

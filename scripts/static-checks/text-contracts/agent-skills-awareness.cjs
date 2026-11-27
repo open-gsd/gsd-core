@@ -12,6 +12,7 @@ const {
   INCLUDE,
   REFERENCE_MAX_BYTES,
   DISCOVERY_FILES,
+  SPAWN_PROMPT_FILES,
 } = require('./lib/project-skills-discovery.cjs');
 
 // The first non-blank line under the include is the agent's own application line: a bullet that
@@ -24,6 +25,28 @@ function roleStatementUnderInclude(text) {
   const next = lines.slice(at + 1).find((line) => line.trim() !== '') ?? '';
   if (/^- .*\bskills?\b/i.test(next)) return true;
   return `the line under the include is not a bullet that names skills: ${JSON.stringify(next.slice(0, 60))}`;
+}
+
+// A spawn prompt that names the project skill directories states the scoped read (#5248): the
+// frontmatter first, the full SKILL.md only where the description fits, never every SKILL.md. Lines
+// are found by the "<.claude dir> or <.agents dir>" pair, so the spike/sketch lookups, which name
+// neither, are not read as project-skills lines. The plan checker line names both but asks for no
+// read ("verify plans account for ...", out of scope in #5248), so it is set aside by its verb.
+const SKILL_DIRS_LINE = /\.claude\/skills\/ or [^\n]*\.agents\/skills\//;
+const PLAN_CHECKER_LINE = /\bverify plans\b/;
+const READ_EVERY_SKILL = /read SKILL\.md(?: for each| files)/i;
+
+function spawnLinesAreScoped(text) {
+  const lines = text.split(/\r?\n/).filter((line) => SKILL_DIRS_LINE.test(line) && !PLAN_CHECKER_LINE.test(line));
+  if (lines.length === 0) return 'no project-skills line found';
+  for (const line of lines) {
+    const shown = JSON.stringify(line.trim().slice(0, 70));
+    if (READ_EVERY_SKILL.test(line)) return `a project-skills line asks to read every SKILL.md: ${shown}`;
+    if (!/frontmatter/i.test(line)) return `a project-skills line does not scope the read to the frontmatter: ${shown}`;
+    if (!/\bdescription\b/.test(line)) return `a project-skills line does not gate the full read on the description: ${shown}`;
+    if (!/no description|\bmissing\b/.test(line)) return `a project-skills line has no fallback for a skill without a description: ${shown}`;
+  }
+  return true;
 }
 
 module.exports = {
@@ -49,6 +72,11 @@ module.exports = {
         .satisfies(roleStatementUnderInclude, `${rel} needs its own application line under the include`);
     }
 
+    // The spawn prompts agree with the reference (#5248).
+    for (const rel of SPAWN_PROMPT_FILES) {
+      ctx.doc(rel).satisfies(spawnLinesAreScoped, `${rel} spawn prompt must state the scoped project-skills read`);
+    }
+
     // The reverse leg: an agent that includes the reference is on the list, so a new includer
     // cannot slip in unlisted and a listed agent cannot drop the include unnoticed.
     const listed = new Set(DISCOVERY_FILES);
@@ -57,16 +85,22 @@ module.exports = {
       ctx.doc(rel).lacks(INCLUDE, `${rel} includes the discovery reference but is not in the agent-skills-awareness list`);
     }
 
-    // The reference itself: frontmatter first, a description gate, the no-description fallback,
-    // deferred skills stay reachable, generic resource loading, and nothing from the dropped dedup
-    // step or the old pack-specific steps.
+    // The reference itself: a code-produced frontmatter index (#6719), a description gate, the
+    // no-description fallback, a frontmatter-only fallback when the command fails, deferred skills
+    // stay reachable, generic resource loading, and nothing from the dropped dedup step or the old
+    // pack-specific steps.
     ctx.doc(REFERENCE)
-      .has(/only the (?:YAML )?frontmatter/i, 'step 3 must scope the index read to the frontmatter')
+      .has('skill-manifest', 'the listing step must run the skill-manifest command, which emits no skill body')
+      .has('--skills-dir <dir>', 'the skill-manifest call must be scoped with --skills-dir <dir>, one project skills directory at a time')
+      .has('gsd-run-resolver.md', 'the reference must name the launcher file that defines gsd_run')
+      .lacks(/@\S*gsd-run-resolver\.md/, 'the reference must not @-include the launcher: 2.8 KB on every spawn, including when no skills dir exists')
+      .has(/If the launcher or the command fails, list/, 'the reference needs a fallback that lists the directories when the launcher or command fails')
+      .has(/only the (?:YAML )?frontmatter/i, 'the fallback must scope the read to the frontmatter')
       .has('`description`', 'the read must be gated on the skill description')
       .has(/no `description`/, 'a skill without a description must still be read in full')
       .has(/stays available|remains available/i, 'a skill that was not read must stay reachable')
       .has(/a `SKILL\.md` references/, 'resource loading must follow what a SKILL.md references')
-      .lacks(/config-get|gsd_run|agent_skills/, 'the agent_skills dedup step was dropped (#4649, 2026-10-14)')
+      .lacks(/config-get|agent_skills/, 'the agent_skills dedup step was dropped (#4649, 2026-10-14)')
       .lacks(/AGENTS\.md/, 'the reference must not mention AGENTS.md')
       .lacks('rules/*.md', 'the reference must not encode one pack\'s rules/*.md layout')
       .satisfies(
