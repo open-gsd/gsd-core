@@ -12,7 +12,7 @@ We will add a single `GET /health` endpoint to an existing Express application. 
 
 ## Prerequisites
 
-- **Node.js 18 or later** — `node --version` should print `v18.x.x` or higher.
+- **Node.js 24 or later** — `node --version` should print `v24.x.x` or higher.
 - **An existing project** — any repo with code already in it. It does not have to be Express; the steps apply to any stack.
 - **Claude Code** — open in your repo root.
 
@@ -29,9 +29,9 @@ npx @opengsd/gsd-core@latest
 Choose **Claude Code** and **local** when prompted. You'll see:
 
 ```text
-✓ Installed 86 skills to .claude/commands/
-✓ Installed agents to .claude/agents/
-✓ GSD Core ready — run /gsd-new-project to start
+✓ Installed 72 commands to commands/ (gsd-<cmd>.md flat form)
+✓ Installed agents
+Done! Open a blank directory in Claude Code and run /gsd-new-project.
 ```
 
 ---

@@ -34,16 +34,10 @@ Before researching, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
+**Project skills:** @__GSD_PI_ENGINE_ROOT__/gsd-core/references/project-skills-discovery.md
+- Research should account for project skill patterns
 
 **agent_skills:** self-load per @__GSD_PI_ENGINE_ROOT__/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-ui-researcher`)
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
-3. Load specific `rules/*.md` files as needed during research
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-5. Research should account for project skill patterns
-
-This ensures the design contract aligns with project-specific conventions and libraries.
 </project_context>
 
 <upstream_input>

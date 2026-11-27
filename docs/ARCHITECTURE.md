@@ -293,13 +293,13 @@ Runtime hooks that integrate with the host AI agent:
 | `gsd-path-export.js` | `SessionStart` | Appends the installed `gsd-core/bin` directory to `$CLAUDE_ENV_FILE` (provided to SessionStart hooks only) so a later Bash call resolves `gsd_run` from PATH; no-op when the variable is unset |
 | `gsd-check-update-worker.js` | (helper) | Background worker spawned by `gsd-check-update.js`; no direct event registration |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt injection patterns (advisory) |
-| `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read tool output for injected instructions in untrusted content |
+| `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read, WebFetch and WebSearch output for injected instructions in untrusted content (advisory) |
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in via `hooks.workflow_guard`) |
 | `gsd-secret-read-guard.js` | `PreToolUse` | Hard-blocks Read / Grep / Bash reads of `.env`, `.env.<suffix>` (templates such as `.env.example` exempt) and `.secrets`; replaces the installer-written `Read(.env*)` permission deny rules, which made every `cd DIR && grep …` compound prompt for approval on Claude Code ≥ 2.1.259 (#4221) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on files not yet read in the session |
-| `gsd-session-state.sh` | `SessionStart` | Session state tracking for shell-based runtimes |
-| `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional commit enforcement |
-| `gsd-phase-boundary.sh` | `PostToolUse` | Phase boundary detection for workflow transitions |
+| `gsd-session-state.sh` | `SessionStart` | Session state tracking for shell-based runtimes; opt-in, a no-op unless `hooks.community` is `true` |
+| `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional commit enforcement; blocks a non-conforming `git commit` (exit 2); opt-in, a no-op unless `hooks.community` is `true` |
+| `gsd-phase-boundary.sh` | `PostToolUse` | Phase boundary detection for workflow transitions; opt-in, a no-op unless `hooks.community` is `true` |
 
 See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
 
@@ -983,8 +983,8 @@ Debounce: 5 tool uses between repeated warnings. Severity escalation (WARNING→
 
 ### Safety Properties
 
-- All hooks wrap in try/catch, exit silently on error
-- stdin timeout guard (3s) prevents hanging on pipe issues
+- Advisory hooks wrap in try/catch and exit silently on error; enforcement hooks take the crash policy they declare (see the crash policy under Hooks above)
+- A stdin timeout guard prevents hanging on pipe issues: 3 s in the guards and the statusline, 5 s in the read injection scanner, 8 s in the config reload hook, 10 s in the context monitor
 - Stale metrics (>60s old) are ignored
 - Missing bridge files handled gracefully (fresh sessions)
 - Subagent inputs (`agent_id` a non-empty string) exit silently before any bridge or sentinel access: they share the parent's `session_id`, so any reading would be the parent's (#6360)
