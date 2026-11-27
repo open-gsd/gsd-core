@@ -1427,8 +1427,8 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     assertBlocked(runHook(bash(`cat .env; echo "$(${'"$('.repeat(12000)}`)), '12000 "$(', { code: 'command-too-complex', tool: 'Bash' });
   });
 
-  // Past 1,000 nested spans (MAX_READER_DEPTH, the limit the changeset and the
-  // user guide state) the readers stop, and the grammar scan, which cannot
+  // Past 1,000 nested spans (MAX_READER_DEPTH, the limit the changeset states)
+  // the readers stop, and the grammar scan, which cannot
   // finish, denies the command as command-too-complex; a stack overflow does the
   // same at a depth that depends on the runtime. Each row nests a `case` N spans
   // deep, with a read after the innermost spans close. bash 5 closes the
