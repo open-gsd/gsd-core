@@ -381,6 +381,11 @@ describe('buildModel', () => {
 });
 
 describe('renderMatrix and gaps', () => {
+  test('a backslash and a pipe in an item are each escaped, so the cell cannot end early', () => {
+    const model = buildModel(inputs({ agents: ['gsd-a\\b|c'] }));
+    assert.ok(renderMatrix(model).includes('`gsd-a\\\\b\\|c`'));
+  });
+
   const model = buildModel(inputs({
     commands: [{ stem: 'a', argumentHint: '[--x]' }, { stem: 'b', argumentHint: '' }],
     configKeys: ['k.prose', 'k.table'],

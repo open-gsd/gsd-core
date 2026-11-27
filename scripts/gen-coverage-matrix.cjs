@@ -416,7 +416,7 @@ function typeOf(file) {
 }
 
 function cell(text) {
-  return String(text).replace(/\|/g, '\\|');
+  return String(text).replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 }
 
 function renderRow(row) {
