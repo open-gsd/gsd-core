@@ -97,7 +97,7 @@ One `.compact.md` sibling per agent above, same directory, same stem — ADR-413
 
 ## Commands
 
-Full roster at `commands/gsd/*.md`. The groupings below mirror `docs/COMMANDS.md` section order; each row carries the command name, a one-line role derived from the command's frontmatter `description:`, and a link to the source file. `tests/command-count-sync.test.cjs` locks the count against the filesystem.
+Full roster at `commands/gsd/*.md`. The groupings below mirror `docs/COMMANDS.md` section order; each row carries the command name, a one-line role derived from the command's frontmatter `description:`, and a link to the source file. `tests/inventory-manifest-sync.test.cjs` locks the count against the filesystem.
 
 ### Namespace Meta-Skills
 

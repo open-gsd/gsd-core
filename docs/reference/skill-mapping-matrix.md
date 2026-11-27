@@ -1,6 +1,6 @@
 # Per-runtime skill mapping matrix
 
-> **Reference** page. The authoritative source for every cell is the runtime's `capabilities/<runtime>/capability.json` `artifactLayout` descriptor, resolved by `resolveRuntimeArtifactLayout` in `gsd-core/src/runtime-artifact-layout.cts`. This page is the human-readable projection; when they disagree, the descriptor wins.
+> **Reference** page. The authoritative source for every cell is the runtime's `capabilities/<runtime>/capability.json` `artifactLayout` descriptor, resolved by `resolveRuntimeArtifactLayout` in `src/runtime-artifact-layout.cts`. This page is the human-readable projection; when they disagree, the descriptor wins.
 >
 > **Decision record:** [ADR-1593 — Skill mapping & converter methodology across runtimes](../adr/1593-skill-mapping-converter-methodology.md). See also [ADR-3660](../adr/3660-runtime-artifact-layout-module.md) (layout owner) and [ADR-1016](../adr/1016-runtime-capability-descriptor.md) (converter enum).
 
