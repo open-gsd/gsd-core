@@ -1088,7 +1088,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 @~/.claude/gsd-core/references/execute-phase-between-wave-reset.md
 
 8. **Execute checkpoint plans between waves** — see `<checkpoint_handling>`.
-9. **Proceed to next wave.** Without `WAVE_FILTER`, read and follow `execute-phase/steps/wave-refresh.md` (#5966): it re-reads `phase-plan-index` in the run's original scope, picks the next wave, and owns the stop conditions.
+9. **Proceed to next wave.** Without `WAVE_FILTER`, read and follow `execute-phase/steps/wave-refresh.md` (#5966): it re-reads the index and decides what follows each wave.
 </step>
 <step name="checkpoint_handling">
 Plans with `autonomous: false` require user interaction.
