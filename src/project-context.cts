@@ -26,6 +26,7 @@ import configFileReadMod = require('./config-file-read.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- worktree-safety.cjs is an export= CommonJS module
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 import { execGit as execGitSeam, type SpawnResultOutput } from './shell-command-projection.cjs';
+import { requireSafePath, tryWithinRootLexical, PathAcceptance, type PathAcceptancePolicy } from './security.cjs';
 const { readConfigFileBounded } = configFileReadMod;
 const { DEFAULT_GIT_TIMEOUT_MS, parseWorktreeEntries } = worktreeSafetyMod;
 
@@ -933,4 +934,41 @@ export function legacyDispatchCwd(
   if (!ctx.isLinkedWorktree) return startDir;
   if (fs.existsSync(path.join(ctx.worktreeRoot, '.planning'))) return ctx.worktreeRoot;
   return ctx.repoRoot;
+}
+
+/** `candidate` relative to `root` when it sits strictly inside it, else null. A child named `..x` is inside. */
+function relativeInside(root: string, candidate: string): string | null {
+  const inside = tryWithinRootLexical(candidate, root);
+  if (inside === null) return null;
+  const rel = path.relative(root, inside);
+  return rel === '' ? null : rel;
+}
+
+/**
+ * #6820 (ADR-4908 §3): a planning artifact is contained against the root its
+ * content really lives in. Under the `gsd-planning-out-of-repo.md` layout
+ * (`.planning -> ../<repo>-planning`) the realpath of `.planning/phases/...`
+ * sits outside `ctx.projectRoot`, so a path that is lexically under the
+ * project's `.planning` entry (or already under the store's own root) is checked
+ * against `ctx.planningRoot`; anything else keeps the project-root containment
+ * under the caller's `policy`. Both checks go through `requireSafePath`, so a
+ * traversal or a symlink that leaves the chosen root is still refused.
+ *
+ * Returns the contained path and how it is shown back to the caller
+ * (project-relative, `.planning/...` for the store).
+ */
+export function requirePlanningArtifactPath(
+  ctx: ProjectContext,
+  filePath: string,
+  label: string,
+  policy: PathAcceptancePolicy = PathAcceptance.AbsoluteInsideRoot,
+): { resolved: string; display: string } {
+  const lexical = path.resolve(ctx.projectRoot, filePath);
+  const rel = relativeInside(path.join(ctx.projectRoot, '.planning'), lexical) ?? relativeInside(ctx.planningRoot, lexical);
+  if (rel !== null) {
+    const resolved = requireSafePath(rel, ctx.planningRoot, label, PathAcceptance.RelativeOnly);
+    return { resolved, display: path.join('.planning', path.relative(ctx.planningRoot, resolved)) };
+  }
+  const resolved = requireSafePath(filePath, ctx.projectRoot, label, policy);
+  return { resolved, display: path.relative(ctx.projectRoot, resolved) };
 }

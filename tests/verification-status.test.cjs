@@ -56,15 +56,24 @@ const {
   defaultPhaseCleanCommitTimesMs,
   resolveVerificationFile,
   resolveUatFile,
-  readVerificationStatus,
+  readVerificationStatus: readVerificationStatusWithCtx,
   findStaleVerificationSummary,
-  isPhaseComplete,
+  isPhaseComplete: isPhaseCompleteWithCtx,
   computeCoveredDigest,
   sharedPlanningRoots,
   isSharedPlanningDoc,
   parseFingerprintVersion,
   parseFingerprintFileArgs,
 } = require('../gsd-core/bin/lib/verification.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+
+// #6820 (ADR-4908 §6): the readers take a REQUIRED ProjectContext. These two
+// bindings resolve one from the fixture phase dir (the walk-up the readers used
+// to do themselves) and forward every other option unchanged.
+const readVerificationStatus = (phaseDir, opts = {}) =>
+  readVerificationStatusWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...opts });
+const isPhaseComplete = (phaseDir, deps = {}) =>
+  isPhaseCompleteWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...deps });
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');

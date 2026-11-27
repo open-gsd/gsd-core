@@ -462,14 +462,10 @@ describe('project-context CLI: workspace and verb', () => {
       assert.equal(result.status, 'stale');
     });
 
-    test('verificationWithoutContextResolvesThroughTheSeam', (t) => {
-      const { a, phaseDir } = mkTwoProjects(t, { aHasFile: true });
-      // Project A holds the same file content, so the digest matches whichever root is chosen:
-      // the bare call (what the interior callers pass) must reach `passed` through the walk-up.
-      const viaSeam = verification.readVerificationStatus(phaseDir, { ctx: resolveProjectContext(a) });
-      const bare = verification.readVerificationStatus(phaseDir);
-      assert.equal(viaSeam.status, 'passed');
-      assert.equal(bare.status, 'passed');
+    test('verificationRefusesToReadWithoutAContext', (t) => {
+      const { phaseDir } = mkTwoProjects(t, { aHasFile: true });
+      // ADR-4908 section 6: ctx is required; there is no phase-dir walk-up fallback to fall into.
+      assert.throws(() => verification.readVerificationStatus(phaseDir), TypeError);
     });
 
     test('fingerprintHonorsProjectDirFromAnyCwd', (t) => {
@@ -514,9 +510,8 @@ describe('project-context CLI: workspace and verb', () => {
   describe('the retired root resolvers (B6, B10)', () => {
     test('retiredRootResolversAreNotExported', () => {
       const exported = Object.keys(projectRootModule).sort();
-      // findProjectRoot stays as the one-line walk delegate for hooks/lib/isolation-sentinel.js
-      // until Phase 5 (#6047) retires it under the lint ratchet.
-      assert.deepEqual(exported, ['consentProjectRoot', 'findProjectRoot']);
+      assert.deepEqual(exported, ['consentProjectRoot']);
+      assert.equal(projectRootModule.findProjectRoot, undefined);
       assert.equal(projectRootModule.setExplicitProjectRoot, undefined);
       assert.equal(projectRootModule.resolveProjectRoot, undefined);
     });

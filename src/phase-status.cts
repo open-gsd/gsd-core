@@ -201,6 +201,7 @@ export function phaseStatusFromFacts(facts: PhaseStatusFacts): PhaseStatus {
 type VerificationMod = typeof import('./verification.cjs');
 type VerificationStatus = import('./verification.cjs').VerificationStatus;
 type PlanScanMod = typeof import('./plan-scan.cjs');
+type ProjectContextMod = typeof import('./project-context.cjs');
 type Scope = import('./planning-scope.cjs').Scope;
 type PhaseCompletion = ReturnType<VerificationMod['isPhaseComplete']>;
 
@@ -213,6 +214,8 @@ export interface PhaseStatusDeps {
   fs?: IsPhaseCompleteDeps['fs'];
   /** Per-phase clean-commit-time resolver, threaded into `isPhaseComplete`. */
   phaseCleanCommitTimesMs?: IsPhaseCompleteDeps['phaseCleanCommitTimesMs'];
+  /** Resolved ProjectContext, threaded into `isPhaseComplete`; omitted: resolved from `phaseDir`. */
+  ctx?: IsPhaseCompleteDeps['ctx'];
 }
 
 export interface PhaseStatusValue {
@@ -238,13 +241,15 @@ const SCOPE_SEVERITY: Readonly<Record<string, number>> = Object.freeze({
 
 let _verification: VerificationMod | null = null;
 let _planScan: PlanScanMod | null = null;
+let _projectContext: ProjectContextMod | null = null;
 
-function owners(): { verification: VerificationMod; planScan: PlanScanMod } {
+function owners(): { verification: VerificationMod; planScan: PlanScanMod; resolveProjectContext: ProjectContextMod['resolveProjectContext'] } {
   /* eslint-disable @typescript-eslint/no-require-imports */
   if (!_verification) _verification = require('./verification.cjs') as VerificationMod;
   if (!_planScan) _planScan = require('./plan-scan.cjs') as PlanScanMod;
+  if (!_projectContext) _projectContext = require('./project-context.cjs') as ProjectContextMod;
   /* eslint-enable @typescript-eslint/no-require-imports */
-  return { verification: _verification, planScan: _planScan };
+  return { verification: _verification, planScan: _planScan, resolveProjectContext: _projectContext.resolveProjectContext };
 }
 
 /**
@@ -253,9 +258,10 @@ function owners(): { verification: VerificationMod; planScan: PlanScanMod } {
  * scopes, so a caller can tell "not started" from "could not look".
  */
 export function phaseStatus(phaseDir: string, deps: PhaseStatusDeps = {}): { value: PhaseStatusValue; scope: Scope } {
-  const { verification, planScan } = owners();
+  const { verification, planScan, resolveProjectContext } = owners();
   const scan = planScan.scanPhasePlans(phaseDir);
   const completion = verification.isPhaseComplete(phaseDir, {
+    ctx: deps.ctx ?? resolveProjectContext(phaseDir),
     convention: deps.convention,
     fs: deps.fs,
     phaseCleanCommitTimesMs: deps.phaseCleanCommitTimesMs,

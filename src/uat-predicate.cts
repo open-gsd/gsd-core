@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, frontmatterBlock } = frontmatter;
@@ -712,7 +713,7 @@ function evaluateUatPassed(
   // only records the fact for the report below; it never itself gates `blockers`.
   let verificationStaleCheckIndeterminate = false;
   if (requireVerification) {
-    const verificationResult = readVerificationStatus(phaseFullDir);
+    const verificationResult = readVerificationStatus(phaseFullDir, { ctx: resolveProjectContext(phaseFullDir) });
     const verificationStatus = verificationResult.status;
     verificationStaleCheckIndeterminate = verificationResult.staleCheckIndeterminate === true;
     if (verificationStatus === VERIFICATION_STATUS.STALE) {

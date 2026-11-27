@@ -46,8 +46,8 @@ const { reportStatusOf, isReportContained, VERIFICATION_STATUS } = verificationM
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
-import { requireSafePath, sanitizeForDisplay, PathAcceptance, tryWithinRootLexical } from './security.cjs';
-import type { ProjectContext } from './project-context.cjs';
+import { sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import { requirePlanningArtifactPath, resolveProjectContext, type ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
@@ -433,36 +433,6 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
 
 // ─── cmdRenderCheckpoint ──────────────────────────────────────────────────────
 
-/**
- * #6820 (ADR-4908 §3): a planning artifact is contained against the root its
- * content really lives in. Under the `gsd-planning-out-of-repo.md` layout
- * (`.planning -> ../<repo>-planning`) the realpath of `.planning/phases/...`
- * sits outside `ctx.projectRoot`, so a path that is lexically under the
- * project's `.planning` entry (or already under the store's own root) is checked
- * against `ctx.planningRoot`; anything else keeps the project-root containment.
- * Both checks go through `requireSafePath`, so a traversal or a symlink that
- * leaves the chosen root is still refused.
- */
-/** `candidate` relative to `root` when it sits strictly inside it, else null. A child named `..x` is inside. */
-function relativeInside(root: string, candidate: string): string | null {
-  const inside = tryWithinRootLexical(candidate, root);
-  if (inside === null) return null;
-  const rel = path.relative(root, inside);
-  return rel === '' ? null : rel;
-}
-
-/** The contained path and how it is shown back to the caller (project-relative, `.planning/...` for the store). */
-function resolveUatArtifactPath(ctx: ProjectContext, filePath: string): { resolved: string; display: string } {
-  const lexical = path.resolve(ctx.projectRoot, filePath);
-  const rel = relativeInside(path.join(ctx.projectRoot, '.planning'), lexical) ?? relativeInside(ctx.planningRoot, lexical);
-  if (rel !== null) {
-    const resolved = requireSafePath(rel, ctx.planningRoot, 'UAT file', PathAcceptance.RelativeOnly);
-    return { resolved, display: path.join('.planning', path.relative(ctx.planningRoot, resolved)) };
-  }
-  const resolved = requireSafePath(filePath, ctx.projectRoot, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
-  return { resolved, display: path.relative(ctx.projectRoot, resolved) };
-}
-
 function cmdRenderCheckpoint(ctx: ProjectContext, options: { file?: string } = {}, raw: boolean): void {
   const filePath = options.file;
   if (!filePath) {
@@ -470,7 +440,7 @@ function cmdRenderCheckpoint(ctx: ProjectContext, options: { file?: string } = {
     return;
   }
 
-  const { resolved: resolvedPath, display } = resolveUatArtifactPath(ctx, filePath);
+  const { resolved: resolvedPath, display } = requirePlanningArtifactPath(ctx, filePath, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${filePath}`);
   }
@@ -814,7 +784,7 @@ function cmdUatCompleteSession(
     error('UAT file required: use uat.complete-session <uatPath>');
     return;
   }
-  const resolvedPath = requireSafePath(uatPathArg, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  const resolvedPath = requirePlanningArtifactPath(resolveProjectContext(cwd), uatPathArg, 'UAT file', PathAcceptance.AbsoluteInsideRoot).resolved;
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${uatPathArg}`);
     return;

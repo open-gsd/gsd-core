@@ -43,6 +43,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningSnapshotMod = require('./planning-snapshot.cjs');
 const { buildPlanningSnapshot, worstScope } = planningSnapshotMod;
@@ -1281,6 +1282,7 @@ function buildPlanningInspectResult(cwd: string): {
     let verification: { status: string | null; next_action: string | null; route: string };
     try {
       verification = readVerificationStatus(phaseDir, {
+        ctx: resolveProjectContext(phaseDir),
         fs: containmentEnforcingVerificationFs(paths.planning),
       });
     } catch (err) {

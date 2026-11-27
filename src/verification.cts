@@ -30,7 +30,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { resolveProjectContext } from './project-context.cjs';
 import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
@@ -1813,10 +1812,9 @@ interface ReadVerificationStatusOptions {
    * #6820 (ADR-4908): the resolved ProjectContext the covered-input fingerprint
    * is recomputed against (`ctx.projectRoot`). The dispatcher passes the one it
    * resolved, so `--project-dir` reaches the staleness check without a module
-   * global. Omitted: the reader resolves one from `phaseDir` through
-   * `resolveProjectContext` (the walk-up it always did, now behind the seam).
+   * global. Required: there is no hidden resolver fallback (ADR-4908 section 6).
    */
-  ctx?: ProjectContext;
+  ctx: ProjectContext;
 }
 
 interface VerificationStatusResult {
@@ -1970,7 +1968,7 @@ function findStaleVerificationSummary(
  */
 function readVerificationStatus(
   phaseDir: string,
-  opts: ReadVerificationStatusOptions = {},
+  opts: ReadVerificationStatusOptions,
 ): VerificationStatusResult {
   const fsImpl: FsLike = opts.fs ?? defaultFsImpl;
   const phaseCleanCommitTimesMs: PhaseCleanCommitTimesFn =
@@ -2064,7 +2062,7 @@ function readVerificationStatus(
     // change keeps its own semantics rather than going stale on upgrade. An
     // unknown version parses to `null`, which `computeCoveredDigest`
     // refuses (returns `null`), so the compare below fails closed.
-    const projectRoot = (opts.ctx ?? resolveProjectContext(phaseDir)).projectRoot;
+    const projectRoot = opts.ctx.projectRoot;
     const storedVersion =
       hasWellFormedFingerprint && typeof coveredDigestVal === 'string'
         ? parseFingerprintVersion(coveredDigestVal)
@@ -2141,7 +2139,7 @@ interface IsPhaseCompleteDeps {
    */
   convention?: string | null;
   /** #6820 (ADR-4908): the resolved ProjectContext, threaded through to readVerificationStatus. */
-  ctx?: ProjectContext;
+  ctx: ProjectContext;
 }
 
 /**
@@ -2210,7 +2208,7 @@ interface PhaseCompletionValue {
  */
 function isPhaseComplete(
   phaseDir: string,
-  deps: IsPhaseCompleteDeps = {},
+  deps: IsPhaseCompleteDeps,
 ): { value: PhaseCompletionValue; scope: Scope } {
   const fsImpl: FsLike = deps.fs ?? defaultFsImpl;
   let readable = true;
@@ -2428,16 +2426,16 @@ function cmdVerificationAllSummarized(ctx: ProjectContext, phaseDirArg: string |
  * field (that would declare DEGRADED) — so it is distinguishable from an
  * existing directory with no report, where `""` alone keeps its meaning.
  *
- * @param cwd         - Current working directory (used to resolve phaseDirArg).
- * @param phaseDirArg - Phase directory path (absolute or relative to cwd).
+ * @param ctx         - Resolved ProjectContext (`ctx.projectRoot` resolves phaseDirArg).
+ * @param phaseDirArg - Phase directory path (absolute or relative to the project root).
  * @param raw         - Whether to emit raw (non-JSON) output.
  */
-function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined, raw: boolean): void {
+function cmdVerificationResolveFile(ctx: ProjectContext, phaseDirArg: string | undefined, raw: boolean): void {
   if (!phaseDirArg) {
     error('phase directory required for verification.resolve-file');
     return;
   }
-  const phaseDir = path.resolve(cwd, phaseDirArg);
+  const phaseDir = path.resolve(ctx.projectRoot, phaseDirArg);
   if (isPhaseDirNotFound(defaultFsImpl, phaseDir)) {
     output(
       {
@@ -2864,7 +2862,7 @@ function isAllowedAuditTargetBasenameCI(basename: string): boolean {
  * mutate.
  */
 function cmdVerificationAppendAudit(
-  cwd: string,
+  ctx: ProjectContext,
   fileArg: string | undefined,
   argTokens: readonly string[],
   raw: boolean,
@@ -2904,7 +2902,7 @@ function cmdVerificationAppendAudit(
     return;
   }
 
-  const resolvedPath = requireSafePath(fileArg, cwd, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot);
+  const resolvedPath = requireSafePath(fileArg, ctx.projectRoot, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot);
   const realBasename = path.basename(resolvedPath);
   if (isVerificationReportBasenameCI(realBasename)) {
     error('verification.append-audit refuses a verification report path');

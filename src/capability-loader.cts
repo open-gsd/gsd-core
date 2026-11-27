@@ -73,7 +73,6 @@ interface SemverModule {
   semverSatisfies: (version: unknown, range: unknown) => boolean;
 }
 interface ProjectRootModule {
-  findProjectRoot: (startDir: string) => string | null;
   /** #1459 IC-01/CB-4: the canonical realpath'd consent project root (RECORD/LOOKUP/revoke parity). */
   consentProjectRoot: (cwd: string) => string;
 }
@@ -343,9 +342,10 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
   const globalCanon = canonicalDir(globalDir);
   let projectRoot: string | null = null;
   try {
+    // #6820 (ADR-4908): the project overlay root is the context's `projectRoot`.
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-    const projectRootMod: ProjectRootModule = require('./project-root.cjs');
-    projectRoot = projectRootMod.findProjectRoot(cwd);
+    const projectContextMod: { resolveProjectContext: (startDir: string) => { projectRoot: string } } = require('./project-context.cjs');
+    projectRoot = projectContextMod.resolveProjectContext(cwd).projectRoot;
   } catch {
     projectRoot = null;
   }

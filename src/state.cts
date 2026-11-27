@@ -3589,7 +3589,7 @@ function buildStateFrontmatter(
             // #612: `phaseConvention` threaded so a bracket phase dir resolves
             // and scopes its verification report like its legacy twin — the
             // read-side half of the same thread cmdStateSync gets below.
-            const completion = isPhaseComplete(phaseDir, { convention: phaseConvention });
+            const completion = isPhaseComplete(phaseDir, { ctx: resolveProjectContext(phaseDir), convention: phaseConvention });
             // #5118 (no write before the error): every STATE.md write rebuilds
             // this frontmatter BEFORE its write, so a report whose `status` is
             // outside the closed set fails the write here — the owner's error,
@@ -7365,7 +7365,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     // #5118 (no write before the error): `state sync` writes STATE.md only
     // after this scan, so an out-of-set report status fails it here, having
     // written nothing.
-    const completion = isPhaseComplete(dirPath, { convention: syncConvention });
+    const completion = isPhaseComplete(dirPath, { ctx: resolveProjectContext(dirPath), convention: syncConvention });
     if (completion.value.statusError) throw completion.value.statusError;
     if (completion.value.complete) diskCompletedPhases++;
 
