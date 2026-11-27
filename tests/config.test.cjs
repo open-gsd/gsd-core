@@ -4757,6 +4757,35 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     }
   });
 
+  // In a project and outside one, config-get and the loader read a stored
+  // parallelization alike: a scalar that is not a boolean is no setting to
+  // either, as with no store at all.
+  test('config-get and loadConfig read a stored parallelization scalar alike, in a project and outside one', (t) => {
+    const read = (stored, inProject) => {
+      const { gsdHome } = defaultsHome(t, stored);
+      const projectDir = tempProject(t);
+      if (inProject) {
+        fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+        fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), JSON.stringify({ model_profile: 'balanced' }));
+      }
+      const got = runGsdTools(['config-get', 'parallelization', '--raw'], projectDir, { GSD_HOME: gsdHome });
+      const loaded = withIsolatedProcessState(() => {
+        process.env.GSD_HOME = gsdHome;
+        return loadConfig(projectDir).parallelization;
+      });
+      return { success: got.success, output: got.success ? got.output.trim() : '', loaded };
+    };
+    for (const inProject of [true, false]) {
+      const where = inProject ? 'in a project' : 'outside a project';
+      const unset = read(undefined, inProject);
+      assert.strictEqual(unset.loaded, true, where);
+      for (const stored of ['"yes"', '0', '"false"']) {
+        assert.deepStrictEqual(read(`{"parallelization":${stored}}`, inProject), unset, `${stored} ${where}`);
+      }
+      assert.deepStrictEqual(read('{"parallelization":false}', inProject), { success: true, output: 'false', loaded: false }, where);
+    }
+  });
+
   // The two twins the template writes flat are the loader's FLAT_WRITTEN_TWIN_KEYS:
   // a new project writes each of them flat.
   test('the flat-written twins are the ones a new project writes flat', (t) => {
