@@ -179,6 +179,20 @@ node gsd-tools.cjs state signal-resume
 
 `state record-session` lists the fields it wrote under `updated`, and under `replacedRecord` any Stopped At / Resume File value the write displaced (the `None` placeholder is not a record). In the session section, a line inside a fenced code block is an example: no session writer (`record-session`, `state update`/`patch` of a session field, `phase complete`) changes it, and neither the frontmatter sync nor `state-snapshot` reads it as a field. A field whose current value continues onto the next line is left unchanged, because a single-line write would orphan the rest (a line directly below shaped `words: text` counts as a continuation unless its label is bold or one STATE.md defines, such as `Resume file` or `Status`, since a wrapped sentence can take that shape): it is listed under `skipped` as `{ "field", "reason": "wrapped_value", "continuation" }` with a warning on stderr (the continuation is echoed up to 200 characters, then `…`), and when every field to update was skipped the call reports `"recorded": false`. With no session heading, Last session, Last Date and Resume file are not written in place — `state-snapshot` reads them from a session section only — and the call appends a `## Session` section (reported as `"created": true`, which an insert into an existing section is not) holding the new Last session and Stopped at, and the passed Resume file or else the body's existing one rather than `None` (a Stopped at skipped as wrapped carries its existing value); a carried value holding U+2028/U+2029 is left out and listed as `{ "field", "reason": "line_separator" }`, and when the document ends inside an unclosed code fence nothing is appended (it would land inside the fence) and each field the call writes (Last session, and Stopped at or Resume file when passed) that was not written in place or skipped for another reason is listed with `"reason": "unclosed_fence"`. `state record-session`, `state update` and `state patch` write a session field (Stopped At, Paused At, Resume File, Last session, Last Date) inside the session section — not a fenced example there, and not a copy in another section such as `## Session Continuity Archive` — which is where the frontmatter sync and `state-snapshot` read it. `record-session` inserts a field the section lacks; `state update` and `state patch` report it updated, and a document whose session section lacks the field, or that has no session section, reports it not found and is left unchanged. `state patch`, like `state update`, reports a field that already holds the requested value as updated. `state update` and `state patch` replace a field's first line only and do not check for a wrapped value, so a continuation line below it stays in place: fold a wrapped value onto one line before updating it with them.
 
+### State Prune
+
+Move phase-tagged entries older than the last K phases out of `.planning/STATE.md` into `.planning/STATE-ARCHIVE.md`
+(Decisions, Recently Completed, resolved Blockers and Performance Metrics rows at or below `current phase - K`):
+
+```bash
+node gsd-tools.cjs state prune [--keep-recent K] [--dry-run]
+```
+
+`K` is a whole number written in digits, default 3. `0` keeps no recent phase: everything tagged up to the current
+phase is archived. A missing, empty, repeated, negative, fractional or non-numeric value is refused with a usage
+error (reason `usage`) before anything is read or written. A cutoff of 0 or less returns
+`{ "pruned": false, "reason": ... }`; `--dry-run` reports what would move and writes nothing.
+
 ### State Snapshot
 
 Structured parse of the full STATE.md:
