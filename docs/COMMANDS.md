@@ -1064,9 +1064,11 @@ Batch several `/gsd-quick`-shaped tasks together — one coordinator plans, disp
 | `--jobs auto\|N` | `auto` (default) uses the negotiated dispatch capacity as-is; `N` caps effective concurrency at `min(task count, N, capacity)` |
 | `--validate` | Per-item plan-checker loop (max 2 iterations) + post-merge verification |
 | `--research` | Per-item researcher dispatched before planning |
-| `--resume <batch-id>` | Skip task-list parsing and batch creation; dispatch only the batch's still-eligible items |
+| `--resume <batch-id>` | Skip task-list parsing and batch creation; dispatch only the batch's still-eligible items. The batch keeps the `--validate`/`--research` modes it was created with: a resume with no mode flags uses them, and a resume with any other set of mode flags is refused |
 
 **Not supported in v1:** `--discuss` and `--full` are rejected with a usage error before any dispatch — run `/gsd-quick --discuss`/`--full` per item instead.
+
+**Modes are part of the batch (#6532).** `quick-batch create` stores the run's modes in `BATCH.json` as `options.modes` (`[]`, `["research"]`, `["validate"]` or `["research", "validate"]`). `gsd-tools query init.quick-batch --resume <batch-id>` loads the batch first, builds the section manifest from the stored modes and returns them as `modes`; the workflow sets its research and verification variables from that field. Mode flags given on a resume must be absent or equal the stored set; a subset or superset is refused with an error that names the stored set (`field: "options.modes"`, `stored_modes` under `--json-errors`). An invalid `options.modes` is refused at create, and a hand-edited invalid one makes the batch fail to load. A batch created before this change has no stored modes and keeps the old behavior: a resume takes its modes from the flags.
 
 **How the arguments are validated.** The task text you type is untrusted input. The command feeds it to `gsd-tools quick-batch parse-args --stdin` on standard input through a quoted heredoc, so quotes, `$(...)`, backticks and newlines in it are never parsed by a shell ([ADR-4780](adr/4780-labeled-arguments-block.md)). `parse-args --text "<string>"` and `parse-args -- <tokens>` remain for callers that already hold real argv elements.
 

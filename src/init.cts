@@ -78,6 +78,8 @@ import loopResolverMod = require('./loop-resolver.cjs');
 import capabilityLoaderMod = require('./capability-loader.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-state.cjs is an export= CommonJS module
 import capabilityStateMod = require('./capability-state.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6532 quick-batch.cjs is an export= CommonJS module
+import quickBatchMod = require('./quick-batch.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- docs.cjs is an export= CommonJS module
 import docsMod = require('./docs.cjs');
 const { detectMonorepoWorkspaces } = docsMod;
@@ -1918,6 +1920,10 @@ function cmdInitQuick(
  * `--full` are rejected by `quick-batch-dispatch.cts`'s `parseQuickBatchArgs`
  * before this init bundle is ever reached, so no `discuss`/`full` flag key is
  * accepted here (unlike `cmdInitQuick`, which still supports both).
+ *
+ * #6532: `--resume <batch_id>` loads `BATCH.json` first and gates the sections
+ * on the batch's stored `options.modes`; the result's `modes` is the set the
+ * run uses (stored, or flag-derived for a new batch or one without stored modes).
  */
 function cmdInitQuickBatch(
   cwd: string,
@@ -1946,8 +1952,32 @@ function cmdInitQuickBatch(
     planning_exists: fs.existsSync(planningRoot(cwd)),
   };
 
+  // #6532: a resume uses the modes stored in BATCH.json (refusing differing
+  // flags); a new batch, or one without stored modes, uses the flags.
+  const flagModes = quickBatchMod.QUICK_BATCH_MODES.filter((mode) => options[mode] === true);
+  let modes = flagModes;
+  if (options['resumeRepeated'] === true) {
+    error('--resume may be given only once', ERROR_REASON.USAGE);
+  }
+  if (typeof options['resume'] === 'string') {
+    const resolved = quickBatchMod.resolveBatchModes(cwd, options['resume'], flagModes);
+    if (resolved.ok) {
+      modes = resolved.value.modes;
+    } else {
+      const { ok: _ok, reason, ...extra } = resolved;
+      error(reason, ERROR_REASON.USAGE, extra);
+    }
+  }
+  result['modes'] = modes;
+
   // #2992 (Phase 6.1): additive, optional field — degrades to null, never throws.
-  result['section_manifest'] = buildSectionManifestField(cwd, null, options, 'quick-batch');
+  // Only the modes reach the manifest, so `--resume` never becomes a flag atom.
+  result['section_manifest'] = buildSectionManifestField(
+    cwd,
+    null,
+    { research: modes.includes('research'), validate: modes.includes('validate') },
+    'quick-batch',
+  );
 
   output(withProjectRoot(cwd, result), raw);
 }

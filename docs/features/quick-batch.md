@@ -21,3 +21,4 @@ group: Planning Features
 - REQ-QB-10: System MUST NOT call the STATE.md completion primitive for an item routed to `human_needed`
 - REQ-QB-11: System MUST fail an item routed to `gaps_found`/`merge_failed`/`scope_violation` without rollback, without an automatic retry, and with its worktree preserved
 - REQ-QB-12: System MUST support `--resume <batch-id>` to re-derive eligibility and dispatch only still-runnable items, refusing closed on an unknown batch id or a diverged base revision
+- REQ-QB-13: System MUST store the batch's modes (`options.modes`) at create and use them on every `--resume`, refusing a resume whose mode flags differ from them; a batch without stored modes keeps the flag-derived behavior (#6532)

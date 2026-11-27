@@ -133,7 +133,11 @@ interface QuickBatchManifest {
   schema_version: 1;
   batch_id: string;
   created_at: string;
-  /** Opaque, caller-supplied batch-level options — round-tripped verbatim, never interpreted here (Phase 4's job). */
+  /**
+   * Caller-supplied batch-level options, round-tripped verbatim. #6532: only
+   * `options.modes` is interpreted (see `validateBatchModes`); every other key
+   * stays opaque.
+   */
   options: Record<string, unknown>;
   /** The git revision this batch was created against, when the caller supplies one (see `createBatch`'s `baseRevision` option). Null when not tracked. */
   base_revision: string | null;
@@ -479,6 +483,105 @@ function computeWaves(items: WaveInputItem[]): Result<string[][]> {
   return { ok: true, value: waves };
 }
 
+// ─── Batch modes (#6532) ────────────────────────────────────────────────────────
+
+/** The modes a batch can run with, in their canonical order. */
+const QUICK_BATCH_MODES: readonly string[] = Object.freeze(['research', 'validate']);
+
+/** The one `options` key core interprets; failures about it carry this as `field`. */
+const MODES_FIELD = 'options.modes';
+
+/** The field a failure about the shape of `options` itself names. */
+const OPTIONS_FIELD = 'options';
+
+/** A failure that names the field it is about, so `--json-errors` callers get it typed. */
+type FieldFailure = { ok: false; reason: string; field: string; [extra: string]: unknown };
+
+/**
+ * `options.modes` is a JSON array of distinct strings from `QUICK_BATCH_MODES`,
+ * in that order; `[]` is the empty set. Anything else is invalid.
+ */
+function validateBatchModes(value: unknown): Result<string[]> {
+  if (!Array.isArray(value)) {
+    return { ok: false, reason: `${MODES_FIELD} must be an array of modes (${QUICK_BATCH_MODES.join(', ')})` };
+  }
+  let last = -1;
+  for (const entry of value) {
+    const idx = typeof entry === 'string' ? QUICK_BATCH_MODES.indexOf(entry) : -1;
+    if (idx === -1) {
+      return { ok: false, reason: `${MODES_FIELD} holds an unknown mode; allowed: ${QUICK_BATCH_MODES.join(', ')}` };
+    }
+    if (idx <= last) {
+      return { ok: false, reason: `${MODES_FIELD} must list distinct modes in the order ${QUICK_BATCH_MODES.join(', ')}` };
+    }
+    last = idx;
+  }
+  return { ok: true, value: value as string[] };
+}
+
+/** A JSON object: not null, not an array, and no prototype other than Object's (or none). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * The `options` a new BATCH.json holds: `{}` for none (undefined or null),
+ * otherwise the JSON round trip of a plain object, which must itself be an
+ * object. Anything else fails naming `options`.
+ */
+function storedBatchOptions(value: unknown): Result<Record<string, unknown>> | FieldFailure {
+  if (value === undefined || value === null) return { ok: true, value: {} };
+  const refused: FieldFailure = { ok: false, reason: 'options must be a JSON object', field: OPTIONS_FIELD };
+  if (!isPlainObject(value)) return refused;
+  let copy: unknown;
+  try {
+    copy = JSON.parse(JSON.stringify(value));
+  } catch {
+    return refused; // a BigInt or a cycle: not JSON
+  }
+  return isPlainObject(copy) ? { ok: true, value: copy } : refused;
+}
+
+function hasModes(options: unknown): options is Record<string, unknown> {
+  return !!options && typeof options === 'object' && !Array.isArray(options)
+    && Object.prototype.hasOwnProperty.call(options, 'modes');
+}
+
+/** The batch's stored modes, or `null` when it has none (a batch created before #6532). */
+function readBatchModes(manifest: QuickBatchManifest): string[] | null {
+  return hasModes(manifest.options) ? (manifest.options.modes as string[]) : null;
+}
+
+/**
+ * The modes a run of batch `batchId` uses (#6532 items 3-4 and 8). Loads the
+ * batch first (fails closed like `loadBatch`). With stored modes, `flagModes`
+ * (canonical order) must be empty or equal to them; any other set is refused
+ * with a failure naming the stored set. Without stored modes the flags decide.
+ */
+function resolveBatchModes(
+  cwd: string,
+  batchId: string,
+  flagModes: string[],
+): Result<{ modes: string[]; stored: boolean }> | FieldFailure {
+  const loaded = loadBatch(cwd, batchId);
+  if (!loaded.ok) return loaded;
+  const stored = readBatchModes(loaded.value);
+  if (stored === null) return { ok: true, value: { modes: flagModes, stored: false } };
+  if (flagModes.length > 0 && flagModes.join(',') !== stored.join(',')) {
+    return {
+      ok: false,
+      reason: `batch ${batchId} was created with modes [${stored.join(', ')}]; a resume takes no mode flags or exactly those, `
+        + `not [${flagModes.join(', ')}]`,
+      field: MODES_FIELD,
+      stored_modes: stored,
+      given_modes: flagModes,
+    };
+  }
+  return { ok: true, value: { modes: stored, stored: true } };
+}
+
 // ─── BATCH.json creation ────────────────────────────────────────────────────────
 
 function batchManifestPath(cwd: string, batchId: string): string {
@@ -497,9 +600,22 @@ function createBatch(
   cwd: string,
   itemsInput: QuickBatchItemInput[],
   options: { clock?: Clock; batchOptions?: Record<string, unknown>; baseRevision?: string } = {},
-): Result<{ batchId: string; manifestPath: string; manifest: QuickBatchManifest }> {
+): Result<{ batchId: string; manifestPath: string; manifest: QuickBatchManifest }> | FieldFailure {
   if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
     return { ok: false, reason: 'createBatch requires at least one item' };
+  }
+  // The loader (`validateBatchSchema`) accepts only an object `options`, so any
+  // other value is refused here, before ids are allocated or BATCH.json is
+  // written. The value is judged as BATCH.json would hold it (a JSON round
+  // trip, so a `toJSON` cannot change it after the check) and that copy is what
+  // gets written. A class instance (a Date, a Map) is refused too: it does not
+  // serialize to the object it holds. No options (undefined or null) is stored as `{}`.
+  const stored = storedBatchOptions(options.batchOptions);
+  if (!stored.ok) return stored;
+  // #6532: an invalid `options.modes` is refused before anything is written.
+  if (hasModes(stored.value)) {
+    const modes = validateBatchModes(stored.value.modes);
+    if (!modes.ok) return { ok: false, reason: modes.reason, field: MODES_FIELD };
   }
   const dagResult = validateDag(itemsInput);
   if (!dagResult.ok) return dagResult;
@@ -548,7 +664,7 @@ function createBatch(
         schema_version: 1,
         batch_id: batchId,
         created_at: clock.nowIso(),
-        options: options.batchOptions ?? {},
+        options: stored.value,
         base_revision: options.baseRevision ?? null,
         head_revision: null,
         items,
@@ -587,6 +703,14 @@ function validateBatchSchema(parsed: unknown, batchId: string): Result<QuickBatc
     return { ok: false, reason: `BATCH.json for batch ${batchId} has an invalid options field` };
   }
   const optionsValue = (obj.options as Record<string, unknown> | undefined) ?? {};
+  // #6532: a present but invalid `options.modes` (a hand edit) is a corrupt
+  // manifest. Never repaired or dropped here; other `options` keys stay opaque.
+  if (hasModes(optionsValue)) {
+    const modes = validateBatchModes(optionsValue.modes);
+    if (!modes.ok) {
+      return { ok: false, reason: `BATCH.json for batch ${batchId} has an invalid ${MODES_FIELD} field: ${modes.reason}`, field: MODES_FIELD } as Result<QuickBatchManifest>;
+    }
+  }
   if (obj.base_revision !== null && obj.base_revision !== undefined && typeof obj.base_revision !== 'string') {
     return { ok: false, reason: `BATCH.json for batch ${batchId} has an invalid base_revision field` };
   }
@@ -1066,4 +1190,7 @@ export = {
   completeQuickItem,
   hasQuickTaskRow,
   updateBatchItems,
+  QUICK_BATCH_MODES,
+  validateBatchModes,
+  resolveBatchModes,
 };

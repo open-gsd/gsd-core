@@ -539,7 +539,7 @@ const SHIPPED = [
   'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
   'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
   'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
-  'advisor-prefilter',
+  'quick-batch-mode-gates', 'advisor-prefilter',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -575,6 +575,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/references/verify-mvp-mode.md', 'gsd-core/references/planner-human-verify-mode.md', 'gsd-core/references/checkpoints.md',
     'gsd-core/workflows/settings-advanced.md', 'gsd-core/workflows/review.md', 'gsd-core/workflows/quick.md',
     'gsd-core/references/untrusted-input-boundary.md', 'package-lock.json', '.github/workflows/test.yml',
+    // #6532.
+    'gsd-core/workflows/quick-batch/steps/verification-wave.md', 'gsd-core/workflows/quick-batch/steps/research-phase.md',
     // agent-skills-awareness (#4649): the 21 canonical agents, their 15 compact variants and the shared reference.
     ...PROJECT_SKILLS.DISCOVERY_FILES, PROJECT_SKILLS.REFERENCE,
     // advisor-prefilter (#4795): the fragment and the two workflows that deliver it.
@@ -600,6 +602,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     ['gsd-core/workflows/autonomous.md', '--override-gate', 'autonomous-converge'],
     ['gsd-core/workflows/next.md', 'PLAN_STRATEGY="converge"', 'adr-15-progress-converge'],
     ['commands/gsd/progress.md', '--cross-ai', 'adr-15-progress-converge'],
+    ['gsd-core/workflows/quick-batch/steps/verification-wave.md', 'Skip this step entirely if NOT `$VALIDATE_MODE`.', 'quick-batch-mode-gates'],
+    ['gsd-core/workflows/quick-batch/steps/research-phase.md', 'Skip this step entirely if NOT `$RESEARCH_MODE`.', 'quick-batch-mode-gates'],
     ['gsd-core/workflows/autonomous/steps/converge-fail-fast.md', 'OVERRIDES the `workflow.plan_review_convergence` config gate', 'autonomous-converge'],
   ]) {
     test(`removing ${JSON.stringify(phrase)} from ${rel} fails ${contract}`, (t) => {
@@ -638,6 +642,42 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       fs.writeFileSync(abs, after);
       const findings = runShipped(root);
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // quick-batch-mode-gates (#6532): a gate that moves below the step's first Agent() dispatch no longer gates it.
+  for (const [rel, variable, expected] of [
+    ['gsd-core/workflows/quick-batch/steps/verification-wave.md', 'VALIDATE_MODE', /\$VALIDATE_MODE gate must come before the first verifier Agent\(\) dispatch/],
+    ['gsd-core/workflows/quick-batch/steps/research-phase.md', 'RESEARCH_MODE', /\$RESEARCH_MODE gate must come before the first researcher Agent\(\) dispatch/],
+  ]) {
+    test(`mutation: the $${variable} gate moved to the end of ${rel} fails quick-batch-mode-gates`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const gate = `Skip this step entirely if NOT \`$${variable}\`.`;
+      const before = fs.readFileSync(abs, 'utf8');
+      assert.equal(before.split(gate).length, 2, 'the gate is present exactly once to start with');
+      fs.writeFileSync(abs, `${before.replace(gate, '')}\n${gate}\n`);
+      const findings = runShipped(root);
+      assert.equal(findings.length, 1, JSON.stringify(findings.map((f) => f.message)));
+      assert.match(findings[0].message, expected);
+    });
+  }
+
+  // quick-batch-mode-gates (#6532): the wording around the variable is free, and an Agent() in prose is not the dispatch.
+  for (const [title, rel, edit] of [
+    ['a reworded $VALIDATE_MODE gate', 'gsd-core/workflows/quick-batch/steps/verification-wave.md',
+      (text) => text.replace('Skip this step entirely if NOT `$VALIDATE_MODE`.', 'Skip this step if NOT `$VALIDATE_MODE` is set.')],
+    ['a prose Agent() mention above the $RESEARCH_MODE gate', 'gsd-core/workflows/quick-batch/steps/research-phase.md',
+      (text) => text.replace('Skip this step entirely if NOT `$RESEARCH_MODE`.', 'Each item gets one `Agent()` call.\n\nSkip this step entirely if NOT `$RESEARCH_MODE`.')],
+  ]) {
+    test(`${title} still satisfies quick-batch-mode-gates`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the edit changed the file');
+      fs.writeFileSync(abs, after);
+      assert.deepEqual(runShipped(root), []);
     });
   }
 

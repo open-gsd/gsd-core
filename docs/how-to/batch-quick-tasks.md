@@ -47,7 +47,7 @@ dispatched together.
 | `--jobs auto\|N` | `auto` (default) uses the negotiated dispatch capacity as-is. `N` caps effective concurrency at `min(task count, N, capacity)` — never more than the number of tasks, never more than what the runtime negotiated. A non-numeric or non-positive `N` is rejected before any dispatch. |
 | `--validate` | Enables the per-item plan-checker loop (max 2 iterations, same cap as `/gsd-quick --validate`) and post-merge verification. |
 | `--research` | Dispatches a focused researcher per item before planning. |
-| `--resume <batch-id>` | Skips task-list parsing and batch creation entirely — loads the existing batch and dispatches only its still-eligible items. |
+| `--resume <batch-id>` | Skips task-list parsing and batch creation entirely — loads the existing batch and dispatches only its still-eligible items. The batch keeps the `--validate`/`--research` modes it was created with, so you don't repeat them; a resume with a different set of mode flags is refused. |
 
 **Not supported in v1:** `--discuss` and `--full` are rejected with a usage
 error before any dispatch. If a task genuinely needs a discussion phase, run
