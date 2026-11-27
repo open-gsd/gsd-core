@@ -46,7 +46,7 @@ The grammar reserves `latest`, `claimed` and `json` as first segments (`json` wa
 
 ### 3. Resume claims by exclusive marker, then rename, before reading
 
-`resume-project.md` first creates the claim marker `.planning/.handoff-claim.<role_id>` with an exclusive create (`set -o noclobber`), and only the session whose create succeeds renames `HANDOFF.latest.<role_id>.json` to `HANDOFF.claimed.<role_id>.<session_id>.json` **before** reading it. It removes the marker in the same block, whether or not the rename succeeded. The loser finds the marker held or no `.latest` file and is told so. The consumed files are then removed, and committed when `commit_docs` is on. A marker older than a day is a crash leftover; the claim block removes it.
+`resume-project.md` first creates the claim marker `.planning/.handoff-claim.<role_id>` with an exclusive create (`set -o noclobber`), and only the session whose create succeeds renames `HANDOFF.latest.<role_id>.json` to `HANDOFF.claimed.<role_id>.<session_id>.json` **before** reading it. It removes the marker in the same block, whether or not the rename succeeded. The loser finds the marker held or no `.latest` file and is told so. The consumed files are then removed, and committed when `commit_docs` is on. The marker holds its creation time; one older than a day is a crash leftover, and the claim block removes it.
 
 *Failure prevented:* two sessions resuming the same role and both acting on one handoff.
 
@@ -76,7 +76,7 @@ The STATE.md schema, `STATUS_LIFECYCLE_ENUM` and `normalizeStateStatus` are unch
 | `milestone.lock` (`src/milestone-lock.cts`, #3311) | `(phase, session)` with a TTL | two sessions advancing **different phases** of one milestone | pause state; resuming |
 | Session store (`src/session-store.cts`, this ADR) | `role_id`, else session id | **whose handoff** a session may resume; who is paused | phase ownership; workstream selection |
 
-All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
+All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. The Decision 3 claim marker is that decision's own one-block mechanism, not a coordination primitive between sessions: it lives for one block and keys on `role_id`. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
 
 ### 7. `src/session-store.cts` owns the filename grammar; any hook-side copy is named and held to it by a parity guard
 

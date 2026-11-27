@@ -93,10 +93,21 @@ HANDOFF=""
 case "$OWN" in
   HANDOFF.latest.*.json)
     # The exclusive create of a claim marker decides the winner (ADR-4962 Decision 3, amended): two renames of one
-    # source can both succeed on Windows, so the rename alone is not exclusive. A marker older than a day is a crash leftover.
+    # source can both succeed on Windows, so the rename alone is not exclusive. The marker holds its creation time
+    # (epoch seconds); one older than a day is a crash leftover and is removed. A guarded glob loop, not `find`
+    # (the check_incomplete_work block below says why); an empty or non-numeric marker is a live one being written.
+    shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+    _NOW=$(date +%s 2>/dev/null)
+    case "$_NOW" in ''|*[!0-9]*) ;; *)
+      for _M in .planning/.handoff-claim.*; do
+        [ -e "$_M" ] || continue
+        _T=''; IFS= read -r _T < "$_M" 2>/dev/null || :
+        case "$_T" in ''|*[!0-9]*) continue ;; esac
+        if [ $((_NOW - _T)) -gt 86400 ]; then rm -f -- "$_M"; fi
+      done ;;
+    esac
     _CLAIM_MARK=".planning/.handoff-claim.${ROLE_ID}"
-    find -H .planning -maxdepth 1 -name '.handoff-claim.*' -mmin +1440 -exec rm -f -- {} + 2>/dev/null || :
-    if ( set -o noclobber; : > "$_CLAIM_MARK" ) 2>/dev/null; then
+    if ( set -o noclobber; date +%s > "$_CLAIM_MARK" ) 2>/dev/null; then
       if mv "./.planning/$OWN" "./.planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json" 2>/dev/null; then
         HANDOFF=".planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json"
       fi

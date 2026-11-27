@@ -247,37 +247,40 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
       assert.equal(exists('HANDOFF.claimed.coordinator.s1.json'), true);
     });
 
-    test('aHeldClaimMarkerMakesTheSessionLoseAndLeavesTheHandoffAndTheMarker', () => {
-      const marker = path.join(planning, '.handoff-claim.coordinator');
-      fs.writeFileSync(marker, '');
-      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'still unclaimed' });
-      const r = runBash(tmp, script([claim()], '--role coordinator'), 's1');
+    // The marker holds its creation time in epoch seconds; the claim removes one older than a day (ADR-4962 Decision 3).
+    const MARKER = '.handoff-claim.coordinator';
+    const claimWith = (content) => {
+      const marker = path.join(planning, MARKER);
+      fs.writeFileSync(marker, content);
+      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'after a crash' });
+      return { marker, r: runBash(tmp, script([claim()], '--role coordinator'), 's1') };
+    };
+
+    test('aHeldFreshClaimMarkerMakesTheSessionLoseAndLeavesTheHandoffAndTheMarker', () => {
+      const { marker, r } = claimWith(Math.floor(Date.now() / 1000) + '\n');
       assert.equal(r.status, 0, r.err);
       assert.match(r.out, /NO_UNCLAIMED_HANDOFF role_id=coordinator/);
       assert.doesNotMatch(r.out, /HANDOFF_FILE=/);
       assert.equal(exists('HANDOFF.latest.coordinator.json'), true, 'the handoff stays for the marker holder');
-      assert.equal(fs.existsSync(marker), true, 'a loser never removes the winner\'s marker');
+      assert.equal(fs.existsSync(marker), true, 'a loser never removes the winner marker');
     });
 
-    test('aStaleClaimMarkerIsSweptAndTheClaimSucceeds', () => {
-      const marker = path.join(planning, '.handoff-claim.coordinator');
-      fs.writeFileSync(marker, '');
-      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-      fs.utimesSync(marker, twoDaysAgo, twoDaysAgo);
-      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'after a crash' });
-      const r = runBash(tmp, script([claim()], '--role coordinator'), 's1');
+    test('aMarkerOlderThanADayIsSweptAndTheClaimSucceedsAndLeavesNoMarker', () => {
+      const { marker, r } = claimWith('1\n');
       assert.equal(r.status, 0, r.err);
       assert.match(r.out, /HANDOFF_FILE=\.planning\/HANDOFF\.claimed\.coordinator\.s1\.json/);
       assert.match(r.out, /after a crash/);
       assert.equal(fs.existsSync(marker), false, 'the winner removes the marker in the same block');
     });
 
-    test('aWinningClaimLeavesNoMarkerBehind', () => {
-      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'ship it' });
-      const r = runBash(tmp, script([claim()], '--role coordinator'), 's1');
-      assert.equal(r.status, 0, r.err);
-      assert.equal(fs.existsSync(path.join(planning, '.handoff-claim.coordinator')), false);
-    });
+    for (const [name, content] of [['anEmptyMarkerIsALiveOneBeingWrittenAndIsNotSwept', ''], ['aNonNumericMarkerIsNotSwept', 'not a time\n']]) {
+      test(name, () => {
+        const { marker, r } = claimWith(content);
+        assert.match(r.out, /NO_UNCLAIMED_HANDOFF/);
+        assert.equal(fs.existsSync(marker), true);
+        assert.equal(exists('HANDOFF.latest.coordinator.json'), true);
+      });
+    }
 
     test('twoSessionsResumingOneRoleYieldExactlyOneWinner', async () => {
       put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'only one reads this' });
