@@ -2398,6 +2398,7 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
   describe('#6360 context-monitor: subagent inputs (agent_id) are silent and touch no session file', () => {
     const SUBAGENT = { agent_id: 'a4653ce68d3a4418c', agent_type: 'general-purpose' };
     const WARNING_70 = /^CONTEXT WARNING: Usage at 70%/;
+    const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
     test('a subagent input at CRITICAL in a GSD project emits nothing and never reaches the record-session spawn', (t) => {
       const s = makeSession(t, { gsdActive: true });
@@ -2425,6 +2426,27 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
         'the top-level control must spawn the record-session writer once on this fixture');
       assert.strictEqual(s.warn() && s.warn().criticalRecorded, true,
         'the top-level control must reach the record-session spawn on this fixture');
+    });
+
+    // #6797 (ADR-4962): the CRITICAL breadcrumb is attributed to the session that ran out of context, so a second
+    // session on the same .planning/ does not have its handoff or record read as the first one's.
+    test('contextMonitorPassesSessionToRecordSession: the CRITICAL record-session spawn carries --session <payload session_id>', (t) => {
+      const s = makeSession(t, { gsdActive: true });
+      const spawnDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fix-6797-spawns-'));
+      const spawnLog = path.join(spawnDir, 'spawns.log');
+      t.after(() => cleanup(spawnDir));
+      const sessionId = path.basename(s.metricsPath).slice('claude-ctx-'.length, -'.json'.length);
+      const top = s.call('PostToolUse', 20, { spawnLog, timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS });
+      assert.strictEqual(top.exitCode, 0);
+      const spawns = splitLines(fs.readFileSync(spawnLog, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
+        .filter((argv) => argv.includes('state') && argv.includes('record-session'));
+      assert.strictEqual(spawns.length, 1);
+      const argv = spawns[0];
+      const at = argv.indexOf('--session');
+      assert.ok(at !== -1, `the spawn must pass --session: ${JSON.stringify(argv)}`);
+      assert.strictEqual(argv[at + 1], sessionId);
+      assert.ok(argv.indexOf('--stopped-at') !== -1 && /context exhaustion at/.test(argv[argv.indexOf('--stopped-at') + 1]),
+        'the breadcrumb text is unchanged');
     });
 
     test('a subagent input leaves the parent\'s debounce sentinel byte-identical (no escalation spent)', (t) => {

@@ -843,10 +843,11 @@ Status reporting is scoped to the current milestone's `ROADMAP.md` window and se
 
 ### `/gsd-resume-work`
 
-Restore full context from last session.
+Restore full context from last session. A role handoff is claimed by atomic rename before it is read, so a second session resuming the same role finds none. `--role <text>` (last argument) resumes that role's pause.
 
 ```bash
 /gsd-resume-work                    # After context reset or new session
+/gsd-resume-work --role Coordinator # Claim the Coordinator role's handoff
 ```
 
 ### `/gsd-pause-work`
@@ -856,11 +857,15 @@ Save context handoff when stopping mid-phase.
 | Flag | Description |
 |------|-------------|
 | `--report` | Generate a post-session summary in `.planning/reports/` capturing commits, file changes, and phase progress |
+| `--role <text>` | Name this session's role (free text, last argument). The pause is written to that role's slot, `HANDOFF.latest.<role_id>.json`, so a later session with the same role can claim it |
 
 ```bash
-/gsd-pause-work                     # Creates continue-here.md
-/gsd-pause-work --report            # Creates continue-here.md + session report
+/gsd-pause-work                     # This session's own handoff and a continue-here file
+/gsd-pause-work --role Coordinator  # The Coordinator role's handoff slot
+/gsd-pause-work --report            # Handoff + session report
 ```
+
+The handoff belongs to the session that wrote it; nothing is written to `paused_at` or `status: paused`. See [Run two sessions with roles](how-to/run-two-sessions-with-roles.md).
 
 ### `/gsd-manager`
 

@@ -20,6 +20,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 - [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 18 supported runtimes
 - [Start a GSD workflow from Pi](how-to/start-a-gsd-workflow-from-pi.md) — run `/skill:gsd-<command>` (or `/gsd <command>`) in Pi instead of getting a JSON dump from `/gsd`
+- [Run two sessions with roles](how-to/run-two-sessions-with-roles.md) — pause under `--role`, resume it in another session, and have a second session find no handoff to take
 - [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) — exempt one committed file, such as a placeholder `.env.production`, from the secret-read guard while every other secret file stays blocked
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
@@ -153,7 +154,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Installer flags](reference/installer-flags.md) — every option of `npx @opengsd/gsd-core`: runtime flags, location, skill profiles, cleanup and hook-path behavior
 - [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
-- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not
+- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not; `npm run lint:generated-sync` fails when the page is stale or any item or option is undocumented
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
 - [Exit code reference](reference/exit-codes.md) — generated catalogue of every registered process exit code, its name, meaning, and owning module, plus the reserved bands and the v1/v2 exit contract
 - [Capability manifest](reference/capability-manifest.md) — the full `capability.json` schema and validation rules
@@ -184,6 +185,8 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
 - [Agent skills dual injection](explanation/agent-skills-dual-injection.md) — why configured skills reach agents through two seams and how the dedup guard keeps one copy
 - [Decision coverage gates explained](explanation/decision-coverage-gates.md) — how the plan-phase and verify-phase decision gates work, and when a decision is exempt
+- [About the code-review pipeline design](explanation/review-pipeline-design.md) — why depth escalation, prefix matching, ledger replacement and the sibling record are shaped as they are
+- [About autonomous decision classification](explanation/autonomous-decision-classification.md) — why /gsd-autonomous decides some discuss questions and asks about others
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts

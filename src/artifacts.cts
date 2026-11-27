@@ -11,6 +11,8 @@
  * Add entries here whenever a new workflow produces a .planning/ root file.
  */
 
+import { classifyHandoffName } from './session-store.cjs';
+
 // Exact-match canonical file names at .planning/ root
 export const CANONICAL_EXACT: ReadonlySet<string> = new Set([
   'PROJECT.md',
@@ -47,6 +49,8 @@ export const CANONICAL_PATTERNS: ReadonlyArray<RegExp> = [
  */
 export function isCanonicalPlanningFile(filename: string): boolean {
   if (CANONICAL_EXACT.has(filename)) return true;
+  // #6797 (ADR-4962): every per-session handoff name the store's grammar recognizes (the store owns that grammar).
+  if (classifyHandoffName(filename) !== null) return true;
   for (const pattern of CANONICAL_PATTERNS) {
     if (pattern.test(filename)) return true;
   }
