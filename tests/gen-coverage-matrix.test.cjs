@@ -432,6 +432,14 @@ describe('renderMatrix and gaps', () => {
   });
 });
 
+describe('npm wiring', () => {
+  test('lint:generated-sync fails the build on documentation gaps', () => {
+    const gate = require('../package.json').scripts['lint:generated-sync'];
+    assert.ok(gate.includes('gen-coverage-matrix.cjs --strict'));
+    assert.ok(gate.includes('gen-coverage-matrix.cjs --check'));
+  });
+});
+
 describe('properties', () => {
   const lineArb = fc.oneof(
     fc.constantFrom('```', '~~~', '```bash'),

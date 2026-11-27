@@ -10,7 +10,7 @@
  * and the --json / human output modes.
  */
 
-const { describe, test, afterEach } = require('node:test');
+const { describe, test, before, after, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -108,7 +108,22 @@ describe('smart-entry: the STATE.md body starts after the frontmatter block', ()
 
 // #6431: `/gsd-pause-work` writes `.planning/HANDOFF.json` and never `paused_at`; `/gsd-resume-work` deletes the file once
 // resumed. The file is the recorded pause, so the front door must route to resume while it exists and forward after.
+// #6797 (ADR-4962): the pause is per session — the front door routes to resume only for a handoff the CALLING session
+// owns, and a session's identity comes from a runtime key (never a terminal), so these rows run under one.
+const SESSION_KEYS = ['GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID', 'OPENCODE_SESSION_ID', 'GEMINI_SESSION_ID', 'CURSOR_SESSION_ID', 'WINDSURF_SESSION_ID'];
+function withSessionEnv(env) {
+  const saved = Object.fromEntries(SESSION_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of SESSION_KEYS) delete process.env[k];
+  Object.assign(process.env, env);
+  return () => {
+    for (const k of SESSION_KEYS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  };
+}
+
 describe('smart-entry: a recorded pause is the pause-work handoff, not only paused_at (#6431)', () => {
+  let restoreEnv;
+  before(() => { restoreEnv = withSessionEnv({ GSD_SESSION_KEY: 'sess-6431' }); });
+  after(() => restoreEnv());
   afterEach(removeAll);
 
   const FORWARD = state({ status: 'executing', total_phases: 5, current_phase: 2, progress: 60 });
@@ -178,6 +193,99 @@ describe('smart-entry: a recorded pause is the pause-work handoff, not only paus
     assert.equal(detectSignals(none).paused, false, 'no .planning at all');
     const dir = track(makeProject({ state: FORWARD, roadmap: true }));
     assert.equal(detectSignals(dir).paused, false);
+  });
+});
+
+// #6797 (ADR-4962 Decisions 1, 2, 4): "paused" is the calling session's own handoff.
+describe('smart-entry: the pause is per session (#6797)', () => {
+  afterEach(removeAll);
+
+  const FORWARD = state({ status: 'executing', total_phases: 5, current_phase: 2, progress: 60 });
+  const put = (dir, name, body = {}) => fs.writeFileSync(path.join(dir, '.planning', name), JSON.stringify(body));
+  const project = () => track(makeProject({ state: FORWARD, roadmap: true }));
+  const sessionRecord = (dir, sid, roleId) => {
+    fs.mkdirSync(path.join(dir, '.planning', 'sessions'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'sessions', `${sid}.json`), JSON.stringify({ session_id: sid, role_id: roleId }));
+  };
+
+  for (const [label, key, files] of [
+    ['its own session-keyed handoff', 'me', ['HANDOFF.me.json']],
+    ['a role-less legacy HANDOFF.json', 'me', ['HANDOFF.json']],
+    ['the role slot of its recorded role', 'me', ['HANDOFF.latest.coordinator.json']],
+  ]) {
+    test(`smartEntryPausedForOwnHandoff: ${label} routes to resume`, () => {
+      const restore = withSessionEnv({ GSD_SESSION_KEY: key });
+      try {
+        const dir = project();
+        sessionRecord(dir, 'me', 'coordinator');
+        for (const f of files) put(dir, f);
+        const result = classifyProject(dir);
+        assert.equal(result.signals.paused, true);
+        assert.equal(result.situation, 'paused');
+        assert.equal(result.recommended, 'resume-work');
+      } finally { restore(); }
+    });
+  }
+
+  test('smartEntryNotPausedForOthersHandoff: another session\'s or another role\'s handoff does not pause this session', () => {
+    const restore = withSessionEnv({ GSD_SESSION_KEY: 'me' });
+    try {
+      const dir = project();
+      sessionRecord(dir, 'me', 'coordinator');
+      put(dir, 'HANDOFF.someone-else.json');
+      put(dir, 'HANDOFF.latest.implementer.json');
+      put(dir, 'HANDOFF.json', { role_id: 'reviewer' });
+      const result = classifyProject(dir);
+      assert.equal(result.signals.paused, false);
+      assert.equal(result.situation, 'executing');
+    } finally { restore(); }
+  });
+
+  test('smartEntryNoIdentityHandoffDoesNotPause: with no session key a handoff owns nobody, so it does not mark paused', () => {
+    const restore = withSessionEnv({});
+    try {
+      const dir = project();
+      put(dir, 'HANDOFF.json');
+      put(dir, 'HANDOFF.me.json');
+      assert.equal(detectSignals(dir).paused, false);
+    } finally { restore(); }
+  });
+
+  test('smartEntryNoIdentityIgnoresTerminalKeys: a terminal-multiplexer variable is not a session', () => {
+    const restore = withSessionEnv({ TMUX_PANE: '%3', TERM_SESSION_ID: 'w0t0p0' });
+    try {
+      const dir = project();
+      put(dir, 'HANDOFF.json');
+      assert.equal(detectSignals(dir).paused, false);
+    } finally { restore(); }
+  });
+
+  test('smartEntryPausedAtStillPauses: the legacy STATE.md paused_at pauses every session, key or no key', () => {
+    for (const env of [{}, { GSD_SESSION_KEY: 'me' }]) {
+      const restore = withSessionEnv(env);
+      try {
+        const dir = track(makeProject({ state: state({ status: 'executing', total_phases: 5, current_phase: 2, paused_at: '2026-06-01T00:00:00Z' }), roadmap: true }));
+        assert.equal(detectSignals(dir).paused, true);
+      } finally { restore(); }
+    }
+  });
+
+  test('smartEntryWithoutHandoffUnchanged: no handoff file means the same signals as a project that never paused', () => {
+    const restore = withSessionEnv({ GSD_SESSION_KEY: 'me' });
+    try {
+      const dir = project();
+      assert.equal(detectSignals(dir).paused, false);
+      assert.equal(classifyProject(dir).situation, 'executing');
+    } finally { restore(); }
+  });
+
+  test('smartEntryUnreadableHandoffNeverPauses: an oversized or invalid handoff is skipped, not read as a pause', () => {
+    const restore = withSessionEnv({ GSD_SESSION_KEY: 'me' });
+    try {
+      const dir = project();
+      fs.writeFileSync(path.join(dir, '.planning', 'HANDOFF.me.json'), '{not json');
+      assert.equal(detectSignals(dir).paused, false);
+    } finally { restore(); }
   });
 });
 
