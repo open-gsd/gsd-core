@@ -153,7 +153,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Installer flags](reference/installer-flags.md) — every option of `npx @opengsd/gsd-core`: runtime flags, location, skill profiles, cleanup and hook-path behavior
 - [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
-- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not
+- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not; `npm run lint:generated-sync` fails when the page is stale or any item or option is undocumented
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
 - [Exit code reference](reference/exit-codes.md) — generated catalogue of every registered process exit code, its name, meaning, and owning module, plus the reserved bands and the v1/v2 exit contract
 - [Capability manifest](reference/capability-manifest.md) — the full `capability.json` schema and validation rules

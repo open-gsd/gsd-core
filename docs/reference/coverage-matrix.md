@@ -2,7 +2,7 @@
 
 # Documentation coverage matrix
 
-Which shipped item is documented where, and whether each of its options is documented there. Every item list is read from the surface's own source, and every verdict is a mechanical check of the documentation text; the rule for each surface is stated under its heading. The page is generated, and CI fails when it is stale.
+Which shipped item is documented where, and whether each of its options is documented there. Every item list is read from the surface's own source, and every verdict is a mechanical check of the documentation text; the rule for each surface is stated under its heading. The page is generated, and CI fails when it is stale or when any item or option is undocumented.
 
 In the tables, **Documented in** is the first documenting section, **Type** is the Diataxis type of that page, **Options** is documented options over declared options, and **Missing** lists the options with no mention in a documenting section.
 
