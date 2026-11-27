@@ -105,7 +105,19 @@
     "qs": ">=6.15.2",
     "body-parser": ">=2.3.0",
     "@hono/node-server": ">=2.0.5",
-    "hono": ">=4.13.5"
+    "hono": ">=4.13.5",
+    "@stryker-mutator/core": {
+      "minimatch": ">=11.0.1"
+    },
+    "glob": {
+      "minimatch": ">=11.0.1"
+    },
+    "test-exclude": {
+      "minimatch": ">=11.0.1"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": ">=11.0.1"
+    }
   },
   "optionalDependencies": {
     "fallow": "^3.34.0"

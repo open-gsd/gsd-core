@@ -258,6 +258,7 @@ build/
 /gsd-core/bin/lib/health-diagnostic-rules/consistency.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/install-surface-shadowing.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/context-bridge.cjs
+/gsd-core/bin/lib/health-diagnostic-rules/project-skills-budget.cjs
 /gsd-core/bin/lib/command-roster.cjs
 /gsd-core/bin/lib/runtime-artifact-conversion.cjs
 /gsd-core/bin/lib/runtime-artifact-layout.cjs

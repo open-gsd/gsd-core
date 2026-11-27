@@ -647,7 +647,7 @@ claude --dangerously-skip-permissions
 > **The permissions flag is optional.** It skips per-file confirmation while
 > GSD's sub-agents read and write files. Use it only in low-stakes or
 > throwaway contexts. To keep confirmations enabled, start with `claude` instead.
-> For real work, read the [security model](../explanation/security-model.md) first.
+> For real work, read the [security model](explanation/security-model.md) first.
 
 
 ### New Project from Existing Document
