@@ -1314,7 +1314,7 @@ older filename pairing (below). Four additive fields report the halt:
 | Field | Where | Meaning |
 |---|---|---|
 | `halted` | each plan row | `true` when the SUMMARY this plan's halt is read from declares `status: halted` (which SUMMARY that is, and the limits, below) |
-| `blocked_by` | each plan row | The halted plan ids upstream of this plan, directly or transitively, over its `depends_on` edges; `[]` when nothing upstream halted. In or behind a `depends_on` cycle a non-halted plan names its own direct `depends_on` plans in the phase instead, completed ones included (below) |
+| `blocked_by` | each plan row | The halted plan ids upstream of this plan, directly or transitively, over its `depends_on` edges; `[]` when nothing upstream halted. In or behind a `depends_on` cycle a non-halted plan names its own direct `depends_on` plans among the phase's live, canonically named plans instead, completed ones included (below) |
 | `halted_count` | each phase row, beside `summary_count` | Live (non-superseded) plans whose `halted` is `true` |
 | `progress.halted_plans` | beside `progress.completed_plans` | `{completed, total, percent, scope}`: Σ `halted_count` over Σ `plan_count`, under the same percent rule as the other fractions (a withheld percentage gets its own `percent_withheld` diagnostic) |
 
@@ -1349,10 +1349,10 @@ give different answers:
   line endings before it reads a document (#3707); `phase-plan-index` does not,
   so the two can read a different `depends_on` from the same file.
 - **A `depends_on` cycle.** `phase-plan-index` refuses the phase. `planning
-  inspect` still answers: every non-halted plan in or behind the cycle gets a
-  non-empty `blocked_by` naming its own direct `depends_on` plans in the
-  phase, sorted, completed ones included (a plan that depends on itself names
-  itself), so nothing the graph cannot order reads as runnable.
+  inspect` still answers: a non-halted plan in or behind the cycle gets a
+  non-empty `blocked_by` naming its own direct `depends_on` plans among the
+  phase's live, canonically named plans, sorted, completed ones included (a
+  plan that depends on itself names itself), so it does not read as runnable.
 - **Two plan ids that differ only in case** (`A-01-PLAN.md` and
   `a-01-PLAN.md`). `phase-plan-index` refuses the phase as ambiguous. `planning
   inspect` answers: a `depends_on` token naming either plan's id, or a
