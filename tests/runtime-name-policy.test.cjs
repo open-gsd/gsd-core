@@ -17,6 +17,7 @@ const {
   getGlobalConfigHomeFragment,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
 const { getGlobalConfigDir } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
+const { CONFIG_LOCATION_ENV_KEYS } = require('./helpers.cjs');
 
 describe('runtime-name-policy canonical runtime ids', () => {
   test('canonicalizes Kimi without adding extra aliases', () => {
@@ -215,11 +216,9 @@ function withEnv(overrides, fn) {
   }
 }
 
-// Clear all kilo-relevant env vars so tests are hermetic.
-const kiloEnvClears = {
-  KILO_CONFIG_DIR: undefined,
-  XDG_CONFIG_HOME: undefined,
-};
+// Clear every config-location variable (registry-derived, #4635), not a hand-picked pair:
+// KILO_CONFIG alone redirects the kilo config dir, and a hand list missed it.
+const kiloEnvClears = Object.fromEntries(CONFIG_LOCATION_ENV_KEYS.map((key) => [key, undefined]));
 
 describe('bug #783: kilo global skills dir is ~/.kilo/skills, not ~/.config/kilo/skills', () => {
   test('getGlobalSkillsBase("kilo") resolves to ~/.kilo/skills', () => {

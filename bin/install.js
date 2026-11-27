@@ -1417,7 +1417,7 @@ if (hasUninstall) {
 
 // Show help if requested
 if (hasHelp) {
-  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--kimi${reset}                    Install for Kimi CLI only\n    ${cyan}--kimi-code${reset}               Install for Kimi Code only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--zcode${reset}                  Install for ZCode only\n    ${cyan}--pi${reset}                      Install for Pi only\n    ${cyan}--gemini${reset}                  Install for Gemini CLI only\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}--no-legacy-cleanup${reset}          Skip the legacy get-shit-done-cc artifact scan\n                              (an explicit --config-dir already scopes the scan to it)\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              and resolve the node runner at hook-fire time via\n                              hooks/gsd-node-runner.sh (WSL/Docker bind-mount\n                              setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--relative-includes${reset}       With --local: write project-relative @ includes\n                              (.claude/gsd-core/...) instead of this checkout's\n                              absolute path, so several git worktrees of one repo\n                              each read their own copy (also GSD_RELATIVE_INCLUDES=1)\n    ${cyan}--reclaim-kimi-legacy${reset}     With --kimi-code: also remove the GSD hooks a\n                              pre-1.10.0 --kimi-code install orphaned in ~/.kimi.\n                              Opt-in — those artifacts are indistinguishable from\n                              Kimi CLI's own, so skip it if you use Kimi CLI too.\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — ${PROFILES.core.length} main-loop skills incl. phase (~130 desc tokens)\n                              standard — ${PROFILES.standard.length} skills incl. phase, review, config (~700)\n                              full     — all skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Kimi CLI globally${reset}\n    npx ${pkg.name} --kimi --global\n\n    ${dim}# Install for Kimi Code globally (its own ~/.kimi-code root)${reset}\n    npx ${pkg.name} --kimi-code --global\n\n    ${dim}# Kimi Code, also reclaiming hooks a pre-1.10.0 install left in ~/.kimi${reset}\n    npx ${pkg.name} --kimi-code --global --reclaim-kimi-legacy\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Local install for a repo worked from several git worktrees${reset}\n    npx ${pkg.name} --claude --local --relative-includes\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / KIMI_CONFIG_DIR / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n    Kimi CLI defaults to the first existing generic skills root: ${cyan}~/.config/agents/skills${reset}, then ${cyan}~/.agents/skills${reset}; if neither exists, GSD creates ${cyan}~/.config/agents${reset}.\n    Kimi CLI and Kimi Code are separate products with separate hook roots: use ${cyan}--kimi${reset} (${cyan}~/.kimi${reset}, ${cyan}KIMI_SHARE_DIR${reset}) or ${cyan}--kimi-code${reset} (${cyan}~/.kimi-code${reset}, ${cyan}KIMI_CODE_HOME${reset}).\n`);
+  console.log(`  ${yellow}Usage:${reset} npx ${pkg.name} [options]\n\n  ${yellow}Options:${reset}\n    ${cyan}-g, --global${reset}              Install globally (to config directory)\n    ${cyan}-l, --local${reset}               Install locally (to current directory)\n    ${cyan}--claude${reset}                  Install for Claude Code only\n    ${cyan}--opencode${reset}                Install for OpenCode only\n    ${cyan}--kilo${reset}                    Install for Kilo only\n    ${cyan}--codex${reset}                   Install for Codex only\n    ${cyan}--kimi${reset}                    Install for Kimi CLI only\n    ${cyan}--kimi-code${reset}               Install for Kimi Code only\n    ${cyan}--copilot${reset}                 Install for Copilot only\n    ${cyan}--antigravity${reset}             Install for Antigravity only\n    ${cyan}--cursor${reset}                  Install for Cursor only\n    ${cyan}--windsurf${reset}                Install for Windsurf only\n    ${cyan}--augment${reset}                 Install for Augment only\n    ${cyan}--trae${reset}                    Install for Trae only\n    ${cyan}--qwen${reset}                    Install for Qwen Code only\n    ${cyan}--hermes${reset}                  Install for Hermes Agent only\n    ${cyan}--cline${reset}                   Install for Cline only\n    ${cyan}--codebuddy${reset}              Install for CodeBuddy only\n    ${cyan}--zcode${reset}                  Install for ZCode only\n    ${cyan}--pi${reset}                      Install for Pi only\n    ${cyan}--devin-desktop${reset}           Alias of --windsurf (Windsurf is now Devin Desktop)\n    ${cyan}--both${reset}                    Install for Claude Code and OpenCode\n    ${cyan}--all${reset}                     Install for all runtimes\n    ${cyan}-u, --uninstall${reset}           Uninstall GSD (remove all GSD files)\n    ${cyan}-c, --config-dir <path>${reset}   Specify custom config directory\n    ${cyan}--no-legacy-cleanup${reset}          Skip the legacy get-shit-done-cc artifact scan\n                              (an explicit --config-dir already scopes the scan to it)\n    ${cyan}--dry-run${reset}                 Preview the legacy get-shit-done-cc cleanup and exit\n                              without installing (does not preview --uninstall)\n    ${cyan}--skills-root <runtime>${reset}   Print the skills root for a runtime and exit\n    ${cyan}-h, --help${reset}                Show this help message\n    ${cyan}--force-statusline${reset}        Replace existing statusline config\n    ${cyan}--portable-hooks${reset}          Emit \$HOME-relative hook paths in settings.json\n                              and resolve the node runner at hook-fire time via\n                              hooks/gsd-node-runner.sh (WSL/Docker bind-mount\n                              setups; also GSD_PORTABLE_HOOKS=1)\n    ${cyan}--relative-includes${reset}       With --local: write project-relative @ includes\n                              (.claude/gsd-core/...) instead of this checkout's\n                              absolute path, so several git worktrees of one repo\n                              each read their own copy (also GSD_RELATIVE_INCLUDES=1)\n    ${cyan}--reclaim-kimi-legacy${reset}     With --kimi-code: also remove the GSD hooks a\n                              pre-1.10.0 --kimi-code install orphaned in ~/.kimi.\n                              Opt-in — those artifacts are indistinguishable from\n                              Kimi CLI's own, so skip it if you use Kimi CLI too.\n    ${cyan}--profile=<name>${reset}         Install a named skill profile. Profiles:\n                              core     — ${PROFILES.core.length} main-loop skills incl. phase (~130 desc tokens)\n                              standard — ${PROFILES.standard.length} skills incl. phase, review, config (~700)\n                              full     — all skills (default)\n                              Composable: --profile=core,audit installs union of closures.\n                              Profile is persisted and respected by \`gsd update\`.\n    ${cyan}--minimal${reset}                 Alias for --profile=core (back-compat).\n                              Cuts cold-start overhead from ~12k tokens to ~700.\n                              Alias: --core-only.\n\n  ${yellow}Examples:${reset}\n    ${dim}# Interactive install (prompts for runtime and location)${reset}\n    npx ${pkg.name}\n\n    ${dim}# Install for Claude Code globally${reset}\n    npx ${pkg.name} --claude --global\n\n    ${dim}# Install for Kilo globally${reset}\n    npx ${pkg.name} --kilo --global\n\n    ${dim}# Install for Codex globally${reset}\n    npx ${pkg.name} --codex --global\n\n    ${dim}# Install for Kimi CLI globally${reset}\n    npx ${pkg.name} --kimi --global\n\n    ${dim}# Install for Kimi Code globally (its own ~/.kimi-code root)${reset}\n    npx ${pkg.name} --kimi-code --global\n\n    ${dim}# Kimi Code, also reclaiming hooks a pre-1.10.0 install left in ~/.kimi${reset}\n    npx ${pkg.name} --kimi-code --global --reclaim-kimi-legacy\n\n    ${dim}# Install for Copilot globally${reset}\n    npx ${pkg.name} --copilot --global\n\n    ${dim}# Install for Copilot locally${reset}\n    npx ${pkg.name} --copilot --local\n\n    ${dim}# Install for Antigravity globally${reset}\n    npx ${pkg.name} --antigravity --global\n\n    ${dim}# Install for Antigravity locally${reset}\n    npx ${pkg.name} --antigravity --local\n\n    ${dim}# Install for Cursor globally${reset}\n    npx ${pkg.name} --cursor --global\n\n    ${dim}# Install for Cursor locally${reset}\n    npx ${pkg.name} --cursor --local\n\n    ${dim}# Install for Windsurf globally${reset}\n    npx ${pkg.name} --windsurf --global\n\n    ${dim}# Install for Windsurf locally${reset}\n    npx ${pkg.name} --windsurf --local\n\n    ${dim}# Install for Augment globally${reset}\n    npx ${pkg.name} --augment --global\n\n    ${dim}# Install for Augment locally${reset}\n    npx ${pkg.name} --augment --local\n\n    ${dim}# Install for Trae globally${reset}\n    npx ${pkg.name} --trae --global\n\n    ${dim}# Install for Trae locally${reset}\n    npx ${pkg.name} --trae --local\n\n    ${dim}# Install for Hermes Agent globally${reset}\n    npx ${pkg.name} --hermes --global\n\n    ${dim}# Install for Hermes Agent locally${reset}\n    npx ${pkg.name} --hermes --local\n\n    ${dim}# Install for Cline globally${reset}\n    npx ${pkg.name} --cline --global\n\n    ${dim}# Install for Cline locally${reset}\n    npx ${pkg.name} --cline --local\n\n    ${dim}# Install for CodeBuddy globally${reset}\n    npx ${pkg.name} --codebuddy --global\n\n    ${dim}# Install for CodeBuddy locally${reset}\n    npx ${pkg.name} --codebuddy --local\n\n    ${dim}# Install for all runtimes globally${reset}\n    npx ${pkg.name} --all --global\n\n    ${dim}# Install to custom config directory${reset}\n    npx ${pkg.name} --kilo --global --config-dir ~/.kilo-work\n\n    ${dim}# Install to current project only${reset}\n    npx ${pkg.name} --claude --local\n\n    ${dim}# Local install for a repo worked from several git worktrees${reset}\n    npx ${pkg.name} --claude --local --relative-includes\n\n    ${dim}# Uninstall GSD from Cursor globally${reset}\n    npx ${pkg.name} --cursor --global --uninstall\n\n  ${yellow}Notes:${reset}\n    The --config-dir option is useful when you have multiple configurations.\n    It takes priority over CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR / KILO_CONFIG_DIR / CODEX_HOME / KIMI_CONFIG_DIR / COPILOT_CONFIG_DIR / COPILOT_HOME / ANTIGRAVITY_CONFIG_DIR / CURSOR_CONFIG_DIR / WINDSURF_CONFIG_DIR / AUGMENT_CONFIG_DIR / TRAE_CONFIG_DIR / QWEN_CONFIG_DIR / HERMES_HOME / CLINE_CONFIG_DIR / CODEBUDDY_CONFIG_DIR environment variables.\n    Kimi CLI defaults to the first existing generic skills root: ${cyan}~/.config/agents/skills${reset}, then ${cyan}~/.agents/skills${reset}; if neither exists, GSD creates ${cyan}~/.config/agents${reset}.\n    Kimi CLI and Kimi Code are separate products with separate hook roots: use ${cyan}--kimi${reset} (${cyan}~/.kimi${reset}, ${cyan}KIMI_SHARE_DIR${reset}) or ${cyan}--kimi-code${reset} (${cyan}~/.kimi-code${reset}, ${cyan}KIMI_CODE_HOME${reset}).\n`);
   process.exit(0);
 }
 
@@ -1616,6 +1616,14 @@ function stripJsonComments(text) {
   let i = 0;
   let inString = false;
   let stringChar = '';
+  // #5989: a comma seen outside a string is held, not emitted. It is dropped
+  // only when the next emitted non-whitespace char is `}` or `]` (a JSONC
+  // trailing comma) and flushed before any other emitted char. Comments are
+  // skipped by this same pass, so `, /*c*/ }` collapses exactly as the old
+  // post-strip regex `,\s*([}\]])` did — but that regex ran on stripped text,
+  // where a `,}` inside a string was indistinguishable from structure and
+  // rewrote values like "x,}y".
+  let pendingComma = false;
   while (i < text.length) {
     // Handle string literals — don't strip comments inside strings
     if (inString) {
@@ -1633,6 +1641,10 @@ function stripJsonComments(text) {
     }
     // Start of string
     if (text[i] === '"' || text[i] === "'") {
+      if (pendingComma) {
+        result += ',';
+        pendingComma = false;
+      }
       inString = true;
       stringChar = text[i];
       result += text[i];
@@ -1649,14 +1661,37 @@ function stripJsonComments(text) {
     if (text[i] === '/' && text[i + 1] === '*') {
       i += 2;
       while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      // #5990: the scan may stop at end of input — that is not a closed comment.
+      if (i >= text.length) throw new SyntaxError('Unterminated block comment');
       i += 2; // skip closing */
       continue;
+    }
+    if (text[i] === ',') {
+      // Consecutive commas keep failing exactly as before: the held comma is
+      // flushed and this one takes its place.
+      if (pendingComma) result += ',';
+      pendingComma = true;
+      i++;
+      continue;
+    }
+    if (/\s/.test(text[i])) {
+      result += text[i];
+      i++;
+      continue;
+    }
+    if (text[i] === '}' || text[i] === ']') {
+      pendingComma = false;
+    } else if (pendingComma) {
+      result += ',';
+      pendingComma = false;
     }
     result += text[i];
     i++;
   }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
+  // EOF flush: nothing followed the comma to drop it, so the text keeps the
+  // same malformed shape the old regex left behind ({"a":1, still fails).
+  if (pendingComma) result += ',';
+  return result;
 }
 
 /**
@@ -1713,6 +1748,11 @@ const {
   readGsdRuntimeProfileResolver,
   resolveAgentModelOverride,
 } = require(path.join(_gsdLibDir, 'install-model-override-resolver.cjs'));
+// #4669: the one selector for a runtime-keyed `model_overrides.<agent>` entry. The Codex `.toml`
+// baker below reads that key directly rather than through resolveAgentModelOverride (it has its own
+// value policy: trim, drop Anthropic-flavored ids with a warning), so it selects through the same
+// function the dispatch and install resolvers use and the three cannot disagree.
+const { selectAgentModelOverride } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2875 Part 2: effort frontmatter injection moved to runtimeArtifactConversion
 // (single source of truth with the descriptor pipeline's
@@ -4417,7 +4457,10 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // default now, and only an explicit model_overrides pin survives. See the
   // deprecation-notice block below for the population that used to get a pin from
   // the resolver and no longer does.
-  const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+
+  // #4669: an entry may be a runtime-keyed object; this file IS the codex install, so `codex` is the key.
+  const rawModelOverride = selectAgentModelOverride(modelOverrides?.[resolvedName], 'codex')
+    || selectAgentModelOverride(modelOverrides?.[agentName], 'codex');
   let pinnedModel = null;
   if (rawModelOverride) {
     // Trim before the truthiness test (#3241 defect fix): a whitespace-only value
@@ -4804,6 +4847,45 @@ function spliceCodexAgentsScalars(block, scalarLines) {
 }
 
 /**
+ * A TOML section nominally ends at the next table header, but comments directly
+ * above that header conventionally describe the NEXT table. Keep that trailing
+ * comment block when deleting a managed section so uninstall never consumes
+ * user documentation along with GSD-owned bytes (#5199 F2).
+ */
+function managedTomlSectionRemovalEnd(content, section) {
+  const records = getTomlLineRecords(content).filter((record) =>
+    record.start >= section.headerEnd && record.end + record.eol.length <= section.end
+  );
+  let preserveStart = section.end;
+  let sawComment = false;
+  let index = records.length - 1;
+
+  // A blank separator may sit between the comment block and the next table.
+  // Walk past trailing blanks first, but preserve them only when a comment is
+  // actually found.
+  while (index >= 0 && !records[index].startsInMultilineString && records[index].text.trim() === '') {
+    index -= 1;
+  }
+
+  for (let i = index; i >= 0; i -= 1) {
+    const record = records[i];
+    const trimmed = record.text.trim();
+    if (!record.startsInMultilineString && trimmed.startsWith('#')) {
+      sawComment = true;
+      preserveStart = record.start;
+      continue;
+    }
+    if (sawComment && trimmed === '') {
+      preserveStart = record.start;
+      continue;
+    }
+    break;
+  }
+
+  return sawComment ? preserveStart : section.end;
+}
+
+/**
  * Strip any managed GSD agent sections from a TOML string.
  *
  * Used by the uninstall path (`stripGsdFromCodexConfig`). Removes only what GSD
@@ -4828,8 +4910,7 @@ function stripCodexGsdAgentSections(content) {
     // GSD's managed `[agents]` scalar block (ADR-1239 upgrade 2 / #2088 — the
     // `max_depth` dispatch-tuning table). Install purges any pre-existing bare
     // `[agents]` and writes its own, so a known-scalar-only bare `[agents]` is
-    // GSD-owned; strip it on uninstall. (The marker path already removes it via
-    // the marker-to-EOF cut; this covers the no-marker fallback.)
+    // GSD-owned; strip it on uninstall, with or without the managed marker.
     if (!section.array && section.path === 'agents') {
       const body = content.slice(section.headerEnd, section.end);
       return codexBareAgentsHasOnlyKnownScalars(body);
@@ -4848,8 +4929,48 @@ function stripCodexGsdAgentSections(content) {
 
   return removeContentRanges(
     content,
-    sections.map(({ start, end }) => ({ start, end })),
+    sections.map((section) => ({
+      start: section.start,
+      end: managedTomlSectionRemovalEnd(content, section),
+    })),
   );
+}
+
+/** Standalone managed-marker lines, ignoring marker text inside multiline strings. */
+function managedCodexMarkers(content) {
+  return getTomlLineRecords(content).filter((record) =>
+    !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER);
+}
+
+function parseCodexHooksOwnership(record) {
+  if (!record || record.startsInMultilineString) return null;
+  return /^# GSD codex_hooks ownership: (section|root_dotted)[ \t]*$/.exec(record.text)?.[1] || null;
+}
+
+// Legacy injected feature keys belong only to [features]. Identically named
+// keys in user tables and text inside multiline values must survive cleanup.
+function stripInjectedCodexFeatureKeys(content) {
+  const injectedFeatureRecords = getTomlLineRecords(content).filter((record) => {
+    if (record.startsInMultilineString || record.tableHeader || record.tablePath !== 'features') return false;
+    if (record.keySegments?.length !== 1 ||
+        !['multi_agent', 'default_mode_request_user_input'].includes(record.keySegments[0])) return false;
+    const equalsIndex = findTomlAssignmentEquals(record.text);
+    const commentStart = findTomlCommentStart(record.text);
+    return record.text.slice(equalsIndex + 1, commentStart === -1 ? record.text.length : commentStart).trim() === 'true';
+  });
+  return removeContentRanges(content, injectedFeatureRecords.map((record) => ({
+    start: record.start, end: findTomlAssignmentBlockEnd(content, record),
+  })));
+}
+
+// Remove a managed [features]/[agents] table only when its body is empty, never
+// a header with user keys after a blank line, nor look-alike headers in strings.
+function stripEmptyManagedCodexTables(content) {
+  const emptySections = getTomlTableSections(content).filter((section) =>
+    !section.array && ['features', 'agents'].includes(section.path) &&
+    content.slice(section.headerEnd, section.end).trim() === ''
+  );
+  return removeContentRanges(content, emptySections.map(({ start, end }) => ({ start, end })));
 }
 
 /**
@@ -4858,48 +4979,83 @@ function stripCodexGsdAgentSections(content) {
  */
 function stripGsdFromCodexConfig(content) {
   const eol = detectLineEnding(content);
-  const markerIndex = content.indexOf(GSD_CODEX_MARKER);
-  const codexHooksOwnership = getManagedCodexHooksOwnership(content);
+  const lineRecords = getTomlLineRecords(content);
+  const markerRecords = managedCodexMarkers(content);
+  const markerRecord = markerRecords[0] || null;
+  const codexHooksOwnership = markerRecords
+    .map((record) => getManagedCodexHooksOwnership(content, record))
+    .find(Boolean) || null;
 
-  if (markerIndex !== -1) {
-    // Has GSD marker — remove everything from marker to EOF. First recover the
-    // user's own AgentsToml scalars (max_threads etc.) that install folded into
-    // the managed [agents] block (#2088), so a full install→uninstall cycle
-    // round-trips the user's tuning. GSD-managed max_depth is dropped.
-    const preservedScalars = extractCodexUserAgentsScalars(content.slice(markerIndex));
-    let before = content.substring(0, markerIndex);
-    before = stripCodexHooksFeatureAssignments(before, codexHooksOwnership);
-    // Also strip GSD-injected feature keys above the marker (Case 3 inject)
-    before = before.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
-    before = before.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
-    before = before.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
-    before = before.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
-    before = before.replace(/^(?:\r?\n)+/, '').trimEnd();
+  if (!markerRecord) {
+    // Acceptance criterion 5 keeps the legacy markerless cleanup path except
+    // for the approved safety fixes (#5199 maintainer rulings): trailing user
+    // comments survive managed section removal, marker text inside a multiline
+    // string is not a managed marker, injected keys are removed only inside
+    // [features], and only a table with an empty body loses its header.
+    let cleaned = stripCodexHooksFeatureAssignments(content, codexHooksOwnership);
+    cleaned = stripInjectedCodexFeatureKeys(cleaned);
+    const preservedScalars = extractCodexUserAgentsScalars(cleaned);
+    cleaned = stripCodexGsdAgentSections(cleaned);
+    cleaned = stripEmptyManagedCodexTables(cleaned);
+    cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
     if (preservedScalars.length > 0) {
-      before = (before ? before + eol + eol : '') + '[agents]' + eol + preservedScalars.join(eol);
+      cleaned = (cleaned ? cleaned + eol + eol : '') + '[agents]' + eol + preservedScalars.join(eol);
     }
-    if (!before) return null;
-    return before + eol;
+    if (!cleaned) return null;
+    return cleaned + eol;
   }
 
-  // No marker but may have GSD-injected feature keys
   let cleaned = content;
-  cleaned = stripCodexHooksFeatureAssignments(cleaned, codexHooksOwnership);
-  cleaned = cleaned.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
-  cleaned = cleaned.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
+  // #5199: the marker identifies GSD's block, not ownership of every byte
+  // after it. Preserve both sides and let the uninstall section parser remove
+  // only managed agents, including legacy entries, below.
+  const removalRanges = [];
+  for (const managedMarker of markerRecords) {
+    removalRanges.push({ start: managedMarker.start, end: managedMarker.end + managedMarker.eol.length });
+    const ownershipRecord = lineRecords[lineRecords.findIndex((record) => record.start === managedMarker.start) + 1];
+    if (parseCodexHooksOwnership(ownershipRecord)) {
+      removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
+    }
+  }
+  cleaned = removeContentRanges(content, removalRanges);
 
-  // #2088: recover the user's own AgentsToml scalars before the [agents] table is
-  // stripped, so they survive uninstall even in the no-marker fallback path.
-  const preservedScalars = extractCodexUserAgentsScalars(cleaned);
+  // Older installers wrote hook tables after the managed marker. The marker
+  // no longer owns marker-to-EOF, so remove those tables through their existing
+  // structural owner before preserving the remaining user content (#5199 F1).
+  cleaned = stripStaleGsdHookBlocks(cleaned, true);
+  // These legacy injected keys belong only to [features]. Identically named
+  // user-table keys and text inside multiline values must survive cleanup.
+  cleaned = stripInjectedCodexFeatureKeys(cleaned);
+  // Remove the injected feature keys first. That lets the structural hooks
+  // owner recognize a now-comment-only [features] table and remove its header
+  // in the same pass instead of requiring a second cleanup (#5199 F4).
+  cleaned = stripCodexHooksFeatureAssignments(cleaned, codexHooksOwnership);
+
+  // #2088: recover user AgentsToml scalars only when the section parser will
+  // strip their table. A table with unknown user keys survives in place, so
+  // restoring its known scalars would create a second [agents] (#5199).
+  const agentsSection = getTomlTableSections(cleaned).find((section) => !section.array && section.path === 'agents');
+  const stripsAgentsTable = agentsSection && codexBareAgentsHasOnlyKnownScalars(cleaned.slice(agentsSection.headerEnd, agentsSection.end));
+  const preservedScalars = stripsAgentsTable ? extractCodexUserAgentsScalars(cleaned) : [];
+
+  if (agentsSection && !stripsAgentsTable) {
+    // The managed max_depth can coexist with future user tuning keys. Drop only
+    // that assignment, retaining the table and all unknown keys in place.
+    const depthRecords = getTomlLineRecords(cleaned).filter((record) =>
+      !record.startsInMultilineString && !record.tableHeader &&
+      record.start >= agentsSection.headerEnd && record.start < agentsSection.end &&
+      record.keySegments?.length === 1 && record.keySegments[0] === 'max_depth'
+    );
+    cleaned = removeContentRanges(cleaned, depthRecords.map((record) => ({
+      start: record.start, end: findTomlAssignmentBlockEnd(cleaned, record),
+    })));
+  }
 
   // Remove [agents.gsd-*] sections + the managed known-scalar [agents] table.
   cleaned = stripCodexGsdAgentSections(cleaned);
 
-  // Remove [features] section if now empty (only header, no keys before next section)
-  cleaned = cleaned.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
-
-  // Remove [agents] section if now empty
-  cleaned = cleaned.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
+  // Remove truly empty managed tables, never look-alike headers in user strings.
+  cleaned = stripEmptyManagedCodexTables(cleaned);
 
   cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
 
@@ -5382,9 +5538,24 @@ function getTomlTableSections(content) {
   }));
 }
 
-function collapseTomlBlankLines(content) {
-  const eol = detectLineEnding(content);
-  return content.replace(/(?:\r?\n){3,}/g, eol + eol);
+function collapseTomlBlankLines(content, preserveUserText = false) {
+  if (!preserveUserText) {
+    const eol = detectLineEnding(content);
+    return content.replace(/(?:\r?\n){3,}/g, eol + eol);
+  }
+  let blankRun = 0;
+  let collapsed = '';
+  for (const record of getTomlLineRecords(content)) {
+    const blank = !record.startsInMultilineString && record.text.trim() === '';
+    if (blank) {
+      blankRun += 1;
+      if (blankRun > 1) continue;
+    } else {
+      blankRun = 0;
+    }
+    collapsed += content.slice(record.start, record.end + record.eol.length);
+  }
+  return collapsed;
 }
 
 function removeContentRanges(content, ranges) {
@@ -5474,6 +5645,13 @@ function stripCodexHooksFeatureAssignments(content, ownership = null) {
           start: featuresSection.start,
           end: featuresSection.end,
         });
+      } else if (!hasRemainingContent) {
+        // The table was GSD-owned but its trailing comments are user-owned.
+        // Remove only the header so those comments remain file-scoped.
+        removalRanges.push({
+          start: featuresSection.start,
+          end: featuresSection.headerEnd,
+        });
       }
     }
   }
@@ -5500,30 +5678,29 @@ function stripCodexHooksFeatureAssignments(content, ownership = null) {
   return removeContentRanges(content, removalRanges);
 }
 
-function getManagedCodexHooksOwnership(content) {
-  const markerIndex = content.indexOf(GSD_CODEX_MARKER);
-  if (markerIndex === -1) {
+function getManagedCodexHooksOwnership(content, markerRecord) {
+  if (!markerRecord) {
     return null;
   }
 
-  const afterMarker = content.slice(markerIndex + GSD_CODEX_MARKER.length);
-  const match = afterMarker.match(/^\r?\n# GSD codex_hooks ownership: (section|root_dotted)\r?\n/);
-  return match ? match[1] : null;
+  const afterMarker = content.slice(markerRecord.end + markerRecord.eol.length);
+  return parseCodexHooksOwnership(getTomlLineRecords(afterMarker)[0]);
 }
 
 function setManagedCodexHooksOwnership(content, ownership) {
-  const markerIndex = content.indexOf(GSD_CODEX_MARKER);
+  const marker = managedCodexMarkers(content)[0];
+  const markerIndex = marker?.start ?? -1;
   if (markerIndex === -1) {
     return content;
   }
 
   const eol = detectLineEnding(content);
-  const markerEnd = markerIndex + GSD_CODEX_MARKER.length;
+  const markerEnd = marker.end;
   const afterMarker = content.slice(markerEnd);
-  const normalizedAfterMarker = afterMarker.replace(
-    /^\r?\n# GSD codex_hooks ownership: (?:section|root_dotted)\r?\n/,
-    eol
-  );
+  const following = getTomlLineRecords(content.slice(markerEnd + marker.eol.length))[0];
+  const normalizedAfterMarker = parseCodexHooksOwnership(following)
+    ? eol + afterMarker.slice(marker.eol.length + following.end + following.eol.length)
+    : afterMarker;
 
   if (!ownership) {
     return content.slice(0, markerEnd) + normalizedAfterMarker;
@@ -5633,7 +5810,7 @@ function stripLeakedGsdCodexSections(content) {
  * Pure function, exported for test coverage. Returns the input unchanged
  * if no GSD-managed hook section is present.
  */
-function stripStaleGsdHookBlocks(configContent) {
+function stripStaleGsdHookBlocks(configContent, preserveUserText = false) {
   const sections = getTomlTableSections(configContent);
   const lineRecords = getTomlLineRecords(configContent);
   const hookSections = sections.filter(
@@ -5721,10 +5898,10 @@ function stripStaleGsdHookBlocks(configContent) {
     if (prev && !prev.startsInMultilineString && prev.text.trim() === '# GSD Hooks') {
       start = prev.start;
     }
-    ranges.push({ start, end: section.end });
+    ranges.push({ start, end: preserveUserText ? managedTomlSectionRemovalEnd(configContent, section) : section.end });
   }
 
-  return collapseTomlBlankLines(removeContentRanges(configContent, ranges));
+  return collapseTomlBlankLines(removeContentRanges(configContent, ranges), preserveUserText);
 }
 
 /**
@@ -5955,13 +6132,12 @@ function migrateCodexHooksMapFormat(content) {
     }
   }
 
-  // Insert flat-AoT conversions before the GSD managed marker (if present) so
-  // the migrated user hooks stay in the "user" portion of the file and are not
-  // swept away when stripGsdFromCodexConfig strips from the marker to EOF.
+  // Insert flat-AoT conversions before the GSD managed marker (if present) to
+  // keep migrated user hooks grouped ahead of the managed config block.
   // If no marker exists, append at the end of the file.
   if (flatAotBlocks.length > 0) {
     const insertionText = flatAotBlocks.join('');
-    const markerIdx = result.indexOf(GSD_CODEX_MARKER);
+    const markerIdx = managedCodexMarkers(result)[0]?.start ?? -1;
     if (markerIdx !== -1) {
       const before = result.slice(0, markerIdx).trimEnd();
       const after = result.slice(markerIdx);
@@ -6877,7 +7053,7 @@ function mergeCodexConfigContent(existing, gsdBlock) {
   // it inside the managed block, so install never silently drops it.
   const mergedGsdBlock = spliceCodexAgentsScalars(gsdBlock, extractCodexUserAgentsScalars(existing));
   const normalizedGsdBlock = mergedGsdBlock.replace(/\r?\n/g, eol);
-  const markerIndex = existing.indexOf(GSD_CODEX_MARKER);
+  const markerIndex = managedCodexMarkers(existing)[0]?.start ?? -1;
 
   // Case 2: Has GSD marker — preserve user content on BOTH sides, regenerate the GSD block.
   //
@@ -6903,9 +7079,14 @@ function mergeCodexConfigContent(existing, gsdBlock) {
     // is GSD-owned and is stripped from the trailing region so it is not duplicated alongside
     // the freshly regenerated block.
     const rawAfter = existing.substring(markerIndex);
-    const markerStripped = rawAfter
-      .replace(GSD_CODEX_MARKER, '')
-      .replace(/^\r?\n# GSD codex_hooks ownership: (?:section|root_dotted)\r?\n/, '');
+    const records = getTomlLineRecords(rawAfter);
+    const end = parseCodexHooksOwnership(records[1])
+      ? records[1].end + records[1].eol.length
+      : records[0].end + records[0].eol.length;
+    const markerStripped = rawAfter.slice(end);
+    // Install/update shares standalone-marker detection and whitespace-tolerant
+    // ownership-line parsing with cleanup. Structural hooks-feature cleanup
+    // remains specific to uninstall.
     const afterUser = stripLeakedGsdCodexSections(markerStripped).trim();
 
     // #3610: top-level keys that survived BELOW the marker were file-scoped
@@ -7695,7 +7876,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
  *   Preserves: "Claude Code" (product), "Claude Opus/Sonnet/Haiku" (models),
  *   "claude-" (prefixes), "CLAUDE.md" (handled separately)
  * - "CLAUDE.md" → runtime-appropriate instruction file
- * - "Do NOT load full AGENTS.md" → removed (harmful for AGENTS.md runtimes)
  *
  * @param {string} content - File content to neutralize
  * @param {string} instructionFile - Runtime's instruction file ('AGENTS.md', 'GEMINI.md', etc.)
@@ -7710,8 +7890,6 @@ function neutralizeAgentReferences(content, instructionFile) {
   if (instructionFile) {
     c = c.replace(/CLAUDE\.md/g, instructionFile);
   }
-  // Remove instructions that conflict with AGENTS.md-based runtimes
-  c = c.replace(/Do NOT load full `AGENTS\.md` files[^\n]*/g, '');
   return c;
 }
 
@@ -7724,8 +7902,9 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   // Replace /gsd-command colon variant with /gsd-command for opencode (flat command structure)
   convertedContent = convertedContent.replace(/\/gsd:/g, '/gsd-');
   // Replace ~/.claude and $HOME/.claude with OpenCode's config location
-  convertedContent = convertedContent.replace(/~\/\.claude\b/g, '~/.config/opencode');
-  convertedContent = convertedContent.replace(/\$HOME\/\.claude\b/g, '$HOME/.config/opencode');
+  convertedContent = runtimeArtifactConversion.rewriteOpencodeHomeForms(convertedContent);
+  // #4779: project-skills locator and launcher reinstall hint (single owner in the conversion module)
+  convertedContent = runtimeArtifactConversion.rewriteOpencodeClaudeOnlyForms(convertedContent);
   // Replace general-purpose subagent type with OpenCode's equivalent "general"
   convertedContent = convertedContent.replace(/subagent_type="general-purpose"/g, 'subagent_type="general"');
   // Runtime-neutral agent name replacement (#766)
@@ -10815,6 +10994,67 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 }
 
 /**
+ * The Claude-only forms the post-install leak scan reports, per runtime. `~/.claude` forms are a leak
+ * for every runtime. #4779: on OpenCode the project-skills locator and the launcher reinstall hint are
+ * too, because the OpenCode converter owns rewriting them (rewriteOpencodeClaudeOnlyForms); on Claude
+ * the same text is correct, so it is never scanned there.
+ */
+function claudeLeakPatternsFor(runtime) {
+  const patterns = [/(?:~|\$HOME)\/\.claude\b/g];
+  if (hostBehaviorsFor(runtime).rewritesClaudeOnlyForms === true) {
+    patterns.push(...runtimeArtifactConversion.opencodeClaudeOnlyFormPatterns());
+  }
+  return patterns;
+}
+
+/**
+ * Post-install leak scan over the installed manifest files: `[{ file, count }]` for every host-read
+ * `.md`/`.toml` that still carries a Claude-only form. Read-only: it reads each listed file under
+ * `targetDir` and writes nothing.
+ */
+function collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }) {
+  const leaked = [];
+  const patterns = claudeLeakPatternsFor(runtime);
+  // The corpus is scanned when something reads it as converted text: Windsurf's workflow wrappers delegate
+  // to it (#1629), and a runtime that rewrites its corpus (rewritesClaudeOnlyForms, #4779) converts it.
+  const behaviors = hostBehaviorsFor(runtime);
+  const corpusIsConverted = behaviors.installsCommandBodiesForWorkflowDelegation || behaviors.rewritesClaudeOnlyForms === true;
+  for (const relPath of manifestFiles) {
+    const fileName = path.basename(relPath);
+    if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
+    if (fileName === 'CHANGELOG.md') continue;
+    // #5547: the Runtime Surface corpus is the package's canonical source
+    // bytes, kept byte-identical so a refresh can restore them
+    // (tests/install-runtime-artifacts.test.cjs); the converted artifacts
+    // are what the host reads. Counting the source form as a "leak" made
+    // every skills-runtime install print a warning about files nothing reads.
+    // Windsurf is the exception: its workflow wrappers delegate to the
+    // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
+    // ARE host-read artifacts and stay in the scan.
+    const posixRelPath = relPath.replace(/\\/g, '/');
+    if (!corpusIsConverted
+      && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
+    const fullPath = path.join(targetDir, relPath);
+    let content;
+    try {
+      content = fs.readFileSync(fullPath, 'utf8');
+    } catch (err) {
+      if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ENOENT') {
+        continue; // skip inaccessible or missing files
+      }
+      throw err;
+    }
+    let count = 0;
+    for (const pattern of patterns) {
+      const matches = content.match(pattern);
+      if (matches) count += matches.length;
+    }
+    if (count > 0) leaked.push({ file: relPath, count });
+  }
+  return leaked;
+}
+
+/**
  * The two content rewrites install() runs on manifest-listed files AFTER the first writeManifest
  * (#5954): the Codex `@~/.claude/gsd-core/` include rewrite (#4667) and the Copilot / Antigravity /
  * Kimi include retarget (#5123, global installs only). Applied to `relPaths` under `rootDir` (the
@@ -13346,36 +13586,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       if (_includesRewritten) {
         writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: _installScopeId });
       }
-      for (const relPath of manifestFiles) {
-        const fileName = path.basename(relPath);
-        if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-        if (fileName === 'CHANGELOG.md') continue;
-        // #5547: the Runtime Surface corpus is the package's canonical source
-        // bytes, kept byte-identical so a refresh can restore them
-        // (tests/install-runtime-artifacts.test.cjs); the converted artifacts
-        // are what the host reads. Counting the source form as a "leak" made
-        // every skills-runtime install print a warning about files nothing reads.
-        // Windsurf is the exception: its workflow wrappers delegate to the
-        // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
-        // ARE host-read artifacts and stay in the scan.
-        const posixRelPath = relPath.replace(/\\/g, '/');
-        if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
-          && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
-        const fullPath = path.join(targetDir, relPath);
-        let content;
-        try {
-          content = fs.readFileSync(fullPath, 'utf8');
-        } catch (err) {
-          if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ENOENT') {
-            continue; // skip inaccessible or missing files
-          }
-          throw err;
-        }
-        const matches = content.match(/(?:~|\$HOME)\/\.claude\b/g);
-        if (matches) {
-          leakedPaths.push({ file: relPath, count: matches.length });
-        }
-      }
+      leakedPaths.push(...collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }));
     }
     if (leakedPaths.length > 0) {
       const totalLeaks = leakedPaths.reduce((sum, l) => sum + l.count, 0);
@@ -15704,6 +15915,9 @@ module.exports = {
     stripGsdFromCodexConfig,
     stripGsdFromCodexConfigOnUninstall,
     migrateCodexHooksMapFormat,
+    managedCodexMarkers,
+    collapseTomlBlankLines,
+    setManagedCodexHooksOwnership,
     stripStaleGsdHookBlocks,
     hasUserNamespacedAotHooks,
     parseTomlToObject,
@@ -15732,6 +15946,7 @@ module.exports = {
     mapClaudeToolsToKimiTools,
     buildKimiAgentArtifacts,
     convertClaudeToOpencodeFrontmatter,
+    collectInstalledClaudeLeaks,
     convertClaudeToKiloFrontmatter,
     configureOpencodePermissions,
     neutralizeAgentReferences,

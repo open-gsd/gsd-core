@@ -15,4 +15,4 @@ group: v1.42.1 Features
 - REQ-HUMAN-VERIFY-02: Human-needed verification MUST remain pending until the end-of-phase review resolves it.
 - REQ-HUMAN-VERIFY-03: Configs without the key MUST use `"end-of-phase"`.
 
-**Reference:** [Checkpoints Reference](../gsd-core/references/checkpoints.md)
+**Reference:** [Checkpoints Reference](../../gsd-core/references/checkpoints.md)

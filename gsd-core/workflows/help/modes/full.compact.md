@@ -218,6 +218,10 @@ Usage: `/gsd:pr-branch` or `/gsd:pr-branch main`
 
 Usage: `/gsd:capture --seed "add real-time notifications when we build the events system"`
 
+**`/gsd:capture --seed --close SEED-ID (--promoted REQ-ID | --built PHASE | --dropped "why")`** — Closes a seed whose idea was acted on (sets `status: closed`, records `outcome_kind`, `outcome_ref`, `outcome`); it stops surfacing in `/gsd:new-milestone` and the milestone-close audit.
+
+Usage: `/gsd:capture --seed --close SEED-260315-k3x --promoted PLAT-17`
+
 **`/gsd:capture --backlog [description]`** — Adds an idea to the 999.x backlog without committing to the current milestone; promote later via `/gsd:review-backlog`.
 
 Usage: `/gsd:capture --backlog "real-time notifications when events ship"`

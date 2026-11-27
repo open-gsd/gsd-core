@@ -456,6 +456,25 @@ the merge queue ejected a docs-only PR for it (#6375).
 
 Raising the spawn limit is not the fix (ADR-6315 invariant I4).
 
+### A skip for a missing host tool is announced, and a host can make it fail
+
+A test that runs a documented bash block needs `bash`, and sometimes `curl`, `jq` or `node`. It
+gates on `skipUnless('bash', 'jq')` from `tests/helpers/bash-probe.cjs`, never on a bare
+`skip: 'reason'` literal, so the decision has one owner and one test (`tests/bash-probe.test.cjs`).
+
+- A tool present: the suite runs.
+- A tool missing under `CI`, or under `GSD_REQUIRE_BASH_TOOLS`: the file fails at load. A skipped
+  suite there would report green having executed nothing.
+- A tool missing anywhere else: the suite skips, and the skip is announced as a named skipped test
+  (`bash-block behavior tests skipped on this host: ...`), so it shows in the run summary and the
+  reporter events. A skipped `describe` registers none of its children, so without that line a
+  skip leaves no trace: the gsd-test tester image has no `curl` or `jq`, and those suites' bash-block
+  tests skipped on it with `skipped 0` in the verdict (#6677).
+
+A host that is not CI but must not skip sets `GSD_REQUIRE_BASH_TOOLS=1`
+([docs/how-to/make-a-missing-test-tool-fail.md](docs/how-to/make-a-missing-test-tool-fail.md)).
+A new gate on a host capability goes through `skipUnless`, so it inherits the announcement.
+
 ### A git fixture is a copy of a template
 
 `createFixture({ git: true })`, and so `createTempGitProject`, no longer runs git. Each of the four
@@ -494,6 +513,7 @@ Do not write into a template (`gitTemplateRoot`). A test process that changes on
 | `local/no-magic-sleep-in-tests` | `error` | `setTimeout`/`sleep`/`delay` calls inside `test()`/`it()`/`describe()` bodies |
 | `local/no-elapsed-assertion` | `error` (promoted by #3331, precondition delivered by #3314) | Assertions on `Date.now()` delta, `process.hrtime()`, `performance.now()` comparisons |
 | `local/no-adhoc-timeout-literal` | `error` | Bare numeric `timeout`/`timeoutMs` option literal in `tests/**/*.cjs` (PR #4428) |
+| `local/no-adhoc-env-isolation` | `error` (no options; allowlist retired by #6040) | A hand-written PATH split/filter or HOME/USERPROFILE env in `tests/**/*.cjs`; `tests/helpers/isolated-env.cjs` is the only route and the only exempt file |
 | `no-only-tests/no-only-tests` | `error` | `test.only`/`describe.only`/`it.only` committed to non-scratch files |
 | `no-restricted-syntax` (ban 1) | `error` | Top-level `setTimeout` in `ExpressionStatement` |
 | `no-restricted-syntax` (ban 2) | `error` | `.only` member access on `test`/`it`/`describe` (belt-and-suspenders) |

@@ -77,6 +77,7 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--gaps-only` → `GAPS_ONLY=true`
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
+- Optional `--force-mvp-gate "<reason>"` → `FORCE_MVP_GATE_REASON` (required value; see `execute-phase/steps/verify-phase-goal.md`)
 
 If `--wave` is absent, execute the phase's incomplete waves; without `--interactive`, step 9 re-reads the plan index at each wave boundary (`wave-refresh.md`, #5966).
 </step>
@@ -744,7 +745,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
        - ${PROJECT_ROOT}/${prior_wave_summaries} (SUMMARY.md files from earlier waves in this phase — what was already built)
        ` : ''}
        - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
-       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
+       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — read SKILL.md frontmatter; full file only if description fits or is missing; follow its rules)
        </required_reading>
 
        ${AGENT_SKILLS}
@@ -962,7 +963,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    if [ "${TEST_EXIT}" -eq 0 ]; then
      # Update ROADMAP plan progress for each completed plan in this wave
      for plan_id in {completed_plan_ids}; do
-       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete" ${GSD_WS:+--ws=${GSD_WS##* }}) && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete" ${GSD_WS:+--ws=${GSD_WS##* }}) && [ -n "$PROGRESS" ] && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
      done
 
      # Only commit tracking files if they actually changed
