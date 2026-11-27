@@ -191,9 +191,14 @@ export function classifyHandoffName(name: unknown): HandoffName | null {
 
 // ─── Ownership ────────────────────────────────────────────────────────────────
 
-/** The role a legacy handoff body names, as a slug, or null when it names none. */
-function bodyRoleId(body: Record<string, unknown>): string | null {
-  return sanitizeRoleId(body['role_id']) ?? sanitizeRoleId(body['role']);
+/**
+ * The role a legacy handoff body names: its `role_id`, and only when that is already a valid slug
+ * (so no transliteration is needed, and the hook-side followers that cannot require this module
+ * read it identically). Free-text `role` and any other shape name no role. Null when none is named.
+ */
+export function bodyRoleId(body: Record<string, unknown>): string | null {
+  const id = body['role_id'];
+  return typeof id === 'string' && id.length <= ROLE_ID_MAX && ROLE_ID_RE.test(id) ? id : null;
 }
 
 /**
@@ -274,6 +279,22 @@ export function listHandoffs(planningDir: string): { handoffs: HandoffEntry[]; s
   return { handoffs, skipped };
 }
 
+/**
+ * Whether the caller owns any handoff. Reads only the files whose NAME could be the caller's (a name-owned file, or the
+ * legacy file whose ownership its body decides), so the cost does not grow with other sessions' handoffs.
+ */
+export function hasOwnHandoff(planningDir: string, identity: Identity): boolean {
+  if (identity.session_id === null) return false;
+  for (const file of readDirNames(planningDir)) {
+    const parsed = classifyHandoffName(file);
+    if (parsed === null) continue;
+    if (parsed.kind !== 'legacy' && !isOwnHandoff({ ...parsed, body: {} }, identity)) continue;
+    const read = readJsonObject(path.join(planningDir, file));
+    if (read.ok && isOwnHandoff({ ...parsed, body: read.value }, identity)) return true;
+  }
+  return false;
+}
+
 function sessionsDirIsUsable(planningDir: string): boolean {
   try {
     const st = fs.lstatSync(path.join(planningDir, SESSIONS_DIR));
@@ -324,7 +345,9 @@ export function resolveIdentity(planningDir: string, input: IdentityInput = {}):
   const session_id = resolveSessionId({ session: input.session, env: input.env });
   const prior = readRecord(planningDir, session_id);
   const role = typeof input.role === 'string' && input.role !== '' ? input.role : null;
-  const priorRoleId = prior && typeof prior['role_id'] === 'string' ? sanitizeRoleId(prior['role_id']) : null;
+  // The CLI writes `role_id` already slugged; one that is not a valid slug (a hand edit) names no role, as in the
+  // hook-side followers that cannot slug free text.
+  const priorRoleId = prior ? bodyRoleId(prior) : null;
   const role_id = roleIdFromFlags(input.role_id, role) ?? priorRoleId;
   return { session_id, role_id, role };
 }
