@@ -21,7 +21,7 @@ These files live directly at `.planning/` — not inside phase subdirectories.
 | `LEARNINGS.md` | *(inline)* | `/gsd:extract-learnings`, `/gsd:execute-phase` (gated: `features.global_learnings`) | Phase retrospective learnings for future plans |
 | `THREADS.md` | *(inline)* | `/gsd:thread` | Persistent discussion threads |
 | `config.json` | `config.json` | `/gsd:new-project`, `/gsd:health --repair` | Project-specific GSD configuration |
-| `CLAUDE.md` | *(inline)* | `/gsd:new-project`, `/gsd:profile-user` | Auto-assembled Claude Code context file |
+| `CLAUDE.md` | *(inline)* | `/gsd:new-project`, `/gsd:profile-user` | Auto-assembled context file, written to `.claude/CLAUDE.md` (`AGENTS.md`, `GEMINI.md` and similar on other runtimes) |
 | `RETROSPECTIVE.md` | *(inline)* | `/gsd:complete-milestone` | Living milestone retrospective updated at each milestone close |
 | `WINDOWS.md` | *(none)* | broken-windows ledger (`src/broken-windows.cts`) | Tracked known-broken items pending resolution (#3224) |
 | `STATE-ARCHIVE.md` | *(none)* | `state.cts`'s `cmdStatePrune` | Pruned historical STATE.md entries |
