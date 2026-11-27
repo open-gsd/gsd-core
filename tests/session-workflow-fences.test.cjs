@@ -45,7 +45,8 @@ function withArgs(body, args) {
   return body.split('$ARGUMENTS').join(args);
 }
 
-const PRELUDE = `gsd_run() { node "${TOOLS}" "$@"; }\n`;
+// The CLI path reaches the shell as an environment value, never spliced into the script text.
+const PRELUDE = 'gsd_run() { node "$GSD_TEST_TOOLS" "$@"; }\n';
 
 function script(parts, args) {
   return PRELUDE + parts.map((p) => withArgs(p, args)).join('\n') + '\n';
@@ -53,7 +54,7 @@ function script(parts, args) {
 
 function bashEnv(sessionId) {
   const git = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' };
-  return { ...process.env, ...git, ...NO_KEYS, ...(sessionId ? { GSD_SESSION_KEY: sessionId } : {}) };
+  return { ...process.env, ...git, GSD_TEST_TOOLS: TOOLS, ...NO_KEYS, ...(sessionId ? { GSD_SESSION_KEY: sessionId } : {}) };
 }
 
 function runBash(cwd, text, sessionId) {
