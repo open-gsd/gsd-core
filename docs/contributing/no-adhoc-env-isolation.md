@@ -4,9 +4,8 @@ Epic #4635 gave child-env isolation for tests one owner, `tests/helpers/isolated
 `isolatedEnv({ home })` builds the env a test hands to a child, and `isolatedPath({ without })`
 builds a PATH the named tools cannot resolve from. The rule
 (`eslint-rules/no-adhoc-env-isolation.cjs`, #6035, Phase 3) stops a new hand-written copy of either
-from being added under `tests/**` while the remaining ones are migrated (Phases 4-7) and the
-allowlist is deleted (Phase 8). How to build an env with the helper, and what to do when a count
-fails, is in CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
+from being added under `tests/**`, with no exemption surface. How to build an env with the helper is in
+CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
 
 ## What the rule recognises
 
@@ -77,27 +76,22 @@ writes under its home.
 Arm 1 skips a split of a process PATH read whose result is read only for `.length`
 (`process.env.PATH.split(path.delimiter).length`): a count builds no PATH.
 
-## Exempt file, allowlist and count
+## Exempt file and the zero count
 
-`tests/helpers/isolated-env.cjs` is the implementation and is excluded in `eslint.config.mjs`. The
-rule's `allowlist` option (repo-relative POSIX paths, resolved against the lint cwd, so lint runs
-from the repository root) names the files that still carry a copy: an allowlisted file's violations
-are counted but not reported, and a listed file with zero violations reports `staleAllowlistEntry`
-so its entry is deleted. `eslint.config.mjs` passes the keys of
-`eslint-rules/no-adhoc-env-isolation.allowlist.json`, which maps each listed file to its site count.
+`tests/helpers/isolated-env.cjs` is the implementation and is excluded in `eslint.config.mjs`. It is
+the only exemption: the rule takes no options, and there is no allowlist.
 
-`tests/no-adhoc-env-isolation.rule.test.cjs` lints every `.cjs` file under `tests/` with the
-allowlist emptied and inline config off, and fails when a listed file's count rises or falls, or an
-unlisted file has a site, so a count falls as copies migrate and grows only by the route
-CONTRIBUTING.md states. It also fails when ESLint lints fewer `.cjs` files under `tests/` than are
-on disk: an ESLint ignore over a `tests/` subtree would hide that subtree's copies from the rule and
-the count alike. The rule has no marker comment of its own. An `eslint-disable` comment naming it
-hides a copy from lint output, but not from that count, so it exempts nothing.
+`tests/no-adhoc-env-isolation.rule.test.cjs` lints every `.cjs` file under `tests/` with the rule on
+and inline config off, and fails on any site. It also fails when ESLint lints fewer `.cjs` files
+under `tests/` than are on disk: an ESLint ignore over a `tests/` subtree would hide that subtree's
+copies from the rule and the count alike. It also fails if the allowlist file reappears or the
+rule is given an option. The rule has no marker comment of its own. An `eslint-disable` comment
+naming it hides a copy from lint output but not from that count, and an unused one fails
+`npm run lint` through ESLint's unused-directive warning, so it exempts nothing.
 
-The rule and the count cover only the `.cjs` files under `tests/`, so the allowlist lists exactly
-the remaining sites in those files. A copy in any other file is neither flagged nor counted: a
-`.mjs`, `.js` or `.cts` file under `tests/`, or a file outside `tests/`, such as one under
-`scripts/`.
+The rule and the count cover only the `.cjs` files under `tests/`. A copy in any other file is
+neither flagged nor counted: a `.mjs`, `.js` or `.cts` file under `tests/`, or a file outside
+`tests/`, such as one under `scripts/`.
 
 ## Out of scope: examples
 

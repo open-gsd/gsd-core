@@ -71,16 +71,18 @@ function baseEnv(extra = {}) {
 }
 
 /**
- * Run a hook with a payload on stdin (or, for C4, no `input` key at all —
- * see below). Thin wrapper over the process-seam so every case in this file
+ * Run a hook with a payload on stdin (or, for C4, with `holdStdin` — see
+ * below). Thin wrapper over the process-seam so every case in this file
  * shares one spawn path and one required timeout. The default is the
  * staged-hook class bound: the git-probing guards in this table run up to 3
  * sequential probes of BLOCKING_GUARD_PROBE_TIMEOUT_MS plus node start/kill
  * overhead, which the quick/probe classes cannot hold on a starved runner.
+ * With `holdStdin` the seam's async path runs and the return is a Promise.
  */
-function runHook(name, { payload, cwd, env, timeoutMs = STAGED_HOOK_SCRIPT_TIMEOUT_MS } = {}) {
+function runHook(name, { payload, cwd, env, timeoutMs = STAGED_HOOK_SCRIPT_TIMEOUT_MS, holdStdin } = {}) {
   const opts = { env: baseEnv(env), timeoutMs };
   if (cwd !== undefined) opts.cwd = cwd;
+  if (holdStdin !== undefined) opts.holdStdin = holdStdin;
   if (payload !== undefined) {
     opts.input = typeof payload === 'string' ? payload : JSON.stringify(payload);
   }
@@ -481,21 +483,28 @@ describe('hooks-crash-policy: C3 crash -> declared ON_CRASH policy', () => {
 });
 
 // ---------------------------------------------------------------------------
-// C4 — stdin never closes: no `input` is supplied to the seam at all, so the
-// child's stdin pipe is left open. Only the hook's OWN bounded stdin-timeout
-// (-> allow() -> terminateNow -> a real process.exit) can end it; a bare
-// `process.exitCode = N` inside that timer would never actually terminate a
-// process still blocked reading stdin. Never assert on elapsed time — only
-// that it terminated, and with what code.
+// C4 — stdin never closes: every row passes `holdStdin` to the seam, which
+// spawns with async `spawn` and never writes or ends the child's stdin, so
+// EOF is impossible for the whole run (#5837: the pre-fix rows supplied no
+// `input`, the seam's spawnSync path closed stdin at once, and every row
+// ended on the EOF path without ever reaching a stdin timer). Only the hook's
+// OWN bounded stdin-timeout (-> allow() -> terminateNow -> a real
+// process.exit) can end it; a bare `process.exitCode = N` inside that timer
+// would never actually terminate a process still blocked reading stdin.
+// Never assert on elapsed time — only that it terminated, and with what code.
 // ---------------------------------------------------------------------------
 
 describe('hooks-crash-policy: C4 stdin never closes -> bounded termination, not a hang', () => {
   for (const row of TABLE) {
-    test(`${row.file}: unclosed stdin still terminates`, () => {
+    test(`${row.file}: unclosed stdin still terminates`, async () => {
       const outerTimeoutMs = (row.stdinTimeoutMs ?? 3000) + 10000;
-      // No `payload` key at all -> the seam omits `options.input` -> the
-      // child's stdin is never written to or closed by the parent.
-      const r = runHook(row.file, { timeoutMs: outerTimeoutMs });
+      // holdStdin -> the seam's async path: stdin unwritten-then-open for the
+      // whole run. EXITED with code 0 below is then reachable only through
+      // the hook's own stdin timer — except the two `stdinTimeoutMs: null`
+      // rows (`gsd-ensure-canonical-path.js`, `gsd-path-export.js`), whose
+      // hooks never read stdin and exit on their own; those rows pin that the
+      // held pipe does not introduce a hang.
+      const r = await runHook(row.file, { timeoutMs: outerTimeoutMs, holdStdin: true });
       assert.equal(
         r.outcome, OUTCOME.EXITED,
         `expected the hook's own stdin-timeout to terminate it before the outer ` +

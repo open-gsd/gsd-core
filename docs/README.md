@@ -12,16 +12,18 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md) — bring GSD Core to a brownfield repo
 - [Build your first capability](tutorials/build-your-first-capability.md) — author a tiny declarative capability and watch it act in the loop
 - [Install your first capability](tutorials/install-your-first-capability.md) — install a third-party capability end-to-end: consent, verify, check for updates, remove
+- [Embed GSD in a new host](tutorials/embed-gsd-in-a-new-host.md) — embed the orchestration loop into a brand-new host, step by step
 
 ---
 
 ## How-to guides
 
-- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 16 supported runtimes
+- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 18 supported runtimes
 - [Start a GSD workflow from Pi](how-to/start-a-gsd-workflow-from-pi.md) — run `/skill:gsd-<command>` (or `/gsd <command>`) in Pi instead of getting a JSON dump from `/gsd`
 - [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) — exempt one committed file, such as a placeholder `.env.production`, from the secret-read guard while every other secret file stays blocked
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
+- [Enable Serply for web research](how-to/enable-serply-web-research.md) — set the key, register the Serply MCP server, and confirm the researcher agents pick it over the built-in `websearch`
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
 - [Run a plan on another runtime](how-to/run-a-plan-on-another-runtime.md) — declare `executor_runtime` on a plan so a different runtime's CLI executes it, with the gate, the model source and every fallback reason
@@ -36,6 +38,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
 - [Guide external reviewers with a capability](how-to/guide-external-reviewers-with-a-capability.md) — add `review:pre` reviewer guidance so `/gsd-review` and convergence cycles judge plans under your capability's constraints
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
+- [Migrate to bracket phase IDs](how-to/migrate-to-bracket-phase-ids.md) — preview and apply `roadmap upgrade --convention bracket`, read the `STATE.md` and `PROJECT.md` label edits, and resolve each reference the migration skipped
 - [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
 - [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
 - [Resolve an unreachable-workflow finding](how-to/resolve-unreachable-workflow-findings.md) — wire or fully sweep a shipped workflow that no command, agent, or skill references
@@ -53,6 +56,8 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve a skipped capability probe](how-to/resolve-a-skipped-capability-probe.md) — act on a coverage gate that held your phase for an unestablished scope, or a planning checkpoint that reported `skipped` instead of a verdict
 - [Diagnose which gsd-tools is running](how-to/diagnose-a-foreign-gsd-tools.md) — tell this package's tool apart from the predecessor's colliding binary and from a gsd-core too old to identify itself
 - [Resolve an ESLint glob-coverage finding](how-to/resolve-eslint-coverage-findings.md) — bring a source file that matches no lint rule under coverage, or record a reasoned exemption
+- [Replace a hand-written env-isolation copy](how-to/replace-a-hand-written-env-isolation-copy.md) — turn a `local/no-adhoc-env-isolation` lint error into `isolatedEnv`, `isolatedPath`, `homePair` or `setEnvForTest`; there is no allowlist
+- [Make a missing test tool fail instead of skip](how-to/make-a-missing-test-tool-fail.md) — set `GSD_REQUIRE_BASH_TOOLS` so a host without `curl` or `jq` fails the bash-block tests it would otherwise skip without a trace
 - [Resolve a raw-terminator finding](how-to/resolve-a-raw-terminator-finding.md) — pick `runMain`/`ExitError`, `terminateNow`, or `process.exitCode` for a `local/require-registered-exit` finding, and know the two allowlist entries and the rule's documented evasions
 - [Adopt the v2 exit contract](how-to/adopt-the-v2-exit-contract.md) — turn on `gsd-tools`'s versioned exit-code projection, read the code table including what `80` (`DEGRADED`) means, and migrate a CI gate that treats any non-zero exit as fatal
 - [Read the statusline freshness marker](how-to/read-the-statusline-freshness-marker.md) — turn on `state ~N commits back`, and tell "STATE.md is fresh" apart from "freshness could not be established"
@@ -70,11 +75,13 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Enable parallel reviewer lanes](how-to/enable-parallel-reviewer-lanes.md) — cut a multi-reviewer `/gsd-review` pass toward its slowest lane, and tell a rate-limited lane apart from one that was never selected
 - [Enable concurrent per-plan planners in chunked mode](how-to/enable-concurrent-chunked-planning.md) — dispatch chunked `/gsd-plan-phase`'s per-plan Tasks together within one outline Wave instead of one at a time, and know when the setting has no effect
 - [Verify and ship](how-to/verify-and-ship.md) — walk through completed work, diagnose failures, and create the PR
+- [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) — have the session advisor check the output is final and consistent before the next review gate; opt-in, advisory, cost stated
 - [Catch complexity before it compounds](how-to/act-on-a-refactor-proposal.md) — enable the post-execute refactor hook, read a proposal's score vs. anchor delta, and accept or decline it
 - [Run phases autonomously](how-to/run-phases-autonomously.md) — use autonomous mode for unattended phase execution
 - [Handle quick and fast tasks](how-to/handle-quick-and-fast-tasks.md) — use `/gsd-quick` and `/gsd-fast` for ad-hoc work outside the phase loop
 - [Batch quick tasks](how-to/batch-quick-tasks.md) — run several `/gsd-quick`-shaped tasks together with `/gsd-quick-batch`, understand capacity/isolation, and recover a failed or interrupted batch
 - [Configure model profiles](how-to/configure-model-profiles.md) — switch between quality, balanced, and budget model tiers
+- [Run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md) — give the failing-test step its own model inside a `type: tdd` plan
 - [Choose which executors run your plans](how-to/choose-the-executor-policy.md) — answer the Executor question at new-project or in `/gsd-settings`: `gsd-executor` only, or allow installed executors named by `agent_hint:`
 - [Route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md) — send one plan to your own executor agent with `agent_hint:`, pick its model, and read the routing output
 - [Control which host runtime GSD reports](how-to/control-the-reported-host-runtime.md) — read the `agent_runtime` ladder, understand what host detection looks at, and pin the runtime when detection is not what you want
@@ -109,6 +116,17 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Clean up get-shit-done-cc](cleanup-get-shit-done-cc.md) — remove leftover old-package artifacts that cause a spurious `⬆ /gsd-update` indicator after migrating to `@opengsd/gsd-core`
 - [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md) — resolve the branch-divergence condition that halts parallel phase execution
 - [Recover and troubleshoot](how-to/recover-and-troubleshoot.md) — fix common problems, rebuild context, and uninstall
+- [Run a long-running job asynchronously](how-to/async-external-jobs.md) — run a legitimately long execute task through the SLURM adapter
+- [Author a host plugin](how-to/author-a-host-plugin.md) — for external tool authors who want to embed GSD's orchestration
+- [Add a `command-exit-zero` gate to a capability](how-to/command-exit-zero-gate.md) — a recipe for capability authors
+- [Connect a host to the GSD companion MCP server](how-to/connect-gsd-mcp-server.md) — make an MCP-capable host talk to GSD
+- [Enable cross-session memory with MemPalace](how-to/enable-cross-session-memory-with-mempalace.md) — durable memory across sessions and projects: recall before planning, capture at each phase boundary
+- [Import a capability from a URL](how-to/import-a-capability-from-a-url.md) — install a published capability from a git repository, an npm package, a tarball or a local path
+- [Publish a capability](how-to/publish-a-capability.md) — prepare the manifest, validate locally and release it so others can `gsd capability install` it
+- [Remove or disable a capability](how-to/remove-a-capability.md) — delete a capability and its shared configuration, or toggle it off without touching files
+- [Version and upgrade a capability](how-to/version-a-capability.md) — keep a manifest correctly versioned as an author, or apply updates safely as a consumer
+- [Update manually (non-npm install)](manual-update.md) — update when `npx @opengsd/gsd-core@latest` is unavailable
+- [Add custom PR body sections](ship-pr-body-sections.md) — make `/gsd-ship` carry user stories, acceptance criteria, risks or approval notes
 
 ---
 
@@ -128,6 +146,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [ROADMAP phase-list entry grammar](reference/roadmap-phase-entry.md) — the one accepted form of a `- [ ] **Phase N: Name**` checklist entry, shared by every reader
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
+- [Installer flags](reference/installer-flags.md) — every option of `npx @opengsd/gsd-core`: runtime flags, location, skill profiles, cleanup and hook-path behavior
 - [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
@@ -137,6 +156,15 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Workflow fragments](reference/workflow-fragments.md) — in-file `<!-- gsd:section -->` marker grammar for fragmentizing workflow markdown at emission time
 - [Partition rules for compact-content splits](PARTITION-RULES.md) — the protected-content list, sentinel syntax, and the five CI checks a `workflow.compact_content` spine/detail split must obey
 - [Reviewer Lane Registry](registries/reviewer-registry.md) — generated catalogue of third-party reviewer lanes, with their flags, transport, and install commands
+- [Host Integration capability matrix](reference/host-integration-capability-matrix.md) — maintainer-facing source of truth for the `hostIntegration` block of every runtime
+- [Host-Integration Interface](reference/host-integration-interface.md) — the normative reference for the interface (ADR-1239)
+- [Long-running operations](reference/long-running-operations.md) — the operation-classification policy and the async external-job contract
+- [OpenCode 2.x verification matrix](reference/opencode-v2-verification-matrix.md) — every GSD feature that reaches OpenCode, exercised on a real OpenCode 2.x
+- [Per-runtime skill mapping matrix](reference/skill-mapping-matrix.md) — where each runtime places skills, commands and agents
+- [Testing suites](TESTING-SUITES.md) — the filename-suffix markers that group `tests/` into named suites, and where a new test goes
+- [Installer migration architecture](installer-migrations.md) — the migration layer for GSD installs and upgrades
+- [Beta features](BETA.md) — opt-in features that may change or be removed without notice
+- [Canary stream](CANARY.md) — the earliest preview channel, built from the `dev` integration branch
 
 ---
 
@@ -155,11 +183,19 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
 - [Context monitoring](context-monitor.md) — context window monitoring hook architecture
 - [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
+- [Claude orchestration capability (BETA)](explanation/claude-orchestration-capability.md) — why the capability exists and how it fits the loop
+- [Interface versioning and deprecation policy](explanation/interface-versioning-policy.md) — how the Host-Integration Interface (ADR-1239) evolves
+- [The live-DOM UAT capability](explanation/live-dom-uat-capability.md) — why GSD can drive a browser during execution, and why from a purpose-built agent
+- [Branching model](branching.md) — a plain-English guide to where work happens, where it merges, and why
 
 ---
 
 ## Related
 
 - [What's new in 1.7.0](whats-new-1.7.0.md) — curated highlights of the 1.7.0 release
+- [User guide](USER-GUIDE.md) — a narrative companion that orients you, then links into the dedicated docs
+- [Branch protection rollout](branch-protection.md) — the four ruleset specs under `.github/rulesets/`
+- [Contributor standards](contributor-standards.md) — standards for `CONTEXT.md`, `docs/adr/` and AI-agent-assisted contributions
+- [Legacy release notes](RELEASE-NOTES-LEGACY.md) — frozen history of the earlier package names, `1.0.0` to `1.42.x`
 - [Root README](../README.md) — landing page, quickstart, and documentation overview
 - [Changelog](../CHANGELOG.md) — release history

@@ -38,6 +38,7 @@ let installExports;
   }
 }
 const { readSettings, writeSettings, stripJsonComments } = installExports;
+const { parseJsonc } = require('../gsd-core/bin/lib/settings-jsonc.cjs');
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -138,6 +139,46 @@ describe('stripJsonComments (#1461)', () => {
     assert.ok(result.hooks, 'should have hooks');
     assert.ok(result.statusLine, 'should have statusLine');
     assert.strictEqual(result.statusLine.refreshInterval, 10);
+  });
+});
+
+describe('stripJsonComments: trailing-comma cleanup must not rewrite strings (#5989)', () => {
+  // The cleanup regex used to run after comment stripping, where a comma
+  // inside a string is indistinguishable from a structural trailing comma.
+
+  test('keeps ",}" inside a string value (issue example)', () => {
+    const result = JSON.parse(stripJsonComments('{"a":"x,}y", /*c*/ "b":1}'));
+    assert.strictEqual(result.a, 'x,}y');
+    assert.strictEqual(result.b, 1);
+  });
+
+  test('keeps ",]" inside a string value', () => {
+    const result = JSON.parse(stripJsonComments('{"a":"p,]q" /*c*/}'));
+    assert.strictEqual(result.a, 'p,]q');
+  });
+
+  test('keeps ",}" after an escaped quote inside a string', () => {
+    const result = JSON.parse(stripJsonComments('{"a":"say \\"x,}\\" ok", /*c*/}'));
+    assert.strictEqual(result.a, 'say "x,}" ok');
+  });
+
+  test('still drops a real trailing comma after a value and inside an array', () => {
+    const result = JSON.parse(stripJsonComments('{"a":1, /*t*/ "b":[2,],}'));
+    assert.deepStrictEqual(result, { a: 1, b: [2] });
+  });
+
+  test('still drops a trailing comma before a line comment', () => {
+    const result = JSON.parse(stripJsonComments('{"a":1, // t\n}'));
+    assert.deepStrictEqual(result, { a: 1 });
+  });
+
+  test('a comma-brace pair inside a line comment changes nothing', () => {
+    const result = JSON.parse(stripJsonComments('{"a":1 // ,}\n}'));
+    assert.deepStrictEqual(result, { a: 1 });
+  });
+
+  test('a double comma still fails to parse (failure semantics unchanged)', () => {
+    assert.throws(() => JSON.parse(stripJsonComments('{"a":1,, /*c*/}')), SyntaxError);
   });
 });
 
@@ -432,5 +473,51 @@ describe('writeSettings durability (#1874 F5)', () => {
         'the settings file must be untouched when every temp path is squatted');
       for (const link of planted) fs.unlinkSync(link);
     });
+  });
+});
+
+describe('stripJsonComments: unterminated block comments are rejected (#5990)', () => {
+  // The block-comment skip used to walk to end of input without verifying the
+  // closing delimiter, so a truncated comment vanished and the file parsed.
+  const UNTERMINATED = [
+    ['a bare opener at EOF', '{"a":1} /*'],
+    ['an opener plus one slash', '{"a":1} /*/'],
+    ['one char short of the closer', '{"a":1} /* x *'],
+    ['a dangling comment body', '{"a":1} /* unterminated'],
+  ];
+
+  for (const [label, doc] of UNTERMINATED) {
+    test(`stripJsonComments throws SyntaxError on ${label}`, () => {
+      assert.throws(() => stripJsonComments(doc), { name: 'SyntaxError', message: 'Unterminated block comment' });
+    });
+    test(`parseJsonc throws SyntaxError on ${label}`, () => {
+      assert.throws(() => parseJsonc(doc), { name: 'SyntaxError', message: 'Unterminated block comment' });
+    });
+  }
+
+  // Boundary per the brief: one short (above), exact, and one over.
+  test('closer ending exactly at EOF parses', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1} /* x */')), { a: 1 });
+  });
+
+  test('content after the closer parses (one over)', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1 /* x */ }')), { a: 1 });
+  });
+
+  test('minimal closer parses', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1} /**/')), { a: 1 });
+  });
+
+  test('star run before the closer parses', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1} /* ** */')), { a: 1 });
+  });
+
+  test('opener inside a string is left alone', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":"/*"} /*c*/')), { a: '/*' });
+    assert.deepEqual(parseJsonc('{"a":"/* unterminated"}'), { a: '/* unterminated' });
+  });
+
+  test('line comment at EOF still parses (unchanged)', () => {
+    assert.deepEqual(JSON.parse(stripJsonComments('{"a":1 // t\n}')), { a: 1 });
   });
 });

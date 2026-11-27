@@ -3076,8 +3076,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (declaresModelFlag) {
             const { readGsdEffectiveModelOverrides, resolveAgentModelOverride } =
               require('./lib/install-model-override-resolver.cjs');
+            // #4669: the 4th arg names the host being dispatched to, so a runtime-keyed
+            // `model_overrides["gsd-executor"]` entry selects THIS host's pin. It does not
+            // loosen the explicit-pin-only rule above: the runtime resolver stays `null`.
             const pinned = resolveAgentModelOverride(
-              'gsd-executor', readGsdEffectiveModelOverrides(cwd), null);
+              'gsd-executor', readGsdEffectiveModelOverrides(cwd), null, runtimeId);
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
           const resolution = resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model);

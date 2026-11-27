@@ -1504,16 +1504,108 @@ The command anchors to the project root via `findProjectRoot` before loading con
 Pre-compute and cache skill discovery for faster command loading.
 
 ```bash
-# Generate skill manifest (writes to .claude/skill-manifest.json)
+# Print the manifest of every skill root (project, global and legacy)
 node gsd-tools.cjs skill-manifest
 
-# Generate with custom output path
-node gsd-tools.cjs skill-manifest --output <path>
+# Also write it to skill-manifest.json in the planning directory (when that directory exists)
+node gsd-tools.cjs skill-manifest --write
+
+# List one directory only: this is what the project-skills discovery step runs per directory
+node gsd-tools.cjs skill-manifest --skills-dir .claude/skills
 ```
+
+Each entry carries the skill's `name`, `description`, `triggers`, `path` and `file_path` from its `SKILL.md` frontmatter. The body is not emitted, apart from lines that start `TRIGGER when:`, which are collected into `triggers`; `description` and `triggers` are not length-limited. Within one directory a skill is keyed by its frontmatter `name`: two skill folders that declare the same `name` are listed once. A skill directory that is a symlink is listed; a dangling link or a link to a file is skipped. A skill with no usable `description` (missing key, unparseable or unterminated frontmatter) is listed with `description: ""`. `--skills-dir` replaces the default roots with that one directory (scope `custom`); a directory that does not exist is reported with `present: false`.
 
 Returns JSON mapping of all available GSD skills with their metadata (name, description, file path, argument hints). Used by the installer and session-start hooks to avoid repeated filesystem scans.
 
 ---
+
+## Drift Guard, Workstream, UAT, Todo and Stats Verbs
+
+These verbs run as `node gsd-tools.cjs <verb>` or `node gsd-tools.cjs query <verb>`; the dotted manifest name (`workstream.status`) and the spaced form (`workstream status`) are interchangeable where both are listed. Output is JSON unless stated; the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `drift-guard authority`
+
+Prints the effective source-grounding authority for plan review, one of `grep`, `intel`, `treesitter`, `lsp`, `scip`. The configured value is `plan_review.source_grounding_authority` in `config.json` (default `grep`; an unknown value is an error naming the valid ones). A configured `grep` is upgraded to `intel` when `intel.enabled` is `true`; every other configured value is returned unchanged. Takes no flags.
+
+### `drift-guard severity --status <status> [--authority <authority>]`
+
+Classifies one source-grounding verdict. `--status` is required and is one of `VERIFIED`, `MISSING`, `AMBIGUOUS`, `UNCHECKABLE`; `--authority` defaults to the effective authority above. Output: `{severity, hardBlock}`.
+
+| Status | Authority | Severity | `hardBlock` |
+|--------|-----------|----------|-------------|
+| `VERIFIED` | any | `none` | `false` |
+| `MISSING` | `lsp` or `scip` | `HIGH` | `true` |
+| `MISSING` | `grep`, `intel` or `treesitter` | `needs-acknowledgement` | `false` |
+| `AMBIGUOUS` | any | `MEDIUM` | `false` |
+| `UNCHECKABLE` | any | `INFO` | `false` |
+
+### `drift-guard phase-status [--phase <N>]`
+
+Compares the `Status:` line in STATE.md's `## Current Position` section with the Status cell of that phase's row in ROADMAP.md's `## Progress` table. `--phase` defaults to the phase named by `Phase:` in the same section. Output: `{verdict, phase, stateStatus, roadmapStatus, stateRank, roadmapRank, authority}` with `authority` always `STATE.md`.
+
+| `verdict` | Meaning |
+|-----------|---------|
+| `consistent` | Both statuses sit on the same lifecycle rung |
+| `lag` | The two statuses are one rung apart |
+| `drifted` | Two or more rungs apart; or exactly one side is terminal; or exactly one side is `deferred` and the other is past rung 0 |
+| `uncheckable` | A status was not recognised, or a source is missing (see `reason`) |
+
+An `uncheckable` verdict caused by a missing source also carries `reason`: `missing_state` (no STATE.md), `no_current_position` (STATE.md has no Current Position section; the verb never guesses from the rest of the file), `missing_roadmap` (no ROADMAP.md) or `phase_not_in_roadmap` (no Progress row for the phase).
+
+### `workstream status <name>`
+
+Reports one workstream. Output when it exists: `{found: true, workstream, path, files: {roadmap, state, requirements}, phases, phase_count, completed_phases, status, milestone_shipped_unverified, current_phase, last_activity}`; otherwise `{found: false, workstream}`. `<name>` is required and must be a valid workstream name.
+
+### `workstream complete <name>`
+
+Archives a workstream: every entry of `.planning/workstreams/<name>/` moves to `.planning/milestones/ws-<name>-<YYYY-MM-DD>/` (a numeric suffix `-1`, `-2`, … is appended when that directory exists), and the workstream is cleared as the active one if it was. Output: `{completed: true, workstream, archived_to, remaining_workstreams, reverted_to_flat}`; `reverted_to_flat` is `true` when no workstream remains, in which case the empty `workstreams/` directory is removed. A name with no directory returns `{completed: false, error: "not_found", workstream}`. If a move fails, moved entries are put back and the result is `{completed: false, error: "archive_failed", message, workstream}`.
+
+### `uat render-checkpoint --file <path>`
+
+Renders the pending checkpoint of a UAT file as the text a verifier presents. `--file` is required and must resolve inside the project root. Output: `{file_path, test_number, test_name, checkpoint}`, where `checkpoint` is a Markdown block (`### CHECKPOINT: Verification Required`, the test name, its expected behavior, and the prompt `Type pass or describe what's wrong.`); the banner and prompt follow the configured `response_language`. A UAT file whose `## Current Test` section reads `[testing complete]` is an error: `UAT session is already complete; no pending checkpoint to render`.
+
+### `uat complete-session <uat-file> [--message <text>]`
+
+Closes a UAT session. The file must resolve inside the project root. The verb sets the frontmatter `status` to `complete`, or to `partial` when the `## Tests` section holds a test with result `pending`, result `blocked`, result `skipped` with no reason, or a `###` test heading with no `result:` line; and replaces the `## Current Test` body with `[testing complete]`. Output:
+
+| Case | Output |
+|------|--------|
+| Nothing material changed (ignoring the `updated:` line) | `{changed: false, status}`; with `restored: true` when the live file differed from its committed form and was reset to it. Nothing is committed |
+| The file changed | The file is written and committed alone, with `--message` or `test: complete UAT session (<path>)`: `{changed: true, status, committed}`, plus `reason` when `committed` is `false` |
+
+A frontmatter block that cannot be parsed is refused: nothing is written or committed.
+
+### `todo match-phase <phase>`
+
+Ranks the pending todos in `.planning/todos/pending/*.md` by relevance to a phase. Each todo's `title:` (default `Untitled`), `area:` (default `general`) and `files:` lines are read; the rest of the body contributes its first 200 characters. Output: `{phase, matches, todo_count}`, where `matches` is `[{file, title, area, score, reasons}]` for every todo scoring above zero, highest score first, and `todo_count` is the number of pending todos read. The score is the sum of:
+
+| Signal | Score |
+|--------|-------|
+| Words of more than two letters shared between the todo's title and body and the phase's name, goal and ROADMAP section (stop words excluded): 0.2 each | up to 0.6 |
+| The todo's `area` (when not `general`) appears in the phase text | 0.3 |
+| A path in the todo's `files:` overlaps a path in a phase plan's `files_modified` | 0.4 |
+
+`<phase>` is required.
+
+### `stats json`
+
+Prints project statistics as JSON; bare `stats` does the same, and `stats table` prints a Markdown summary instead (`{rendered}`). Output fields:
+
+| Field | Meaning |
+|-------|---------|
+| `milestone_version`, `milestone_name` | The current milestone; `null` when none |
+| `phases` | `[{number, display_id?, name, plans, summaries, status}]`; `status` is a display label such as `Not Started`, `Planned`, `Complete` |
+| `phases_completed`, `phases_total` | Phases at the `Complete` rung, and all phases |
+| `total_plans`, `total_summaries` | Plan and summary counts across the phases |
+| `percent` | `phases_completed` as a percentage of `phases_total` |
+| `plan_percent` | `total_summaries` as a percentage of `total_plans` |
+| `requirements_total`, `requirements_complete` | Count of `- [x] **` and `- [ ] **` lines in REQUIREMENTS.md |
+| `git_commits`, `git_first_commit_date` | Commits reachable from `HEAD`, and the date of the root commit (`YYYY-MM-DD`) |
+| `last_activity` | The last-activity line of STATE.md; `null` when absent |
+| `phase_scope` | `complete` when every phase was enumerated; any other value means the phase list could not be fully read |
+
+`percent` and `plan_percent` are `null` unless `phase_scope` is `complete`, so an unreadable phase directory is never reported as `0%`.
 
 ## Utility Commands
 
@@ -1528,7 +1620,12 @@ node gsd-tools.cjs current-timestamp [full|date|filename]
 # Count and list pending todos
 node gsd-tools.cjs list-todos [area]
 
-# List captured seeds (optionally filter by status: dormant|active|triggered)
+# List captured seeds (optionally filter by status: dormant|active|triggered|closed)
+# `dormant`, `active` and `triggered` are the open statuses; `closed` is the one value that takes a
+# seed out of `audit-open` and out of `/gsd-new-milestone`'s candidates (#4647). Each seed object carries
+# seed_id, slug, status, scope, trigger_when, planted, title, path, and the outcome fields outcome_kind
+# (promoted|built|dropped), outcome_ref (requirement id or phase number; empty when dropped) and
+# outcome (one line), which are empty strings on a seed that is not closed.
 node gsd-tools.cjs list-seeds [status]
 
 # Check file/directory existence
@@ -1644,6 +1741,58 @@ node gsd-tools.cjs websearch <query> [--limit N] [--freshness day|week|month]
 
 ---
 
+## Commit Selection, Sub-repo and Reviewer-flag Verbs
+
+These verbs run as `node gsd-tools.cjs <verb>` (or `node gsd-tools.cjs query <verb>`); the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `select-revert-commits --range <git-range> (--phase <id> | --plan <id>)`
+
+Selects, from a git range, the commits that belong to one phase or one plan, for `/gsd-undo`. Exactly one of `--phase` and `--plan` is required, and `--range` is required and must not start with `-`; each failure is a usage error. The verb runs `git log --no-merges` over `--range` in the directory it was invoked from (not the main worktree) and reads each subject's declared scope: the `scope` of a `type(scope):` header, with a leading `fixup! ` or `squash! ` or a `Revert "…"` wrapper removed first. A subject with no scope, or no `type:` header, has no declared scope and is never selected.
+
+| Flag | Selects a commit when its declared scope is |
+|------|---------------------------------------------|
+| `--phase <id>` | the phase id, or starts with `<id>-` (so `3` selects `03` and `03-01`; an all-digit id is zero-padded first; a bracket-style id such as `PROJ-42` is used as given) |
+| `--plan <id>` | exactly the plan id, in the two-segment form `NN-MM` (`3-1` is padded to `03-01`). A three-segment id, or a bracket-style phase segment, is refused |
+
+Output: `{selected: [{sha, subject}], classified: [{sha, subject, parsedScope, matched}]}`, `classified` holding every commit in the range with its parsed scope. With `--raw` the output is one `<sha> <subject>` line per selected commit. A `git log` failure (an invalid range, or one that takes more than 15 seconds) is a usage error naming the range.
+
+```bash
+node gsd-tools.cjs select-revert-commits --range main..HEAD --plan 03-01
+node gsd-tools.cjs select-revert-commits --range HEAD~20..HEAD --phase 3 --raw
+```
+
+### `commit-to-subrepo "<message>" --files <path>...`
+
+Commits files in the sub-repositories listed in `sub_repos` of `.planning/config.json`, one commit per sub-repository. The message is required, `sub_repos` must be non-empty, and `--files` is required, each a usage error. Each path is assigned to the sub-repository whose name is the longest prefix of the path (`sub_repos: ["packages", "packages/core"]` sends `packages/core/x.ts` to `packages/core`); a path matching none is reported on stderr and listed in `unmatched`. Within each sub-repository the verb stages the named paths (relative to it) and commits only those, never the rest of the index. A path that fails to stage unstages what this call staged and records `staging_failed` (or `staging_timeout`) for that sub-repository.
+
+Output: `{committed, repos: {<repo>: {committed, hash, files, reason?, error?}}, unmatched?}`. `committed` is `true` when any sub-repository committed. A sub-repository that did not commit carries `reason`: `nothing_to_commit`, `staging_failed`, `staging_timeout`, `commit_timeout` or `error`. With `--raw` the output is `<repo>:<hash>` pairs, `skip` standing for a missing hash.
+
+### `pr-subrepo "<message>" --repo <path> --branch <name>`
+
+Puts a sub-repository's tracked changes on a new branch and pushes it, ready for a pull request. The message, `--repo` and `--branch` are required; `--branch` must not start with `-`; `--repo` must resolve inside the project root (an escaping path is refused). The verb collects the tracked changes of the sub-repository (untracked files are excluded; a rename counts both paths), refuses when the branch already exists, creates the branch, stages exactly those files, commits them with the message, and runs `git push --set-upstream origin <branch>`. It does not open the pull request.
+
+| Result | Output |
+|--------|--------|
+| No tracked changes | `{ok: true, repo, branch, committed: false, reason: "nothing_to_commit", files: []}`; no branch is created |
+| Pushed | `{ok: true, repo, branch, committed: true, files, commit_hash, remote_url, remote_slug}`; `remote_slug` is the `owner/repo` of a GitHub `origin`, else `null` |
+| Staging or commit fails | The branch is deleted and the previous branch restored; the verb exits with an error |
+| Push fails | The error names the retry command; the local branch and its commit are kept |
+
+### `quick-tasks-migrate`
+
+Rewrites the `### Quick Tasks Completed` table of STATE.md into the canonical column set `# | Description | Date | Commit | Status | Directory`. Each legacy column is mapped onto its canonical column; a column with no canonical counterpart, or a second column mapping to an already-filled one, is folded into `Description` as `<column>: <value>`, so no value is dropped. Empty canonical cells are written as `—`. The write goes through the STATE.md writer, which also refreshes the file's frontmatter.
+
+Output: `{ok: true, migrated: true, from: [<legacy columns>], rows: <count>}` after a migration; `{ok: true, migrated: false}` when the table is absent or already canonical; `{ok: true, migrated: false, reason}` when STATE.md is missing (`reason` names the path). The verb is idempotent.
+
+### `review-lane explicit-from-argv [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] -- <argument>...`
+
+Tells the review workflows which reviewer lanes the user named. Every token after `--` is compared with the flags each lane declares (the first-party lanes plus installed third-party reviewer lanes; `antigravity` declares both `--antigravity` and `--agy`), and the slugs of the matching lanes are printed as plain text, sorted and comma-joined, with no trailing newline. Output is empty when no token matches. `--selected`, `--run-dir` and `--repo-root` are accepted for parity with the other `review-lane` subcommands and do not affect this one.
+
+```bash
+node gsd-tools.cjs review-lane explicit-from-argv -- --claude --agy --all
+# antigravity,claude
+```
+
 ## Update Backup and Restore
 
 The two halves of `/gsd-update`'s user-added-file protection. `detect-custom-files`
@@ -1738,7 +1887,7 @@ node gsd-tools.cjs worktree create \
   [--files "<space-separated declared paths>"]
 ```
 
-**`worktree create`** validates and records the manifest entry BEFORE running any git command, then runs `git worktree add` for the validated `{path, branch, base}`, and only on success finalizes the manifest write — a rejected entry or a failed `git worktree add` never leaves a partially-recorded manifest or an unmanifested worktree on disk. `--root` is **mandatory** (#3050): the fail-closed root-confinement check resolves `--path` and `--root` and rejects (`reason:"path_outside_root"`) unless `--path` resolves strictly inside `--root` — this closes a prior gap where an unconfined `--path` (no `--root` check at all) could point a spawned executor's worktree anywhere on the filesystem. Omitting `--root` fails closed with `reason:"root_required"` rather than silently skipping confinement. All other flags share `worktree record-agent`'s validation rules above (`--branch` namespace, non-empty/non-whitespace `--path`/`--branch`/`--base`, `--agent-id` required). It also accepts the same optional `--files` as `record-agent` (#2596).
+**`worktree create`** validates and records the manifest entry BEFORE running any git command, then runs `git worktree add` for the validated `{path, branch, base}`, and only on success finalizes the manifest write — a rejected entry or a failed `git worktree add` never leaves a partially-recorded manifest or an unmanifested worktree on disk. `--root` is **mandatory** (#3050): the fail-closed root-confinement check resolves `--path` and `--root` and rejects (`reason:"path_outside_root"`) unless `--path` resolves strictly inside `--root` — this closes a prior gap where an unconfined `--path` (no `--root` check at all) could point a spawned executor's worktree anywhere on the filesystem. Omitting `--root` fails closed with `reason:"root_required"` rather than silently skipping confinement. All other flags share `worktree record-agent`'s validation rules above (`--branch` namespace, non-empty/non-whitespace `--path`/`--branch`/`--base`, `--agent-id` required). It also accepts the same optional `--files` as `record-agent` (#2596). `--files`/`--deletions` values are whitespace-separated: a value containing a comma is rejected with `reason:"comma_joined_scope"` and a hint naming the space separator, before any git command runs and with nothing written (#6510).
 
 ### Wave-manifest recording
 
@@ -1753,7 +1902,7 @@ node gsd-tools.cjs worktree record-agent \
   [--files "<space-separated declared paths>"]
 ```
 
-**`worktree record-agent`** appends one `{agent_id, worktree_path, branch, expected_base}` entry to an already-initialized manifest, validating every field **at write time using the same rules the `cleanup-wave` reader enforces** — `--branch` must match the disposable `^(worktree-)?agent-[A-Za-z0-9._/-]+$` namespace (accepts both `agent-<id>` and legacy `worktree-agent-<id>`), and `--path`/`--branch`/`--base` must be non-empty. `--agent-id` is required (write-strict), even though the reader treats it as optional. A missing or garbled field — or a duplicate `(worktree_path, branch)` the reader would dedup away — fails loudly with a recovery hint and a non-zero exit **without** writing, instead of appending an under-populated or silently-dropped entry. Whitespace-only `--path`/`--base` are rejected (values are trimmed). The on-disk manifest shape is unchanged unless `--files` is supplied (see below); the reader still re-derives `allowed_bases`, and the orchestrator still initializes the empty `{orchestrator_root, worktrees: []}` shell inline before any agent is recorded.
+**`worktree record-agent`** appends one `{agent_id, worktree_path, branch, expected_base}` entry to an already-initialized manifest, validating every field **at write time using the same rules the `cleanup-wave` reader enforces** — `--branch` must match the disposable `^(worktree-)?agent-[A-Za-z0-9._/-]+$` namespace (accepts both `agent-<id>` and legacy `worktree-agent-<id>`), and `--path`/`--branch`/`--base` must be non-empty. `--agent-id` is required (write-strict), even though the reader treats it as optional. A missing or garbled field — or a duplicate `(worktree_path, branch)` the reader would dedup away — fails loudly with a recovery hint and a non-zero exit **without** writing, instead of appending an under-populated or silently-dropped entry. Whitespace-only `--path`/`--base` are rejected (values are trimmed). The on-disk manifest shape is unchanged unless `--files` is supplied (see below); the reader still re-derives `allowed_bases`, and the orchestrator still initializes the empty `{orchestrator_root, worktrees: []}` shell inline before any agent is recorded. `--files`/`--deletions` values are whitespace-separated: a value containing a comma is rejected with `reason:"comma_joined_scope"` and a hint naming the space separator, and nothing is written (#6510).
 
 `--files` is optional (#2596). When supplied it records the plan's declared `files_modified` — the same whitespace-separated `PLAN_FILES` list the per-plan worktree gate already builds — as an extra `files_modified` array on the entry, and `cleanup-wave` then reports any path the branch committed outside it. A blank or omitted `--files` writes no field at all, leaving the 4-field on-disk shape untouched, and the scope check is simply skipped for that entry: an unrecorded scope means *unknown*, never *declares nothing*. Values are compared against a diff, never opened as paths and never passed to a shell.
 
@@ -1776,7 +1925,7 @@ Matching is **exact after normalization**: git's C-quoting is decoded, backslash
 
 A declared deletion is also treated as in-scope by the advisory below, so authorizing a removal does not then warn that the removed path was out of the declared scope. That is done by **subtracting** declared deletions from the advisory's findings, not by adding them to the declared scope it matches against — the advisory reads its scope list with prefix-and-glob semantics, so adding them would quietly give `declared_deletions` a second, wider matching rule than the table above, and `["*.md"]` would go from inert to silencing the advisory entirely. One field, one matching rule, on every surface. Subtraction also means the advisory's activation is unchanged: it still runs only when `files_modified` is recorded, so a plan that declares deletions alone stays as silent as it was before #3003.
 
-One limit worth knowing, shared with `--files` and failing closed: a declared path containing a **space** cannot be expressed, because the flag value is whitespace-separated — such a path splits into fragments, matches nothing, and the entry blocks. Flag values are also read positionally and never re-inspected for shape, so a malformed `--deletions --files src/a.ts` records the literal `--files` as the declaration; that is harmless (it is a path git never reports as deleted, so it authorizes nothing) and `--files` still resolves to `src/a.ts` on its own lookup.
+One limit worth knowing, shared with `--files` and failing closed: a declared path containing a **space** cannot be expressed, because the flag value is whitespace-separated — such a path splits into fragments, matches nothing, and the entry blocks. Flag values are also read positionally and, apart from the documented comma rejection (#6510), never re-inspected for shape, so a malformed `--deletions --files src/a.ts` records the literal `--files` as the declaration; that is harmless (it is a path git never reports as deleted, so it authorizes nothing) and `--files` still resolves to `src/a.ts` on its own lookup.
 
 **Scope conformance at merge (advisory, #2596)**
 
@@ -1824,6 +1973,80 @@ node gsd-tools.cjs graphify snapshot [name]
 User-facing entry point: `/gsd-graphify` (see [Command Reference](COMMANDS.md#gsd-graphify)).
 
 ---
+
+## Knowledge Store, Research Cache and Resolver Commands
+
+Every verb below is invoked as `node gsd-tools.cjs <verb> [args]` or `node gsd-tools.cjs query <verb> [args]`; the dotted manifest names (`learnings.list`) and the spaced forms (`learnings list`) are both accepted. Output is JSON unless stated; the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `learnings` — the global knowledge store
+
+Learnings are JSON records in `~/.gsd/knowledge/<id>.json` (one file per learning), shared across projects. Each record carries `id`, `source_project`, `date`, `context`, `learning`, `tags` and `content_hash` (SHA-256 of the learning text plus the source project; a second write with the same hash is skipped).
+
+| Verb | Arguments | Output | Behavior |
+|------|-----------|--------|----------|
+| `learnings list` | none | `{learnings, count}` | Every record, newest first. A malformed file is skipped with a warning on stderr. |
+| `learnings query --tag <tag>` | `--tag` required | `{learnings, count, tag}` | Records whose `tags` array contains `<tag>` exactly, newest first. |
+| `learnings copy` | none | `{total, created, skipped}` | Copies the current project's learnings into the store. Reads the most recently modified `.planning/phases/*/*-LEARNINGS.md`, falling back to `.planning/LEARNINGS.md`; returns zeros when neither exists. Each `###` item under a `##` category becomes one record (a `##` section with no `###` items becomes one record); tags are the first word of the category plus the words of the item title longer than two characters. `source_project` is the name of the directory that contains `.planning`. Records whose hash is already stored count as `skipped`. |
+| `learnings prune --older-than <Nd>` | `--older-than` required, format `<digits>d` (for example `90d`) | `{removed, kept}` | Deletes records older than `N` days. Any other format exits with `Invalid duration format`. |
+| `learnings delete <id>` | the record id (`<base36>-<hex>`) | `{id, deleted}` | Deletes one record; `deleted` is `false` when no such file exists. An id that does not match `^[a-z0-9]+-[a-f0-9]+$` exits with `Invalid learning ID`. |
+
+```bash
+node gsd-tools.cjs learnings copy
+node gsd-tools.cjs learnings query --tag testing
+node gsd-tools.cjs learnings prune --older-than 90d
+```
+
+### `research-plan`, `research-store get`, `research-store put` — the research cache
+
+The research cache keeps fetched research so a repeated question is not fetched again. A key is a 64-character lowercase hex SHA-256 of the lower-cased, trimmed `ecosystem`, `library`, `version`, `query` and `kind`; `research-plan` computes it, and the store rejects any other key shape.
+
+`research-plan --input <file>` reads a JSON file `{"questions": [{"text", "kind", "library"?, "version"?}], "ecosystem"?}` and prints `{items: [{question, key, cache?, fetch?}]}`. A question with a fresh cache entry yields `{question, key, cache: {hit: true, stale: false}}` and no `fetch`. A cache miss yields `{question, key, fetch: {provider, query}}`; a stale entry yields the same plus `cache: {hit: true, stale: true}`. A question whose `text` is missing or empty is dropped from `items`. `fetch.provider` is the first available provider in the waterfall for the question's `kind`: `docs` → `context7`, `ref`, `jina`, `websearch`; `web` → `exa`, `tavily`, `perplexity`, `brave`, `serply`, `websearch`; `scrape` → `firecrawl`, `jina`. Any other `kind` uses the `web` waterfall, and `websearch` is the fallback. `context7`, `jina` (unless the `jina` config value is falsy) and `websearch` are always available; `exa`, `tavily`, `brave`, `firecrawl`, `ref`, `perplexity` and `serply` are available when the config keys `exa_search`, `tavily_search`, `brave_search`, `firecrawl`, `ref_search`, `perplexity` and `serply_search` respectively are truthy.
+
+| Verb | Arguments | Output |
+|------|-----------|--------|
+| `research-store get <key> [--kind <k>]` | 64-hex key; `--kind` optional | `{hit, stale, entry}`; `entry` is `null` on a miss and for a key that is not 64-hex. Both tiers are searched, whatever the entry's source. A file that is not valid JSON, or whose `fetched_at` or `ttl` is invalid, is a miss |
+| `research-store put <key> --content <text> --source <s> --provider <p> --kind <k> --confidence <level>` | all five flags required | the stored entry `{content, source, provider, confidence, fetched_at, ttl, kind}` |
+
+`--content` is stored as the string given (a JSON argument is not parsed). The entry lives at `<key>.json` in one of two tiers, chosen by `--source`: `curated` entries go to the user tier `~/.gsd/research-cache/`, every other source to the project tier `.planning/research/.cache/`. The `ttl` is 30 days for `curated` with confidence `HIGH`, 7 days for `curated` with `MEDIUM`, and 1 day otherwise; `stale` is `true` once the entry is older than its `ttl`.
+
+### `classify-confidence`
+
+```bash
+node gsd-tools.cjs query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--provider <id>` | Yes | The research provider that produced the finding |
+| `--package <name>`, `--ecosystem <npm\|pypi\|crates>` | Together or not at all | Look up the package's legitimacy verdict (`OK`, `SUS`, `SLOP`) on its registry and use it as ground truth; giving only one of the two is a usage error |
+| `--verified` | No | The finding was corroborated against the official source |
+
+Output: `{provider, package, ecosystem, legitimacyVerdict, verified, confidence}`, with `confidence` one of `HIGH`, `MEDIUM`, `LOW`. Provider authority: `context7` and `ref` are `official`; `jina` and `firecrawl` are `scrape`; `exa`, `tavily`, `perplexity`, `brave`, `serply` and `websearch` are `web`; any other id is `none`. The first matching rule wins:
+
+| Rule | Confidence |
+|------|------------|
+| verdict is `SLOP` | `LOW` |
+| verdict is `OK` and authority is not `none` | `HIGH` |
+| authority is `official` or `scrape` | `MEDIUM` |
+| verdict is `OK` (authority `none`) | `MEDIUM` |
+| authority is `web` and `--verified` | `MEDIUM` |
+| anything else | `LOW` |
+
+### `resolve-package-manager <script>`
+
+Prints, as plain text, the command that runs package script `<script>` with the project's package manager, or nothing when `<script>` is not a plain identifier (`[A-Za-z0-9_][A-Za-z0-9:_-]{0,63}`). The manager is the `packageManager` field of `package.json` (read only when the file is at most 1 MiB), else the first lockfile found in the order `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `bun.lockb`, else `npm`. `test` prints `<manager> test` except under `bun`; every other case prints `<manager> run <script>`.
+
+### `resolve-granularity <phase-type> [--granularity <coarse|standard|fine>]`
+
+Resolves the planning granularity for a phase type. Precedence: the `--granularity` override (an invalid value exits with `invalid granularity`), then `granularities.<phase-type>` in config, then top-level `granularity`, then `planning.granularity`, then `standard`. Output: `{granularity, phase_type}`, plus `unknown_phase_type: true` when `<phase-type>` is not one of `planning`, `discuss`, `research`, `execution`, `verification`, `completion`. The phase type is required.
+
+### `user-story.validate --story "<text>"`
+
+Checks a user story against `As a [role], I want to [capability], so that [outcome].` Output: `{valid, errors, slots}`, where `slots` is `{role, capability, outcome}` when valid and `null` otherwise. Each failed requirement adds one entry to `errors`: the `As a` opening, the `, I want to` clause, the `, so that` clause, a non-empty value in each slot, and a closing period.
+
+### `project-instruction-file [--runtime <id>]`
+
+Prints, as plain text, the project instruction file a runtime reads: `.claude/CLAUDE.md` for `claude`, `.github/copilot-instructions.md` for `copilot`, `.trae/rules/rules.md` for `trae`, `GEMINI.md` for `antigravity`, and `AGENTS.md` for every other runtime and when `--runtime` is omitted. The retired runtime `gemini` is refused with an error that names its replacement.
 
 ## Module Architecture
 

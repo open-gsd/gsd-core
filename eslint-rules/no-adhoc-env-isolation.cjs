@@ -1,21 +1,16 @@
 'use strict';
 
-const path = require('path');
-
 /**
  * no-adhoc-env-isolation (#6035, Phase 3 of epic #4635)
  *
  * Stops a new hand-written copy of the child-env isolation helper,
  * `tests/helpers/isolated-env.cjs` (#6033), from being added under `tests/`:
  * an inline PATH split or filter (`inlinePathFilter`), and a hand-built HOME /
- * USERPROFILE env (`adhocHomeConstruction`). Files that still carry a copy are
- * named by the `allowlist` option; a listed file with none left reports
- * `staleAllowlistEntry`. The per-file site counts live in
- * `no-adhoc-env-isolation.allowlist.json` and are held by
- * `tests/no-adhoc-env-isolation.rule.test.cjs`.
+ * USERPROFILE env (`adhocHomeConstruction`). The rule takes no options; the helper
+ * file is excluded by exact path in `eslint.config.mjs`.
  *
- * The forms each arm recognises, the allowlist and count, and examples of what
- * is out of scope: docs/contributing/no-adhoc-env-isolation.md.
+ * The forms each arm recognises, and examples of what is out of scope:
+ * docs/contributing/no-adhoc-env-isolation.md.
  */
 
 const HOME_KEYS = new Set(['HOME', 'USERPROFILE']);
@@ -81,15 +76,7 @@ const rule = {
         'Disallow hand-written PATH filtering and HOME/USERPROFILE env construction in tests; use tests/helpers/isolated-env.cjs',
       category: 'Test isolation',
     },
-    schema: [
-      {
-        type: 'object',
-        properties: {
-          allowlist: { type: 'array', items: { type: 'string' } },
-        },
-        additionalProperties: false,
-      },
-    ],
+    schema: [],
     messages: {
       inlinePathFilter:
         'Hand-written PATH split/filter (#4635). Build the PATH with `isolatedPath({ without: [...] })` ' +
@@ -102,25 +89,11 @@ const rule = {
         'config-location variables, and strips ambient GSD_* and the runner\'s RUN_TESTS_* / ' +
         'NODE_TEST_CONTEXT. A hand-built env is hermetic on its author\'s machine only (#4312, #4613). ' +
         'In-process, use sandboxHome() from tests/helpers.cjs.',
-      staleAllowlistEntry:
-        '{{file}} no longer contains an ad-hoc env-isolation copy. Delete its line from ' +
-        'eslint-rules/no-adhoc-env-isolation.allowlist.json: the allowlist names only files that still carry a copy.',
     },
   },
 
   create(context) {
-    const options = context.options[0] || {};
-    const allowlist = Array.isArray(options.allowlist) ? options.allowlist : [];
-
-    const rel = path.relative(context.cwd, context.filename).split(path.sep).join('/');
-    const allowlisted = allowlist.includes(rel);
     const sourceCode = context.sourceCode;
-
-    let violations = 0;
-    function violation(node, messageId, data) {
-      violations += 1;
-      if (!allowlisted) context.report({ node, messageId, data });
-    }
 
     /** True when `node` is a read of `process.env.PATH` (or `Path`). */
     function isEnvPathRead(node) {
@@ -199,7 +172,7 @@ const rule = {
           (readsEnvPath(callee.object) && !isLengthOnly(node)) ||
           (isPathDelimiter(node.arguments[0]) && isFilteredSplit(node))
         ) {
-          violation(node, 'inlinePathFilter');
+          context.report({ node, messageId: 'inlinePathFilter' });
         }
       },
 
@@ -208,7 +181,7 @@ const rule = {
           if (prop.type !== 'Property') continue;
           const key = staticName(prop.key, prop.computed);
           if (HOME_KEYS.has(key) && !isNotASandbox(prop.value, key)) {
-            violation(prop, 'adhocHomeConstruction', { key });
+            context.report({ node: prop, messageId: 'adhocHomeConstruction', data: { key } });
             return;
           }
         }
@@ -219,13 +192,7 @@ const rule = {
         if (left.type !== 'MemberExpression' || isProcessEnv(left.object)) return;
         const key = staticName(left.property, left.computed);
         if (HOME_KEYS.has(key) && !isNotASandbox(node.right, key)) {
-          violation(node, 'adhocHomeConstruction', { key });
-        }
-      },
-
-      'Program:exit'(node) {
-        if (allowlisted && violations === 0) {
-          context.report({ node, messageId: 'staleAllowlistEntry', data: { file: rel } });
+          context.report({ node, messageId: 'adhocHomeConstruction', data: { key } });
         }
       },
     };

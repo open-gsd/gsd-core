@@ -258,6 +258,72 @@ describe('research-provider: terminal fallback to websearch', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #4942: Serply is an opt-in web-discovery provider
+// ---------------------------------------------------------------------------
+
+describe('research-provider: serply is opt-in (#4942)', () => {
+  const NO_PREMIUM = {
+    exa_search: false,
+    tavily_search: false,
+    brave_search: false,
+    firecrawl: false,
+    ref_search: false,
+    perplexity: false,
+  };
+
+  async function pickWeb(config, kind = 'web') {
+    const result = await planResearch({
+      questions: [{ text: 'current js bundler comparison', kind }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+    return result.items[0].fetch.provider;
+  }
+
+  test('serply sits after brave and before the websearch terminal', () => {
+    const web = PROVIDER_WATERFALL.web;
+    assert.ok(web.includes('serply'));
+    assert.ok(web.indexOf('brave') < web.indexOf('serply'));
+    assert.ok(web.indexOf('serply') < web.indexOf('websearch'));
+  });
+
+  test('serply is unavailable unless serply_search is truthy', () => {
+    for (const unset of [undefined, null, false, 0, '']) {
+      assert.equal(providerAvailability({ serply_search: unset }).serply, false);
+    }
+    assert.equal(providerAvailability(NO_PREMIUM).serply, false);
+    assert.equal(providerAvailability({}).serply, false);
+    assert.equal(providerAvailability({ serply_search: true }).serply, true);
+  });
+
+  test('unset serply_search falls through to websearch (nothing sent to Serply)', async () => {
+    assert.equal(await pickWeb(NO_PREMIUM), 'websearch');
+  });
+
+  test('only serply_search enabled picks serply for web questions', async () => {
+    assert.equal(await pickWeb({ ...NO_PREMIUM, serply_search: true }), 'serply');
+  });
+
+  test('brave still wins over serply when both are enabled', async () => {
+    assert.equal(await pickWeb({ ...NO_PREMIUM, brave_search: true, serply_search: true }), 'brave');
+  });
+
+  test('exa, tavily and perplexity each still win over serply', async () => {
+    assert.equal(await pickWeb({ ...NO_PREMIUM, exa_search: true, serply_search: true }), 'exa');
+    assert.equal(await pickWeb({ ...NO_PREMIUM, tavily_search: true, serply_search: true }), 'tavily');
+    assert.equal(await pickWeb({ ...NO_PREMIUM, perplexity: true, serply_search: true }), 'perplexity');
+  });
+
+  test('docs and scrape questions never route to serply', async () => {
+    const config = { ...NO_PREMIUM, serply_search: true };
+    assert.notEqual(await pickWeb(config, 'docs'), 'serply');
+    assert.notEqual(await pickWeb(config, 'scrape'), 'serply');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // FINDING 5 REGRESSION: planResearch skips questions with missing/non-string text
 // ---------------------------------------------------------------------------
 

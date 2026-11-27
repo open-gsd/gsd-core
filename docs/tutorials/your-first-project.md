@@ -16,7 +16,7 @@
 > **This is the one guaranteed path.** You will build a tiny app, run **every**
 > command in the core loop exactly once, and — the part most tutorials skip —
 > understand *why* each step exists. This tutorial uses **Claude Code**; GSD
-> works in 15+ runtimes — see [Install on your runtime](../how-to/install-on-your-runtime.md)
+> works in 18 runtimes — see [Install on your runtime](../how-to/install-on-your-runtime.md)
 > for the flag and command syntax for yours.
 
 ---
@@ -177,7 +177,7 @@ different runtime? See [Install on your runtime](../how-to/install-on-your-runti
 for its flag. You'll see a summary of what was installed, e.g.:
 
 ```text
-✓ Installed 71 commands to commands/ (gsd-<cmd>.md flat form)
+✓ Installed 72 commands to commands/ (gsd-<cmd>.md flat form)
 ✓ Installed agents
 ```
 

@@ -8,7 +8,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { setJsoncValue, removeJsoncValue, hasJsoncFeatures, isEditableJsonc } = require('../gsd-core/bin/lib/jsonc-edit.cjs');
+const { setJsoncValue, removeJsoncValue, hasJsoncFeatures, isEditableJsonc, parseJsonc } = require('../gsd-core/bin/lib/jsonc-edit.cjs');
 
 // Reference parser: strip comments/trailing commas the simple way (inputs here contain no comment-like strings
 // except where a test says so).
@@ -174,4 +174,52 @@ test('randomised edits keep the document equal to the same edit on the parsed ob
       assert.deepEqual(parse(removeJsoncValue(text, path)), ref, `remove ${path} in\n${text}`);
     }
   }
+});
+
+// ─── parseJsonc: trailing-comma cleanup must not rewrite strings (#5989) ─────
+
+test('parseJsonc keeps ",}" inside a string value (issue example, #5989)', () => {
+  assert.deepEqual(parseJsonc('{"a":"x,}y", /*c*/ "b":1}'), { a: 'x,}y', b: 1 });
+});
+
+test('parseJsonc keeps ",}" after an escaped quote inside a string (#5989)', () => {
+  assert.deepEqual(parseJsonc('{"a":"say \\"x,}\\" ok", /*c*/}'), { a: 'say "x,}" ok' });
+});
+
+test('parseJsonc still drops real trailing commas, nested (#5989)', () => {
+  assert.deepEqual(parseJsonc('{"m":{"u":{"t":1,},},}'), { m: { u: { t: 1 } } });
+});
+
+test('parseJsonc still throws like JSON.parse on malformed input (#5989)', () => {
+  assert.throws(() => parseJsonc('{"a":1,, /*c*/}'), SyntaxError);
+});
+
+// ─── parseJsonc: unterminated block comments are rejected (#5990) ─────────────
+
+test('parseJsonc throws SyntaxError on a bare block-comment opener at EOF (#5990)', () => {
+  assert.throws(() => parseJsonc('{"a":1} /*'), { name: 'SyntaxError', message: 'Unterminated block comment' });
+});
+
+test('parseJsonc throws SyntaxError on an opener plus one slash (#5990)', () => {
+  assert.throws(() => parseJsonc('{"a":1} /*/'), { name: 'SyntaxError', message: 'Unterminated block comment' });
+});
+
+test('parseJsonc throws SyntaxError one char short of the closer (#5990)', () => {
+  assert.throws(() => parseJsonc('{"a":1} /* x *'), { name: 'SyntaxError', message: 'Unterminated block comment' });
+});
+
+test('parseJsonc throws SyntaxError on a dangling comment body (#5990)', () => {
+  assert.throws(() => parseJsonc('{"a":1} /* unterminated'), { name: 'SyntaxError', message: 'Unterminated block comment' });
+});
+
+test('parseJsonc parses minimal, EOF-exact, star-run closers and content after the closer (#5990)', () => {
+  assert.deepEqual(parseJsonc('{"a":1} /**/'), { a: 1 });
+  assert.deepEqual(parseJsonc('{"a":1} /* x */'), { a: 1 });
+  assert.deepEqual(parseJsonc('{"a":1 /* x */ }'), { a: 1 });
+  assert.deepEqual(parseJsonc('{"a":1} /* ** */'), { a: 1 });
+});
+
+test('parseJsonc leaves a block-comment opener inside a string alone (#5990)', () => {
+  assert.deepEqual(parseJsonc('{"a":"/*"} /*c*/'), { a: '/*' });
+  assert.deepEqual(parseJsonc('{"a":"/* unterminated"}'), { a: '/* unterminated' });
 });
