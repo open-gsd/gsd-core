@@ -39,7 +39,7 @@ Combine any number of runtime flags; with none, the installer asks.
 | `--all` | All 18 runtimes above |
 | `--both` | Claude Code and OpenCode |
 
-**`--gemini` is retired.** Gemini CLI was sunset by Google on 2026-06-18. `--gemini` prints a redirect to `--antigravity` and exits with status 1 when it is the only runtime flag; combined with another runtime flag the notice is printed and the other runtime installs. `--gemini --uninstall` exits with status 1 and prints the manual cleanup steps. `--help` still lists `--gemini`. <!-- gsd-allow-retired-runtime-name: this paragraph documents that the retired runtime flag is refused (#1928) -->
+**`--gemini` is retired.** Gemini CLI was sunset by Google on 2026-06-18. `--gemini` prints a redirect to `--antigravity` and exits with status 1 when it is the only runtime flag; combined with another runtime flag the notice is printed and the other runtime installs. `--gemini --uninstall` exits with status 1 and prints the manual cleanup steps. `--help` omits it. <!-- gsd-allow-retired-runtime-name: this paragraph documents that the retired runtime flag is refused (#1928) -->
 
 **Kimi variants.** `--kimi` and `--kimi-code` are separate products with separate hook roots. When the selected variant does not match the config the installer finds (`~/.kimi/config.toml` or `~/.kimi-code/config.toml`), it prints a notice.
 
