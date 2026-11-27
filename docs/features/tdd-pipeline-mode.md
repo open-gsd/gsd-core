@@ -34,8 +34,11 @@ ADR-443 first. See [Configuration](../CONFIGURATION.md#tdd-gate-models-executort
 
 `check tdd-red-evidence` selects a parser by the captured report format. Node's
 built-in runner and Vitest (`tap` and `tap-flat`) share the TAP adapter; Maven
-Surefire and Failsafe share the JUnit XML adapter; `swift test` (swift-testing),
-Python `unittest` and `go test` text output have their own adapters. The command name does not
+Surefire and Failsafe and pytest (`--junitxml`) share the JUnit XML adapter; `swift test`
+(swift-testing), Python `unittest` and `go test` text output have their own adapters. In a pytest
+report, an `<error>` that pytest writes for a collection crash or a fixture failing in setup or
+teardown (`collection failure`, `failed on setup|teardown with "…"`) is a load
+failure, refused as `fixture_or_load_failure` and never a RED target (#6641). The command name does not
 select or bypass validation. Reports from other producers can use these same
 formats. Unsupported or malformed reports return `INVALID_RED` with
 `evidence.report_errors`; configure a supported reporter before proceeding.
