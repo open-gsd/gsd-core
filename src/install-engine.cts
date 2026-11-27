@@ -219,6 +219,49 @@ function provisionRuntimeSurfaceCorpus(
 
 function executingPackageRoot(): string { return path.dirname(path.dirname(runtimeArtifactLayout.findInstallSourceRoot())); }
 
+/**
+ * The path prefix an OpenCode-family install emits into its converted artifacts. One owner for the
+ * skills/commands/agents pass and for the corpus pass below (#4779), so the two cannot disagree.
+ */
+function opencodeFamilyPathPrefix(runtime: string, configDir: string, isGlobal: boolean, behaviors: any): string {
+  return (runtimeArtifactConversion as any)._computePathPrefix({
+    isGlobal,
+    isOpencode: behaviors.skipHomePrefixSubstitution === true,
+    isWindowsHost: process.platform === 'win32',
+    resolvedTarget: posixNormalize(path.resolve(configDir)),
+    homeDir: posixNormalize(os.homedir()),
+    // #4377: the runtime's own localConfigDir, so an opted-in local install
+    // emits `<dir>/...` instead of this checkout's absolute path.
+    localDirName: runtimeArtifactConversion._localIncludeDirName(runtime),
+  });
+}
+
+/**
+ * #4779: the installed Runtime Surface corpus (`gsd-core/commands/gsd/`, `gsd-core/agents/`) is the
+ * source a refresh re-converts. For a runtime that declares `rewritesClaudeOnlyForms` (OpenCode) its
+ * path text gets the install's own rewrites, so the corpus no longer points at `~/.claude` or
+ * `.claude/skills/`. Only path text changes (rewriteOpencodeCorpusText); a refresh converts the result
+ * to the same bytes it would convert the original to. Runs before the manifest is hashed.
+ */
+function rewriteProvisionedCorpusForRuntime(runtime: string, configDir: string, scope: string): void {
+  const behaviors = hostBehaviorsFor(runtime);
+  if (behaviors.rewritesClaudeOnlyForms !== true) return;
+  const pathPrefix = opencodeFamilyPathPrefix(runtime, configDir, isGlobalScope(scope as InstallScope), behaviors);
+  const rewriteTree = (dir: string, kind: 'commands' | 'agents'): void => {
+    if (!installFs().existsSync(dir)) return;
+    for (const entry of installFs().readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { rewriteTree(full, kind); continue; }
+      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+      const content = installFs().readFileSync(full, 'utf8');
+      const rewritten = (runtimeArtifactConversion as any).rewriteOpencodeCorpusText(content, { runtime, pathPrefix, kind });
+      if (rewritten !== content) installFs().writeFileSync(full, rewritten);
+    }
+  };
+  rewriteTree(path.join(configDir, 'gsd-core', 'commands', 'gsd'), 'commands');
+  rewriteTree(path.join(configDir, 'gsd-core', 'agents'), 'agents');
+}
+
 // ---------------------------------------------------------------------------
 // USER_OWNED_ARTIFACTS
 // ---------------------------------------------------------------------------
@@ -1401,7 +1444,10 @@ function installRuntimeArtifacts(
       // real installer is the authority that refreshes package bytes into the
       // durable installed corpus; attempting that cross-filesystem copy through
       // an in-memory destination adapter would read from the wrong filesystem.
-      if (!deps.fs) provisionRuntimeSurfaceCorpus(layout, configDir, scope);
+      if (!deps.fs) {
+        provisionRuntimeSurfaceCorpus(layout, configDir, scope);
+        rewriteProvisionedCorpusForRuntime(runtime, configDir, scope);
+      }
       return installOpencodeFamilyArtifacts(
         runtime,
         configDir,
@@ -2258,16 +2304,7 @@ function installOpencodeFamilyArtifacts(
   const src = packageRoot ?? executingPackageRoot();
   const rawCommandsDir = installProfiles.stageSkillsForProfile(commandsGsdDir, resolvedProfile);
 
-  const pathPrefix = (runtimeArtifactConversion as any)._computePathPrefix({
-    isGlobal,
-    isOpencode: behaviors.skipHomePrefixSubstitution === true,
-    isWindowsHost: process.platform === 'win32',
-    resolvedTarget: posixNormalize(path.resolve(configDir)),
-    homeDir: posixNormalize(os.homedir()),
-    // #4377: the runtime's own localConfigDir, so an opted-in local install
-    // emits `<dir>/...` instead of this checkout's absolute path.
-    localDirName: runtimeArtifactConversion._localIncludeDirName(runtime),
-  });
+  const pathPrefix = opencodeFamilyPathPrefix(runtime, configDir, isGlobal, behaviors);
 
   // #2329: destDir is derived from the SAME hostBehaviors.flatCommandDir
   // descriptor value read by writeManifest's manifest-key prefix and by

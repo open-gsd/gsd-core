@@ -11003,18 +11003,23 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 function claudeLeakPatternsFor(runtime) {
   const patterns = [/(?:~|\$HOME)\/\.claude\b/g];
   if (hostBehaviorsFor(runtime).rewritesClaudeOnlyForms === true) {
-    patterns.push(/(?<![A-Za-z0-9_-])\.claude\/skills\//g, /(?<![A-Za-z0-9_-])--claude --local(?![\w-])/g);
+    patterns.push(...runtimeArtifactConversion.OPENCODE_CLAUDE_ONLY_FORM_PATTERNS);
   }
   return patterns;
 }
 
 /**
  * Post-install leak scan over the installed manifest files: `[{ file, count }]` for every host-read
- * `.md`/`.toml` that still carries a Claude-only form. Pure over (targetDir, manifestFiles, runtime).
+ * `.md`/`.toml` that still carries a Claude-only form. Read-only: it reads each listed file under
+ * `targetDir` and writes nothing.
  */
 function collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }) {
   const leaked = [];
   const patterns = claudeLeakPatternsFor(runtime);
+  // #4779: a runtime that rewrites its corpus (rewritesClaudeOnlyForms) has no byte-identical corpus left
+  // to exclude: its text is converted too, so it stays in the scan like Windsurf's delegated bodies.
+  const behaviors = hostBehaviorsFor(runtime);
+  const bodiesDelegated = behaviors.installsCommandBodiesForWorkflowDelegation || behaviors.rewritesClaudeOnlyForms === true;
   for (const relPath of manifestFiles) {
     const fileName = path.basename(relPath);
     if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
@@ -11028,7 +11033,7 @@ function collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }) {
     // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
     // ARE host-read artifacts and stay in the scan.
     const posixRelPath = relPath.replace(/\\/g, '/');
-    if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
+    if (!bodiesDelegated
       && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
     const fullPath = path.join(targetDir, relPath);
     let content;

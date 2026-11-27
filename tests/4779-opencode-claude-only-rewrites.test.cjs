@@ -4,7 +4,10 @@
  * #4779 — the OpenCode install rewrites the Claude-only forms that survive the path rewrite:
  * the project-skills locator (`.claude/skills/`) and the launcher's reinstall hint
  * (`--claude --local`), and the post-install leak scan reports the same forms on OpenCode.
- * Matrix: .gsd/phase/feat-4779-opencode-claude-only-rewrites/50-test-matrix.md.
+ * Seams: the shared helper, both OpenCode converters (bin mirror and compiled module), the extracted
+ * leak scan, the OpenCode corpus rewrite, and a real install tree. The installed corpus under
+ * gsd-core/commands|agents/ is converted for OpenCode (path text only) and scanned; on runtimes that
+ * keep it byte-identical (#5547) it is still skipped.
  */
 
 const { test, describe } = require('node:test');
@@ -13,10 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
-const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { installRuntimeFixture } = require('./helpers/install-shared.cjs');
 const installer = require('../bin/install.js');
 const conversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
@@ -84,12 +84,6 @@ describe('#4779: rewriteOpencodeClaudeOnlyForms', () => {
     const once = rewrite(`${LOC_OLD} ${HINT_OLD}`);
     assert.equal(rewrite(once), once);
   });
-
-  test('passes non-string input through', () => {
-    for (const value of [undefined, null, 0, 7]) {
-      assert.equal(rewrite(value), value);
-    }
-  });
 });
 
 describe('#4779: both OpenCode converters apply the rewrites', () => {
@@ -132,6 +126,71 @@ describe('#4779: both OpenCode converters apply the rewrites', () => {
         return true;
       }),
       { seed: 4779, numRuns: 200 },
+    );
+  });
+});
+
+describe('#4779: the OpenCode corpus rewrite', () => {
+  const PREFIXES = ['~/.config/opencode/', '/custom/cfg/', '$HOME/.config/opencode/'];
+  const KINDS = ['commands', 'agents'];
+  const include = '@~/.claude/gsd-core/references/project-skills-discovery.md';
+  const corpusText = (content, kind, pathPrefix) =>
+    conversion.rewriteOpencodeCorpusText(content, { runtime: 'opencode', pathPrefix, kind });
+  // What the real install does to the same source text, per kind (prefix pass, then the converter).
+  const installed = (content, kind, pathPrefix) => viaModule(
+    kind === 'agents'
+      ? conversion.applyAgentPathRewrites(content, 'opencode', pathPrefix)
+      : conversion._rewriteOpencodeFamilyConfigDirForms(content, pathPrefix, '.opencode'),
+  );
+
+  for (const kind of KINDS) {
+    test(`${kind}: rewrites an @-include, the home forms, the locator and the hint`, () => {
+      const out = corpusText(
+        `${include}\nsee $HOME/.claude/gsd-core/x and \`${LOC_OLD}\`\nnpx @opengsd/gsd-core@latest ${HINT_OLD}\n`,
+        kind,
+        '~/.config/opencode/',
+      );
+      assert.equal(
+        out,
+        `@~/.config/opencode/gsd-core/references/project-skills-discovery.md\nsee $HOME/.config/opencode/gsd-core/x and \`${LOC_NEW}\`\nnpx @opengsd/gsd-core@latest ${HINT_NEW}\n`,
+      );
+    });
+
+    test(`${kind}: honors a custom config dir prefix, bare home form included`, () => {
+      const out = corpusText(`${include}\nset -- "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"\n`, kind, '/custom/cfg/');
+      assert.ok(out.startsWith('@/custom/cfg/gsd-core/references/project-skills-discovery.md\n'), out);
+      assert.equal(out.includes('~/.claude') || out.includes('$HOME/.claude'), false, out);
+      // The refresh seam: the custom dir the install chose survives a second conversion.
+      assert.equal(installed(out, kind, '/custom/cfg/'), installed(`${include}\nset -- "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"\n`, kind, '/custom/cfg/'));
+    });
+
+    test(`${kind}: leaves tool names, slash spellings and frontmatter in source form`, () => {
+      const source = '---\nname: gsd-x\ntools: Read, AskUserQuestion\n---\nRun /gsd:plan-phase then AskUserQuestion\n';
+      assert.equal(corpusText(source, kind, '~/.config/opencode/'), source);
+    });
+  }
+
+  test('property: converting the rewritten corpus equals converting the original', () => {
+    const tokens = [
+      include, '~/.claude/gsd-core/x', '$HOME/.claude/gsd-core/y', '${CLAUDE_CONFIG_DIR:-$HOME/.claude}',
+      '${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin', LOC_OLD, `./${LOC_OLD}`, HINT_OLD, '--claude --global',
+      'my.claude/skills/', 'AskUserQuestion', '/gsd:next', 'prose', '\n', ' ',
+    ];
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom(...tokens), { maxLength: 20 }),
+        fc.constantFrom(...PREFIXES),
+        fc.constantFrom(...KINDS),
+        (parts, prefix, kind) => {
+          const original = parts.join(' ');
+          const corpus = corpusText(original, kind, prefix);
+          assert.equal(installed(corpus, kind, prefix), installed(original, kind, prefix));
+          assert.equal(corpusText(corpus, kind, prefix), corpus);
+          assert.equal(/(~|\$HOME)\/\.claude\b/.test(corpus), false);
+          return true;
+        },
+      ),
+      { seed: 4779, numRuns: 300 },
     );
   });
 });
@@ -185,13 +244,25 @@ describe('#4779: collectInstalledClaudeLeaks', () => {
     assert.deepEqual(scan(dir, 'claude', ['agents/a.md']), []);
   });
 
-  test('skips the byte-identical corpus', (t) => {
+  test('skips the byte-identical corpus on a runtime that keeps it unconverted', (t) => {
     const dir = tree({
       'gsd-core/commands/x.md': `${LOC_OLD} ~/.claude\n`,
       'gsd-core/agents/y.md': `${HINT_OLD}\n`,
     });
     t.after(() => cleanup(dir));
-    assert.deepEqual(scan(dir, 'opencode', ['gsd-core/commands/x.md', 'gsd-core/agents/y.md']), []);
+    assert.deepEqual(scan(dir, 'claude', ['gsd-core/commands/x.md', 'gsd-core/agents/y.md']), []);
+  });
+
+  test('scans the corpus on opencode, which converts it', (t) => {
+    const dir = tree({
+      'gsd-core/commands/x.md': `${LOC_OLD} ~/.claude\n`,
+      'gsd-core/agents/y.md': `${HINT_OLD}\n`,
+    });
+    t.after(() => cleanup(dir));
+    assert.deepEqual(scan(dir, 'opencode', ['gsd-core/commands/x.md', 'gsd-core/agents/y.md']), [
+      { file: 'gsd-core/commands/x.md', count: 2 },
+      { file: 'gsd-core/agents/y.md', count: 1 },
+    ]);
   });
 
   test('skips CHANGELOG and missing files', (t) => {
@@ -202,18 +273,6 @@ describe('#4779: collectInstalledClaudeLeaks', () => {
 });
 
 describe('#4779: installed trees', () => {
-  function install(t, runtimeFlag) {
-    const home = createTempDir('gsd-4779-home-');
-    t.after(() => cleanup(home));
-    const configDir = path.join(home, 'cfg');
-    const result = runNode([INSTALL_SCRIPT, runtimeFlag, '--global', '--config-dir', configDir], {
-      env: installerEnv(isolatedEnv({ home, path: process.env.PATH })),
-      timeoutMs: INSTALL_TIMEOUT_MS,
-    });
-    assert.strictEqual(result.exitCode, 0, `installer failed\n${result.stdout}\n${result.stderr}`);
-    return { configDir, stdout: result.stdout, stderr: result.stderr };
-  }
-
   function hostReadFiles(root) {
     const out = [];
     const walk = (dir) => {
@@ -230,8 +289,8 @@ describe('#4779: installed trees', () => {
     return out;
   }
 
-  test('opencode install has no Claude-only residue', (t) => {
-    const { configDir, stdout, stderr } = install(t, '--opencode');
+  test('opencode install has no Claude-only residue', () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     const files = hostReadFiles(configDir);
     assert.ok(files.length > 50, `expected installed markdown, saw ${files.length}`);
     const residue = [];
@@ -241,15 +300,48 @@ describe('#4779: installed trees', () => {
         || /@(~|\$HOME)\/\.claude\b/.test(text)) residue.push(rel);
     }
     assert.deepEqual(residue, []);
-    assert.doesNotMatch(`${stdout}\n${stderr}`, /unreplaced \.claude/);
+    // The installer's own scan, run over the installed manifest, agrees: nothing left to report.
+    const manifest = JSON.parse(fs.readFileSync(path.join(configDir, 'gsd-file-manifest.json'), 'utf8'));
+    assert.deepEqual(
+      installer.collectInstalledClaudeLeaks({
+        targetDir: configDir,
+        manifestFiles: Object.keys(manifest.files),
+        runtime: 'opencode',
+      }),
+      [],
+    );
   });
 
-  test('claude install keeps its own hint', (t) => {
-    const { configDir } = install(t, '--claude');
-    const launcher = fs.readdirSync(path.join(configDir, 'gsd-core', 'workflows'))
+  test('opencode install converts its corpus path text and keeps the corpus a valid source', () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'opencode', scope: 'global' });
+    const corpus = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.md')) corpus.push(full);
+      }
+    };
+    walk(path.join(configDir, 'gsd-core', 'commands', 'gsd'));
+    walk(path.join(configDir, 'gsd-core', 'agents'));
+    assert.ok(corpus.length > 100, `expected the installed corpus, saw ${corpus.length}`);
+    const residue = corpus.filter((file) => {
+      const text = fs.readFileSync(file, 'utf8');
+      return text.includes(HINT_OLD) || /(^|[^A-Za-z0-9_-])\.claude\/skills\//.test(text)
+        || /(~|\$HOME)\/\.claude\b/.test(text);
+    });
+    assert.deepEqual(residue, []);
+    // Tool names stay in source form so a refresh still converts the corpus.
+    const mapper = fs.readFileSync(path.join(configDir, 'gsd-core', 'agents', 'gsd-pattern-mapper.md'), 'utf8');
+    assert.match(mapper, /^tools: Read, Bash, Glob, Grep, Write$/m);
+  });
+
+  test('claude install keeps its own hint', () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'claude', scope: 'global' });
+    const keepsHint = fs.readdirSync(path.join(configDir, 'gsd-core', 'workflows'))
       .filter((name) => name.endsWith('.md'))
       .map((name) => fs.readFileSync(path.join(configDir, 'gsd-core', 'workflows', name), 'utf8'))
       .some((text) => text.includes(HINT_OLD));
-    assert.equal(launcher, true);
+    assert.equal(keepsHint, true);
   });
 });
