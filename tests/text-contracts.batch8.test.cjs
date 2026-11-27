@@ -869,7 +869,8 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         ['the ship-note push gone from track_shipping (#2138)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', erase(/git push origin \$\{CURRENT_BRANCH\}/g)), 'ship-note', /must push the ship-note commit onto the PR branch/],
         // One row per alternative of the contract's token pattern, in both cases; the tokens are assembled so this file
         // carries no literal one.
-        ...[...SHIP_NOTE_SKIP_TOKENS.map((t) => `[${t}]`), `skip-checks:${'true'}`, `skip-checks: ${'true'}`]
+        // The trailer rows cover the bare pattern's spacings: none, one, two spaces and a tab.
+        ...[...SHIP_NOTE_SKIP_TOKENS.map((t) => `[${t}]`), `skip-checks:${'true'}`, `skip-checks: ${'true'}`, `skip-checks:  ${'true'}`, `skip-checks:\t${'true'}`]
           .flatMap((token) => [token, token.toUpperCase()])
           .map((token) => [`the CI skip token ${token} back on the ship-note commit (#6173)`, 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', (step) => `${step}\ngit commit -m "docs: ship-note ${token}"\n`), 'ship-note', /must carry no CI skip token/]),
         ['the merge-state polling back in track_shipping (#6173)', 'gsd-core/workflows/ship.md', within('<step name="track_shipping">', '</step>', (step) => `${step}\ngh pr view --json mergeStateStatus\n`), 'ship-note', /must not poll the PR merge state or push an empty recovery commit/],

@@ -7,11 +7,12 @@
 // still records the phase and PR number, and writes only the activity line, never a Status (#5165). Was
 // tests/ship-note.test.cjs.
 
-// Every bracketed spelling GitHub honors, plus the skip-checks trailer. tests/ship-notes-wedged-pr.test.cjs imports
-// these instead of keeping its own copy, and tests/text-contracts.batch8.test.cjs mutates in one row per alternative.
-// The pattern is assembled so this file carries no literal token.
+// Every bracketed spelling GitHub honors, plus the skip-checks trailer, matched bare so any value or spacing after the
+// colon counts. tests/ship-note-no-skip-token.test.cjs imports these instead of keeping its own copy, and
+// tests/text-contracts.batch8.test.cjs mutates in one row per alternative. The pattern is assembled so this file
+// carries no literal token.
 const SKIP_TOKENS = ['skip ci', 'ci skip', 'no ci', 'skip actions', 'actions skip'];
-const SKIP_TOKEN_RE = new RegExp(`\\[(?:${SKIP_TOKENS.join('|')})\\]|skip-checks: ?true`, 'i');
+const SKIP_TOKEN_RE = new RegExp(`\\[(?:${SKIP_TOKENS.join('|')})\\]|skip-checks:`, 'i');
 const RECOVERY_RE = /mergeStateStatus|--allow-empty/;
 
 module.exports = {

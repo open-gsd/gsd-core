@@ -317,7 +317,7 @@
     "shared-install-fixture.test.cjs": 1135,
     "shell-command-projection-dispatch.test.cjs": 4686,
     "shell-command-projection-md-normalize.test.cjs": 331,
-    "ship-notes-wedged-pr.test.cjs": 8,
+    "ship-note-no-skip-token.test.cjs": 8,
     "shipped-reference-cites.test.cjs": 258,
     "skill-manifest.test.cjs": 1630,
     "slug-derivation-drift-guard.test.cjs": 4699,
