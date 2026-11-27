@@ -2283,6 +2283,27 @@ describe('#6641 — pytest JUnit harness errors are never a RED target', () => {
     }
   });
 
+  test('a class-based or parametrized pytest RED is named by classname#name exactly as the report writes it', () => {
+    // pytest-class-red.xml: tests/test_widget.py, TestWidget.test_x and test_param[a-1] both assert 1 == 2.
+    for (const [target, matched] of [
+      ['tests.test_widget.TestWidget#test_x', 'tests.test_widget.TestWidget#test_x'],
+      ['test_x', 'tests.test_widget.TestWidget#test_x'],
+      ['tests.test_widget#test_param[a-1]', 'tests.test_widget#test_param[a-1]'],
+      ['test_param[a-1]', 'tests.test_widget#test_param[a-1]'],
+    ]) {
+      const result = classifyPytest('pytest-class-red.xml', target);
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.reason, 'target_test_failed', target);
+      assert.equal(result.evidence.matched_test, matched, target);
+    }
+    // The module path without the class, or a parametrized name without its brackets, names no test.
+    for (const target of ['tests.test_widget#test_x', 'tests.test_widget#test_param', 'test_param']) {
+      const result = classifyPytest('pytest-class-red.xml', target);
+      assert.equal(result.verdict, 'INVALID_RED', target);
+      assert.equal(result.reason, 'no_target_test_failure', target);
+    }
+  });
+
   test('a fixture that fails in setup is fixture_or_load_failure, not RED', () => {
     const result = classifyPytest('pytest-setup-error.xml', 'test_target');
     assert.equal(result.verdict, 'INVALID_RED');
