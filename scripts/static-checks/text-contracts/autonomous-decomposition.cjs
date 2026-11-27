@@ -3,12 +3,13 @@
 // #2196: autonomous.md exceeded the Claude Code Read tool's 10K-token limit (11,748 tokens), so the
 // smart_discuss step moved to a reference file and autonomous.md has to stay under the limit. At about
 // 4 characters a token, 10K tokens is 40K characters. Raised from 38K after the #729 + #853 merge added
-// runtime-gated converge routing to the interactive planning arm (about 1.2K characters).
-// Was tests/autonomous-decomposition.test.cjs.
+// runtime-gated converge routing to the interactive planning arm (about 1.2K characters). Raised to
+// 41K by #5438, so the research-resolution stop is checked at each plan run (3b, the 3c wait, gap
+// closure) without trimming unrelated prose. Was tests/autonomous-decomposition.test.cjs.
 
 const WORKFLOW = 'gsd-core/workflows/autonomous.md';
 const SMART_DISCUSS = 'gsd-core/references/autonomous-smart-discuss.md';
-const SIZE_LIMIT = 40 * 1024;
+const SIZE_LIMIT = 41 * 1024;
 
 module.exports = {
   id: 'autonomous-decomposition',

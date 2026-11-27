@@ -666,7 +666,7 @@ describe('the shipped contracts hold on the real files, and fail when a contract
   }
 
   // The four autonomous-* contracts: each asserts on the command, the workflow or the smart-discuss reference.
-  const SIZE_LIMIT = 40 * 1024;
+  const SIZE_LIMIT = 41 * 1024; // autonomous-decomposition's ceiling (#2196, raised by #5438)
   const dropLine = (line) => (text) => text.split('\n').filter((l) => l.trim() !== line).join('\n');
   for (const [title, rel, edit, contract, expected] of [
     ['Agent dropped from the command allowed-tools (#2043)', 'commands/gsd/autonomous.md',

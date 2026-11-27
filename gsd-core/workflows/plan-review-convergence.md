@@ -199,6 +199,8 @@ Skill(skill="gsd-plan-phase", args="{PHASE} {GSD_WS}")
 
 Run plan-phase **inline** (do NOT wrap it in Agent()). The convergence orchestrator runs at depth 0 with Agent available, so inline plan-phase can spawn gsd-planner and gsd-plan-checker at depth 1 — the one level of nesting that works on Claude Code. Wrapping plan-phase in Agent() would push it to depth 1 where the Agent tool is absent, preventing it from spawning any sub-agents. Wait until plan-phase completes and PLAN.md files are committed before continuing.
 
+**If plan-phase printed `PLANNING STOPPED`:** a research question needs a user ruling (`gsd-core/references/revision-loop.md`, Resolve), which no review cycle can supply. Display that line and exit this workflow without converging; do not count plans or start step 5.
+
 After plan-phase completes, verify plans were created. This asks "did initial
 planning write files to disk" — a planner-produced-nothing check, not
 outstanding-work counting — so it takes the PHYSICAL set (`plan_count_all`,
@@ -595,6 +597,8 @@ Skill(skill="gsd-plan-phase", args="{PHASE} --reviews --skip-research {GSD_WS}")
 
 Run plan-phase **inline** (do NOT wrap it in Agent()). Same rationale as step 4: the convergence orchestrator runs at depth 0 with Agent available, so inline plan-phase can spawn gsd-planner and gsd-plan-checker at depth 1. Wrapping in Agent() pushes plan-phase to depth 1 where the Agent tool is absent — the replan loop can never produce a revised plan when HIGHs are found. This is the root cause of bug #936. Actionable MEDIUM/LOW findings must be incorporated into executable PLAN.md content or explicitly deferred/rejected in the relevant PLAN.md before convergence can complete. The same holds for any open `## Plan-Revision Conflicts` entry (#3771): the replan must resolve it by adopting one of its recorded alternatives, overriding the named constraint, or amending the constraint — and mark the entry resolved. Re-running the planner against an unchanged conflict cannot resolve it and only burns a cycle. Wait until plan-phase completes (outputs '## PLANNING COMPLETE') and updated PLAN.md files are committed before continuing.
 
+**If plan-phase printed `PLANNING STOPPED` instead:** stop as step 4 does: display that line and exit this workflow without converging; never go back to step 5a.
+
 After plan-phase completes → go back to **step 5a** (review again).
 
 </process>
@@ -604,6 +608,7 @@ After plan-phase completes → go back to **step 5a** (review again).
 - [ ] Initial planning via inline Skill("gsd-plan-phase") if no plans exist — NOT wrapped in Agent() (bug #936: depth-1 Agent has no Agent tool)
 - [ ] Review via Agent → Skill("gsd-review") — isolated Agent is correct; gsd-review is a Bash leaf with no sub-agent spawns; {GSD_WS} forwarded
 - [ ] Replan via inline Skill("gsd-plan-phase --reviews") — NOT wrapped in Agent(); inline lets plan-phase spawn gsd-planner/gsd-plan-checker at depth 1
+- [ ] A plan-phase run that prints `PLANNING STOPPED` (step 4 or 5d) ends the workflow; it never converges
 - [ ] Orchestrator only does: init, config gate, loop control, parse CYCLE_SUMMARY for HIGH and actionable non-HIGH counts, stall detection, escalation
 - [ ] HIGH and actionable non-HIGH counts extracted from review agent's CYCLE_SUMMARY return message (not by grepping REVIEWS.md)
 - [ ] Review agent prompt passes `--cycle-summary` to gsd-review and states the `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` return shape; the counting rules (the resolved/unresolved definitions, the actionable classification and the consensus gate) are owned by gsd-review's `cycle_summary` step and are not restated here (#4617)

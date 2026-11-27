@@ -49,7 +49,7 @@ Para catálogo completo e detalhamento exaustivo, consulte [FEATURES.md em ingl�
 - **Worktree toggle** — desativa isolamento via `workflow.use_worktrees: false`
 - **STATE.md consistency gates** — detecta/repara drift entre STATE.md e filesystem (v1.32)
 - **Autonomous `--to N`** — para execução autônoma após fase N (v1.32)
-- **Research gate** — bloqueia planejamento quando RESEARCH.md tem questões abertas (v1.32)
+- **Research gate** — reprova a verificação dos planos quando RESEARCH.md tem questões abertas sem decisão registrada do usuário (v1.32)
 - **Verifier milestone scope filtering** — distingue gaps reais de itens deferidos (v1.32)
 - **Read-before-edit guard** — hook que previne loops infinitos de retry (v1.32)
 - **Context reduction** — truncamento de markdown e ordenação cache-friendly (v1.32)

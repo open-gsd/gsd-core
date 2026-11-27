@@ -593,44 +593,30 @@ issue:
   fix_hint: "Add eslint verification step to each task's <verify> block"
 ```
 
-## Dimension 11: Research Resolution (#1602)
+## Dimension 11: Research Resolution (#1602, #5438)
 
-**Question:** Are all research questions resolved before planning proceeds?
+**Question:** Does every open question (step 1) cite a recorded user decision?
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
-**Process:**
-1. Read the phase's RESEARCH.md file
-2. Search for a `## Open Questions` section
-3. If section heading has `(RESOLVED)` suffix → PASS
-4. If section exists: check each listed question for inline `RESOLVED` marker
-5. FAIL if any question lacks a resolution
-
-**Red flags:**
-- RESEARCH.md has `## Open Questions` section without `(RESOLVED)` suffix
-- Individual questions listed without resolution status
-- Prose-style open questions that haven't been addressed
+Otherwise, before checking this dimension, Read `~/.claude/gsd-core/references/plan-checker-research-resolution.md`: who may close a question, its four steps and a passing example.
 
 **Example — unresolved questions:**
 ```yaml
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "RESEARCH.md carries no unresolved open question"
-  description: "RESEARCH.md has unresolved open questions"
-  file: "01-RESEARCH.md"
-  unresolved_questions:
-    - "Hash prefix — keep or change?"
-    - "Cache TTL — what duration?"
-  fix_hint: "Resolve questions and mark section as '## Open Questions (RESOLVED)'"
+  required_property: "Each open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), one answering it"
+  description: "01-RESEARCH.md: 'Hash prefix?' cites no D-NN"
+  fix_hint: "Cite a D-NN under <decisions> that answers it: 'RESOLVED (D-NN): <ruling>'. Else the user rules (orchestrator records a D-NN, or /gsd:discuss-phase {phase} → /gsd:plan-phase {phase} --research) or a source settles a factual gap"
 ```
 
-**Example — resolved (PASS):**
+**Example — self-resolved (BLOCKER); real D-01 decides cache backend:**
 ```markdown
 ## Open Questions (RESOLVED)
 
-1. **Hash prefix** — RESOLVED: Use "guest_contract:"
-2. **Cache TTL** — RESOLVED: 5 minutes with Redis
+1. **Hash prefix** — RESOLVED: keep "guest_contract:" (planning-time disposition, plan 01-03)
+2. **Cache TTL** — RESOLVED (D-01): 5 minutes
 ```
 
 ## Dimension 12: Pattern Compliance (#1861)
@@ -1080,6 +1066,8 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
+- [ ] Research resolution checked (unless skipped): each step-1 question, any heading, cites only `D-NN`s under
+      CONTEXT.md `<decisions>` (not Discretion), one answering it
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)

@@ -799,7 +799,7 @@ PLANNING COMPLETE proceeds to verify_gap_plans; PLANNING INCONCLUSIVE reports an
 </step>
 
 <step name="verify_gap_plans">
-Spawn gsd-plan-checker against the fix plans (iteration_count starts at 1), model="{checker_model}" (omit on inherit/empty, #2517).
+Spawn gsd-plan-checker against the fix plans (iteration_count starts at 1), model="{checker_model}" (omit on inherit/empty, #2517). Tell it to skip Dimension 11 (research resolution): this loop hands it no CONTEXT.md and has no route to record a user ruling (#5438).
 
 <!-- gsd:protected -->
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.

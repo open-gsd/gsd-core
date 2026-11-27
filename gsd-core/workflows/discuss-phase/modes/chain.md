@@ -86,6 +86,12 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
      Auto-advance partial: Planning complete, execution did not finish.
      Continue: /gsd:execute-phase ${PHASE} ${GSD_WS}
      ```
+   - **PLANNING STOPPED** → Stop chain. A research question needs a user
+     ruling; the plans stay on disk and are not executed:
+     ```
+     Auto-advance stopped: research questions need a user ruling.
+     Continue: /gsd:discuss-phase ${PHASE} ${GSD_WS}
+     ```
    - **PLANNING INCONCLUSIVE / CHECKPOINT** → Stop chain:
      ```
      Auto-advance stopped: Planning needs input.

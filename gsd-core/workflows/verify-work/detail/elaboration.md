@@ -168,6 +168,7 @@ Agent(
 
 **Phase:** {phase_number}
 **Phase Goal:** Close diagnosed gaps from UAT
+**Scope:** Gap-closure plans. Skip Dimension 11 (research resolution): this loop hands you no CONTEXT.md and records no user ruling.
 
 <required_reading>
 - {phase_dir}/*-PLAN.md (Plans to verify)

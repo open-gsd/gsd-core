@@ -426,7 +426,6 @@ ui-phase → UI-SPEC.md (contrato de design, opcional)
     │
     ▼
 plan-phase
-    ├── Portão de pesquisa (bloqueia se RESEARCH.md tiver perguntas abertas não resolvidas)
     ├── Pesquisador de Fase → RESEARCH.md
     │       └── Portão de Legitimidade de Pacotes: veredicto da API de registro em cada pacote; [SLOP] removido,
     │           [SUS]/[ASSUMED] sinalizados; tabela de Auditoria escrita no RESEARCH.md
@@ -434,6 +433,10 @@ plan-phase
     │       └── checkpoint:human-verify injetado antes de instalações [ASSUMED]/[SUS];
     │           linha STRIDE T-{phase}-SC adicionada para planos com instalação
     ├── Plan Checker → Loop de verificação (máximo 3x)
+    │       └── Portão de pesquisa (Dimension 11): reprova os planos enquanto uma questão aberta do
+    │           RESEARCH.md não cita só D-NNs de CONTEXT.md <decisions>, fora de Claude's Discretion,
+    │           um deles a respondendo; uma fonte citada resolve só uma lacuna factual. Pulado com o
+    │           loop de verificação (--skip-verify, workflow.plan_check: false, --research-phase)
     ├── Portão de cobertura de requisitos (REQ-IDs → planos)
     └── Portão de cobertura de decisões (CONTEXT.md `<decisions>` → planos, BLOQUEANTE — #2492)
     │

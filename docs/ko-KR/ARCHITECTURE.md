@@ -411,7 +411,6 @@ ui-phase → UI-SPEC.md (디자인 계약, 선택적)
     │
     ▼
 plan-phase
-    ├── 리서치 게이트 (RESEARCH.md에 미해결 공개 질문이 있으면 차단)
     ├── 단계 리서처 → RESEARCH.md
     │       └── 패키지 적법성 게이트: 모든 패키지에 대한 레지스트리 API 판정; [SLOP] 제거,
     │           [SUS]/[ASSUMED] 플래그; 감사 테이블을 RESEARCH.md에 작성
@@ -419,6 +418,10 @@ plan-phase
     │       └── [ASSUMED]/[SUS] 설치 전에 checkpoint:human-verify 삽입;
     │           설치 포함 계획에 T-{phase}-SC STRIDE 행 추가
     ├── 계획 검사기 → 검증 루프 (최대 3회)
+    │       └── 리서치 게이트 (Dimension 11): RESEARCH.md의 각 미해결 질문이 CONTEXT.md <decisions>의
+    │           D-NN만 Claude's Discretion 밖에서 인용하고 그중 하나가 답할 때까지 계획을 통과시키지
+    │           않음. 인용한 출처는 사실에 관한 공백만 메움. 검증 루프와 함께 건너뜀
+    │           (--skip-verify, workflow.plan_check: false, --research-phase)
     ├── 요구 사항 커버리지 게이트 (REQ-ID → 계획)
     └── 결정 커버리지 게이트 (CONTEXT.md `<decisions>` → 계획, 차단 — #2492)
     │
