@@ -342,10 +342,11 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
   const globalCanon = canonicalDir(globalDir);
   let projectRoot: string | null = null;
   try {
-    // #6820 (ADR-4908): the project overlay root is the context's `projectRoot`.
+    // #6820 (ADR-4908): the project overlay root comes from the seam's git-free walk; the loader runs
+    // on every CLI call, so it must not start a second git resolution (tests/git-layout-parity).
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-    const projectContextMod: { resolveProjectContext: (startDir: string) => { projectRoot: string } } = require('./project-context.cjs');
-    projectRoot = projectContextMod.resolveProjectContext(cwd).projectRoot;
+    const projectContextMod: { walkUpForPlanning: (startDir: string) => { root: string } } = require('./project-context.cjs');
+    projectRoot = projectContextMod.walkUpForPlanning(cwd).root;
   } catch {
     projectRoot = null;
   }

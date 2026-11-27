@@ -444,13 +444,18 @@ describe('project-context CLI: workspace and verb', () => {
       if (withFile) write(path.join(root, 'src', 'a.txt'), 'alpha\n');
     }
 
-    /** Phase dir lives under A; the report's digest is taken over project B's files. */
+    /**
+     * Project B holds src/a.txt; the phase directory is nested at B/sub, which has its own `.planning`
+     * (and, when `aHasFile`, its own src/a.txt), so a walk-up from the phase directory lands on B/sub
+     * ("A") while the context can name B. The report's digest is taken over B's files. A v4 digest is
+     * only computable for a phase directory inside the root, hence the nesting.
+     */
     function mkTwoProjects(t, { aHasFile }) {
       const base = mkTmp(t);
-      const a = path.join(base, 'a');
       const b = path.join(base, 'b');
-      mkProject(a, aHasFile);
+      const a = path.join(b, 'sub');
       mkProject(b, true);
+      mkProject(a, aHasFile);
       const phaseDir = path.join(a, '.planning', 'phases', PHASE);
       const digest = verification.computeCoveredDigest(b, ['src/a.txt'], 4, { phaseDir });
       assert.equal(typeof digest, 'string', 'fixture digest must compute over project B');

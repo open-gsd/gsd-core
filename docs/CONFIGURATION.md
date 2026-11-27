@@ -807,8 +807,6 @@ The `verification` verbs (`status`, `all-summarized`, `resolve-file`, `fingerpri
 
 Planning artifacts passed by path (`uat render-checkpoint --file`, `uat complete-session`, `verification append-audit`, `summary-extract`, `coverage classify`, `loop render-hooks --after-fingerprint`) are checked against the real location of `.planning/`, so a `.planning` symlinked into a separate repository is accepted while a path that leaves both the project and that store is still refused.
 
-Capability consent and the project capability overlay use the same resolved project root. From a linked worktree that has no `.planning/` of its own, that root is the main checkout's, so project-scope consent recorded from such a worktree now belongs to the main checkout.
-
 ### Auto-Detection
 
 If `.planning/` is in `.gitignore`, `commit_docs` is automatically `false` regardless of config.json. This prevents git errors.
