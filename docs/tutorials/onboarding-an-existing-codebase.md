@@ -12,7 +12,7 @@ We will add a single `GET /health` endpoint to an existing Express application. 
 
 ## Prerequisites
 
-- **Node.js 18 or later** — `node --version` should print `v18.x.x` or higher.
+- **Node.js 24 or later** — `node --version` should print `v24.x.x` or higher.
 - **An existing project** — any repo with code already in it. It does not have to be Express; the steps apply to any stack.
 - **Claude Code** — open in your repo root.
 
