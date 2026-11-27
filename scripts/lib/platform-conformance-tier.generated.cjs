@@ -303,6 +303,8 @@ module.exports = {
   "tests/security.test.cjs",
   "tests/seed-close.test.cjs",
   "tests/self-test-report-policy.test.cjs",
+  "tests/session-store.test.cjs",
+  "tests/session-verbs.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/sh-hook-paths.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",

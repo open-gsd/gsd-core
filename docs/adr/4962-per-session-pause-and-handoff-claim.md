@@ -40,7 +40,7 @@ Filename grammar — `src/session-store.cts` is the single owner (Decision 7):
 | `HANDOFF.claimed.<role_id>.<session_id>.json` | resume, mid-claim | a session holds this role's handoff |
 | `HANDOFF.json` + `.continue-here.md` | legacy | still resumable; any session may claim it |
 
-The grammar reserves `latest` and `claimed` as first segments. A session id whose first segment is reserved is escaped by the store before it is used in a filename, so `HANDOFF.latest.x.json` always parses as role `x`, never as session `latest.x`. Ownership is decided by the **filename** for role-keyed and session-keyed files. A body-recorded `role` is consulted only for a legacy unkeyed file, so two live sessions that share a role label cannot unlink each other's session-keyed handoff.
+The grammar reserves `latest`, `claimed` and `json` as first segments (`json` was added when #6796 implemented the store: without it `HANDOFF.json.json` would parse as a session named `json` next to the legacy `HANDOFF.json`). A session id whose first segment is reserved is escaped by the store before it is used in a filename, so `HANDOFF.latest.x.json` always parses as role `x`, never as session `latest.x`. Ownership is decided by the **filename** for role-keyed and session-keyed files. A body-recorded `role` is consulted only for a legacy unkeyed file, so two live sessions that share a role label cannot unlink each other's session-keyed handoff.
 
 *Failure prevented:* a handoff nobody can recognize after `/clear` (the session-id-only design, implemented first and rejected), and cross-deletion between sessions that merely share a label.
 
@@ -52,7 +52,7 @@ The grammar reserves `latest` and `claimed` as first segments. A session id whos
 
 ### 4. Session identity comes from `--session` or a runtime-issued env key — never the terminal
 
-The session id resolves from `--session`, else from the first set key in this ordered list: `GSD_SESSION_KEY`, `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `OPENCODE_SESSION_ID`, `GEMINI_SESSION_ID`, `CURSOR_SESSION_ID`, `WINDSURF_SESSION_ID`. This is a strict subset of `WORKSTREAM_SESSION_ENV_KEYS` (`src/active-workstream-store.cts`). The terminal-identity keys (`TERM_SESSION_ID`, `WT_SESSION`, `TMUX_PANE`, `ZELLIJ_SESSION_NAME`, `CLAUDE_CODE_SSE_PORT`) and the controlling-TTY probe are excluded. With no `--session` and no runtime key, the verbs report `session_id: null` and delete nothing.
+The session id resolves from `--session`, else from the first set key of `WORKSTREAM_SESSION_ENV_KEYS` (`src/active-workstream-store.cts`) in that list's own order, with the terminal-identity keys removed: `GSD_SESSION_KEY`, `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `OPENCODE_SESSION_ID`, `GEMINI_SESSION_ID`, `CURSOR_SESSION_ID`, `WINDSURF_SESSION_ID`. The store derives its list from the workstream list (a parity test pins it) instead of copying it, so one session never gets different ids for its workstream pointer and its handoff. The terminal-identity keys (`TERM_SESSION_ID`, `WT_SESSION`, `TMUX_PANE`, `ZELLIJ_SESSION_NAME`, `CLAUDE_CODE_SSE_PORT`) and the controlling-TTY probe are excluded. With no `--session` and no runtime key, the verbs report `session_id: null` and delete nothing.
 
 This deliberately **narrows** `getWorkstreamSessionKey()` for this module's own use. That function falls back to a terminal token because a workstream pointer wrongly shared by two panes is recoverable. Here a wrong "this is mine" deletes another session's handoff, and two panes of one terminal are two sessions.
 
