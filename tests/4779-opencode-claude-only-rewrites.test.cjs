@@ -155,7 +155,8 @@ describe('#4779: the OpenCode corpus rewrite', () => {
       );
       assert.equal(
         out,
-        `@~/.config/opencode/gsd-core/references/project-skills-discovery.md\nsee $HOME/.config/opencode/gsd-core/x and \`${LOC_NEW}\`\nnpx @opengsd/gsd-core@latest ${HINT_NEW}\n`,
+        // The install's prefix pass writes its own prefix for both `~/` and `$HOME/` slash forms.
+        `@~/.config/opencode/gsd-core/references/project-skills-discovery.md\nsee ~/.config/opencode/gsd-core/x and \`${LOC_NEW}\`\nnpx @opengsd/gsd-core@latest ${HINT_NEW}\n`,
       );
     });
 
