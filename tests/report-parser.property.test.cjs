@@ -355,22 +355,38 @@ test('#5721 property: classname "Test suite failed to run" is always flagged, wh
 
 // #6641: pytest's JUnit writer reports a collection crash and a fixture that failed in setup or
 // teardown as <error> with three fixed message shapes. They are modelled here on their own: the
-// parser's regex is not exported and must not be consulted by its own tests.
+// parser's regex is not exported and must not be consulted by its own tests. Every message is
+// harness-shaped or not by construction, and taggedErrorMessage carries that choice as the oracle.
+// The free-text alphabet has no letter but 'a' and 'Z', so free text can never spell a harness shape.
 const pytestFreeText = fc.string({ unit: fc.constantFrom('a', 'Z', '7', ' ', '.', '"', "'", '<', '>', '&', 'ü'), maxLength: 30 });
+const unquotedFreeText = fc.string({ unit: fc.constantFrom('a', 'Z', '7', ' ', '.', "'", '<', '>', '&', 'ü'), maxLength: 30 });
+const pytestPhase = fc.constantFrom('setup', 'teardown');
 const pytestHarnessMessage = fc.oneof(
   fc.constant('collection failure'),
-  fc.tuple(fc.constantFrom('setup', 'teardown'), pytestFreeText).map(([phase, text]) => `failed on ${phase} with "${text}"`),
+  fc.tuple(pytestPhase, pytestFreeText).map(([phase, text]) => `failed on ${phase} with "${text}"`),
 );
-const isPytestHarnessShaped = message => message === 'collection failure'
-  || message.startsWith('failed on setup with "') || message.startsWith('failed on teardown with "');
 // Any other <error> message (or none at all) is the Surefire/Failsafe shape: a plain failed test.
 const otherErrorMessage = fc.oneof(
   pytestFreeText,
-  fc.constantFrom('collection failure.', ' collection failure', 'Collection failure', 'failed on call with "x"',
-    'failed on setup', 'failed on setup with x', 'boom', ''),
+  fc.constantFrom('collection failure.', ' collection failure', 'Collection failure', 'collection failures',
+    'collection failure\n', 'collection failure ', 'failed on call with "x"', 'failed on setup', 'failed on teardown',
+    'failed on setup with x', 'failed on teardown with', 'failed on teardown with ', ' failed on setup with "x"', 'boom', ''),
+  // the phase without ' with "', or with an unquoted cause
+  fc.tuple(pytestPhase, unquotedFreeText).map(([phase, text]) => `failed on ${phase} with ${text}`),
+  pytestPhase.map(phase => `failed on ${phase}`),
+  // a quoted cause after a phase pytest does not report as <error>, or a misspelt phase
+  fc.tuple(fc.constantFrom('call', 'Setup', 'TEARDOWN', 'setup:', 'tear down'), pytestFreeText)
+    .map(([phase, text]) => `failed on ${phase} with "${text}"`),
   fc.constant(undefined),
-).filter(message => message === undefined || !isPytestHarnessShaped(message));
-const errorTag = message => message === undefined ? '<error/>' : `<error message="${xmlEscape(message)}"/>`;
+);
+const taggedErrorMessage = fc.oneof(
+  pytestHarnessMessage.map(message => ({ message, harness: true })),
+  otherErrorMessage.map(message => ({ message, harness: false })),
+);
+// Newlines and tabs are written as character references so the parser sees them unnormalised.
+const errorTag = message => message === undefined
+  ? '<error/>'
+  : `<error message="${xmlEscape(message).replaceAll('\n', '&#10;').replaceAll('\t', '&#9;')}"/>`;
 const pytestCase = (children, name = 'target') =>
   `<testsuite tests="1"><testcase classname="tests.test_mod" name="${name}">${children}</testcase></testsuite>`;
 
@@ -413,6 +429,34 @@ test('#6641 property: a <failure> beside a harness <error> in one testcase is no
     assert.equal(result.verdict, 'RED_EVIDENCE_OK', output);
     assert.equal(result.reason, 'target_test_failed', output);
   }));
+});
+
+test('#6641 property: several <error> elements in one testcase are a load failure only when every one is harness-shaped', () => {
+  fc.assert(fc.property(fc.array(taggedErrorMessage, { minLength: 1, maxLength: 4 }), (errors) => {
+    const output = pytestCase(errors.map(({ message }) => errorTag(message)).join(''));
+    const harnessOnly = errors.every(({ harness }) => harness);
+    const report = parseTestReport(output);
+    assert.equal(report.valid, true, output);
+    assert.deepEqual(report.tests.map(t => [t.status, t.loadFailure === true]), [['failed', harnessOnly]], output);
+    const result = classifyRedEvidence(evidence(output));
+    assert.equal(result.verdict, harnessOnly ? 'INVALID_RED' : 'RED_EVIDENCE_OK', output);
+    assert.equal(result.reason, harnessOnly ? 'fixture_or_load_failure' : 'target_test_failed', output);
+  }));
+});
+
+test('#6641: a harness <error> beside a non-harness <error> in one testcase is a plain failed test, in either order', () => {
+  // The non-harness <error> is an unexpected exception in the test (the Surefire shape), so the testcase
+  // failed on its own account; only a testcase whose every <error> is a pytest harness message is a load failure.
+  for (const children of [
+    '<error message="failed on setup with &quot;RuntimeError: boom&quot;"/><error message="boom"/>',
+    '<error message="boom"/><error message="collection failure"/>',
+  ]) {
+    const output = pytestCase(children);
+    assert.deepEqual(parseTestReport(output).tests.map(t => [t.status, t.loadFailure === true]), [['failed', false]], output);
+    const result = classifyRedEvidence(evidence(output));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK', output);
+    assert.equal(result.reason, 'target_test_failed', output);
+  }
 });
 
 // #5819: node:test repeats error/stack keys in an assert.throws(fn, /re/)
