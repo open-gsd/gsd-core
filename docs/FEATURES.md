@@ -2492,9 +2492,9 @@ flows — the same way every other wave-scoped capability step already behaves f
 
 `workflow.code_review_depth_overrides` matches rules against the review's changed-file set by whole-segment directory-path prefix — `src/auth` matches `src/auth/token.ts` and `src/auth` itself, never `src/authfoo/x.ts` or `docs/src/auth/x.ts` — and is case-sensitive, following git.
 
-Escalation is **whole-review, not per-file**: depth is a single scalar handed to the reviewer agent, not a per-file setting, so the strongest matching tier across the whole rule set applies to every file in the review — a sensitive file is never reviewed shallowly because it shared a review with an unrelated one.
+Escalation is **whole-review, not per-file**: depth is a single scalar handed to the reviewer agent, not a per-file setting, so the strongest matching tier across the whole rule set applies to every file in the review (see [the design record](explanation/review-pipeline-design.md)).
 
-v1 supports **directory-prefix matching only, not glob syntax**: no glob engine (`minimatch`, `picomatch`, `fast-glob`) exists in this project and none was added for this feature. A path containing `*` or `?` (e.g. `src/auth/**`) is a configuration error rather than a silent near-miss, because accepting it as sugar for a prefix would make unsupported patterns look armed when they match nothing. Every use case in the issue is expressible as a directory prefix. See [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) for the resolution order, error table, and a worked example.
+v1 supports **directory-prefix matching only, not glob syntax**. A path containing `*` or `?` (e.g. `src/auth/**`) is a configuration error rather than a silent near-miss (see [why no globs](explanation/review-pipeline-design.md)). See [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) for the resolution order, error table, and a worked example.
 
 **Optional external reviewer lanes (#4209):** `/gsd-code-review` accepts the same reviewer-lane flags as `/gsd-review` — any flag the roster declares (run `gsd_run review-lane flags` to list them for your installation, e.g. `--codex`, `--agy`). No reviewer-lane flag is the default and is byte-for-byte unchanged from before #4209: zero lane selection, plan, or invoke calls, and only the internal `gsd-code-reviewer` agent runs. Passing one or more flags asks those lanes to independently review the same already-resolved file scope alongside the internal agent, through the same shared capability-trait interpreter and `review-lane plan`/`invoke` machinery `/gsd-review` uses — no second implementation. Each lane's prompt carries only the repository root, canonical file paths, review depth, and base SHA, never source file contents, under four fixed prohibitions (no source mutation, no test execution, no background processes, no polling). External findings are unverified corroborating evidence: `gsd-code-reviewer` independently re-verifies every claim against the actual source before writing it to `REVIEW.md`, so there remains exactly one `REVIEW.md` schema regardless of how many lanes ran. An explicitly requested lane that is unavailable or fails is reported as a warning, never silently dropped and never a raw-CLI fallback. This is separate from `/gsd-review`, which reviews `PLAN.md` files before execution, not source code.
 **In-phase review reporting and disposition**
@@ -2555,11 +2555,9 @@ the ledger keys rows on the finding ID, and two rows under one ID is an ambiguit
 drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
 on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
 row carried only by a fix report (#5802).
-A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
-decided anything, so there is no decision to lose. Preserving a recorded decision in the file
-was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
-three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
-why the console reports the drop rather than pointing at a commit that may not exist.
+A prior row still sitting at `open` is replaced silently (see [why the replacement is silent](explanation/review-pipeline-design.md)).
+Recovery is the ledger's own git history where `commit_docs` is on — which is why the console
+reports the drop rather than pointing at a commit that may not exist.
 
 **Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
 `<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
@@ -2616,9 +2614,7 @@ already withholds the severity breakdown. Counts that are merely absent, partial
 are not a disagreement, and the shortfall is still reported from `total` alone. `deferred` is the one disposition the gate never writes: it is recorded by hand, and the
 reason recorded beside it in the Source cell is preserved across re-runs, a literal `|` included
 once escaped. One exception, because it cannot be resolved: a reason ending in the literal phrase
-*(not in the current review)* loses that trailing phrase, since it is indistinguishable from the
-carried marker the gate appends. The alternative is worse — a stored marker never leaves, so a
-carried finding that later reappears would keep claiming it is absent from the review reporting it.
+*(not in the current review)* loses that trailing phrase (see [the carried-marker exception](explanation/review-pipeline-design.md)).
 
 Re-running the gate keeps every row it can, so a decision recorded here is not
 overwritten by a later pass. A finding the current review no longer reports — `--auto` re-reviews
@@ -2644,11 +2640,8 @@ that one is a `## Review Dispositions Ledger` section inside `PLAN.md`, append-o
 with rows carried. Same word, different inputs, writers, files and durability rules; neither governs
 the other.
 
-The record is a sibling artifact rather than a section inside REVIEW.md because `--auto`'s
-re-review loop rewrites REVIEW.md on every iteration — a ledger kept inside it would not survive
-the next pass — and because REVIEW.md has a single writer (`gsd-code-reviewer`) that the gate is
-not. The gate remains advisory throughout: it reports and records, and never blocks phase
-completion.
+The record is a sibling artifact rather than a section inside REVIEW.md (see [why a sibling file](explanation/review-pipeline-design.md)).
+The gate remains advisory throughout: it reports and records, and never blocks phase completion.
 
 **Necessity findings (#4100):** at `standard` and `deep` depth the reviewer also asks whether the
 problem a piece of code addresses can occur in this stack at all. Code that is correct and reachable
