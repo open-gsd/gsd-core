@@ -367,10 +367,19 @@ describe('matchRoadmapStatusCell / parseRoadmapStatusCell', () => {
   });
 
   test('a word that merely begins with a token is not the token', () => {
-    for (const cell of ['Completed', 'Completeness pending', 'Planning', 'Deferredx', 'In progressive', 'Not startedness']) {
+    for (const cell of ['Completeness pending', 'Planning', 'Deferredx', 'In progressive', 'Not startedness']) {
       assert.equal(matchRoadmapStatusCell(cell), null, cell);
       assert.equal(parseRoadmapStatusCell(cell), WIRE_STATUS.PENDING, cell);
     }
+  });
+
+  test('#6170: `Completed`, in any case and with any tail, is the Complete token (the only spelling variant)', () => {
+    for (const cell of ['Completed', 'COMPLETED', 'completed - signed off', ' Completed ']) {
+      assert.equal(matchRoadmapStatusCell(cell).token, ROADMAP_STATUS_TOKEN.COMPLETE, cell);
+      assert.equal(parseRoadmapStatusCell(cell), WIRE_STATUS.COMPLETE, cell);
+    }
+    assert.equal(matchRoadmapStatusCell('Completed - x').text, 'Completed', 'text is the raw spelling, so writers can tell Completed from Complete');
+    assert.equal(matchRoadmapStatusCell('Completedx'), null, 'the word boundary still applies');
   });
 
   test('a cell with no leading token is never guessed', () => {
@@ -593,27 +602,54 @@ describe('#6170 rewriteRoadmapStatusCell: one token-rewrite rule for phase compl
     assert.equal(rewriteRoadmapStatusCell('Complete - done', COMPLETE), 'Complete - done');
   });
 
+  test('a case-variant Complete is re-spelled and re-padded, not kept (case normalization is accepted, #6170 addendum)', () => {
+    assert.equal(rewriteRoadmapStatusCell('complete', COMPLETE), ' Complete    ');
+    assert.equal(rewriteRoadmapStatusCell('COMPLETE - x', COMPLETE), ' Complete - x ');
+  });
+
+  test('a Completed cell is returned unchanged for every target status: it already reads Complete', () => {
+    for (const target of [COMPLETE, ROADMAP_STATUS_TOKEN.IN_PROGRESS]) {
+      assert.equal(rewriteRoadmapStatusCell('Completed', target), 'Completed', target);
+      assert.equal(rewriteRoadmapStatusCell('COMPLETED - signed off', target), 'COMPLETED - signed off', target);
+    }
+  });
+
   test('a cell with no leading token returns null: token-less prose is the caller\'s decision', () => {
     assert.equal(rewriteRoadmapStatusCell('Waiting on sign-off', COMPLETE), null);
-    assert.equal(rewriteRoadmapStatusCell('Completed', COMPLETE), null);
+    assert.equal(rewriteRoadmapStatusCell('Completedx', COMPLETE), null);
   });
 
   test('a pipe or backslash in the tail is escaped for the cell', () => {
     assert.equal(rewriteRoadmapStatusCell('Planned - A | B', COMPLETE), ' Complete - A \\| B ');
+    assert.equal(rewriteRoadmapStatusCell('Planned - A \\ B', COMPLETE), ' Complete - A \\\\ B ');
   });
 
   test('property: the leading token reads Complete, the tail is kept, and a second rewrite changes nothing', () => {
-    const tail = fc.stringMatching(/^[A-Za-z0-9 ,.()/;:-]{0,30}$/).filter((t) => t === '' || /^\s/.test(t));
-    const token = fc.constantFrom('Not started', 'Planned', 'In Progress', 'in progress', 'Complete', 'complete', 'Deferred');
+    const body = fc.stringMatching(/^[A-Za-z0-9 ,.()/;:|\\-]{0,30}$/);
+    // The tail is empty, or starts with a non-word char (so the token boundary holds), or glues on directly (`Complete-x`).
+    const tail = fc.oneof(fc.constant(''), body.map((t) => ` ${t}`), body.map((t) => `-${t}`), body.map((t) => `|${t}`), body.map((t) => `\\${t}`));
+    const token = fc.constantFrom('Not started', 'Planned', 'In Progress', 'in progress', 'Complete', 'complete', 'COMPLETE', 'Deferred', 'DEFERRED');
     fc.assert(fc.property(token, tail, (tok, rest) => {
       const current = `${tok}${rest}`.trim();
       const out = rewriteRoadmapStatusCell(current, COMPLETE);
+      // out === current is the writers' no-op; otherwise `out` is the escaped, padded cell that is spliced in.
       const written = out === current ? current : out.trim();
       assert.equal(parseRoadmapStatusCell(written), WIRE_STATUS.COMPLETE, written);
+      const unescape = (t) => t.replace(/\\([\\|])/g, '$1');
+      const next = out === current ? current : unescape(written);
       const m = matchRoadmapStatusCell(current);
-      assert.equal(written.slice(COMPLETE.length), current.slice(m.text.length), 'tail kept verbatim');
-      const again = rewriteRoadmapStatusCell(written, COMPLETE);
-      assert.equal(again, written, 'idempotent');
+      assert.equal(next.slice(COMPLETE.length), current.slice(m.text.length), 'tail kept verbatim (after the one unescape the next run reads)');
+      assert.equal(rewriteRoadmapStatusCell(next, COMPLETE), next, 'idempotent: the next run leaves the cell as written');
+    }));
+  });
+
+  test('property: a Completed cell is never rewritten, whatever follows it', () => {
+    const tail = fc.stringMatching(/^[ -][A-Za-z0-9 ,.()/;:|\\-]{0,30}$/);
+    const spelling = fc.constantFrom('Completed', 'completed', 'COMPLETED');
+    fc.assert(fc.property(spelling, tail, (sp, rest) => {
+      const current = `${sp}${rest}`.trim();
+      assert.equal(rewriteRoadmapStatusCell(current, COMPLETE), current);
+      assert.equal(rewriteRoadmapStatusCell(current, ROADMAP_STATUS_TOKEN.IN_PROGRESS), current);
     }));
   });
 });

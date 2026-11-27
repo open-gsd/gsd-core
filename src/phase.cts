@@ -7295,15 +7295,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
             if (plansResult.ok) text = plansResult.value;
 
-            // #5165: a Status cell that already reads Complete is left untouched —
-            // re-padding it rewrote a cell the re-run had no business editing.
-            // #6170: any other cell keeps its prose. A leading status token (Deferred
-            // included) is rewritten to Complete and its tail kept, by the rule
-            // `roadmap update-plan-progress` shares (`rewriteRoadmapStatusCell`); prose
-            // with no token becomes `Complete - <prose>` so the leading-token counters
-            // (#4967) read Complete. `Completed`, in any case, already counts as Complete.
+            // #5165, #6170: the Status cell keeps its prose (rule in `rewriteRoadmapStatusCell`); token-less prose becomes `Complete - <prose>`.
             const statusResult = updateTableCell(text, rowMatch, 'Status', (current) => {
-              if (/^completed(?!\w)/i.test(current)) return current;
               const complete = toRoadmapStatusCell(PHASE_STATUS.COMPLETE);
               return rewriteRoadmapStatusCell(current, complete) ?? ` ${escapeCell(`${complete} - ${current}`)} `;
             });
