@@ -181,6 +181,8 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
 - [How GSD runs on Pi](explanation/how-gsd-runs-on-pi.md) — how commands, agent roles and guards map onto Pi's skills, tools and events, and the limits that leaves
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
+- [Agent skills dual injection](explanation/agent-skills-dual-injection.md) — why configured skills reach agents through two seams and how the dedup guard keeps one copy
+- [Decision coverage gates explained](explanation/decision-coverage-gates.md) — how the plan-phase and verify-phase decision gates work, and when a decision is exempt
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts
