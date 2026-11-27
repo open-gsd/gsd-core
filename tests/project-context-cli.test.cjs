@@ -355,7 +355,7 @@ describe('project-context CLI: workspace and verb', () => {
    * /var -> /private/var never skews an equality), cleaned with t.after.
    */
 
-  const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+  const { resolveProjectContext, requirePlanningArtifactPath } = require('../gsd-core/bin/lib/project-context.cjs');
   const projectRootModule = require('../gsd-core/bin/lib/project-root.cjs');
   const verification = require('../gsd-core/bin/lib/verification.cjs');
 
@@ -387,6 +387,19 @@ describe('project-context CLI: workspace and verb', () => {
       const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/..odd-UAT.md`], repo);
       assert.equal(r.success, true, r.error);
       assert.match(r.output, /Login/);
+    });
+
+    test('requirePlanningArtifactPathChoosesTheStoreForPlanningPathsAndTheProjectForTheRest', (t) => {
+      const { repo, store } = mkSymlinkedPlanning(t);
+      write(path.join(repo, 'src', 'a.txt'), 'alpha\n');
+      const ctx = resolveProjectContext(repo);
+      const planning = requirePlanningArtifactPath(ctx, `.planning/phases/${PHASE}/${PHASE}-UAT.md`, 'artifact');
+      assert.equal(planning.resolved, path.join(fs.realpathSync.native(store), 'phases', PHASE, `${PHASE}-UAT.md`));
+      assert.equal(planning.display, path.join('.planning', 'phases', PHASE, `${PHASE}-UAT.md`));
+      const project = requirePlanningArtifactPath(ctx, 'src/a.txt', 'artifact');
+      assert.equal(project.resolved, path.join(fs.realpathSync.native(repo), 'src', 'a.txt'));
+      assert.equal(project.display, path.join('src', 'a.txt'));
+      assert.throws(() => requirePlanningArtifactPath(ctx, '../outside/x.md', 'artifact'), /artifact validation failed: Path escapes allowed directory/);
     });
 
     test('renderCheckpointStillWorksWithARealPlanningDirectory', (t) => {
@@ -465,7 +478,7 @@ describe('project-context CLI: workspace and verb', () => {
     test('verificationRefusesToReadWithoutAContext', (t) => {
       const { phaseDir } = mkTwoProjects(t, { aHasFile: true });
       // ADR-4908 section 6: ctx is required; there is no phase-dir walk-up fallback to fall into.
-      assert.throws(() => verification.readVerificationStatus(phaseDir), TypeError);
+      assert.throws(() => verification.readVerificationStatus(phaseDir), /Cannot read properties of undefined/);
     });
 
     test('fingerprintHonorsProjectDirFromAnyCwd', (t) => {

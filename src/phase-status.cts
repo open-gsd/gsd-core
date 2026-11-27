@@ -214,8 +214,6 @@ export interface PhaseStatusDeps {
   fs?: IsPhaseCompleteDeps['fs'];
   /** Per-phase clean-commit-time resolver, threaded into `isPhaseComplete`. */
   phaseCleanCommitTimesMs?: IsPhaseCompleteDeps['phaseCleanCommitTimesMs'];
-  /** Resolved ProjectContext, threaded into `isPhaseComplete`; omitted: resolved from `phaseDir`. */
-  ctx?: IsPhaseCompleteDeps['ctx'];
 }
 
 export interface PhaseStatusValue {
@@ -261,7 +259,10 @@ export function phaseStatus(phaseDir: string, deps: PhaseStatusDeps = {}): { val
   const { verification, planScan, resolveProjectContext } = owners();
   const scan = planScan.scanPhasePlans(phaseDir);
   const completion = verification.isPhaseComplete(phaseDir, {
-    ctx: deps.ctx ?? resolveProjectContext(phaseDir),
+    // phaseStatus is keyed by a phase directory and none of its eleven callers (commands, init, phase,
+    // roadmap) holds a ProjectContext yet; the context is resolved here, once, through the seam. 2b/2c
+    // (#6821/#6822) thread the caller's context in as those verbs take `ctx`.
+    ctx: resolveProjectContext(phaseDir),
     convention: deps.convention,
     fs: deps.fs,
     phaseCleanCommitTimesMs: deps.phaseCleanCommitTimesMs,

@@ -30,6 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { requirePlanningArtifactPath } from './project-context.cjs';
 import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
@@ -48,7 +49,7 @@ import { splitLines, joinLines } from './text-lines.cjs';
 import { capCodeUnits } from './code-unit-cap.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
-import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
+import { isContainedIn, PathAcceptance } from './security.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { tokenizeHeadings, collectSection } from './markdown-sectionizer.cjs';
 import { parseMarkdownTable } from './markdown-table.cjs';
@@ -2902,7 +2903,7 @@ function cmdVerificationAppendAudit(
     return;
   }
 
-  const resolvedPath = requireSafePath(fileArg, ctx.projectRoot, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot);
+  const resolvedPath = requirePlanningArtifactPath(ctx, fileArg, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot).resolved;
   const realBasename = path.basename(resolvedPath);
   if (isVerificationReportBasenameCI(realBasename)) {
     error('verification.append-audit refuses a verification report path');

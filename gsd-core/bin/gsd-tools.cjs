@@ -5848,7 +5848,7 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // #2844: verify-summary was previously skipped, leaving relative file-claim
   // paths resolved against the raw process.cwd() — invoking from a subdirectory
   // manufactured "missing files" on an otherwise-correct SUMMARY. It now goes
-  // through findProjectRoot so claims resolve against the project root.
+  // through resolveProjectContext so claims resolve against the project root.
   'template', 'frontmatter', 'detect-custom-files',
   // #1854: restore-custom-files operates on a runtime config dir passed
   // explicitly via --config-dir; it never reads .planning/.
@@ -5869,7 +5869,7 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // invocations that run before .planning/ exists (new-project Step 1).
   'project-instruction-file',
   // #1579: eval.score is pure arithmetic (covered/total + infra weights); it
-  // needs no .planning/ access, so skip the findProjectRoot traversal.
+  // needs no .planning/ access, so skip the resolveProjectContext traversal.
   'eval',
 ]);
 
@@ -6031,9 +6031,9 @@ function main() {
 
   // #3881: --project-dir <path> is a documented (docs/CONFIGURATION.md,
   // "Project-Root Resolution in Multi-Repo Workspaces") explicit override of
-  // the project root. It is idempotent under findProjectRoot's ancestor
+  // the project root. It is idempotent under resolveProjectContext's ancestor
   // walk-up — i.e. it short-circuits the walk-up rather than seeding it —
-  // so it MUST be validated and applied here, before findProjectRoot ever
+  // so it MUST be validated and applied here, before resolveProjectContext ever
   // runs, and its result must skip that call entirely below. A relative
   // value resolves against process.cwd(), matching --cwd's own resolution.
   let projectDirExplicit = false;
