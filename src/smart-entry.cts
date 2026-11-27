@@ -36,6 +36,8 @@ import type { PhaseDirectoryContext } from './phase-id.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
 import { readOnlyGitEnv } from './read-only-git-env.cjs';
 import { formatGsdSlash, resolveRuntime, runtimeCommand } from './runtime-slash.cjs';
+// #6797 (ADR-4962): the pause is per session; the store owns the handoff grammar, identity and ownership.
+import { listHandoffs, resolveIdentity, isOwnHandoff } from './session-store.cjs';
 // #3696: the calendar-validity predicate moved to the STATE.md document module
 // so `state validate` can assert the same `last_activity` invariant this reader
 // already enforces (ADR-227). Two copies would let the two surfaces disagree
@@ -445,10 +447,17 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
   const hasPlanning = fs.existsSync(paths.planning);
   const hasRoadmap = fs.existsSync(paths.roadmap);
   const git = readGitSignals(cwd);
-  // #6431: `/gsd-pause-work` never writes `paused_at`; what it always writes is the ROOT `.planning/HANDOFF.json` (whatever scope
-  // the human-readable `.continue-here.md` lands in, and under a workstream too), and `/gsd-resume-work` consumes it. That file
+  // #6431: `/gsd-pause-work` never writes `paused_at`; what it writes is a handoff file in the ROOT `.planning/` (whatever scope
+  // the human-readable `.continue-here.md` lands in, and under a workstream too), and `/gsd-resume-work` consumes it. A handoff
   // IS the recorded pause, so it classifies as paused alongside the STATE.md field, and a resume routes forward again.
-  const handoffPresent = hasPlanning && fs.existsSync(path.join(cwd, '.planning', 'HANDOFF.json'));
+  // #6797: a handoff pauses only the session that owns it (its role slot, its own session file, or a legacy file that names no
+  // other role). The caller's identity comes from a runtime key, never a terminal, so with none a handoff owns nobody here.
+  const planningRootDir = path.join(cwd, '.planning');
+  let handoffPresent = false;
+  if (hasPlanning) {
+    const identity = resolveIdentity(planningRootDir, {});
+    handoffPresent = identity.session_id !== null && listHandoffs(planningRootDir).handoffs.some((h) => isOwnHandoff(h, identity));
+  }
 
   const empty: SmartEntrySignals = {
     current_phase: null,

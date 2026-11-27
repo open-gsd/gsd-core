@@ -191,9 +191,14 @@ export function classifyHandoffName(name: unknown): HandoffName | null {
 
 // ─── Ownership ────────────────────────────────────────────────────────────────
 
-/** The role a legacy handoff body names, as a slug, or null when it names none. */
-function bodyRoleId(body: Record<string, unknown>): string | null {
-  return sanitizeRoleId(body['role_id']) ?? sanitizeRoleId(body['role']);
+/**
+ * The role a legacy handoff body names: its `role_id`, and only when that is already a valid slug
+ * (so no transliteration is needed, and the hook-side followers that cannot require this module
+ * read it identically). Free-text `role` and any other shape name no role. Null when none is named.
+ */
+export function bodyRoleId(body: Record<string, unknown>): string | null {
+  const id = body['role_id'];
+  return typeof id === 'string' && id.length <= ROLE_ID_MAX && ROLE_ID_RE.test(id) ? id : null;
 }
 
 /**
@@ -324,7 +329,9 @@ export function resolveIdentity(planningDir: string, input: IdentityInput = {}):
   const session_id = resolveSessionId({ session: input.session, env: input.env });
   const prior = readRecord(planningDir, session_id);
   const role = typeof input.role === 'string' && input.role !== '' ? input.role : null;
-  const priorRoleId = prior && typeof prior['role_id'] === 'string' ? sanitizeRoleId(prior['role_id']) : null;
+  // The CLI writes `role_id` already slugged; one that is not a valid slug (a hand edit) names no role, as in the
+  // hook-side followers that cannot slug free text.
+  const priorRoleId = prior ? bodyRoleId(prior) : null;
   const role_id = roleIdFromFlags(input.role_id, role) ?? priorRoleId;
   return { session_id, role_id, role };
 }

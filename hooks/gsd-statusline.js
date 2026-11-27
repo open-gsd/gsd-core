@@ -69,6 +69,171 @@ const {
 const { resolveActiveWorkstream, peekActiveWorkstream } = require('../gsd-core/bin/lib/active-workstream-store.cjs');
 const { listAvailableWorkstreams, planningPaths } = require('../gsd-core/bin/lib/planning-workspace.cjs');
 
+// --- Per-session pause marker (#6797, ADR-4962 Decisions 1, 2, 4, 7) --------------------------------
+// "This session is paused" means a handoff file that belongs to it exists under .planning/. The handoff
+// filename grammar, session identity and ownership are owned by src/session-store.cts; this hook cannot
+// require the compiled CLI beyond the modules above (#3582), so the block below is a sanctioned INLINE COPY.
+// It is registered in tests/fixtures/session-handoff-cases.json (`followers`): tests/session-handoff-parity.test.cjs
+// runs it over the shared case table and against the store, and the text contract
+// handoff-grammar-readers-registered fails when a file that reads the grammar is not registered. Change the
+// grammar in the store first, then here, in one PR.
+const SESSION_ENV_KEYS = Object.freeze([
+  'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID',
+  'OPENCODE_SESSION_ID', 'GEMINI_SESSION_ID', 'CURSOR_SESSION_ID', 'WINDSURF_SESSION_ID',
+]);
+const SESSION_ID_MAX = 160;
+const ROLE_ID_MAX = 80;
+const ROLE_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const RESERVED_FIRST_SEGMENTS = new Set(['latest', 'claimed', 'json']);
+const HANDOFF_MAX_BYTES = 256 * 1024;
+// Entries read per render: the hook runs on every prompt, so the work is bounded however many handoffs pile up.
+const HANDOFF_ENTRY_CAP = 64;
+
+function sanitizeSessionId(value) {
+  if (typeof value !== 'string') return null;
+  let id = value.trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[^A-Za-z0-9]+/, '');
+  if (id === '') return null;
+  if (RESERVED_FIRST_SEGMENTS.has(id.split('.')[0])) id = `s_${id}`;
+  id = id.slice(0, SESSION_ID_MAX).replace(/[._-]+$/, '');
+  return id === '' ? null : id;
+}
+
+// A runtime-issued key, never a terminal token (a wrong "this is mine" would mark another session's pause as its own).
+function resolveSessionId(opts = {}) {
+  const fromFlag = sanitizeSessionId(opts.session);
+  if (fromFlag !== null) return fromFlag;
+  const env = opts.env ?? process.env;
+  for (const key of SESSION_ENV_KEYS) {
+    const id = sanitizeSessionId(env[key]);
+    if (id !== null) return id;
+  }
+  return null;
+}
+
+function classifyHandoffName(name) {
+  if (typeof name !== 'string') return null;
+  if (name === 'HANDOFF.json') return { kind: 'legacy', role_id: null, session_id: null };
+  if (!name.startsWith('HANDOFF.') || !name.endsWith('.json')) return null;
+  const middle = name.slice('HANDOFF.'.length, name.length - '.json'.length);
+  if (middle === '') return null;
+  const first = middle.split('.')[0];
+  if (first === 'latest') {
+    const role = middle.startsWith('latest.') ? middle.slice('latest.'.length) : '';
+    if (!ROLE_ID_RE.test(role) || role.length > ROLE_ID_MAX) return null;
+    return { kind: 'latest', role_id: role, session_id: null };
+  }
+  if (first === 'claimed') {
+    const rest = middle.startsWith('claimed.') ? middle.slice('claimed.'.length) : '';
+    const dot = rest.indexOf('.');
+    if (dot <= 0) return null;
+    const role = rest.slice(0, dot);
+    const sid = rest.slice(dot + 1);
+    if (!ROLE_ID_RE.test(role) || role.length > ROLE_ID_MAX || sanitizeSessionId(sid) !== sid) return null;
+    return { kind: 'claimed', role_id: role, session_id: sid };
+  }
+  if (sanitizeSessionId(middle) !== middle) return null;
+  return { kind: 'session', role_id: null, session_id: middle };
+}
+
+// A legacy body names a role only through a `role_id` that is already a valid slug; free-text `role` names none.
+function bodyRoleId(body) {
+  const id = body && body.role_id;
+  return typeof id === 'string' && id.length <= ROLE_ID_MAX && ROLE_ID_RE.test(id) ? id : null;
+}
+
+function isOwnHandoff(entry, identity) {
+  if (identity.session_id === null) return false;
+  switch (entry.kind) {
+    case 'latest':
+      return identity.role_id !== null && entry.role_id === identity.role_id;
+    case 'session':
+    case 'claimed':
+      return entry.session_id === identity.session_id;
+    case 'legacy': {
+      const named = bodyRoleId(entry.body || {});
+      return named === null || named === identity.role_id;
+    }
+    default:
+      return false;
+  }
+}
+
+// A regular, non-symlink, size-capped JSON object; anything else reads as null (skipped, never counted, never thrown).
+function readHandoffBody(file) {
+  try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.size > HANDOFF_MAX_BYTES) return null;
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOFOLLOW || 0));
+    try {
+      const fst = fs.fstatSync(fd);
+      if (!fst.isFile() || fst.size > HANDOFF_MAX_BYTES) return null;
+      const buf = Buffer.alloc(fst.size);
+      const n = fs.readSync(fd, buf, 0, fst.size, 0);
+      const parsed = JSON.parse(buf.toString('utf8', 0, n));
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+// The caller's role: the `role_id` of its own session record, when that is a valid slug.
+function readRecordRoleId(root, sessionId) {
+  try {
+    const dir = path.join(root, '.planning', 'sessions');
+    const st = fs.lstatSync(dir);
+    if (!st.isDirectory()) return null;
+    const body = readHandoffBody(path.join(dir, `${sessionId}.json`));
+    return body === null ? null : bodyRoleId(body);
+  } catch {
+    return null;
+  }
+}
+
+function handoffIdentity(root, payloadSessionId, env) {
+  const sessionId = resolveSessionId({ env }) ?? sanitizeSessionId(payloadSessionId);
+  return { session_id: sessionId, role_id: sessionId === null ? null : readRecordRoleId(root, sessionId) };
+}
+
+// { own, others }: does the caller hold a handoff, and how many readable handoffs do other identities hold.
+function readHandoffs(root, identity) {
+  let names;
+  try {
+    names = fs.readdirSync(path.join(root, '.planning')).sort();
+  } catch {
+    return { own: false, others: 0 };
+  }
+  let own = false;
+  let others = 0;
+  let scanned = 0;
+  for (const name of names) {
+    const parsed = classifyHandoffName(name);
+    if (parsed === null) continue;
+    if (scanned >= HANDOFF_ENTRY_CAP) break;
+    scanned += 1;
+    const body = readHandoffBody(path.join(root, '.planning', name));
+    if (body === null) continue;
+    if (isOwnHandoff({ file: name, ...parsed, body }, identity)) own = true;
+    else others += 1;
+  }
+  return { own, others };
+}
+
+// Attach the pause marker to an already-read STATE.md state: own handoff => status `paused`, others => `⏸N`.
+function attachHandoffs(state, root, opts) {
+  if (state === null || typeof state !== 'object' || state.noActiveWorkstream) return;
+  try {
+    const identity = handoffIdentity(root, opts.sessionId, opts.env || process.env);
+    const found = readHandoffs(root, identity);
+    if (found.own || found.others > 0) {
+      state.handoffs = found;
+      if (found.own) state.status = 'paused';
+    }
+  } catch { /* a pause marker must never break the statusline */ }
+}
+
 // --- Config + last-command readers ------------------------------------------
 
 /**
@@ -510,7 +675,10 @@ function contextMeter(contextWindow, dir, env = process.env, modelId) {
  *     (negative space: mirrors flat-mode's own silent pre-STATE.md window)
  *
  * @param {string} dir
- * @param {{ stateFreshness?: boolean }} [opts] — #2734, additive/default-off.
+ * @param {{ stateFreshness?: boolean, sessionId?: string, env?: object }} [opts] — #2734, additive/default-off.
+ *   #6797: `sessionId` is the hook payload's session id (a runtime key in `env`, default process.env, wins,
+ *   as in the CLI); when any handoff is readable the state carries `handoffs: { own, others }` and an own
+ *   handoff sets status `paused`.
  *   When true and the resolved state carries a truthy `.stateHead`, attaches
  *   `state.freshness` (deriveStateFreshness) before returning — `current` at
  *   that point is the project root the walk resolved, which is what AC-4's
@@ -527,6 +695,7 @@ function readGsdState(dir, opts = {}) {
       if (stateFreshness && flatState.stateHead) {
         flatState.freshness = deriveStateFreshness(current, flatState.stateHead);
       }
+      attachHandoffs(flatState, current, opts);
       return flatState;
     }
 
@@ -544,6 +713,7 @@ function readGsdState(dir, opts = {}) {
       if (wsState !== null && stateFreshness && wsState.stateHead) {
         wsState.freshness = deriveStateFreshness(current, wsState.stateHead);
       }
+      attachHandoffs(wsState, current, opts);
       return wsState;
     }
 
@@ -753,6 +923,11 @@ function formatGsdState(s, opts = {}) {
     }
   }
 
+  // #6797: the per-session pause marker. An own handoff always reads `paused` (the scenes above print the
+  // status only on some paths); other sessions' handoffs add `⏸N`. No handoff adds nothing.
+  if (s.handoffs && s.handoffs.own === true && !parts.some((p) => /(^|\s)paused$/.test(p))) parts.push('paused');
+  if (s.handoffs && s.handoffs.others > 0) parts.push(`⏸${s.handoffs.others}`);
+
   // #2734: STATE.md freshness marker — opt-in, appended last.
   const fresh = formatStateFreshness(s.freshness);
   if (fresh) parts.push(fresh);
@@ -872,6 +1047,10 @@ function formatGsdStateCompact(s, opts = {}) {
       parts.push(`next ${s.nextAction}${phasesStr ? ' ' + phasesStr : ''}`);
     }
   }
+
+  // #6797: the per-session pause marker, as in formatGsdState.
+  if (s.handoffs && s.handoffs.own === true && !parts.includes('PAUSED')) parts.push('PAUSED');
+  if (s.handoffs && s.handoffs.others > 0) parts.push(`\u23f8${s.handoffs.others}`);
 
   // #2734: STATE.md freshness marker \u2014 opt-in, appended last.
   const fresh = formatStateFreshness(s.freshness);
@@ -1330,7 +1509,7 @@ function runStatusline() {
     // task is in flight the GSD-state segment is not rendered, so spending a
     // freshness git spawn here would spend a subprocess on discarded output.
     if (!task) {
-      const state = readGsdState(dir, { stateFreshness: options.showStateFreshness }) || {};
+      const state = readGsdState(dir, { stateFreshness: options.showStateFreshness, sessionId: session }) || {};
       gsdStateStr = options.stateFormat === 'compact'
         ? formatGsdStateCompact(state, options)
         : formatGsdState(state, options);
@@ -1446,6 +1625,9 @@ module.exports = {
   resolveAutoCompactThreshold, contextMeter, SETTINGS_FILE_MAX_BYTES,
   parseAutoCompactWindowEnv, canonicalModelKey, isAutoCompactWindowValue,
   GIT_STATUS_TIMEOUT_MS,
+  // #6797: the inline follower of the store's handoff grammar (registered for the parity guard).
+  readHandoffs, classifyHandoffName, isOwnHandoff, sanitizeSessionId, resolveSessionId,
+  SESSION_ENV_KEYS, HANDOFF_MAX_BYTES, HANDOFF_ENTRY_CAP,
 };
 
 /**
@@ -1486,7 +1668,7 @@ function renderStatusline(data) {
     }
   } catch (e) { /* swallow */ }
 
-  const state = readGsdState(dir, { stateFreshness: options.showStateFreshness }) || {};
+  const state = readGsdState(dir, { stateFreshness: options.showStateFreshness, sessionId: data.session_id }) || {};
   const gsdStateStr = options.stateFormat === 'compact'
     ? formatGsdStateCompact(state, options)
     : formatGsdState(state, options);
