@@ -146,7 +146,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `loop.render-hooks` | [CLI-TOOLS.md#loop-hooks](../CLI-TOOLS.md#loop-hooks) | Reference | 4/4 | — |
 | `migrate-config` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
 | `milestone.archive-quick` | [CLI-TOOLS.md#milestone-commands](../CLI-TOOLS.md#milestone-commands) | Reference | 1/1 | — |
-| `milestone.complete` | [CLI-TOOLS.md#milestone-complete-refuses-an-untrustworthy-window](../CLI-TOOLS.md#milestone-complete-refuses-an-untrustworthy-window) | Reference | 8/8 | — |
+| `milestone.complete` | [CLI-TOOLS.md#milestone-complete-refuses-an-untrustworthy-window](../CLI-TOOLS.md#milestone-complete-refuses-an-untrustworthy-window) | Reference | 9/9 | — |
 | `normalize-test-command` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | n/a | — |
 | `package-legitimacy.check` | [CLI-TOOLS.md#package-legitimacy](../CLI-TOOLS.md#package-legitimacy) | Reference | 1/1 | — |
 | `phase-plan-index` | [CLI-TOOLS.md#phase-commands](../CLI-TOOLS.md#phase-commands) | Reference | 1/1 | — |
