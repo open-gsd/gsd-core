@@ -487,7 +487,7 @@ Git configuration supplied through `-c key=value` is also checked for the two co
 
 ### Package Legitimacy Gate (v1.42.1)
 
-AI coding tools hallucinate package names. Attackers pre-register those names on npm, PyPI, and crates.io with malicious post-install scripts — a technique called *slopsquatting*. v1.42.1 adds a three-layer gate that stops this before it reaches your shell.
+Every package a phase recommends is checked against the live npm, PyPI and crates.io registries before it can reach your shell, so a hallucinated name that an attacker has pre-registered (*slopsquatting*) is stopped at research. The threat, the three pipeline stages, the ecosystem coverage and what happens when a registry cannot be reached are in [Layer 1 of the security model](explanation/security-model.md#layer-1--supply-chain-protection-the-package-legitimacy-gate).
 
 **In RESEARCH.md** — every phase that recommends external packages includes a `## Package Legitimacy Audit` table:
 
@@ -501,11 +501,7 @@ AI coding tools hallucinate package names. Attackers pre-register those names on
 | api-bridge | npm | 6 mo | 1.2k/wk | github.com/user/api-bridge | [SUS] | Flagged |
 ```
 
-`[SLOP]` packages are removed from RESEARCH.md entirely and never reach the planner.
-
-**In PLAN.md** — `[SUS]` or `[ASSUMED]` packages trigger a `checkpoint:human-verify` task before the install.
-
-**During execution** — if an install fails, the executor surfaces a checkpoint and stops rather than silently trying an alternative.
+A `[SUS]` or `[ASSUMED]` package makes the planner add a `checkpoint:human-verify` task before the install, and a failed install stops the executor at a checkpoint.
 
 **Legitimacy verdicts:**
 
@@ -514,11 +510,6 @@ AI coding tools hallucinate package names. Attackers pre-register those names on
 | `[OK]` | Passes all legitimacy checks | Proceeds — no checkpoint added |
 | `[SUS]` | Suspicious signals | Flagged; planner adds `checkpoint:human-verify` |
 | `[SLOP]` | High-confidence hallucination | Removed from RESEARCH.md; never reaches planner |
-
-Verdicts are computed from live registry APIs (npm, PyPI, crates.io) — there
-is no separate tool to install. `slopcheck` is an optional escalate-only
-adapter (it can raise a verdict but never lower one); no shipped
-configuration wires it, and its absence does not change the gate's behavior.
 
 ---
 
