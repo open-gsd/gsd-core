@@ -257,36 +257,11 @@ Until the first close, while `ROADMAP.md` carries no version token, the mileston
 
 ### Validation Architecture (Nyquist Layer)
 
-During plan-phase research, GSD maps automated test coverage to each phase requirement before any code is written. The researcher detects your existing test infrastructure, maps each requirement to a specific test command, and identifies any test scaffolding that must be created before implementation begins (Wave 0 tasks). The plan-checker enforces this as an 8th verification dimension: plans where tasks lack automated verify commands will not be approved.
-
-**Output:** `{phase}-VALIDATION.md` — the feedback contract for the phase.
-
-**Disable:** Set `workflow.nyquist_validation: false` in `/gsd-settings` for rapid prototyping phases where test infrastructure isn't the focus.
+During plan-phase research, GSD maps automated test coverage to each phase requirement before any code is written, and the plan-checker refuses plans whose tasks lack an automated verify command. The result is `{phase}-VALIDATION.md`. Set `workflow.nyquist_validation: false` in `/gsd-settings` for rapid prototyping phases. How the layer works: [Nyquist validation explained](explanation/nyquist-validation.md).
 
 ### Retroactive Validation (`/gsd-validate-phase`)
 
-For phases executed before Nyquist validation existed, or for existing codebases with only traditional test suites, retroactively audit and fill coverage gaps:
-
-```text
-  /gsd-validate-phase N
-         |
-         +-- Detect state (VALIDATION.md exists? SUMMARY.md exists?)
-         |
-         +-- Discover: scan implementation, map requirements to tests
-         |
-         +-- Analyze gaps: which requirements lack automated verification?
-         |
-         +-- Present gap plan for approval
-         |
-         +-- Spawn auditor: generate tests, run, debug (max 3 attempts)
-         |
-         +-- Update VALIDATION.md
-               |
-               +-- COMPLIANT -> all requirements have automated checks
-               +-- PARTIAL -> some gaps escalated to manual-only
-```
-
-The auditor never modifies implementation code — only test files and VALIDATION.md. If a test reveals an implementation bug, it's flagged as an escalation for you to address.
+For phases executed before the Nyquist layer existed, or codebases with only traditional test suites, `/gsd-validate-phase N` audits coverage and generates the missing tests without touching implementation code. The flow and its COMPLIANT and PARTIAL outcomes are in [Nyquist validation explained](explanation/nyquist-validation.md#retroactive-validation-with-gsd-validate-phase).
 
 ### Assumptions Discussion Mode
 
