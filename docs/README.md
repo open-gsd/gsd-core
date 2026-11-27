@@ -20,6 +20,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 - [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 18 supported runtimes
 - [Start a GSD workflow from Pi](how-to/start-a-gsd-workflow-from-pi.md) — run `/skill:gsd-<command>` (or `/gsd <command>`) in Pi instead of getting a JSON dump from `/gsd`
+- [Run two sessions with roles](how-to/run-two-sessions-with-roles.md) — pause under `--role`, resume it in another session, and have a second session find no handoff to take
 - [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) — exempt one committed file, such as a placeholder `.env.production`, from the secret-read guard while every other secret file stays blocked
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension

@@ -141,7 +141,7 @@ Usage: `/gsd:progress --next --auto`
 
 Usage: `/gsd:resume-work`
 
-**`/gsd:pause-work [--report]`** — Creates a `.continue-here` handoff, updates STATE.md's session-continuity section. `--report` also writes a post-session summary to `.planning/reports/`.
+**`/gsd:pause-work [--report] [--role <text>]`** — Creates a per-session handoff and a `.continue-here` file, updates STATE.md's session-continuity section. `--role` pauses under a named role another session can resume. `--report` also writes a post-session summary to `.planning/reports/`.
 
 Usage: `/gsd:pause-work`
 

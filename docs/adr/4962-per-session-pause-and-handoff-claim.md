@@ -1,6 +1,6 @@
-# ADR-4962: Per-session pause — the handoff file is the marker, the role is the identity [Proposed]
+# ADR-4962: Per-session pause — the handoff file is the marker, the role is the identity [Accepted]
 
-- **Status:** Proposed — ratified to `Accepted` when the ratification conditions below are met.
+- **Status:** Accepted
 - **Date:** 2026-11-27
 - **Issue:** [#4962](https://github.com/open-gsd/gsd-core/issues/4962) (this ADR); the feature it governs is [#4845](https://github.com/open-gsd/gsd-core/issues/4845) (`approved-feature`, condition 1 of its triage verdict).
 - **Builds on:** [ADR-3408](3408-state-write-path-preservation.md) (STATE.md write seam and the field-preservation classification that makes a legacy `paused_at` immortal), [ADR-1769](1769-state-md-transition-module.md) (the Transition Module that preserves it), [ADR-857](857-capability-system.md) (the core-versus-Capability line this ADR places pause/resume on).
