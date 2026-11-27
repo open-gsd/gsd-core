@@ -457,6 +457,7 @@ describe('project-context CLI: workspace and verb', () => {
       mkProject(b, true);
       mkProject(a, aHasFile);
       const phaseDir = path.join(a, '.planning', 'phases', PHASE);
+      fs.mkdirSync(phaseDir, { recursive: true }); // the digest enumerates the phase's own artifacts
       const digest = verification.computeCoveredDigest(b, ['src/a.txt'], 4, { phaseDir });
       assert.equal(typeof digest, 'string', 'fixture digest must compute over project B');
       write(
