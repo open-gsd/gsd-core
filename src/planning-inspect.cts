@@ -92,7 +92,7 @@ import markdownTable = require('./markdown-table.cjs');
 const { parseMarkdownTable, matchTableSchema } = markdownTable;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { normalizeLineEndings, extractCanonicalPlanId, findUnsummarizedPlans } = coreUtilsMod;
+const { normalizeLineEndings, extractCanonicalPlanId, findUnsummarizedPlans, countMatchedSummaries } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import securityMod = require('./security.cjs');
 const { tryWithinRoot, PathAcceptance, isContainedIn } = securityMod;
@@ -787,7 +787,18 @@ function buildTaskRows(
   });
 }
 
-function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot: string): { rows: PlanRow[]; scope: Scope } {
+/**
+ * #5823: `counts` is this scan's `plan_count` and `summary_count`, taken from
+ * the same directory read and the same blocked-SUMMARY filter as the rows'
+ * halt read, so a SUMMARY written or rewritten while the command runs cannot
+ * leave `halted_count` above `summary_count`. `null` when this function
+ * returns before its scan (the containment check below).
+ */
+function buildPlanRows(
+  phaseDir: string,
+  diagnostics: Diagnostic[],
+  planningRoot: string,
+): { rows: PlanRow[]; scope: Scope; counts: { planCount: number; summaryCount: number } | null } {
   // GAP 1 (#2790 follow-up security review): `scanPhasePlans` (`plan-scan.cjs`)
   // does its own `readdirSync(phaseDir)`, which FOLLOWS a directory symlink —
   // so a phase directory that is itself a symlink escaping `planningRoot`
@@ -800,7 +811,7 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
   // `isPathContained` comparison `readDocument` uses for files (never a
   // second, hand-rolled boundary check).
   if (!isPathContained(phaseDir, planningRoot)) {
-    return { rows: [], scope: SCOPE.UNREADABLE };
+    return { rows: [], scope: SCOPE.UNREADABLE, counts: null };
   }
   const scan = planScan(phaseDir);
   const supersededSet = new Set(
@@ -935,7 +946,15 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
       .map((row, i) => ({ row, planFile: scan.allPlanFiles[i] }))
       .filter(({ row, planFile }) => !row.superseded && planScan.isCanonicalPlanFile(planFile)),
   );
-  return { rows, scope: scan.scope };
+  return {
+    rows,
+    scope: scan.scope,
+    // `scanPhasePlans`'s own formula, over this function's countable set.
+    counts: {
+      planCount: scan.planFiles.length,
+      summaryCount: countMatchedSummaries(scan.planFiles, countableSummaryFiles),
+    },
+  };
 }
 
 /**
@@ -1499,12 +1518,15 @@ function buildPlanningInspectResult(cwd: string): {
         authoritative: false,
       },
       uat: { unresolved: uat.items, scope: uat.scope },
-      plan_count: phase.planCount,
-      summary_count: phase.summaryCount,
+      // #5823: from the plan rows' own scan (`buildPlanRows`'s `counts`), the
+      // read `halted_count` comes from; the snapshot's counts stand where
+      // `buildPlanRows` returned before its scan (`counts: null`).
+      plan_count: plans.counts ? plans.counts.planCount : phase.planCount,
+      summary_count: plans.counts ? plans.counts.summaryCount : phase.summaryCount,
       // #5823 (additive): live (non-superseded) plans whose `halted` is true.
       // Which SUMMARY `halted` reads: `PlanRow.halted`, and docs/CLI-TOOLS.md,
       // "Which SUMMARY `halted` reads".
-      // `summary_count` is unchanged and still counts them (#2830's model).
+      // `summary_count` still counts them (#2830's model).
       halted_count: plans.rows.filter((row) => !row.superseded && row.halted).length,
       plans: plans.rows,
       scope: folded,

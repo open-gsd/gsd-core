@@ -192,7 +192,7 @@ function readSummaryFrontmatterPrefix(summaryPath: string): string | null {
  * rule; state.cts's `scanOutstanding` does the same for its outstanding plans.
  * Narrower uses: phase-locator.cts's `searchPhaseInDir` for its readiness
  * evidence only (its `incomplete_plans` list uses unfiltered summaries), and
- * `planning inspect` only for the pairing its halt read uses.
+ * `planning inspect` for its halt read's pairing and its `summary_count`.
  */
 function isSummaryFileBlocked(summaryPath: string): boolean {
   const content = readSummaryFrontmatterPrefix(summaryPath);

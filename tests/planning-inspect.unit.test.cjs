@@ -1516,4 +1516,84 @@ describe('planning-inspect — halted plans (#5823)', () => {
     assert.strictEqual(phase.summary_count, 0);
     assert.strictEqual(phase.halted_count, 0);
   });
+
+  test('halted_count stays within summary_count when a halted SUMMARY appears between two reads of the phase directory', (t) => {
+    // The SUMMARY is written just before the k-th read of the phase directory, for each k up to the number of
+    // reads one run makes, so each run puts it between a different pair of reads.
+    const isPhaseDirRead = (target) => String(target).endsWith(path.join('phases', '01-foo'));
+    const original = fs.readdirSync;
+    const runWithWriteBefore = (k) => {
+      const cwd = mkCwd();
+      t.after(() => cleanup(cwd));
+      const dir = buildHaltPhase(cwd);
+      writeHaltPlan(dir, '01-01-PLAN.md', ['wave: 1']);
+      let reads = 0;
+      const mocked = t.mock.method(fs, 'readdirSync', (target, ...rest) => {
+        if (isPhaseDirRead(target)) {
+          reads += 1;
+          if (reads === k) writeHaltSummary(dir, '01-01-SUMMARY.md', ['status: halted']);
+        }
+        return original.call(fs, target, ...rest);
+      });
+      const result = buildPlanningInspect(cwd);
+      mocked.mock.restore();
+      const [phase] = result.phases;
+      return {
+        reads,
+        counts: [phase.summary_count, phase.halted_count],
+        progress: [result.progress.completed_plans.completed, result.progress.halted_plans.completed],
+      };
+    };
+
+    const { reads } = runWithWriteBefore(0);
+    assert.ok(reads > 1, `the phase directory is read ${reads} time(s)`);
+    const outcomes = [];
+    for (let k = 1; k <= reads; k++) {
+      const run = runWithWriteBefore(k);
+      assert.ok(run.counts[1] <= run.counts[0], `write before read ${k}: halted_count ${run.counts[1]} > summary_count ${run.counts[0]}`);
+      assert.ok(run.progress[1] <= run.progress[0], `write before read ${k}: halted_plans ${run.progress[1]} > completed_plans ${run.progress[0]}`);
+      outcomes.push(run.counts.join('/'));
+    }
+    // Written before the first read, the SUMMARY is seen as both a completion record and a halt.
+    assert.strictEqual(outcomes[0], '1/1');
+  });
+
+  test('halted_count stays within summary_count when a blocked SUMMARY is rewritten as halted between two reads of it', (t) => {
+    // The SUMMARY starts at `status: blocked` and is rewritten as `status: halted` just before the k-th time it is
+    // opened, for each k up to the number of opens one run makes.
+    const isSummaryOpen = (target) => String(target).endsWith(path.join('01-foo', '01-01-SUMMARY.md'));
+    const original = fs.openSync;
+    const runWithRewriteBefore = (k) => {
+      const cwd = mkCwd();
+      t.after(() => cleanup(cwd));
+      const dir = buildHaltPhase(cwd);
+      writeHaltPlan(dir, '01-01-PLAN.md', ['wave: 1']);
+      writeHaltSummary(dir, '01-01-SUMMARY.md', ['status: blocked']);
+      let opens = 0;
+      const mocked = t.mock.method(fs, 'openSync', (target, ...rest) => {
+        if (isSummaryOpen(target)) {
+          opens += 1;
+          if (opens === k) writeHaltSummary(dir, '01-01-SUMMARY.md', ['status: halted']);
+        }
+        return original.call(fs, target, ...rest);
+      });
+      const result = buildPlanningInspect(cwd);
+      mocked.mock.restore();
+      const [phase] = result.phases;
+      return { opens, counts: [phase.summary_count, phase.halted_count] };
+    };
+
+    const { opens, counts: untouched } = runWithRewriteBefore(0);
+    assert.ok(opens > 1, `the SUMMARY is opened ${opens} time(s)`);
+    // A blocked SUMMARY is not a completion record.
+    assert.deepStrictEqual(untouched, [0, 0]);
+    const outcomes = [];
+    for (let k = 1; k <= opens; k++) {
+      const run = runWithRewriteBefore(k);
+      assert.ok(run.counts[1] <= run.counts[0], `rewrite before open ${k}: halted_count ${run.counts[1]} > summary_count ${run.counts[0]}`);
+      outcomes.push(run.counts.join('/'));
+    }
+    // Rewritten before the first open, the SUMMARY is seen as both a completion record and a halt.
+    assert.strictEqual(outcomes[0], '1/1');
+  });
 });
