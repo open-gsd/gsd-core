@@ -85,22 +85,75 @@ function commOf(pid) {
   return r.outcome === OUTCOME.EXITED && r.exitCode === 0 ? r.stdout.trim() : '';
 }
 
+/** `{ pid, args }` for every live process; null on win32; throws on POSIX when the table cannot be read. */
+function liveProcessEntries() {
+  if (process.platform === 'win32') return null;
+  if (fs.existsSync(`${PROC_ROOT}/self/cmdline`)) {
+    const out = [];
+    for (const name of fs.readdirSync(PROC_ROOT)) {
+      if (!/^\d+$/.test(name)) continue;
+      try {
+        const args = fs.readFileSync(`${PROC_ROOT}/${name}/cmdline`, 'utf8').split(String.fromCharCode(0)).join(' ').trim();
+        out.push({ pid: Number.parseInt(name, 10), args });
+      } catch {
+        // gone
+      }
+    }
+    return out;
+  }
+  const r = runHook('-A', ['-o', 'pid=,args='], { interpreter: 'ps', timeoutMs: PROBE_TIMEOUT_MS });
+  if (r.outcome !== OUTCOME.EXITED || r.exitCode !== 0) {
+    throw new Error(`stall-leftovers: \`ps -A -o pid=,args=\` could not be read (${r.summary}); the stall cleanup cannot run`);
+  }
+  const out = [];
+  for (const line of splitLines(r.stdout)) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m) out.push({ pid: Number.parseInt(m[1], 10), args: m[2].trim() });
+  }
+  return out;
+}
+
+function terminate(pid) {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // already gone
+  }
+}
+
+/** Let a just-started process reach its `exec` between two process-table reads: a child `sleep`, no timer API. */
+function settle(seconds) {
+  runHook(String(seconds), [], { interpreter: 'sleep', timeoutMs: PROBE_TIMEOUT_MS });
+}
+
 /**
  * Terminate each pid a stall wrote into `pidFile` (one per line) that is still a `sleep`. The `comm` check
  * guards against pid reuse: a recorded pid that has exited and been handed to an unrelated process is left alone.
+ *
+ * With `marker` (the stall's unique command line, e.g. `sleep 12.0864`) it then also ends every live `sleep`
+ * whose command line is exactly that marker, until three consecutive reads find none. The hook records its pid
+ * when git starts it, which can be after the bound fired and the call returned, on a loaded host: that stall
+ * is not in the file yet when it is read above, and would otherwise run out its full duration as a leftover.
  */
-function killRecordedStalls(pidFile) {
-  if (!fs.existsSync(pidFile)) return;
-  for (const line of splitLines(fs.readFileSync(pidFile, 'utf8'))) {
-    const pid = Number.parseInt(line, 10);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    if (/(^|\/)sleep$/.test(commOf(pid))) {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        // already gone
-      }
+function killRecordedStalls(pidFile, marker) {
+  if (fs.existsSync(pidFile)) {
+    for (const line of splitLines(fs.readFileSync(pidFile, 'utf8'))) {
+      const pid = Number.parseInt(line, 10);
+      if (!Number.isInteger(pid) || pid <= 0) continue;
+      if (/(^|\/)sleep$/.test(commOf(pid))) terminate(pid);
     }
+  }
+  if (marker === undefined) return;
+  const rounds = 20;
+  const quietRounds = 3;
+  let quiet = 0;
+  for (let i = 0; i < rounds && quiet < quietRounds; i += 1) {
+    const entries = liveProcessEntries();
+    if (entries === null) return;
+    const found = entries.filter((e) => e.args === marker && /(^|\/)sleep$/.test(commOf(e.pid)));
+    for (const e of found) terminate(e.pid);
+    quiet = found.length === 0 ? quiet + 1 : 0;
+    settle(0.05);
   }
 }
 

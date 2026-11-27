@@ -539,7 +539,7 @@ const SHIPPED = [
   'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
   'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
   'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
-  'quick-batch-mode-gates',
+  'quick-batch-mode-gates', 'advisor-prefilter',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -579,6 +579,10 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/workflows/quick-batch/steps/verification-wave.md', 'gsd-core/workflows/quick-batch/steps/research-phase.md',
     // agent-skills-awareness (#4649): the 21 canonical agents, their 15 compact variants and the shared reference.
     ...PROJECT_SKILLS.DISCOVERY_FILES, PROJECT_SKILLS.REFERENCE,
+    // advisor-prefilter (#4795): the fragment and the two workflows that deliver it.
+    'capabilities/advisor-prefilter/fragments/advisor-prefilter.md', 'gsd-core/workflows/verify-work.md', 'gsd-core/workflows/ship.md',
+    // the spawn-prompt files whose project-skills lines must state the same scoped read (#5248).
+    ...PROJECT_SKILLS.SPAWN_PROMPT_FILES,
   ];
 
   function copyOfRepoFiles(t) {
@@ -674,6 +678,30 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       assert.notEqual(after, before, 'the edit changed the file');
       fs.writeFileSync(abs, after);
       assert.deepEqual(runShipped(root), []);
+    });
+  }
+
+  // advisor-prefilter (#4795): the fragment's contract and the two dispatch lines that deliver it.
+  for (const [title, rel, phrase, expected] of [
+    ['the silent no-op clause gone from the fragment', 'capabilities/advisor-prefilter/fragments/advisor-prefilter.md',
+      'no-op', /must declare a silent no-op/],
+    ['the never-blocks statement gone from the fragment', 'capabilities/advisor-prefilter/fragments/advisor-prefilter.md',
+      'never blocks', /must state it never blocks/],
+    ['a reviewer no longer named as unchanged in the fragment', 'capabilities/advisor-prefilter/fragments/advisor-prefilter.md',
+      'gsd-security-auditor', /must name gsd-security-auditor as unchanged/],
+    ['the verify:post contribution dispatch line gone from verify-work.md', 'gsd-core/workflows/verify-work.md',
+      '**Contribution dispatch:** inject every `kind == "contribution"` fragment from `VERIFY_POST_HOOKS_JSON`', /verify-work\.md must dispatch contributions at verify:post/],
+    ['the ship:pre contribution dispatch line gone from ship.md', 'gsd-core/workflows/ship.md',
+      '**Contribution dispatch:** inject every `kind == "contribution"` fragment from `SHIP_PRE_HOOKS_JSON`', /ship\.md must dispatch contributions at ship:pre/],
+  ]) {
+    test(`mutation: ${title} fails advisor-prefilter`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      assert.ok(before.includes(phrase), 'the phrase is present to start with');
+      fs.writeFileSync(abs, before.split(phrase).join(''));
+      const findings = runShipped(root, ['advisor-prefilter']);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
     });
   }
 

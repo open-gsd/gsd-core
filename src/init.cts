@@ -4847,6 +4847,21 @@ interface SkillManifest {
   };
 }
 
+/**
+ * A directory entry that is a directory, or a symlink that resolves to one (#6719): a skill pack
+ * installed through a link is still a skill directory. A dangling link or a link to a file is not,
+ * and is skipped rather than thrown on.
+ */
+function isDirectoryEntry(parent: string, entry: fs.Dirent): boolean {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return fs.statSync(path.join(parent, entry.name)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function buildSkillManifest(cwd: string, skillsDir: string | null = null): SkillManifest {
   interface CanonicalRoot {
     root: string;
@@ -5034,7 +5049,8 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
 
     let skillCount = 0;
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // #6719: a skill installed through a directory symlink is a skill directory too.
+      if (!isDirectoryEntry(rootPath, entry)) continue;
 
       const skillMdPath = path.join(rootPath, entry.name, 'SKILL.md');
       const content = capabilityLedger.readSkillFile(skillMdPath);
