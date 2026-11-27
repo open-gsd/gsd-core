@@ -3,7 +3,7 @@ Execute a phase prompt (PLAN.md) and create the outcome summary (SUMMARY.md).
 </purpose>
 
 <required_reading>
-Read STATE.md before any operation to load project context.
+Load project state with `init_context`'s STATE.md section reads.
 Read config.json for planning behavior settings.
 
 @~/.claude/gsd-core/references/git-integration.md
@@ -59,6 +59,9 @@ Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
 If `.planning/` missing: error.
+
+Then, in this shell:
+@~/.claude/gsd-core/references/executor-state-sections.md
 </step>
 
 <step name="identify_plan">
@@ -230,7 +233,7 @@ If previous SUMMARY has unresolved "Issues Encountered" or "Next Phase Readiness
 <step name="execute">
 Deviations are normal — handle via rules below.
 
-1. Read @context files from prompt
+1. Read @context files from prompt; a STATE.md `@`-reference is covered by the #6388 section reads
 2. **MCP tools:** If CLAUDE.md or project instructions reference MCP tools (e.g. jCodeMunch for code navigation), prefer them over Grep/Glob when available. Fall back to Grep/Glob if MCP tools are not accessible.
 3. Per task:
    - **Task-content resolution:** If this task is NOT `type="checkpoint:*"` AND it carries a `tracker-id` attribute, run `gsd_run task resolve-content --plan "<plan path>" --task-id "<tracker-id>" --raw` BEFORE anything else for this task — before the read_first gate below, since read_first is itself a field this call can resolve. A `type="checkpoint:*"` task NEVER enters this resolution, regardless of whether it carries a `tracker-id` attribute — its interactive structure always stays sourced from PLAN.md (ADR-3646 Decision 1); see the `type="checkpoint:*"` bullet below. A **non-zero exit is a HARD HALT**: surface the tracker-id, the tracker prefix, and the command's stderr, and STOP — do NOT proceed to read this task's inline PLAN.md content as a fallback (that defeats the point of the seam: see ADR-3646). On exit 0 with `resolved: true`, the returned `content` object SUPERSEDES this task's `<read_first>`/`<action>`/`<verify>`/`<acceptance_criteria>`/`<done>` for every remaining bullet in this step — every gate below reads from the resolved content instead of PLAN.md. On exit 0 with `resolved: false` (for any `reason`), proceed exactly as today and read the task's inline PLAN.md content. A task with no `tracker-id` attribute, or a checkpoint task, is unaffected — this step is unconditional but resolves to a no-op instantly for the common case.

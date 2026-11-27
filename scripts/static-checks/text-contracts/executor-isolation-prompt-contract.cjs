@@ -1,14 +1,15 @@
 'use strict';
 
-// The orchestrator-worktree process spawn carries the gsd-executor identity and execution contract (#3637): the
-// single `text` fence of executor-isolation-dispatch.md is the prompt template, with the required-reading contract
-// (plan path, scope-resolved placeholders, no root .planning/ literals), the execution-context embeds, the
-// gitignored-skip success path that forbids `git add -f`, the role definition and prior-wave summaries, and the
-// persona. Also (#5531) the substitution instruction names every placeholder a fenced block uses, the template
-// sits in no bash block, it carries the two guard markers, the conditional embed line is replaced whole, and the
-// wave name shape matches execute-phase.md; (#5934) quick-batch gives every substituted placeholder a value or a
-// stated not-applicable. Was tests/executor-isolation-prompt-contract.test.cjs. It uses the same helpers as the
-// test (the fenced-block scanner, substitutePlaceholders). The bare "created AND committed" probe is a line walk.
+// The orchestrator-worktree process spawn carries the gsd-executor identity and execution contract (#3637): the single
+// `text` fence of executor-isolation-dispatch.md is the prompt template, with the required-reading contract (plan path,
+// scope-resolved placeholders, no root .planning/ literals, and since #6388 no STATE.md: the executor loads only the
+// STATE.md sections it uses), the execution-context embeds, the gitignored-skip success path that forbids `git add -f`,
+// the role definition and prior-wave summaries, and the persona. Also (#5531) the substitution instruction names every
+// placeholder a fenced block uses, the template sits in no bash block, it carries the two guard markers, the
+// conditional embed line is replaced whole, and the wave name shape matches execute-phase.md; (#5934) quick-batch gives
+// every substituted placeholder a value or a stated not-applicable. Was
+// tests/executor-isolation-prompt-contract.test.cjs. It uses the same helpers as the test (the fenced-block scanner,
+// substitutePlaceholders). The bare "created AND committed" probe is a line walk.
 
 const path = require('node:path');
 
@@ -84,6 +85,15 @@ const onBody = (check) => (text) => {
 
 const has = (pattern, miss) => onBody((body) => pattern.test(body) || miss);
 
+// The template's <required_reading> block, from its opening tag to its closing tag (or the end of the template when
+// it never closes), or '' when the template has none (the required-reading check reports that).
+function requiredReading(body) {
+  const open = body.indexOf('<required_reading>');
+  if (open === -1) return '';
+  const close = body.indexOf('</required_reading>', open);
+  return close === -1 ? body.slice(open) : body.slice(open, close);
+}
+
 // Every occurrence of the unconditional criterion must be followed, on its line, by OR.
 function bareCreatedAndCommitted(body) {
   for (const line of body.split('\n')) {
@@ -132,7 +142,11 @@ module.exports = {
       .satisfies(has(/<required_reading>/, 'no <required_reading>'), 'the prompt must carry the required-reading contract')
       .satisfies(has(/\{phase_dir\}\/\{plan_file\}/, 'no {phase_dir}/{plan_file}'), 'the prompt must name the explicit plan path')
       .satisfies(has(/\{project_rel\}/, 'no {project_rel}'), 'project context is required reading')
-      .satisfies(has(/\{state_rel\}/, 'no {state_rel}'), 'state is required reading')
+      .satisfies(onBody((body) => {
+        const reading = requiredReading(body);
+        return !reading || !/\{state_rel\}|STATE\.md/.test(reading) || 'STATE.md is named in <required_reading>';
+      }), 'state is not required reading (#6388)')
+      .satisfies(onBody((body) => !body.includes('{state_rel}') || 'a {state_rel} placeholder is present'), 'no {state_rel} placeholder is left to substitute (#6388)')
       .satisfies(has(/\{config_rel\}/, 'no {config_rel}'), 'config is required reading')
       .satisfies(onBody((body) => !/\.planning\/(?:PROJECT|STATE)\.md|\.planning\/config\.json/.test(body) || 'a root .planning/ literal is present'), 'no root .planning/ literal in required reading')
       .satisfies(has(/<execution_context>/, 'no <execution_context>'), 'the prompt must carry an execution_context block')

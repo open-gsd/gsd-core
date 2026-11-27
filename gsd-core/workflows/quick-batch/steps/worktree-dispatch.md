@@ -100,7 +100,6 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
 
    <required_reading>
    - ${ITEM_DIR}/${quick_id}-PLAN.md (Plan)
-   - ${STATE_PATH} (Project state — READ ONLY, do not write it)
    - ./CLAUDE.md or ./.claude/CLAUDE.md (if exists)
    </required_reading>
 
@@ -145,7 +144,7 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
      `{plan_file}` = `${quick_id}-PLAN.md`.
    - `{plan_padded}` = `${quick_id}`, so the worker-record summary path is
      `${ITEM_DIR}/${quick_id}-SUMMARY.md`.
-   - `{project_rel}` = `${SCOPE_REL}/PROJECT.md`; `{state_rel}` = `${SCOPE_REL}/STATE.md`;
+   - `{project_rel}` = `${SCOPE_REL}/PROJECT.md`;
      `{config_rel}` = `${SCOPE_REL}/config.json`. `SCOPE_REL="${PLANNING_ROOT#"${PROJECT_ROOT}"/}"`, with
      `PLANNING_ROOT` from `gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root`.
    - `{phase_number}`, `{phase_name}` and `{plan_id}` are not applicable. The

@@ -84,18 +84,16 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `plans`, `incomplete_plans`.
 
-Also load planning state (position, decisions, blockers) via the SDK — **use `node` to invoke the CLI** (not `npx`):
-```bash
-gsd_run query state.load 2>/dev/null
-```
-If STATE.md missing but .planning/ exists: offer to reconstruct or continue without.
-If .planning/ missing: Error — project not initialized.
+Also load planning state, only the STATE.md sections execution uses (#6388):
+@~/.claude/gsd-core/references/executor-state-sections.md
 </step>
 
 <step name="load_plan">
 Read the plan file provided in your prompt context.
 
 Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective, context (@-references), tasks with types, verification/success criteria, output spec.
+
+A STATE.md `@`-reference is covered by the #6388 section reads.
 
 **If plan references CONTEXT.md:** Honor user's vision throughout execution.
 </step>

@@ -237,6 +237,8 @@ Updated after each plan completion.
 
 **Blockers/Concerns** — issues affecting future work, prefixed with the originating phase. Added via `gsd-tools state add-blocker`; resolved via `gsd-tools state resolve-blocker`.
 
+**What a plan executor reads (#6388).** Plan execution — the `gsd-executor` agent and inline execution through `execute-plan.md` — does not load the whole file. Through the shared block in `gsd-core/references/executor-state-sections.md` it reads three sections with `gsd-tools query state.get <name> --raw`, each taking the first name that returns text: `Current Position`; `Decisions`, then `Decisions Made`; `Blockers/Concerns`, then `Blockers` (the heading `state add-blocker` creates when none exists), then `Concerns`. Quick-task history, Performance Metrics and the other sections stay out of its context, however large they grow. `state.get` matches a heading of level 2 or deeper and stops at the next heading of level 2 or deeper, and it checks for a `**Name:**` or `Name:` field line before it looks for a heading — so a stray `Blockers:` line anywhere in the file is returned instead of a `### Blockers` section. A writer-accepted `### Accumulated … Decisions` heading cannot be named this way; when no decisions section is found, the executor falls back to reading STATE.md for its decisions section. It also reads the whole file when a task's `<read_first>` or action names STATE.md, or names another section. The reads resolve the project and workstream exactly as `state.load` does, and `state.load`'s own output is unchanged.
+
 ### Session Continuity
 
 Enables instant session resumption:

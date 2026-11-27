@@ -161,7 +161,7 @@ Every entry with `needsReconciliation: true` (recorded running, process gone) is
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
-**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}`, `{plan_padded}`, `{plan_id}`, `{phase_name}`, `{project_rel}`, `{state_rel}`, `{config_rel}`, `{prior_wave_summaries}` and `{worker_note}` wherever a bash block or the prompt template uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
+**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}`, `{plan_padded}`, `{plan_id}`, `{phase_name}`, `{project_rel}`, `{config_rel}`, `{prior_wave_summaries}` and `{worker_note}` wherever a bash block or the prompt template uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
 
 First build the executor prompt. It is the **same prompt text the harness path's `Agent()` call uses** — same executor identity, same execution context, same required-reading contract — with only the harness-only framing removed: drop the `<worktree_branch_check>` build-time embed note (this backend pins the base itself via `worktree create --base` and verifies it at merge) and the `<parallel_execution>` harness block (its SUMMARY-commit semantics ride inside the embedded `execute-plan.md` worktree mode). Keep `<objective>`, `<execution_context>`, `<required_reading>`, `${AGENT_SKILLS}`, and `<success_criteria>` from the harness prompt — substituting the worktree-specific `<execution_context>` framing below. The checkpoint gate rule (#3370, in `per-plan-executor-routing.md`) applies here too: add no prompt text refusing or overriding auto-approval for the default `gate="blocking"` — only `blocking-human` always surfaces.
 
@@ -183,10 +183,10 @@ Create the prompt file for THIS plan; the block prints its path as `PROMPT_FILE=
 #      never a skip — a child without these texts is not a gsd-executor.
 #   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
 #      {phase_dir}, {plan_file}, {plan_id}, {plan_padded}, {project_rel},
-#      {state_rel}, and {config_rel} placeholders (same values the
-#      harness path substitutes into its Agent() prompt). {state_rel}, {config_rel} and
+#      and {config_rel} placeholders (same values the
+#      harness path substitutes into its Agent() prompt). {config_rel} and
 #      {project_rel} are the scope-resolved (flat root, GSD_PROJECT, or workstream) repo-relative
-#      paths: `${state_path#"${project_root}"/}` and `${config_path#"${project_root}"/}` from
+#      paths: `${config_path#"${project_root}"/}` from
 #      init.execute-phase, and `${project_path#"${project_root}"/}` with `init.resume --pick
 #      project_path`, so `${PROJECT_ROOT}/` never doubles an absolute path. {plan_id} is this
 #      plan's `id` field from the phase-plan-index JSON — the guard hooks
@@ -279,7 +279,6 @@ First resolve repo root so every path is anchored:
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan — THE plan you are executing)
 - ${PROJECT_ROOT}/{project_rel} (Project context — core value, requirements, evolution rules)
-- ${PROJECT_ROOT}/{state_rel} (State)
 - ${PROJECT_ROOT}/{config_rel} (Config, if exists)
 - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
 - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — read SKILL.md frontmatter; full file only if description fits or is missing; follow its rules)

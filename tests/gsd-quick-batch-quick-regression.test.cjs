@@ -135,6 +135,16 @@ function isQuickTaskTitleSweepLine(sign, body, addedBodies, removedBodies) {
   return false;
 }
 
+// #6388: plan execution loads only the STATE.md sections it uses, so STATE.md leaves the
+// executor's required reading in every spawn path — quick-batch's two dispatch branches and
+// ordinary quick's executor prompt alike. That is a change to the shared gsd-executor contract,
+// not #3676 quick-batch phase work. Carved out exactly: the removal of quick.md's executor line,
+// nothing else (the planner's `${STATE_PATH} (Project State)` line stays out of scope).
+const QUICK_EXECUTOR_STATE_6388_LINE = '- ${STATE_PATH} (Project state)';
+function isExecutorStateReadingSweepLine(sign, body) {
+  return sign === '-' && body === QUICK_EXECUTOR_STATE_6388_LINE;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -170,6 +180,7 @@ function editsBeyondSharedDirective(base, file) {
     if (isRenewHeldSweepLine(line[0], body, addedBodies, removedBodies)) return false;
     if (isScopedPlanningSweepLine(line[0], body, addedBodies)) return false;
     if (file === 'gsd-core/workflows/quick.md' && isQuickTaskTitleSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (file === 'gsd-core/workflows/quick.md' && isExecutorStateReadingSweepLine(line[0], body)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
@@ -291,6 +302,15 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     const [firstGuidance] = QUICK_TASK_TITLE_5830_LINES;
     assert.equal(isQuickTaskTitleSweepLine('-', firstGuidance, new Set(), new Set()), false);
     assert.equal(isQuickTaskTitleSweepLine('+', 'Spawn the executor with --validate', new Set(), new Set()), false);
+  });
+
+  test('positive control: the #6388 carve-out exempts only the removal of quick.md\'s executor STATE.md line', () => {
+    assert.equal(isExecutorStateReadingSweepLine('-', '- ${STATE_PATH} (Project state)'), true);
+    // The planner's line, a reworded line, the same text added, and unrelated lines are not exempted by it.
+    assert.equal(isExecutorStateReadingSweepLine('-', '- ${STATE_PATH} (Project State)'), false);
+    assert.equal(isExecutorStateReadingSweepLine('-', '- ${STATE_PATH} (Project state — READ ONLY)'), false);
+    assert.equal(isExecutorStateReadingSweepLine('+', '- ${STATE_PATH} (Project state)'), false);
+    assert.equal(isExecutorStateReadingSweepLine('-', '- ./CLAUDE.md or ./.claude/CLAUDE.md (Project instructions, if exists)'), false);
   });
 
   test('positive control: the #5118 allowance exempts exactly one path; every other quick path in the same branch shape still trips row 48', () => {

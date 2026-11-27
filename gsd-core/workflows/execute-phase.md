@@ -735,7 +735,6 @@ increases monotonically across waves. `{status}` is `complete` (success),
        \`PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)\`
        - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan)
        - ${PROJECT_ROOT}/{project_rel} (Project context — core value, requirements, evolution rules)
-       - ${PROJECT_ROOT}/{state_rel} (State)
        - ${PROJECT_ROOT}/{config_rel} (Config, if exists)
        ${CONTEXT_WINDOW >= 500000 ? `
        - ${PROJECT_ROOT}/${phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices)
