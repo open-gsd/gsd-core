@@ -330,10 +330,13 @@ function write(root) {
   if (!violations.length) for (const item of pending) {
     if (item.output === item.original) continue;
     const temp = `${item.absolute}.${process.pid}.tmp`;
+    let created = false;
     try {
-      fs.writeFileSync(temp, item.output, { flag: 'wx', mode: fs.statSync(item.absolute).mode });
+      const fd = fs.openSync(temp, 'wx', fs.statSync(item.absolute).mode);
+      created = true;
+      try { fs.writeFileSync(fd, item.output); } finally { fs.closeSync(fd); }
       fs.renameSync(temp, item.absolute);
-    } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+    } finally { if (created && fs.existsSync(temp)) fs.unlinkSync(temp); }
     changedFiles.push(item.file);
   }
   return { ...report(violations), changedFiles };
@@ -386,6 +389,21 @@ function historical(line) {
 }
 function checkEvidence(root) {
   const violations = [];
+  for (const file of [...EXCLUDED_USER_OUTPUT, ...EXCLUDED_ARTIFACTS, ...EXCLUDED_QUICK_FORWARDERS]) {
+    if (!fs.existsSync(path.join(root, file))) violations.push(violation(file, 1, 'missing_excluded_file'));
+  }
+  const ownerPath = path.join(root, 'gsd-core/bin/lib/phase-id-card.cjs');
+  const sources = fs.existsSync(ownerPath) ? require(ownerPath).PHASE_ID_PLACEHOLDER_SOURCES || [] : [];
+  const defined = new Set(sources.flatMap(rule => rule.placeholders));
+  // Content, count, model and status fields do not carry identity or paths.
+  const nonIdentity = new Set([
+    'phase_name', 'PHASE_NAME', 'plan_name', 'phase_goal', 'PHASE_GOAL', 'phase_count',
+    'completed_phases', 'total_plans', 'plan_count', 'wave_plan_count', 'milestone_name',
+    'queued_milestone_name', 'phase_relevant_terms', 'phase_req_ids', 'planner_model',
+    'DISK_PLANS', 'approach_from_plan', 'plan_requirements', 'PLANNING_TOTAL',
+    'PLANNING_DELETIONS', 'preserved_plan_revision_conflict_entries', 'PHASE_COMPLETE_BLOCKERS',
+    'PLAN_PRE_PRODUCTS', 'PLANNER_MODEL',
+  ]);
   const listed = new Set(TARGETS.map(target => target.file));
   // Walk independently: an added workflow/agent must not evade a pinned manifest.
   const candidates = [
@@ -416,6 +434,13 @@ function checkEvidence(root) {
       continue;
     }
     const text = fs.readFileSync(absolute, 'utf8').replace(/\r\n/g, '\n');
+    for (const match of text.matchAll(/(?<!\$)\{([A-Za-z_]+)\}/g)) {
+      const name = match[1];
+      if (/phase|plan|milestone/i.test(name) && !nonIdentity.has(name) && !defined.has(name)) {
+        const line = text.slice(0, match.index).split('\n').length;
+        violations.push(violation(file, line, 'undefined_identity_placeholder', name));
+      }
+    }
     const region = readRegion(text, CONVENTION, file);
     if (region.violation) { violations.push(region.violation); continue; }
     // Retain original line offsets. Strip only a validated region, never a greedy span.

@@ -57,6 +57,6 @@ Regenerate both regions with `npm run build:lib` followed by
 `node scripts/gen-phase-id-convention.cjs --write`; check with `--check`.
 
 The generator selects full agent definitions, phase-emitting workflow instructions,
-and seven core templates. Files whose text is user-facing command output are not
+and template instruction wrappers. Files whose text is user-facing command output are not
 targets: `help/modes/brief.md`, `default.md`, and `full.md` are explicitly excluded
 by the manifest and evidence gate. The generator owns the exact reviewed selection.

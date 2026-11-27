@@ -575,6 +575,36 @@ describe('installer migration install integration', { concurrency: false }, () =
     assert.equal(fs.existsSync(path.join(claudeHome, 'gsd-install-state.json')), false);
   });
 
+  test('throwing convention card write preserves finalized migrations', () => {
+    const claudeHome = path.join(tmpRoot, '.claude');
+    fs.mkdirSync(claudeHome, { recursive: true });
+    writeFile(claudeHome, 'hooks/statusline.js', 'legacy managed hook\n');
+    writeManifest(claudeHome, {
+      'hooks/statusline.js': sha256('legacy managed hook\n'),
+    });
+    const write = process.stderr.write;
+    let injected = false;
+    process.stderr.write = function (chunk, ...args) {
+      if (String(chunk).startsWith('Bracket phase-ID convention')) {
+        injected = true;
+        throw new Error('injected card write failure');
+      }
+      return write.call(this, chunk, ...args);
+    };
+    try {
+      captureConsole(() => withEnv('CLAUDE_CONFIG_DIR', claudeHome, () =>
+        withSdkDistPresent(() => installModule.installAllRuntimes(['claude'], true, false))));
+    } catch (error) {
+      assert.match(error.message, /injected card write failure/);
+    } finally {
+      process.stderr.write = write;
+    }
+    assert.equal(injected, true, 'fault injection must reach the card write');
+    assert.equal(fs.existsSync(path.join(claudeHome, 'hooks/statusline.js')), false,
+      'successful migration must not roll back after a card write failure');
+    assert.equal(fs.existsSync(path.join(claudeHome, 'gsd-install-state.json')), true);
+  });
+
   test('rolls back completed runtime migrations when a later runtime install fails', () => {
     const claudeHome = path.join(tmpRoot, '.claude');
     fs.mkdirSync(claudeHome, { recursive: true });

@@ -321,10 +321,10 @@ shadows global defaults, including when that project config is `{}`. Set custom
 naming in the effective project config rather than relying on a shadowed global
 default. A corrupt project config reports its parse failure instead.
 
-Phase convention guidance in 35 full agents, 101 phase-emitting workflows, and nine
-template instruction wrappers is generated from `src/phase-id-card.cts`. The nine
-wrappers include the seven core phase templates plus verification-report and user-setup. The generator pins its exact
-target set and checks both parity and convention prose outside generated regions.
+Phase convention guidance in full agents, phase-emitting workflows, and
+template instruction wrappers is generated from `src/phase-id-card.cts`. The
+wrappers include core phase templates, verification-report, and user-setup. The
+generator pins its exact target set and checks both parity and convention prose outside generated regions.
 After required completion writes succeed, an installer invocation displays one titled
 canonical card on stderr, including when installing all runtimes. See the [canonical convention reference](../gsd-core/references/phase-id-convention.md).
 Bracket remains opt-in; this guidance does not change new-project defaults or migrate
