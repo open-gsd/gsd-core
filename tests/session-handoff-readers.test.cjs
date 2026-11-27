@@ -115,9 +115,19 @@ describe('statusline: the per-session pause marker (#6797)', () => {
     assert.ok(!/paused/i.test(out), out);
   });
 
-  test('statuslineKeepsLegacyPausedAt: a STATE.md paused_at still shows PAUSED to every session', () => {
-    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE.replace('status: executing', 'status: executing\npaused_at: 2026-06-01'));
-    assert.ok(/paused/i.test(render({ sessionId: 'me' })));
+  test('statuslineKeepsLegacyPausedStatus: a STATE.md whose status is paused still reads paused to every session, with no handoff at all', () => {
+    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE.replace('status: executing', 'status: paused'));
+    for (const sessionId of ['me', 'someone-else']) {
+      assert.ok(/paused/i.test(render({ sessionId })), sessionId);
+      assert.ok(/PAUSED/.test(render({ sessionId }, 'compact')), sessionId);
+    }
+  });
+
+  test('statuslineNeverDoublesPaused: an own handoff on a state already saying paused prints it once', () => {
+    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE.replace('status: executing', 'status: paused'));
+    put('HANDOFF.me.json');
+    assert.equal((render({ sessionId: 'me' }).match(/paused/g) || []).length, 1);
+    assert.equal((render({ sessionId: 'me' }, 'compact').match(/PAUSED/g) || []).length, 1);
   });
 
   test('statuslineReadsRoleFromOwnRecord: a role that is not a slug in the record is ignored (role-less)', () => {
