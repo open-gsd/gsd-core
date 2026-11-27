@@ -8576,8 +8576,10 @@ describe('#5027: successful installer invocation displays one titled card', () =
       assert.ok(result.stdout.includes('Done!'), 'runtime onboarding remains reachable');
     });
   }
-  test('--all emits one titled card for the complete invocation', () => {
-    const result = invocation(['--all', '--global']);
+  // Two named runtimes exercise the same multi-runtime CLI path as --all without
+  // installing every runtime, which took over two minutes on Windows CI.
+  test('a multi-runtime invocation emits one titled card for the complete invocation', () => {
+    const result = invocation(['--claude', '--kimi', '--global']);
     assert.equal(result.exitCode, 0, result.stderr);
     assert.equal(result.stderr.split(card).length - 1, 1);
     assert.equal(result.stdout.includes('[GSD.02] 05.03-01'), false);
