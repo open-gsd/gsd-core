@@ -100,6 +100,16 @@ A role is free text and reaches workflow shell fences from the user (or a repo r
 - A third advisory primitive exists. Decision 6's table is the cost control for "which one do I use".
 - Docs owed by the implementation: `docs/features/session-management.md` (REQ-SESSION-01/02/06 describe the single `HANDOFF.json`), `docs/reference/state-md.md`, `docs/reference/planning-artifacts.md`, `docs/CLI-TOOLS.md`, a how-to for running two sessions with roles, and the i18n mirrors that reference `HANDOFF.json`.
 
+## Implementation phases
+
+The implementation of [#4845](https://github.com/open-gsd/gsd-core/issues/4845) is split so each decision lands in one reviewable PR:
+
+| Phase | Issue | Decisions it implements |
+|---|---|---|
+| 1 — session store, `state` verbs, shared parity case table | [#6796](https://github.com/open-gsd/gsd-core/issues/6796) | 2, 4, 5, 9 (store side) |
+| 2 — statusline, context-monitor, `smart-entry`, parity guard | [#6797](https://github.com/open-gsd/gsd-core/issues/6797) | 1 (readers), 7 |
+| 3 — `pause-work` / `resume-project` / `next` workflows, docs, ratification | [#6798](https://github.com/open-gsd/gsd-core/issues/6798) | 1 (writers), 3, 9 (workflow side), 8 |
+
 ## Rejected alternatives
 
 | Alternative | Why not |
