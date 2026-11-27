@@ -20,7 +20,7 @@ const { ExitError } = cliExitMod;
 import configLoader = require('./config-loader.cjs');
 const {
   CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, FLAT_WRITTEN_TWIN_KEYS, resolvePlannerStallDetectionEnabled,
-  _getGlobalTwinValue, _getConfigNested,
+  _getGlobalTwinValue, _getConfigNested, isUnreadGlobalDefault,
 } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -991,6 +991,14 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
         error(`Invalid settings for config-save-defaults: "${spelling}" must be a ${want}, got ${shown}.`, ERROR_REASON.USAGE);
       }
     }
+  }
+  // The loader reads a `parallelization` that is neither a boolean nor an object
+  // as no setting, so saving one would report a save that sets nothing. A null
+  // still clears the key.
+  const parallelization = readPath(patch, 'parallelization');
+  if (parallelization !== null && isUnreadGlobalDefault('parallelization', parallelization)) {
+    const shown = typeof parallelization === 'number' ? String(parallelization) : JSON.stringify(parallelization);
+    error(`Invalid settings for config-save-defaults: "parallelization" must be a boolean or an object, got ${shown}.`, ERROR_REASON.USAGE);
   }
 
   const gsdDir = path.join(resolveGsdHome(), '.gsd');

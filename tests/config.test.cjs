@@ -5298,6 +5298,30 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
       { model_profile: 'quality', planning: { commit_docs: false, search_gitignored: true } });
   });
 
+  // The loader reads a parallelization that is neither a boolean nor an object
+  // as no setting, so the save refuses one rather than report it saved.
+  for (const bad of ['"false"', '"yes"', '0']) {
+    test(`parallelization given ${bad} is a usage error and the store is left byte-identical`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      const result = run([`{"parallelization":${bad}}`]);
+      assertRefused(result, 'usage');
+      assert.ok(JSON.parse(result.error).message.includes(`"parallelization" must be a boolean or an object, got ${bad}.`), result.error);
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
+
+  test('a boolean or object parallelization is saved, and a null clears it', (t) => {
+    const { defaultsPath, run } = storeWith(t, BEFORE);
+    const stored = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')).parallelization;
+    for (const value of [false, true, { enabled: false }]) {
+      const result = run([JSON.stringify({ parallelization: value })]);
+      assert.ok(result.success, result.error);
+      assert.deepStrictEqual(stored(), value);
+    }
+    assert.ok(run(['{"parallelization":null}']).success);
+    assert.strictEqual(stored(), undefined);
+  });
+
   for (const args of [[], ['{}', '{}']]) {
     test(`${args.length} positionals is a usage error`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);
