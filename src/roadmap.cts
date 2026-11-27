@@ -35,7 +35,7 @@ const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestone
 
 /** Every phase-list entry line, any phase: the rows between two of them belong to the first. */
 const ANY_PHASE_ENTRY_LINE = phaseEntryRegExp('Phase[ \\t][^\\r\\n]*$', 'gi');
-import { tokenizeHeadings, iterateBullets, stripFencedCode, updateBullet } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, iterateBullets, stripFencedCode, updateBullet, scanFencedBlocks } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
 import { normalizeMilestoneToken, editRoadmapProgress } from './roadmap-progress.cjs';
@@ -1338,83 +1338,110 @@ function editProgressTableSlice(content: string, edit: (scoped: string) => strin
   return editRoadmapProgress(content, (scoped) => editFromPhaseTable(scoped, edit), { active });
 }
 
-/**
- * #6171: order two plan ids (`12-9` before `12-10`, `5-01` before `5-01.5`). Ids split on `-` and `.`;
- * numeric segments compare as numbers, numeric before non-numeric, and a prefix sorts first.
- */
-function comparePlanIds(a: string, b: string): number {
-  const sa = a.split(/[-.]/);
-  const sb = b.split(/[-.]/);
-  for (let i = 0; i < Math.min(sa.length, sb.length); i++) {
-    const na = /^\d+$/.test(sa[i]);
-    const nb = /^\d+$/.test(sb[i]);
-    if (na && nb) {
-      const d = Number(sa[i]) - Number(sb[i]);
-      if (d !== 0) return d < 0 ? -1 : 1;
-    } else if (na !== nb) {
-      return na ? -1 : 1;
-    } else if (sa[i] !== sb[i]) {
-      return sa[i] < sb[i] ? -1 : 1;
-    }
-  }
-  return Math.sign(sa.length - sb.length);
+/** Compare two digit runs by value, with no `Number()` (so no precision limit): longer after zero-stripping is larger. */
+function compareDigitRuns(a: string, b: string): number {
+  const x = a.replace(/^0+(?=\d)/, '');
+  const y = b.replace(/^0+(?=\d)/, '');
+  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  return x < y ? -1 : x > y ? 1 : 0;
 }
 
-// The `- [ ] TBD (run <plan-phase command> <phase> to break down)` row `phase add` / `phase insert`
-// write. The command token is runtime-specific (`/gsd-plan-phase`, `$gsd-plan-phase`, ...), so any
-// single token is accepted.
-const PLAN_LIST_STUB_RE = /^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]+TBD[ \t]*\(run[ \t]+\S+[ \t]+\S+[ \t]+to break down\)[ \t]*\r?$/i;
-const PLAN_LIST_ROW_RE = /^[ \t]*[-*+][ \t]+\[[ xX]\][ \t]*(?:\*\*)?(\d[\w.-]*)/;
+/**
+ * #6171: natural order of two plan ids. An id is cut into digit runs and non-digit runs; digit runs compare by value
+ * (`12-9` before `12-10`, `01` and `1` tie), non-digit runs as lower-cased text, a digit run before a non-digit one,
+ * and a prefix before its extensions (`01` < `01.5` < `01A`, `01A` < `01A.2`). Letter-suffixed (`12-01A`), dotted
+ * (`12-01.5`) and custom (`SETUP-2-01`) ids all order the same way, with no assumption about the phase prefix.
+ */
+function comparePlanIds(a: string, b: string): number {
+  const x = a.match(/\d+|\D+/g) ?? [];
+  const y = b.match(/\d+|\D+/g) ?? [];
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const digitX = /^\d/.test(x[i]);
+    if (digitX !== /^\d/.test(y[i])) return digitX ? -1 : 1;
+    const d = digitX ? compareDigitRuns(x[i], y[i]) : x[i].toLowerCase() < y[i].toLowerCase() ? -1 : x[i].toLowerCase() > y[i].toLowerCase() ? 1 : 0;
+    if (d !== 0) return d;
+  }
+  return Math.sign(x.length - y.length);
+}
+
+// A `**Wave N**` group header the dependency annotator writes (`**Wave 2** *(blocked on Wave 1 completion)*`), or a
+// hand-written one (`**Wave 1: Name**`, `Wave 1:`): it sits inside the plan list and does not end it.
+const PLAN_LIST_WAVE_HEADER_RE = /^\*{0,2}Wave\s+\d+\b/i;
 
 /**
- * #6171: merge the missing plan files' checklist rows into the plan list that follows a `Plans:` anchor.
- * `tail` is the text after the anchor line's last character (so `tail[0]` is the anchor's newline).
- * Each row goes before the first existing row whose plan id sorts after it, else after the last row;
- * blank lines and indented detail lines stay where they were. The `TBD ... to break down` stub is dropped.
- * A list with no recognizable row takes the rows at the stub's position, else directly under the anchor.
+ * #6171: merge plan rows into the plan list that follows a `Plans:` anchor, and drop the `TBD ... to break down` stub
+ * once the list holds a real row. `tail` is the text after the anchor line's last character (`tail[0]` is the anchor's
+ * newline); `missingPlanFiles` may be empty (then only the stub is dropped); `listedPlans` are the ids of the
+ * phase's PLAN files with the regex `planRowPattern` builds for each, so a row is "real" by the same test that
+ * decided which plans were missing: a `-` checkbox row naming one of this phase's plans, never a fenced line, a
+ * `*` bullet, or an unrelated checkbox (`- [ ] 2026-11-21 release`). Each missing row goes before the first existing
+ * row whose id sorts after it, else after the last row (and that row's indented detail lines); a loose list
+ * (blank lines between rows) keeps its blank-line separators, and rows are written in the list's own line ending
+ * (`cr`). The list ends at a heading or prose line, not at a Wave header or an indented detail line.
+ * A list with no real row (only the stub, or unrelated checkboxes) takes the rows at the stub's position, else
+ * directly under the anchor, in plan-id order.
  */
-function mergePlanRows(tail: string, missingPlanFiles: string[]): string {
+function mergePlanRows(
+  tail: string,
+  missingPlanFiles: string[],
+  listedPlans: Array<{ id: string; row: RegExp }>,
+  cr: string,
+): string {
   const lines = tail.split('\n'); // lines[0] is the (empty) remainder of the anchor line
-  // The list region: blank lines, indented lines, bullets and `**Wave N**` headers, up to a heading or prose.
+  const fenced = new Set<number>();
+  for (const block of scanFencedBlocks(lines)) {
+    for (let i = block.openLineIdx; i <= (block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx); i++) fenced.add(i);
+  }
   let regionEnd = 1;
   for (let i = 1; i < lines.length; i++) {
     const l = lines[i];
     if (l.trim() === '') continue;
-    if (/^#{1,6}\s/.test(l)) break;
-    if (/^[ \t]/.test(l) || /^[-*+][ \t]/.test(l) || /^\*\*Wave\s+\d+\*\*/i.test(l)) { regionEnd = i + 1; continue; }
+    if (!fenced.has(i) && /^#{1,6}\s/.test(l)) break;
+    if (fenced.has(i) || /^[ \t]/.test(l) || /^[-*+][ \t]/.test(l) || PLAN_LIST_WAVE_HEADER_RE.test(l)) { regionEnd = i + 1; continue; }
     break;
   }
   const stubs = new Set<number>();
   const real: Array<{ index: number; id: string }> = [];
   for (let i = 1; i < regionEnd; i++) {
-    if (PLAN_LIST_STUB_RE.test(lines[i])) { stubs.add(i); continue; }
-    const m = PLAN_LIST_ROW_RE.exec(lines[i]);
-    if (m) real.push({ index: i, id: m[1].replace(/(?:-PLAN)?\.md$/i, '').replace(/[.-]+$/, '') });
+    if (fenced.has(i)) continue;
+    if (coreUtils.isPlanListStubRow(lines[i])) { stubs.add(i); continue; }
+    const plan = listedPlans.find((p) => p.row.test(lines[i]));
+    if (plan) real.push({ index: i, id: plan.id });
   }
   const incoming = missingPlanFiles
-    .map((file) => ({ id: file.replace(/-PLAN\.md$/i, ''), row: `- [ ] ${file}` }))
+    .map((file) => ({ id: file.replace(/-PLAN\.md$/i, ''), file }))
     .sort((a, b) => comparePlanIds(a.id, b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // A list that is loose (a blank line between two of its rows) gets a blank line between the rows it receives too.
+  const loose = real.some((r, k) => k > 0 && lines.slice(real[k - 1].index + 1, r.index).some((l) => l.trim() === ''));
+  const rowLine = (file: string): string => `- [ ] ${file}${cr}`;
   const before = new Map<number, string[]>();
   const after: string[] = [];
   let afterIndex = 0;
   if (real.length === 0) {
-    const at = stubs.size > 0 ? Math.min(...stubs) : 1;
-    before.set(at, incoming.map((r) => r.row));
+    before.set(stubs.size > 0 ? Math.min(...stubs) : 1, incoming.map((r) => rowLine(r.file)));
   } else {
     // The last row's block includes its indented detail lines.
     afterIndex = real[real.length - 1].index;
     while (afterIndex + 1 < regionEnd && /^[ \t]+\S/.test(lines[afterIndex + 1])) afterIndex++;
     for (const r of incoming) {
       const next = real.find((e) => comparePlanIds(e.id, r.id) > 0);
-      if (next) before.set(next.index, [...(before.get(next.index) ?? []), r.row]);
-      else after.push(r.row);
+      if (next) before.set(next.index, [...(before.get(next.index) ?? []), rowLine(r.file)]);
+      else after.push(rowLine(r.file));
     }
   }
+  const dropStubs = real.length > 0 || incoming.length > 0;
+  const skip = new Set<number>();
   const out: string[] = [];
   lines.forEach((l, i) => {
-    out.push(...(before.get(i) ?? []));
-    if (!stubs.has(i)) out.push(l);
-    if (i === afterIndex && after.length > 0) out.push(...after);
+    const rows = before.get(i) ?? [];
+    out.push(...(loose ? rows.flatMap((r) => [r, cr]) : rows));
+    if (stubs.has(i) && dropStubs) {
+      // A dropped stub that sat between two blank lines takes one of them, unless rows now sit where it was.
+      if (rows.length === 0 && lines[i - 1]?.trim() === '' && lines[i + 1]?.trim() === '') skip.add(i + 1);
+    } else if (!skip.has(i)) {
+      out.push(l);
+    }
+    if (i === afterIndex && after.length > 0) out.push(...(loose ? after.flatMap((r) => [cr, r]) : after));
   });
   // Rows aimed past the last line (anchor at the end of the text) land at the end.
   out.push(...(before.get(lines.length) ?? []));
@@ -2012,47 +2039,48 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       return !coreUtils.planRowPattern(stem, { anyState: true }).test(presentRows) && !(located && hasUnownedAny(planFile, stem));
     });
 
-    if (missingPlans.length > 0) {
-      // Insert missing plan checklist rows (#1163).  We prefer to anchor to the
-      // bare `Plans:` checklist header (canonical template form) and fall back to
-      // the bold `**Plans**:`/`**Plans:**` summary line only when no bare header
-      // is present.  Using two separate patterns avoids the lazy-quantifier trap
-      // where a single alternation would stop at the first matching alternative
-      // (the bold summary) before reaching the checklist header.
-      //
-      // Canonical template (gsd-core/templates/roadmap.md) uses BOTH lines:
-      //   **Plans**: N plans   ← summary (colon outside bold)
-      //   Plans:               ← checklist header (PREFERRED insertion anchor)
-      // Rows must land after `Plans:`, not between the summary and the header.
-      //
-      // Pattern A: anchor to bare `Plans:` header (preferred).
-      // Pattern B: fallback to bold summary when no bare header exists.
-      const insertRowsPatternA = /((?:^|\n)Plans:[^\n]*)/i;
-      const insertRowsPatternB = /((?:\*\*Plans\*\*:|\*\*Plans:\*\*)[^\n]*)/i;
+    // Insert missing plan checklist rows (#1163).  We prefer to anchor to the
+    // bare `Plans:` checklist header (canonical template form) and fall back to
+    // the bold `**Plans**:`/`**Plans:**` summary line only when no bare header
+    // is present.  Using two separate patterns avoids the lazy-quantifier trap
+    // where a single alternation would stop at the first matching alternative
+    // (the bold summary) before reaching the checklist header.
+    //
+    // Canonical template (gsd-core/templates/roadmap.md) uses BOTH lines:
+    //   **Plans**: N plans   ← summary (colon outside bold)
+    //   Plans:               ← checklist header (PREFERRED insertion anchor)
+    // Rows must land after `Plans:`, not between the summary and the header.
+    //
+    // Pattern A: anchor to bare `Plans:` header (preferred).
+    // Pattern B: fallback to bold summary when no bare header exists.
+    const insertRowsPatternA = /((?:^|\n)Plans:[^\n]*)/i;
+    const insertRowsPatternB = /((?:\*\*Plans\*\*:|\*\*Plans:\*\*)[^\n]*)/i;
 
-      // #6171: rows are merged into the existing list by plan id (not stacked above it), and the
-      // `TBD` stub is replaced by them. Both patterns match through the end of the anchor line.
-      const insertAfterAnchor = (pattern: RegExp, text: string): string => {
-        const m = pattern.exec(text);
-        if (!m) return text;
-        const end = m.index + m[0].length;
-        return text.slice(0, end) + mergePlanRows(text.slice(end), missingPlans);
-      };
+    // #6171: the list after the anchor is merged by `mergePlanRows`: missing rows go in plan-id order (not stacked
+    // above the list) and the `TBD` stub goes once the list holds a real row. This runs even with no missing row, so
+    // a stub left beside hand-written rows is dropped too. A row is "real" by the presence test above:
+    // `planRowPattern` for one of the phase's PLAN files.
+    const listedPlans = phaseInfo!.plans.map((planFile) => {
+      const id = planFile.replace(/-PLAN\.md$/i, '');
+      return { id, row: coreUtils.planRowPattern(id, { anchored: true, anyState: true }) };
+    });
+    const mergeIntoList = (scope: string): string => {
+      const anchor = insertRowsPatternA.exec(scope) ?? insertRowsPatternB.exec(scope);
+      if (!anchor) return scope;
+      const end = anchor.index + anchor[0].length;
+      return scope.slice(0, end) + mergePlanRows(scope.slice(end), missingPlans, listedPlans, anchor[0].endsWith('\r') ? '\r' : '');
+    };
 
-      // Archived `<details>` blocks are already hidden (maskArchivedDetails), so
-      // archived duplicate phase headings cannot receive rows. #6169: rows go into the
-      // phase's heading scope only (a phase found only by its checklist bullet gets none).
-      const withRows = withPhaseSection(roadmapContent, phaseNum, (scope: string): string => {
-        const regionA = insertAfterAnchor(insertRowsPatternA, scope);
-        return regionA !== scope ? regionA : insertAfterAnchor(insertRowsPatternB, scope);
-      }, true, phasePattern);
-      if (withRows !== roadmapContent) {
-        roadmapContent = withRows;
-        // Mark any newly-inserted rows that already have summaries as complete
-        // (#4741: same superseded-filtered tick list as the loop above — a
-        // pre-existing superseded row must stay unchecked on this path too).
-        roadmapContent = tickPlanRows(roadmapContent);
-      }
+    // Archived `<details>` blocks are already hidden (maskArchivedDetails), so
+    // archived duplicate phase headings cannot receive rows. #6169: rows go into the
+    // phase's heading scope only (a phase found only by its checklist bullet gets none).
+    const withRows = withPhaseSection(roadmapContent, phaseNum, mergeIntoList, true, phasePattern);
+    if (withRows !== roadmapContent) {
+      roadmapContent = withRows;
+      // Mark any newly-inserted rows that already have summaries as complete
+      // (#4741: same superseded-filtered tick list as the loop above — a
+      // pre-existing superseded row must stay unchecked on this path too).
+      roadmapContent = tickPlanRows(roadmapContent);
     }
 
     // #6270: a plan row whose PLAN file is gone is dropped from the phase's own detail section, so the `Plans:` count (read
@@ -2515,5 +2543,4 @@ export = {
   foldPhaseId,
   insideOpenDetails,
   checklistEntrySrc,
-  comparePlanIds,
 };

@@ -41,7 +41,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 // drift and no parity test needed to police one.
 const {
   toPosixPath, generateSlugInternal, readSubdirectories, extractCanonicalPlanId,
-  findUnsummarizedPlans,
+  findUnsummarizedPlans, planListStubRow,
 } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
@@ -2214,12 +2214,12 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       const dependsOn = dependsOnLine(_newPhaseId, [...declared],
         (phase) => renderPhaseId(bracketPhaseId(bracketContext, phase)));
       phaseEntry =
-        `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+        `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n${planListStubRow(formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string, id.phase)}\n`;
     } else {
       const dependsOn =
         naming.phaseNaming === 'custom' ? '' : dependsOnFor(_newPhaseId, rawContent);
       phaseEntry =
-        `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+        `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n${planListStubRow(formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string, _newPhaseId)}\n`;
     }
 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
@@ -2368,12 +2368,12 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         const dependsOn = dependsOnLine(newPhaseId, [...declared],
           (phase) => renderPhaseId(bracketPhaseId(bracketContext, phase)));
         phaseEntry =
-          `\n### ${renderPhaseId(id)}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
+          `\n### ${renderPhaseId(id)}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n${planListStubRow(formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string, id.phase)}\n`;
       } else {
         const dependsOn =
           naming.phaseNaming === 'custom' ? '' : dependsOnFor(newPhaseId, rawContent);
         phaseEntry =
-          `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
+          `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n${planListStubRow(formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string, newPhaseId)}\n`;
       }
       const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
       const recorded = recordNewPhase(spliceRoadmapBlock(rawContent, insertAt, phaseEntry), cwd, newPhaseId, description, undefined,
@@ -2967,7 +2967,7 @@ function cmdPhaseInsert(
         dependsId = renderPhaseId(bracketPhaseId(bracketContext, dependsPhase, dependsSubphase));
       }
       const phaseEntry =
-        `\n### ${headingId}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** ${dependsId}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
+        `\n### ${headingId}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** ${dependsId}\n**Plans:** 0 plans\n\nPlans:\n${planListStubRow(formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string, _decimalPhase)}\n`;
 
       // #5007 (Phase 6 / ADR-4910 §8): this site needs the WHOLE matched
       // heading line plus its trailing newline (for splicing the new entry
