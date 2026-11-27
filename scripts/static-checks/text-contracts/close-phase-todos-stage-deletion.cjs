@@ -6,9 +6,20 @@
 // alone cannot record a deletion, #2014). The step moves with plain `mv`, not `git mv`, so untracked todos and
 // non-git .planning dirs still work. cleanup.md routes its moved-away archive directories through --files-removed,
 // not --files, while the destinations and STATE.md stay under --files. Was tests/close-phase-todos-stage-deletion.test.cjs.
+// The step's bash lives in execute-phase/steps/close-phase-todos.md, which the step in execute-phase.md points at
+// (#5966). The first line of that file's bash block is the runtime launcher, and its text says that a missing
+// gsd-tools moves no todo and that the block never blocks the phase.
+
+const STEP_FILE = 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md';
+
+// The step file's prose with each line break read as a space, so a sentence that wraps is one string.
+const onOneLine = (text) => text.split('\n').join(' ');
 
 // The `gsd_run query commit ... --files <list>` capture of a step body.
 const filesListOf = (stepBody) => /gsd_run\s{1,20}query\s{1,20}commit\b[^\n]{0,2000}--files\s{1,20}([^\n]{1,2000})/.exec(stepBody);
+
+// The plain `mv` of a todo into the completed directory.
+const PLAIN_MV = /\bmv\s{1,20}"\$TODO_FILE"\s{1,20}"\$COMPLETED_DIR\/"/;
 
 // The step body with bash comment lines removed, so a rationale comment naming `git mv` does not count.
 const withoutComments = (stepBody) => stepBody.replace(/^[ \t]{0,200}#[^\n]{0,2000}$/gm, '');
@@ -53,7 +64,10 @@ module.exports = {
   id: 'close-phase-todos-stage-deletion',
   issue: '#2415',
   check(ctx) {
-    const step = ctx.doc('gsd-core/workflows/execute-phase.md').step('close_phase_todos');
+    ctx.doc('gsd-core/workflows/execute-phase.md').step('close_phase_todos')
+      .has('read and execute `execute-phase/steps/close-phase-todos.md`', 'close_phase_todos must read the step file that carries its commit');
+
+    const step = ctx.doc(STEP_FILE);
     step
       .satisfies((body) => {
         const match = filesListOf(body);
@@ -65,8 +79,17 @@ module.exports = {
       }, 'close_phase_todos must stage the completed/ destinations (ADDED under --files), the pending/ deletions (REMOVED under --files-removed) and the {state_path} STATE.md placeholder')
       .has(/ADDED\+=\("\$COMPLETED_DIR\/\$f"\)/, 'ADDED must be built from $COMPLETED_DIR, the destination of the move')
       .has(/REMOVED\+=\("\$PENDING_DIR\/\$f"\)/, 'REMOVED must be built from $PENDING_DIR, the source whose deletion #2415 requires')
-      .satisfies((body) => /\bmv\s{1,20}"\$TODO_FILE"\s{1,20}"\$COMPLETED_DIR\/"/.test(withoutComments(body)) || 'no plain mv of $TODO_FILE', 'close_phase_todos must use plain shell mv to move the file')
-      .satisfies((body) => !hasGitMv(withoutComments(body)) || 'a git mv command', 'close_phase_todos must NOT use git mv as the move command: it fails on untracked todos and on non-git .planning dirs');
+      .satisfies((body) => PLAIN_MV.test(withoutComments(body)) || 'no plain mv of $TODO_FILE', 'close_phase_todos must use plain shell mv to move the file')
+      .satisfies((body) => !hasGitMv(withoutComments(body)) || 'a git mv command', 'close_phase_todos must NOT use git mv as the move command: it fails on untracked todos and on non-git .planning dirs')
+      .satisfies((body) => {
+        const code = withoutComments(body);
+        const move = code.search(PLAIN_MV);
+        if (move === -1) return true; // no plain mv: the check above reports it
+        const launcher = code.indexOf('_GSD_SHIM_NAME=');
+        return (launcher !== -1 && launcher < move) || 'no launcher line ahead of the mv';
+      }, 'the launcher line must run before any move, which is what the step text states (#5966)')
+      .satisfies((body) => onOneLine(body).includes('The block never blocks the phase, which `update_roadmap` has already marked complete'), 'the step must say that it never blocks the phase (#5966)')
+      .satisfies((body) => onOneLine(body).includes('exits 1 when no gsd-tools resolves: then no todo moves and every one stays pending'), 'the step must say that a missing gsd-tools moves no todo (#5966)');
 
     ctx.doc('gsd-core/workflows/cleanup.md')
       .satisfies(onArchive((archive) => {

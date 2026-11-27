@@ -177,6 +177,7 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
     'gsd-core/workflows/diagnose-issues.md',
     'gsd-core/workflows/discuss-phase.md',
     'gsd-core/workflows/execute-phase.md',
+    'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
     'gsd-core/workflows/execute-phase/steps/pre-execute-gate-hooks.md',
     'gsd-core/workflows/execute-phase/steps/verify-phase-goal.md',
     'gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md',
@@ -468,25 +469,43 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           [`every platformWriteSync gone from ${file} (#1972)`, `gsd-core/bin/lib/${file}`, eraseAll('platformWriteSync'), 'atomic-write-coverage', calling],
         ]),
 
-        // close-phase-todos-stage-deletion
+        // close-phase-todos-stage-deletion: the step in execute-phase.md points at the step file, which holds the bash
         ['the close_phase_todos step renamed (#2415)', 'gsd-core/workflows/execute-phase.md',
           swap('<step name="close_phase_todos">', '<step name="close_todos">'), 'close-phase-todos-stage-deletion', /marker .*close_phase_todos.* not found/],
-        ['--files-removed gone from the close_phase_todos commit (#2415, #4208)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap(' --files-removed "${REMOVED[@]}"', '')), 'close-phase-todos-stage-deletion', /close_phase_todos must stage the completed\/ destinations .* \(no --files-removed "\$\{REMOVED\[@\]\}"\)/],
-        ['the ADDED array gone from the close_phase_todos --files (#4208)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap('--files "${ADDED[@]}"', '--files "$COMPLETED_DIR"')), 'close-phase-todos-stage-deletion', /commit --files does not carry the ADDED array/],
-        ['the {state_path} placeholder gone from the close_phase_todos --files (#5861)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap(' "{state_path}"', '')), 'close-phase-todos-stage-deletion', /no \{state_path\} placeholder/],
-        ['the close_phase_todos commit gone (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap('gsd_run query commit', 'gsd_run query save')), 'close-phase-todos-stage-deletion', /no gsd_run query commit \.\.\. --files invocation/],
-        ['ADDED built from the pending dir (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap('ADDED+=("$COMPLETED_DIR/$f")', 'ADDED+=("$PENDING_DIR/$f")')), 'close-phase-todos-stage-deletion', /ADDED must be built from \$COMPLETED_DIR, the destination of the move/],
-        ['REMOVED built from the completed dir (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap('REMOVED+=("$PENDING_DIR/$f")', 'REMOVED+=("$COMPLETED_DIR/$f")')), 'close-phase-todos-stage-deletion', /REMOVED must be built from \$PENDING_DIR, the source whose deletion #2415 requires/],
-        ['the plain mv replaced by cp in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap('mv "$TODO_FILE" "$COMPLETED_DIR/"', 'cp "$TODO_FILE" "$COMPLETED_DIR/"')), 'close-phase-todos-stage-deletion', /close_phase_todos must use plain shell mv to move the file/],
-        ['git mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', swap('mv "$TODO_FILE" "$COMPLETED_DIR/"', 'git mv "$TODO_FILE" "$COMPLETED_DIR/"')), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['--files-removed gone from the close_phase_todos commit (#2415, #4208)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap(' --files-removed "${REMOVED[@]}"', ''), 'close-phase-todos-stage-deletion', /close_phase_todos must stage the completed\/ destinations .* \(no --files-removed "\$\{REMOVED\[@\]\}"\)/],
+        ['the ADDED array gone from the close_phase_todos --files (#4208)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('--files "${ADDED[@]}"', '--files "$COMPLETED_DIR"'), 'close-phase-todos-stage-deletion', /commit --files does not carry the ADDED array/],
+        ['the {state_path} placeholder gone from the close_phase_todos --files (#5861)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap(' "{state_path}"', ''), 'close-phase-todos-stage-deletion', /no \{state_path\} placeholder/],
+        ['the close_phase_todos commit gone (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('gsd_run query commit', 'gsd_run query save'), 'close-phase-todos-stage-deletion', /no gsd_run query commit \.\.\. --files invocation/],
+        ['ADDED built from the pending dir (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('ADDED+=("$COMPLETED_DIR/$f")', 'ADDED+=("$PENDING_DIR/$f")'), 'close-phase-todos-stage-deletion', /ADDED must be built from \$COMPLETED_DIR, the destination of the move/],
+        ['REMOVED built from the completed dir (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('REMOVED+=("$PENDING_DIR/$f")', 'REMOVED+=("$COMPLETED_DIR/$f")'), 'close-phase-todos-stage-deletion', /REMOVED must be built from \$PENDING_DIR, the source whose deletion #2415 requires/],
+        ['the plain mv replaced by cp in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('mv "$TODO_FILE" "$COMPLETED_DIR/"', 'cp "$TODO_FILE" "$COMPLETED_DIR/"'), 'close-phase-todos-stage-deletion', /close_phase_todos must use plain shell mv to move the file/],
+        ['git mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('mv "$TODO_FILE" "$COMPLETED_DIR/"', 'git mv "$TODO_FILE" "$COMPLETED_DIR/"'), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['the step file no longer named in the close_phase_todos step (#5966)', 'gsd-core/workflows/execute-phase.md',
+          inStepOf('close_phase_todos', swap('`execute-phase/steps/close-phase-todos.md`', '`execute-phase/steps/close-todos.md`')), 'close-phase-todos-stage-deletion', /close_phase_todos must read the step file that carries its commit/],
+        ['the launcher line moved below the mv in the close-phase-todos step file (#5966)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          (text) => {
+            const launcher = text.indexOf('_GSD_SHIM_NAME=');
+            const launcherEnd = text.indexOf('\n', launcher) + 1;
+            const mvEnd = text.indexOf('\n', text.indexOf('mv "$TODO_FILE" "$COMPLETED_DIR/"')) + 1;
+            return text.slice(0, launcher) + text.slice(launcherEnd, mvEnd) + text.slice(launcher, launcherEnd) + text.slice(mvEnd);
+          }, 'close-phase-todos-stage-deletion', /the launcher line must run before any move/],
+        ['the launcher line gone from the close-phase-todos step file (#5966)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          (text) => {
+            const launcher = text.indexOf('_GSD_SHIM_NAME=');
+            return text.slice(0, launcher) + text.slice(text.indexOf('\n', launcher) + 1);
+          }, 'close-phase-todos-stage-deletion', /the launcher line must run before any move/],
+        ['"never blocks the phase" gone from the close-phase-todos step file (#5966)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('The block never blocks the phase', 'The block may block the phase'), 'close-phase-todos-stage-deletion', /the step must say that it never blocks the phase/],
+        ['"every one stays pending" gone from the close-phase-todos step file (#5966)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          swap('every one stays pending', 'every one is moved'), 'close-phase-todos-stage-deletion', /the step must say that a missing gsd-tools moves no todo/],
         ['the pending directory moved to --files in the cleanup archive commit (#4208)', 'gsd-core/workflows/cleanup.md',
           swap('--files "${PLANNING_ROOT}/milestones/"', '--files "${PLANNING_ROOT}/phases/" "${PLANNING_ROOT}/milestones/"'), 'close-phase-todos-stage-deletion', /the archive commit must route the moved-away directories through --files-removed, not --files/],
         ['the quick directory gone from --files-removed in the cleanup archive commit (#4208)', 'gsd-core/workflows/cleanup.md',
@@ -551,12 +570,12 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\n\fgsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
         ['vertical tab before a gsd_run call ahead of the resolver (#5004)', 'agents/gsd-verifier.md',
           swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\n\vgsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
-        ['a non-breaking space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', (block) => `${block}\ngit\u00a0mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
-        ['a line separator between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', (block) => `${block}\ngit\u2028mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
-        ['an ideographic space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
-          inStepOf('close_phase_todos', (block) => `${block}\ngit\u3000mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['a non-breaking space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          (block) => `${block}\ngit\u00a0mv a b\n`, 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['a line separator between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          (block) => `${block}\ngit\u2028mv a b\n`, 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['an ideographic space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+          (block) => `${block}\ngit\u3000mv a b\n`, 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
 
         // fourth round
         ['a token ending in gh (xgh) before pr merge on an under-permissioned job (#5136)', '.github/workflows/test.yml',
@@ -1172,8 +1191,8 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         append('[x](../INVENTORY.md#no-such-heading)'), 'localized-inventory-agent-counts');
       passes('a link to an existing ja-JP INVENTORY heading satisfies localized-inventory-agent-counts', 'docs/ja-JP/ARCHITECTURE.md',
         append('[x](INVENTORY.md#エージェント)'), 'localized-inventory-agent-counts');
-      passes('a comment naming git mv does not count for close-phase-todos-stage-deletion', 'gsd-core/workflows/execute-phase.md',
-        inStepOf('close_phase_todos', (block) => `${block}\n  # git mv would fail on untracked todos\n`), 'close-phase-todos-stage-deletion');
+      passes('a comment naming git mv does not count for close-phase-todos-stage-deletion', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+        (block) => `${block}\n  # git mv would fail on untracked todos\n`, 'close-phase-todos-stage-deletion');
       passes('a bare fs.writeFileSync of a .gitkeep stays allowed for atomic-write-coverage', 'gsd-core/bin/lib/phase.cjs',
         append("fs.writeFileSync(path.join(dir, '.gitkeep'), '');"), 'atomic-write-coverage');
       passes('a bare fs.writeFileSync into the archive directory stays allowed for atomic-write-coverage', 'gsd-core/bin/lib/milestone.cjs',
@@ -1331,18 +1350,18 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         (text, gap) => `${text.replace(/reuse|no new|without adding|existing[^\n]{0,500}(?:semantic|memory|capability)/gi, 'x')}\nexisting${'y'.repeat(gap)}memory\n`, 500, /it must state that MemPalace is reused/);
 
       // close-phase-todos-stage-deletion: the commit line is found with up to 2000 characters between "commit" and "--files", up to 20 whitespace characters inside "gsd_run query commit", and a comment is stripped with up to 200 spaces of indent.
-      gapCases('characters between commit and --files in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
-        (text, gap) => inStepOf('close_phase_todos', (block) => {
+      gapCases('characters between commit and --files in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
+        (text, gap) => ((block) => {
           const commit = block.indexOf('gsd_run query commit');
           const files = block.indexOf('--files', commit);
           const filler = gap - (files - (commit + 'gsd_run query commit'.length));
           assert.ok(filler >= 0, 'the real distance is under the bound');
           return `${block.slice(0, commit + 'gsd_run query commit'.length)} ${'x'.repeat(filler - 1)}${block.slice(commit + 'gsd_run query commit'.length)}`;
         })(text), 2000, /no gsd_run query commit \.\.\. --files invocation/);
-      gapCases('whitespace between gsd_run and query in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
-        (text, gap) => inStepOf('close_phase_todos', (block) => block.replace('gsd_run query commit', `gsd_run${' '.repeat(gap)}query commit`))(text), 20, /no gsd_run query commit \.\.\. --files invocation/);
-      gapCases('spaces of indent before a git mv comment in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
-        (text, gap) => inStepOf('close_phase_todos', (block) => `${block}\n${' '.repeat(gap)}# git mv would fail\n`)(text), 200, /close_phase_todos must NOT use git mv as the move command/);
+      gapCases('whitespace between gsd_run and query in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
+        (text, gap) => ((block) => block.replace('gsd_run query commit', `gsd_run${' '.repeat(gap)}query commit`))(text), 20, /no gsd_run query commit \.\.\. --files invocation/);
+      gapCases('spaces of indent before a git mv comment in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
+        (text, gap) => ((block) => `${block}\n${' '.repeat(gap)}# git mv would fail\n`)(text), 200, /close_phase_todos must NOT use git mv as the move command/);
 
       // ─── batch 8, group 1: second round ───────────────────────────────────────────────────────────────────────────────────
       // A fixture tag names <dir>/<file>: each part of at most 100 plain characters is read as a fixture (missing here, so
@@ -1426,14 +1445,14 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
 
 
       // close-phase-todos-stage-deletion: every bound of the commit, mv and comment patterns, at limit - 1, limit and limit + 1.
-      const closePhase = (edit) => (text) => inStepOf('close_phase_todos', edit)(text);
+      const closePhase = (edit) => (text) => edit(text); // the step file is the step's whole body
       const closeWhy = /close_phase_todos must stage the completed\/ destinations/;
       const noCommit = /no gsd_run query commit \.\.\. --files invocation/;
-      gapCases('whitespace between query and commit in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
+      gapCases('whitespace between query and commit in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => block.replace('gsd_run query commit', `gsd_run query${' '.repeat(gap)}commit`))(text), 20, noCommit);
-      gapCases('whitespace after --files-removed in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
+      gapCases('whitespace after --files-removed in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => block.replace('--files-removed "${REMOVED[@]}"', `--files-removed${' '.repeat(gap)}"` + '${REMOVED[@]}"'))(text), 20, closeWhy);
-      gapCases('characters of the --files list up to the end of the REMOVED array in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
+      gapCases('characters of the --files list up to the end of the REMOVED array in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => {
           const start = block.indexOf('--files "${ADDED[@]}"') + '--files '.length;
           const removedEnd = block.indexOf('"${REMOVED[@]}"') + '"${REMOVED[@]}"'.length;
@@ -1441,17 +1460,17 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           assert.ok(filler >= 1, 'the real list is under the bound');
           return block.replace(' --files-removed', ` ${'x'.repeat(filler - 1)} --files-removed`);
         })(text), 2000, closeWhy);
-      gapCases('whitespace between mv and "$TODO_FILE" in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
+      gapCases('whitespace between mv and "$TODO_FILE" in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => block.replace('mv "$TODO_FILE" "$COMPLETED_DIR/"', `mv${' '.repeat(gap)}"$TODO_FILE" "$COMPLETED_DIR/"`))(text), 20, /close_phase_todos must use plain shell mv to move the file/);
-      gapCases('whitespace between "$TODO_FILE" and "$COMPLETED_DIR/" in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
+      gapCases('whitespace between "$TODO_FILE" and "$COMPLETED_DIR/" in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => block.replace('mv "$TODO_FILE" "$COMPLETED_DIR/"', `mv "$TODO_FILE"${' '.repeat(gap)}"$COMPLETED_DIR/"`))(text), 20, /close_phase_todos must use plain shell mv to move the file/);
-      gapCases('characters of a git mv comment after the hash in close_phase_todos', 'gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion',
+      gapCases('characters of a git mv comment after the hash in close_phase_todos', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion',
         (text, gap) => closePhase((block) => `${block}\n#${'x'.repeat(gap - ' git mv'.length)} git mv\n`)(text), 2000, /close_phase_todos must NOT use git mv as the move command/);
       // `git` and `mv` are found whatever the whitespace between them (a word walk, no bound): a long gap does not evade the ban.
       for (const gap of [19, 20, 21, 300]) {
         test(`git and mv ${gap} whitespace characters apart is banned by close-phase-todos-stage-deletion`, (t) => {
           const root = copyOfRepoFiles(t);
-          const abs = path.join(root, 'gsd-core', 'workflows', 'execute-phase.md');
+          const abs = path.join(root, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'close-phase-todos.md');
           fs.writeFileSync(abs, closePhase((block) => `${block}\ngit${' '.repeat(gap)}mv a b\n`)(fs.readFileSync(abs, 'utf8')));
           const findings = runShipped(root, ['close-phase-todos-stage-deletion']);
           assert.ok(findings.some((f) => /close_phase_todos must NOT use git mv as the move command/.test(f.message)), JSON.stringify(findings));
@@ -1459,10 +1478,13 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       }
       test('git and mv on different lines are banned by close-phase-todos-stage-deletion', (t) => {
         const root = copyOfRepoFiles(t);
-        const abs = path.join(root, 'gsd-core', 'workflows', 'execute-phase.md');
+        const abs = path.join(root, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'close-phase-todos.md');
         fs.writeFileSync(abs, closePhase((block) => `${block}\ngit\n\n   mv a b\n`)(fs.readFileSync(abs, 'utf8')));
         assert.ok(runShipped(root, ['close-phase-todos-stage-deletion']).some((f) => /must NOT use git mv/.test(f.message)));
       });
+      // The launcher-order check reads the move through the plain mv pattern, so a step with no plain mv is one finding, the plain mv's.
+      findsOne('the plain mv replaced by cp in the close-phase-todos step file is one finding of close-phase-todos-stage-deletion', 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md',
+        swap('mv "$TODO_FILE" "$COMPLETED_DIR/"', 'cp "$TODO_FILE" "$COMPLETED_DIR/"'), 'close-phase-todos-stage-deletion', /close_phase_todos must use plain shell mv to move the file/);
       const archiveCommit = /cleanup\.md must commit the archive via gsd_run query commit/;
       gapCases('whitespace between gsd_run and query in the cleanup archive commit', 'gsd-core/workflows/cleanup.md', 'close-phase-todos-stage-deletion',
         (text, gap) => text.replace('gsd_run query commit "chore: archive', `gsd_run${' '.repeat(gap)}query commit "chore: archive`), 20, archiveCommit);
@@ -1823,7 +1845,8 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       for (const [surface, ok] of [[49, false], [50, false], [51, true]]) {
         test(`a scan surface of ${surface} markdown files ${ok ? 'satisfies' : 'fails'} context7-tool-name-parity`, (t) => {
           const root = copyOfRepoFiles(t);
-          const keep = new Set(['gsd-core/references/research-documentation-lookup.md']);
+          // docs/ keeps one file: a scanned directory with no markdown file is a finding of its own.
+          const keep = new Set(['gsd-core/references/research-documentation-lookup.md', 'docs/COMMANDS.md']);
           for (const rel of scanSurface(root)) {
             if (fs.readFileSync(path.join(root, ...rel.split('/')), 'utf8').includes('mcp__context7__resolve-library-id')) keep.add(rel);
           }
@@ -2083,6 +2106,7 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
     ['gsd-core/bin/lib/phase.cjs', 'atomic-write-coverage'],
     ['gsd-core/bin/lib/frontmatter.cjs', 'atomic-write-coverage'],
     ['gsd-core/workflows/execute-phase.md', 'close-phase-todos-stage-deletion'],
+    ['gsd-core/workflows/execute-phase/steps/close-phase-todos.md', 'close-phase-todos-stage-deletion'],
     ['gsd-core/workflows/cleanup.md', 'close-phase-todos-stage-deletion'],
     ['gsd-core/workflows/add-todo.md', 'add-todo'],
     ['gsd-core/workflows/progress.md', 'progress-debt-segmentation-guard'],
