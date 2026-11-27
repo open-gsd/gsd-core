@@ -105,3 +105,10 @@ properties are captured data, not matching criteria.
   so pytest writes two `<testcase>` entries for it); `tests/test_widget.py`
   (`TestWidget.test_x` and the parametrized `test_param[a-1]` both assert
   `1 == 2`; classnames `tests.test_widget.TestWidget` and `tests.test_widget`).
+  Minimum pytest: 6.0.0. The `<error>` messages the parser keys on come from
+  `_pytest/junitxml.py`: `collection failure` (`append_collect_error`,
+  unchanged since 2010) and `failed on setup|teardown with "<cause>"`
+  (`append_error`, since pytest 6.0.0, pytest-dev/pytest#7385). Before 6.0.0
+  those two read `test setup failure` and `test teardown failure`; such a
+  report's harness `<error>` stays a plain failed test, so record RED with
+  pytest 6.0 or later.
