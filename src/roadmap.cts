@@ -1485,28 +1485,17 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     let roadmapContent = originalContent;
     // #5186: a custom ID such as SETUP-2 is literal, not numeric phase 2.
     const phasePattern = phaseMarkdownRegexSource(phaseNum, directoryContext);
-    // #4247: ONE local source for the ATX phase-heading anchor that every
-    // section-scoped writer below (`planSectionPattern`,
-    // `insertRowsPatternA|B`) starts with — extracted so the target-detection
-    // gate below reads the SAME grammar the writers anchor on, and a future
-    // edit to one cannot drift from the other three copies.
-    // #4906 Phase 5 (#4984): NOT migrated onto the heading-baseline selector —
-    // this write-path anchor was never one of the five ADR-4910 §8 call sites
-    // this phase owns (init.cts/milestone.cts's buildPhaseHeadingScanRegex
-    // sites); a direct any-bracket selector call here would have added a
-    // fourth uncounted ANY_BRACKET consumer to roadmap.cts's pinned
-    // tests/adr-612-bracket-heading-selection.test.cjs census. Left
-    // bracket-blind deliberately, matching this call's pre-#4984 behavior;
-    // folding it into the census is Phase 6 work.
-    // phase-id-owner: deliberately unmigrated (#4984 revert) — see comment above.
-    const phaseHeadingAnchor = `#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`;
     // #4247: target detection runs against the ORIGINAL content's active
     // (archive-masked) text — the same milestone scoping every writer
     // below applies — so the gate asks "does the file carry a writable phase
     // representation" rather than "did some regex fire mid-transform".
-    // Heading target: the exact grammar `planSectionPattern` /
-    // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
-    const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(originalContent);
+    // Heading target: #6169 the phase's heading scope, located by `withPhaseSection`,
+    // the same locator (and directory context, #5186) the writers below use.
+    let headingTargetFound = false;
+    withPhaseSection(originalContent, phaseNum, (scope: string): string => {
+      headingTargetFound = true;
+      return scope;
+    }, true, phasePattern);
     // #5545: the phase-checklist bullet grammar, defined ONCE for the writer
     // (an unchecked bullet to tick) and the gate probe (`anyState`).
     // Line-anchored, with only an optional `**` before the label and horizontal
@@ -1649,11 +1638,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //      `\n` in the first place.
     // #4906 Phase 2 (#4917/ADR-4910): migrated off the one-capture-group
     // regex that replaced to end of line onto the PlanningDoc `boldField`
-    // write seam. `planSectionPattern` scopes the match to phase N's OWN
-    // detail section (heading + body up to the next heading) — the same
-    // window `phaseHeadingAnchor`'s siblings anchor on — and the callback
-    // below runs parse -> classify -> (maybe) mutate -> serialize entirely
-    // within that section text, mirroring phase.cts's `writePlansField`.
+    // write seam. `withPhaseSection` scopes the match to phase N's OWN
+    // detail section (heading + body up to the next phase heading) and the
+    // callback below runs parse -> classify -> (maybe) mutate -> serialize
+    // entirely within that section text, mirroring phase.cts's `writePlansField`.
     const planCountText = isComplete
       ? `${summaryCount}/${planCount} plans complete`
       : `${summaryCount}/${planCount} plans executed`;
@@ -1725,9 +1713,9 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         : `; ${stillPending.length} ${m[2]}plan${stillPending.length === 1 ? '' : 's'} pending (${stillPending.join(', ')})`;
       return tail.slice(0, m.index) + replacement + tail.slice(m.index + m[0].length);
     };
-    // #6169: the section is the level-bounded, fence-aware phase scope that missing-row
-    // detection reads (`withPhaseSection(..., true)`), so a `####` sub-heading or a fenced
-    // `#` line inside the phase no longer ends it early.
+    // #6169: the level-bounded, fence-aware phase scope, so a `####` sub-heading or a
+    // fenced `#` line inside the phase no longer ends it early; `phasePattern` keeps a
+    // custom id (`SETUP-2`) literal (#5186).
     roadmapContent = withPhaseSection(roadmapContent, phaseNum, (sectionText: string): string => {
       const parsed = parsePlanningDoc(sectionText, 'ROADMAP.md');
       if (!parsed.ok) {
@@ -1805,7 +1793,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         return sectionText;
       }
       return out.value;
-    }, true);
+    }, true, phasePattern);
 
     // If complete: check checkbox
     if (isComplete) {
@@ -1834,7 +1822,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // to the first row outside every phase bullet's rows. Archived blocks are
     // already hidden by maskArchivedDetails (#5553), which owns which regions are editable.
     const editPhaseScopes = (text: string, edit: (scope: string) => string, levelBounded = false): string => {
-      let out = withPhaseSection(text, phaseNum, edit, levelBounded);
+      let out = withPhaseSection(text, phaseNum, edit, levelBounded, phasePattern);
       const bullet = phaseChecklistBullet(true).exec(out);
       if (bullet) {
         const { start, end } = checklistBulletExtent(out, bullet);
@@ -1956,9 +1944,6 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       //
       // Pattern A: anchor to bare `Plans:` header (preferred).
       // Pattern B: fallback to bold summary when no bare header exists.
-      // #6169: both patterns run against the level-bounded, fence-aware phase scope
-      // (`withPhaseSection(..., true)`, the scope detection reads), so they carry no
-      // heading anchor or section-boundary lookahead of their own.
       const insertRowsPatternA = /((?:^|\n)Plans:[^\n]*)/i;
       const insertRowsPatternB = /((?:\*\*Plans\*\*:|\*\*Plans:\*\*)[^\n]*)/i;
 
@@ -1967,11 +1952,12 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       const inserter = (match: string) => `${match}\n${newRows}`;
 
       // Archived `<details>` blocks are already hidden (maskArchivedDetails), so
-      // archived duplicate phase headings cannot receive rows.
+      // archived duplicate phase headings cannot receive rows. #6169: rows go into the
+      // phase's heading scope only (a phase found only by its checklist bullet gets none).
       const withRows = withPhaseSection(roadmapContent, phaseNum, (scope: string): string => {
         const regionA = scope.replace(insertRowsPatternA, inserter);
         return regionA !== scope ? regionA : scope.replace(insertRowsPatternB, inserter);
-      }, true);
+      }, true, phasePattern);
       if (withRows !== roadmapContent) {
         roadmapContent = withRows;
         // Mark any newly-inserted rows that already have summaries as complete

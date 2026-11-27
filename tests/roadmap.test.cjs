@@ -2698,17 +2698,21 @@ describe('#6169: plan-row insertion and count rewrite use the detection scope', 
     cleanup(tmpDir);
   });
 
-  function plans(...names) {
-    const dir = path.join(tmpDir, '.planning', 'phases', '12-test-phase');
+  function plans(dirName, ...names) {
+    const dir = path.join(tmpDir, '.planning', 'phases', dirName);
     fs.mkdirSync(dir, { recursive: true });
     for (const n of names) fs.writeFileSync(path.join(dir, n), `# ${n}\n`);
   }
 
-  function run(roadmap, planFiles = ['12-01-PLAN.md', '12-02-PLAN.md', '12-03-PLAN.md']) {
+  // `opts.phase`/`opts.dir` pick another phase (default 12); `opts.config` writes config.json.
+  let lastOutput;
+  function run(roadmap, planFiles = ['12-01-PLAN.md', '12-02-PLAN.md', '12-03-PLAN.md'], opts = {}) {
     fs.writeFileSync(roadmapPath, roadmap);
-    plans(...planFiles);
-    const result = runGsdTools(['roadmap', 'update-plan-progress', '12'], tmpDir);
+    if (opts.config) fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(opts.config));
+    plans(opts.dir || '12-test-phase', ...planFiles);
+    const result = runGsdTools(['roadmap', 'update-plan-progress', opts.phase || '12'], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
+    lastOutput = JSON.parse(result.output);
     return fs.readFileSync(roadmapPath, 'utf-8');
   }
 
@@ -2793,8 +2797,8 @@ describe('#6169: plan-row insertion and count rewrite use the detection scope', 
     assert.ok(out.includes('**Plans:** 0/3 plans executed'), `count not rewritten\n${out}`);
   });
 
-  test('the next phase heading still ends the scope: no row lands in a sibling phase', () => {
-    const out = run([
+  test('(control) the next phase heading still ends the scope: a sibling phase is byte-unchanged', () => {
+    const roadmap = [
       '# ROADMAP',
       '',
       '### Phase 12: Test phase',
@@ -2814,12 +2818,14 @@ describe('#6169: plan-row insertion and count rewrite use the detection scope', 
       '',
       '- [ ] 13-01-PLAN.md',
       '',
-    ].join('\n'));
-    const sibling = out.slice(out.indexOf('### Phase 13'));
-    assert.ok(!sibling.includes('12-0'), `a phase-12 row leaked into phase 13\n${out}`);
+    ].join('\n');
+    const out = run(roadmap);
+    const tail = (text) => text.slice(text.indexOf('### Phase 13'));
+    assert.equal(tail(out), tail(roadmap), `phase 13 changed\n${out}`);
+    assert.ok(out.includes('- [ ] 12-03-PLAN.md'), `phase 12 still got its rows\n${out}`);
   });
 
-  test('no bare Plans: in scope falls back to the **Plans:** anchor', () => {
+  test('(control) no bare Plans: in scope falls back to the **Plans:** anchor', () => {
     const out = run([
       '# ROADMAP',
       '',
@@ -2839,11 +2845,112 @@ describe('#6169: plan-row insertion and count rewrite use the detection scope', 
     assert.ok(indexOfLine(out, '- [ ] 12-03-PLAN.md') < indexOfLine(out, '#### Success Criteria'));
   });
 
-  test('re-running is idempotent', () => {
+  test('(control) re-running is idempotent', () => {
     const first = run(phase12(['**Plans:** 3 plans', '', '#### Success Criteria', '', '- it works', '']));
     const again = runGsdTools(['roadmap', 'update-plan-progress', '12'], tmpDir);
     assert.ok(again.success);
     assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), first);
+  });
+
+  test('a custom phase id (SETUP-2) keeps its directory context: rows and count go to SETUP-2, not numeric Phase 2', () => {
+    const roadmap = [
+      '# ROADMAP',
+      '',
+      '## Milestone v1.0',
+      '',
+      '### Phase 2: Numeric',
+      '',
+      '**Plans:** 1 plans',
+      '',
+      'Plans:',
+      '',
+      '- [ ] 02-01-PLAN.md',
+      '',
+      '### Phase SETUP-2: Setup',
+      '',
+      '**Plans:** 2 plans',
+      '',
+      'Plans:',
+      '',
+      '- [ ] SETUP-2-01-PLAN.md',
+      '',
+    ].join('\n');
+    const out = run(roadmap, ['SETUP-2-01-PLAN.md', 'SETUP-2-02-PLAN.md'], {
+      phase: 'SETUP-2', dir: 'SETUP-2-setup', config: { phase_naming: 'custom' },
+    });
+    const numeric = out.slice(out.indexOf('### Phase 2:'), out.indexOf('### Phase SETUP-2:'));
+    const custom = out.slice(out.indexOf('### Phase SETUP-2:'));
+    assert.equal(numeric, roadmap.slice(roadmap.indexOf('### Phase 2:'), roadmap.indexOf('### Phase SETUP-2:')), `numeric Phase 2 was edited\n${out}`);
+    assert.ok(custom.includes('**Plans:** 0/2 plans executed'), `SETUP-2 count not rewritten\n${out}`);
+    assert.ok(custom.includes('- [ ] SETUP-2-02-PLAN.md'), `SETUP-2 row not inserted\n${out}`);
+    assert.equal(out.match(/SETUP-2-01-PLAN\.md/g).length, 1, `existing SETUP-2 row duplicated\n${out}`);
+  });
+
+  test('a `# Phase 12` level-1 heading is a writable target and receives its rows', () => {
+    const out = run(['# Phase 12: Test phase', '', '**Plans:** 3 plans', '', 'Plans:', '', '- [ ] 12-01-PLAN.md', ''].join('\n'));
+    assert.equal(lastOutput.updated, true, JSON.stringify(lastOutput));
+    assert.ok(out.includes('- [ ] 12-02-PLAN.md') && out.includes('- [ ] 12-03-PLAN.md'), out);
+  });
+
+  test('a bracket-prefixed `### [v1.0] Phase 12` heading is a writable target and receives its rows', () => {
+    const out = run(['# ROADMAP', '', '### [v1.0] Phase 12: Test phase', '', '**Plans:** 3 plans', '', 'Plans:', '', '- [ ] 12-01-PLAN.md', ''].join('\n'));
+    assert.equal(lastOutput.updated, true, JSON.stringify(lastOutput));
+    assert.ok(out.includes('- [ ] 12-02-PLAN.md') && out.includes('- [ ] 12-03-PLAN.md'), out);
+  });
+
+  test('a phase heading that exists only inside a fenced block is not a target: declines, file unchanged', () => {
+    const roadmap = ['# ROADMAP', '', '```md', '### Phase 12: Test phase', '', 'Plans:', '', '- [ ] 12-01-PLAN.md', '```', ''].join('\n');
+    const out = run(roadmap);
+    assert.equal(lastOutput.updated, false, JSON.stringify(lastOutput));
+    assert.equal(lastOutput.reason, 'missing_phase_details');
+    assert.equal(out, roadmap);
+  });
+
+  test('a nested sub-section with its own **Plans:** line: the first **Plans:** in the phase is rewritten, the nested one is left alone', () => {
+    const out = run([
+      '# ROADMAP', '', '### Phase 12: Test phase', '', '**Plans:** 3 plans', '',
+      '#### Details', '', '**Plans:** stale nested', '', 'Plans:', '', '- [ ] 12-01-PLAN.md', '- [ ] 12-02-PLAN.md', '',
+    ].join('\n'));
+    assert.ok(out.includes('**Plans:** 0/3 plans executed'), out);
+    assert.ok(out.includes('**Plans:** stale nested'), `nested field rewritten\n${out}`);
+    assert.equal(out.match(/\*\*Plans:\*\*/g).length, 2);
+  });
+
+  test('a bare `Plans:` line in a nested sub-section is the preferred insertion anchor over the **Plans:** summary', () => {
+    const out = run([
+      '# ROADMAP', '', '### Phase 12: Test phase', '', '**Plans:** 3 plans', '',
+      '#### Notes', '', 'Plans: see the notes above', '',
+    ].join('\n'));
+    const anchor = indexOfLine(out, 'Plans: see the notes above');
+    assert.ok(lines(out)[anchor + 1].startsWith('- [ ] 12-01-PLAN.md'), `rows go under the bare Plans: line\n${out}`);
+    assert.ok(lines(out)[indexOfLine(out, '**Plans:**') + 1] === '', `nothing added under **Plans:**\n${out}`);
+  });
+
+  test('(control) an unterminated fence in a sub-section after the Plans: list does not stop the count rewrite or the row insertion', () => {
+    const out = run([
+      '# ROADMAP', '', '### Phase 12: Test phase', '', '**Plans:** 3 plans', '', 'Plans:', '', '- [ ] 12-01-PLAN.md', '',
+      '#### Notes', '', '```sh', 'npm test', '',
+    ].join('\n'));
+    assert.ok(out.includes('**Plans:** 0/3 plans executed'), out);
+    assert.ok(out.includes('- [ ] 12-03-PLAN.md'), out);
+  });
+
+  test('(control) a phase absent from ROADMAP.md is a no-op: declines, file unchanged', () => {
+    const roadmap = ['# ROADMAP', '', '### Phase 13: Other phase', '', '**Plans:** 1 plans', '', 'Plans:', '', '- [ ] 13-01-PLAN.md', ''].join('\n');
+    const out = run(roadmap);
+    assert.equal(lastOutput.updated, false, JSON.stringify(lastOutput));
+    assert.equal(out, roadmap);
+  });
+
+  test('(control) a decimal phase 2.1 writes its own section and leaves phase 2 byte-unchanged', () => {
+    const roadmap = [
+      '# ROADMAP', '', '### Phase 2: Whole', '', '**Plans:** 1 plans', '', 'Plans:', '', '- [ ] 02-01-PLAN.md', '',
+      '### Phase 2.1: Sub', '', '**Plans:** 1 plans', '', 'Plans:', '', '- [ ] 02.1-01-PLAN.md', '',
+    ].join('\n');
+    const out = run(roadmap, ['02.1-01-PLAN.md', '02.1-02-PLAN.md'], { phase: '2.1', dir: '02.1-sub' });
+    const whole = (text) => text.slice(text.indexOf('### Phase 2:'), text.indexOf('### Phase 2.1:'));
+    assert.equal(whole(out), whole(roadmap));
+    assert.ok(out.slice(out.indexOf('### Phase 2.1:')).includes('- [ ] 02.1-02-PLAN.md'), out);
   });
 });
 

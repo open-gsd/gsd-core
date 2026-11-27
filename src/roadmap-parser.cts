@@ -2332,14 +2332,19 @@ function maskArchivedDetails(content: string, cwd: string): { visible: string; r
  * (a plan list under a sub-heading) in the body, still ending at the next heading
  * that opens another phase, of any level. Serves the presence check and the
  * plan-row tick writer.
+ *
+ * `phaseSource` is an already-built phase-id regex source (as `findRoadmapPhaseInContent`
+ * takes); a caller that built it with a `PhaseDirectoryContext` passes it so a custom
+ * id such as `SETUP-2` is located literally, not as numeric phase 2 (#5186).
  */
 function withPhaseSection(
   content: string,
   phaseId: unknown,
   edit: (body: string) => string,
   levelBounded = false,
+  phaseSource?: string,
 ): string {
-  const src = phaseMarkdownRegexSource(phaseId);
+  const src = phaseSource ?? phaseMarkdownRegexSource(phaseId);
   const headingRe = new RegExp(`^\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${src}(?=[\\s:(]|$)`, 'i');
   // levelBounded runs to the next same-or-higher heading, so cut at a deeper phase heading too.
   const ownBody = !levelBounded ? edit : (body: string): string => {
