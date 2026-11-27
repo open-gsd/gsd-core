@@ -972,8 +972,8 @@ Runtime Engine (Claude Code / Antigravity CLI)
 
 The two fire-points are defaults. `hooks.context_warning_threshold` and
 `hooks.context_critical_threshold` in `.planning/config.json` move them per
-project; see [context-monitor.md](context-monitor.md) for the resolution and
-fallback rules.
+project; see [How to tune the context monitor's fire-points](how-to/tune-the-context-monitor.md)
+for the steps and [context-monitor.md](context-monitor.md) for the fallback rules.
 
 
 Debounce: 5 tool uses between repeated warnings. Severity escalation (WARNING→CRITICAL) bypasses debounce.

@@ -399,6 +399,8 @@ A deliverable is auto-passed **only** when `human_judgment: false`, its `verific
 node gsd-tools.cjs uat classify-coverage --summary .planning/phases/01-foundation/01-01-SUMMARY.md
 ```
 
+The SUMMARY path is required: `--summary <path>`, or `--file <path>` as an alias. When both are given `--summary` wins. The path must be inside the project root.
+
 ---
 
 ---
