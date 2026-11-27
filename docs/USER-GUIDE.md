@@ -104,33 +104,9 @@ How to verify:
 
 ### Why there are no drawn borders
 
-Earlier releases framed stage banners between two 53-character runs
-of `━`, and checkpoints were a 62-column box drawn with `╔`, `║` and `╚`. Those
-runs are ordinary text to whatever renders GSD's output. In a pane narrower than
-the run, the rule wraps and the leftover glyphs land on a second line — so the
-border comes apart from the heading it was framing, and the output looks broken
-rather than merely narrow. Reported against the Codex desktop interface in
-[#3028](https://github.com/open-gsd/gsd-core/issues/3028).
+Earlier releases framed banners and checkpoints with fixed-width runs of box-drawing characters. In a pane narrower than the run the rule wraps and the frame comes apart from its heading, so the output looked broken ([#3028](https://github.com/open-gsd/gsd-core/issues/3028), against the Codex desktop interface). A Markdown heading and a thematic break carry the same structure at any width. Every runtime gets the same output; if a host reads worse with headings than it did with boxes, report it. Single-cell tokens (`✓ ✗ ◆ ○ ⚠`, the `GSD ►` prefix and the ten-cell progress gauge) do not wrap and are unchanged.
 
-A Markdown heading and a thematic break carry the same structure without
-committing to a width, so they read correctly in a narrow pane and a wide one.
-
-This is unconditional: every runtime gets the same output. The alternative — a
-capability flag that kept line-art for terminal-oriented runtimes — was weighed
-and rejected, because it leaves two output conventions to keep in sync forever
-for a gain that is aesthetic rather than structural. What a terminal loses is the
-drawn frame; what it keeps is the title, the hierarchy and the break, none of
-which depended on the frame. The reasoning is recorded in
-`gsd-core/references/ui-brand.md § Why this is unconditional, not per-runtime`.
-If you run GSD in a host where the heading form reads worse than the old boxes
-did, that is worth reporting — it is the evidence that would justify the flag.
-
-Single-cell tokens are unaffected and unchanged: the status symbols
-(`✓ ✗ ◆ ○ ⚠`), the `GSD ►` prefix, and the ten-cell progress gauge
-(`Progress: ████████░░ 80%`) are not runs and do not wrap.
-
-The convention is specified in `gsd-core/references/ui-brand.md` and enforced
-against all shipped content by `tests/responsive-separators.test.cjs`.
+The convention and the reasoning for making it unconditional are in [`ui-brand.md`](../gsd-core/references/ui-brand.md), and `tests/responsive-separators.test.cjs` enforces it against all shipped content.
 
 ---
 
