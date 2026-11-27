@@ -1371,8 +1371,9 @@ const ENV_S_READINGS = Object.freeze([
 ].map((r) => Object.freeze(r)));
 
 // The `env -S` reading the scans apply (named apart from the `reading`
-// parameter the #5255 scanners take, which is a shell's): set only by the Bash
-// path's loop over ENV_S_READINGS, and the GNU split until then. What the scans
+// parameter the #5255 scanners take, which is a shell's): set by the Bash
+// path's loop over ENV_S_READINGS and by scanFurtherReading (ENV_S_READINGS[0],
+// then the GNU split again), and the GNU split until then. What the scans
 // report back:
 //  - splitSeen: a scan met a split option, so the readings that run on 'split' run.
 //  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
