@@ -1411,6 +1411,25 @@ describe('#4071 the global defaults file produces no shadow warning', () => {
   test('GLOBAL_DEFAULTS_RESOLUTION_KEYS parity with the expected merged set', () => {
     assert.deepEqual([...configLoader.GLOBAL_DEFAULTS_RESOLUTION_KEYS].sort(), [...GLOBAL_KEYS_MERGED_UNDER_PROJECT].sort());
   });
+
+  // #5681: the global layer under a project reads a store as the global-defaults branch does.
+  test('a nested commit_docs that is not a boolean is no setting under a project, as outside one (#5681)', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ planning: { commit_docs: 'false' } });
+    assert.equal(loadConfigResolved(tmpDir).config['commit_docs'], true);
+    writeGlobalDefaults({ planning: { commit_docs: false } });
+    assert.equal(loadConfigResolved(tmpDir).config['commit_docs'], false);
+  });
+
+  test('a parallelization scalar that is not a boolean is no setting under a project, as outside one (#5681)', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    for (const stored of ['false', 0]) {
+      writeGlobalDefaults({ parallelization: stored });
+      assert.equal(loadConfigResolved(tmpDir).config['parallelization'], true, JSON.stringify(stored));
+    }
+    writeGlobalDefaults({ parallelization: false });
+    assert.equal(loadConfigResolved(tmpDir).config['parallelization'], false);
+  });
 });
 
 // ─── Regressions — #3760: a non-object section must not be expanded or written ──

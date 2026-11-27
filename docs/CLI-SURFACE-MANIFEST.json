@@ -153,6 +153,14 @@
       "workstreamScoped": false
     },
     {
+      "verb": "config-save-defaults",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
       "verb": "config-set",
       "aliases": [],
       "positionals": 3,

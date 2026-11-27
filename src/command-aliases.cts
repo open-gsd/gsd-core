@@ -756,6 +756,11 @@ export const NON_FAMILY_COMMAND_ALIASES: NonFamilyCommandAlias[] = [
     "mutation": true
   },
   {
+    "canonical": "config-save-defaults",
+    "aliases": [],
+    "mutation": true
+  },
+  {
     "canonical": "config-set",
     "aliases": [],
     "mutation": true

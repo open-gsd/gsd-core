@@ -724,6 +724,9 @@ node gsd-tools.cjs migrate-config
 
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
+
+# Merge settings into the global defaults store ($GSD_HOME/.gsd/defaults.json)
+node gsd-tools.cjs config-save-defaults '<settings-json>'
 ```
 
 `config-set --dry-run` validates the key and value and prints what would change (`dry_run: true`, the key, its new value and its previous value, masked for secrets) without writing `config.json`.
@@ -798,6 +801,76 @@ repeated global `--cwd` / `--project-dir` flags, including flags before the
 profile argument. Extra positional arguments are refused too. The same contract
 applies with the `query` prefix. `config-set --dry-run` supports previewing an
 individual value change without writing.
+
+`config-save-defaults` is the write behind `/gsd-settings` "save as global defaults" (#5681).
+It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.json` unless
+`GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
+replaces. A setting the save leaves unset keeps what is stored: an empty object, at any depth,
+sets nothing (`{"parallelization":{"enabled":{}}}` leaves a stored `parallelization: false` as it
+was), and a stored section is dropped only when the save empties it (its `null`s, or a spelling it replaces). `parallelization` is a boolean or a section whose `enabled` holds it, and where the stored value and the saved one differ in shape the boolean is merged as `enabled`: a saved `{"max_concurrent_agents":3}` over a stored `false` stores `{"enabled":false,"max_concurrent_agents":3}`, `{"enabled":null}` clears a stored boolean, and a saved `true` over a stored section sets its `enabled` and keeps its other fields. Only a boolean is merged this way: a stored non-boolean, which the loader reads as the default, is replaced by the saved section as before. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+`resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
+`config-set` key and value rules first, as `config-new-project` choices are, so a key must be
+spelled the way `config-set` accepts it: `git.branching_strategy`, not `branching_strategy`
+(a few flat spellings, such as `commit_docs`, are accepted). Saving either spelling of a
+setting (a value or a `null`; an empty object is neither) removes the other from the store (`research` for `workflow.research`,
+`planning.commit_docs` for `commit_docs`), and saving `granularity` removes the retired `depth`, so a
+stale value cannot keep winning or be copied into new projects. Outside a project the loader reads each setting it takes from the store (a fixed list: `search_gitignored`, for one, is read only from a project config) as a new project made from it reads that setting: its flat spelling as stored, else its nested spelling. For `commit_docs` and `search_gitignored`, which new projects write flat, a nested value counts only when it is a boolean, so a hand-written `{"planning":{"commit_docs":"false"}}` is no setting to either and both read the default; every other nested value is read as stored in both places. A missing file is created, and a store kept as a
+symlink is written through to its target, so the link survives; a link whose target is missing
+is refused. These keys are never saved: the search flags that new projects detect from this machine
+(`brave_search`, `firecrawl`, `exa_search`, `tavily_search`, `ref_search`, `perplexity`,
+`jina`, `serply_search`). A save that gives one leaves it out and lists it in the result's `skipped`
+array (`[]` when none was given). Every other key the `config-set` rules accept is saved,
+project-specific settings such as `project_code` or `git.base_branch` included. The store is read the
+way the loader reads every config file: one that cannot be read, is not a regular file (a FIFO
+or device), is larger than 1 MiB, is not valid JSON, or is not a JSON object is refused and left
+as it was. The store is written as 2-space JSON, and a save whose result in that form would be
+larger than 1 MiB is refused too, since the loader could not read it. That holds for a save that
+changes nothing: a compact hand-written store just under the cap grows past it when rewritten
+with indentation, and then no save is accepted until it is made smaller. A write goes to a temp file created exclusively under a
+random name and renamed over the store. The temp file is created with the store's own file mode,
+narrowed by the umask, or `0600` when that mode cannot be read, so a save never opens the store to
+group or others (a `0400` store whose mode cannot be read comes back `0600`). Depth counts toward the 1 MiB limit too:
+each level of nesting adds a level of indentation, so a store of `{"a":…}` 722 levels deep, 4.3 KB
+compact, rewrites to more than 1 MiB and is refused like any oversized save. A store nested too deeply
+to merge into or serialize at all (several thousand levels on Node 24) is refused as such and left as
+it was. A write
+that fails therefore leaves the store as it was, and an existing entry at a temp-file name is never
+opened. A crash between that write and the rename leaves the temp file
+(`defaults.json.tmp.<pid>.<random>`) beside the store, or for a symlinked store beside its target under
+the target's name; nothing reads it, and it can be removed. The
+rename replaces the store's directory entry, so a store kept as a hard link is no longer shared after
+a save: the other name keeps the old contents. Share it with a symlink, which is written through.
+
+A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
+so two saves, or a save and an install, run one after the other and neither loses the other's
+keys. A save waits up to 30 s for the lock. A lock whose owner has exited is reclaimed; a lock
+file that names no owner (`$GSD_HOME/.gsd/gsd-install-migration.lock`, left by a crash before
+its owner was written) is not, and neither is one whose owner has exited when the file cannot be
+removed. The refusal names the file: remove it when no install or save is running, or, when it
+names an owner, when that pid is not running.
+
+With `--json-errors`, each refusal carries a typed reason
+([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
+`usage` for settings that are not one JSON object (including an empty or blank argument),
+that give both spellings of one setting (`commit_docs` and `planning.commit_docs`), or that give
+`commit_docs` or `search_gitignored`, under either spelling, a value that is neither a boolean nor `null` (new
+projects would ignore it while the loader read it), or that give `parallelization` a value that is neither a
+boolean, an object nor `null` (the loader would read it as no setting),
+`config_invalid_key` for a key that is not a known setting, is written dotted
+(`workflow.research` rather than nested) or gives a section a scalar, the reason `config-set` itself
+reports for a value it does not accept (`unknown` for most values, `usage` for a malformed number
+such as `context_window`), `config_invalid_key` also for `__proto__`, `prototype` or
+`constructor` where the schema accepts no such key (a setting or section name, or an entry of
+`models` or `phase_commit_docs`), `config_parse_failed` for one of those names as an entry the
+schema accepts (`model_overrides.constructor`, `agent_skills.constructor`), which the
+prototype-pollution guard then refuses, `config_defaults_invalid` for a store
+that is not a readable JSON object, `config_defaults_write_failed` for a failed write or a store
+that would grow past 1 MiB, and
+`config_defaults_lock_unavailable` when the lock cannot be taken, for example while another
+install or save holds it. The lock is released before the result is reported. If releasing it
+fails after a refusal, the refusal is still the error, with the release failure added to its
+message. If it fails after a save that landed, the error is
+`config_defaults_lock_release_failed`, and it carries `saved`, `created`, `path` and `skipped`.
 
 ---
 

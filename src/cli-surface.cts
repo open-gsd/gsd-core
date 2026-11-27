@@ -98,6 +98,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     rejectShortFlags: true,
     unknownFlagMessage: 'Unknown flag for config-new-project: {flag}',
   },
+  // The settings JSON is the one positional (#5681); a second one is refused.
+  'config-save-defaults': { positionals: 2 },
   'config-path': { positionals: 1 },
   'config-ensure-section': { positionals: 1, rejectShortFlags: true, unknownFlagMessage: 'Unknown flag for config-ensure-section: {flag}', rejectedGlobalFlags: ['pick', 'default'] },
   'config-set-model-profile': { positionals: 2, rejectShortFlags: true, unknownFlagMessage: 'Unknown flag for config-set-model-profile: {flag}', rejectedGlobalFlags: ['pick', 'default'] },

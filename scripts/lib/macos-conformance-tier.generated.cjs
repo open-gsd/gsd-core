@@ -70,6 +70,7 @@ module.exports = {
   "tests/config-loader-bounded-read.platform.test.cjs",
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
+  "tests/config.platform.test.cjs",
   "tests/config.test.cjs",
   "tests/copilot-install.test.cjs",
   "tests/core-utils.test.cjs",

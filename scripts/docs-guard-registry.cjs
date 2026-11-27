@@ -260,7 +260,7 @@ const DOCS_GUARD_TESTS = {
   'tests/compact-content-4139.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/complete-milestone-release-map-routing.test.cjs': ['docs/README.md', 'docs/how-to/tag-a-multi-repo-milestone.md'],
   'tests/config-field-docs.test.cjs': ['docs/CONFIGURATION.md'],
-  'tests/config.test.cjs': ['docs/CONFIGURATION.md'],
+  'tests/config.test.cjs': ['docs/CLI-TOOLS.md', 'docs/CONFIGURATION.md'],
   // #4974: doc/workflow content-parity checks read docs/CONFIGURATION.md's
   // Gate Settings section directly (see tests/gates-confirmation-toggle-config.test.cjs).
   'tests/gates-confirmation-toggle-config.test.cjs': ['docs/CONFIGURATION.md'],

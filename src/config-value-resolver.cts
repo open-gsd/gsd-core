@@ -17,7 +17,7 @@ const { readConfigFileBounded } = configFileRead;
 import { parseJsonc } from './settings-jsonc.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import loader = require('./config-loader.cjs');
-const { CONFIG_REASON } = loader;
+const { CONFIG_REASON, isUnreadGlobalDefault } = loader;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import schema = require('./config-schema.cjs');
 const { isCentralConfigKey, getCapabilityConfigSchema } = schema;
@@ -287,7 +287,9 @@ function resolveConfigValue(
     const resolved = ownValue(data?.parsed ?? read.data, key);
     if (resolved.found) {
       const typed = opts.valueType === undefined || family !== 'B' || typeof resolved.value === opts.valueType;
-      if (typed && (!federatedSlice || (isWellFormedSlice(federatedSlice)
+      // A store value the loader's global layer reads as no setting is skipped here as well (#5681).
+      const unread = layer === 'global-defaults' && isUnreadGlobalDefault(key, resolved.value);
+      if (typed && !unread && (!federatedSlice || (isWellFormedSlice(federatedSlice)
           && typeMatchesSlice(resolved.value, federatedSlice)))) {
         entries.push({ layer, value: resolved.value, rank });
       } else {

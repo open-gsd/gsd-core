@@ -12,13 +12,20 @@ import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
+type ErrorReasonValue = typeof ERROR_REASON[keyof typeof ERROR_REASON];
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
-import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+const {
+  CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, FLAT_WRITTEN_TWIN_KEYS, resolvePlannerStallDetectionEnabled,
+  _getGlobalTwinValue, _getConfigNested, isUnreadGlobalDefault,
+} = configLoader;
+import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
+import { resolveGsdHome } from './runtime-homes.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5681 installer-migrations.cts is an `export =` module, which only `import x = require` can name
+import installerMigrations = require('./installer-migrations.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
@@ -169,7 +176,11 @@ function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
 function validateKnownConfigKeyPath(keyPath: string): void {
-  const suggested = CONFIG_KEY_SUGGESTIONS[keyPath];
+  // Own keys only: `__proto__` and `constructor` would otherwise read
+  // Object.prototype members and suggest them (#5681).
+  const suggested = Object.prototype.hasOwnProperty.call(CONFIG_KEY_SUGGESTIONS, keyPath)
+    ? CONFIG_KEY_SUGGESTIONS[keyPath]
+    : undefined;
   if (suggested) {
     error(`Unknown config key: ${keyPath}. Did you mean ${suggested}?`, ERROR_REASON.CONFIG_INVALID_KEY);
   }
@@ -286,8 +297,64 @@ function validateShipPrBodySections(value: unknown): void {
  */
 interface NewProjectConfigPlan {
   config: Record<string, unknown>;
-  defaultsRewrite: { path: string; contents: string } | null;
+  /** The store to migrate `depth` in, when the plan migrated it in memory. */
+  defaultsRewrite: { path: string } | null;
 }
+
+/**
+ * Search integrations a new project detects from this machine: the flag is on
+ * when the env var is set or the key file exists under `$GSD_HOME/.gsd`.
+ * `config-save-defaults` never copies these flags to the global store, where
+ * they would override the detection in every new project (#5681).
+ */
+const DETECTED_SEARCH_INTEGRATIONS: readonly { key: string; envVar: string; keyFile: string }[] = [
+  { key: 'brave_search', envVar: 'BRAVE_API_KEY', keyFile: 'brave_api_key' },
+  { key: 'firecrawl', envVar: 'FIRECRAWL_API_KEY', keyFile: 'firecrawl_api_key' },
+  { key: 'exa_search', envVar: 'EXA_API_KEY', keyFile: 'exa_api_key' },
+  { key: 'tavily_search', envVar: 'TAVILY_API_KEY', keyFile: 'tavily_api_key' },
+  { key: 'ref_search', envVar: 'REF_API_KEY', keyFile: 'ref_api_key' },
+  { key: 'perplexity', envVar: 'PERPLEXITY_API_KEY', keyFile: 'perplexity_api_key' },
+  { key: 'jina', envVar: 'JINA_API_KEY', keyFile: 'jina_api_key' },
+  { key: 'serply_search', envVar: 'SERPLY_API_KEY', keyFile: 'serply_api_key' },
+];
+
+/** Legacy `depth` values and the `granularity` each one became. */
+const DEPTH_TO_GRANULARITY: Readonly<Record<string, string>> = Object.freeze({ quick: 'coarse', standard: 'standard', comprehensive: 'fine' });
+
+/**
+ * `store` with a legacy `depth` migrated to `granularity`, or null when there is
+ * nothing to migrate (no `depth`, or a `granularity` beside it). An unknown depth,
+ * one named like an Object.prototype member included, is kept as given.
+ */
+function migrateDepthToGranularity(store: Record<string, unknown>): Record<string, unknown> | null {
+  if (!Object.prototype.hasOwnProperty.call(store, 'depth') || Object.prototype.hasOwnProperty.call(store, 'granularity')) return null;
+  const depth = store['depth'] as string;
+  const migrated: Record<string, unknown> = {
+    ...store,
+    granularity: (Object.prototype.hasOwnProperty.call(DEPTH_TO_GRANULARITY, depth) && DEPTH_TO_GRANULARITY[depth]) || depth,
+  };
+  delete migrated['depth'];
+  return migrated;
+}
+
+/**
+ * The flat top-level settings a new project's template starts from. Two of
+ * them have a nested twin (TEMPLATE_FLAT_TWINS).
+ */
+const TEMPLATE_FLAT_SETTINGS: Readonly<Record<string, unknown>> = Object.freeze({
+  model_profile: CONFIG_DEFAULTS.model_profile,
+  commit_docs: CONFIG_DEFAULTS.commit_docs,
+  parallelization: CONFIG_DEFAULTS.parallelization,
+  search_gitignored: CONFIG_DEFAULTS.search_gitignored,
+});
+
+/**
+ * The twins whose flat key the template writes (config-loader's
+ * FLAT_WRITTEN_TWIN_KEYS: `commit_docs`, `search_gitignored`). The loader reads
+ * a flat key before its nested twin, so new-project creation reads each layer's
+ * nested spelling into the flat key itself (#5681).
+ */
+const TEMPLATE_FLAT_TWINS = NESTED_TWINS.filter(({ key }) => FLAT_WRITTEN_TWIN_KEYS.includes(key));
 
 /**
  * Plan a fully-materialized config object for a new project. Writes nothing:
@@ -314,22 +381,10 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   const gsdHome = process.env['GSD_HOME'] || os.homedir();
 
   // Detect API key availability
-  const braveKeyFile = path.join(gsdHome, '.gsd', 'brave_api_key');
-  const hasBraveSearch = !!(process.env['BRAVE_API_KEY'] || fs.existsSync(braveKeyFile));
-  const firecrawlKeyFile = path.join(gsdHome, '.gsd', 'firecrawl_api_key');
-  const hasFirecrawl = !!(process.env['FIRECRAWL_API_KEY'] || fs.existsSync(firecrawlKeyFile));
-  const exaKeyFile = path.join(gsdHome, '.gsd', 'exa_api_key');
-  const hasExaSearch = !!(process.env['EXA_API_KEY'] || fs.existsSync(exaKeyFile));
-  const tavilyKeyFile = path.join(gsdHome, '.gsd', 'tavily_api_key');
-  const hasTavilySearch = !!(process.env['TAVILY_API_KEY'] || fs.existsSync(tavilyKeyFile));
-  const refKeyFile = path.join(gsdHome, '.gsd', 'ref_api_key');
-  const hasRefSearch = !!(process.env['REF_API_KEY'] || fs.existsSync(refKeyFile));
-  const perplexityKeyFile = path.join(gsdHome, '.gsd', 'perplexity_api_key');
-  const hasPerplexity = !!(process.env['PERPLEXITY_API_KEY'] || fs.existsSync(perplexityKeyFile));
-  const jinaKeyFile = path.join(gsdHome, '.gsd', 'jina_api_key');
-  const hasJina = !!(process.env['JINA_API_KEY'] || fs.existsSync(jinaKeyFile));
-  const serplyKeyFile = path.join(gsdHome, '.gsd', 'serply_api_key');
-  const hasSerplySearch = !!(process.env['SERPLY_API_KEY'] || fs.existsSync(serplyKeyFile));
+  const detectedSearch: Record<string, boolean> = {};
+  for (const { key, envVar, keyFile } of DETECTED_SEARCH_INTEGRATIONS) {
+    detectedSearch[key] = !!(process.env[envVar] || fs.existsSync(path.join(gsdHome, '.gsd', keyFile)));
+  }
 
   // Load user-level defaults from $GSD_HOME/.gsd/defaults.json if available
   const globalDefaultsPath = configLoader.globalDefaultsPath(gsdHome);
@@ -337,14 +392,12 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   try {
     if (fs.existsSync(globalDefaultsPath)) {
       userDefaults = JSON.parse(fs.readFileSync(globalDefaultsPath, 'utf-8')) as Record<string, unknown>;
-      // Migrate deprecated "depth" key to "granularity"
-      if ('depth' in userDefaults && !('granularity' in userDefaults)) {
-        const depthToGranularity: Record<string, string> = { quick: 'coarse', standard: 'standard', comprehensive: 'fine' };
-        userDefaults['granularity'] = depthToGranularity[userDefaults['depth'] as string] || userDefaults['depth'];
-        delete userDefaults['depth'];
-        // The migrated value is used for this build whether or not the
-        // rewrite is ever persisted.
-        defaultsRewrite = { path: globalDefaultsPath, contents: JSON.stringify(userDefaults, null, 2) };
+      // Migrate deprecated "depth" key to "granularity". The migrated value is
+      // used for this build whether or not the rewrite is ever persisted.
+      const migrated = migrateDepthToGranularity(userDefaults);
+      if (migrated !== null) {
+        userDefaults = migrated;
+        defaultsRewrite = { path: globalDefaultsPath };
       }
     }
   } catch {
@@ -352,18 +405,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   }
 
   const hardcoded: Record<string, unknown> = {
-    model_profile: CONFIG_DEFAULTS.model_profile,
-    commit_docs: CONFIG_DEFAULTS.commit_docs,
-    parallelization: CONFIG_DEFAULTS.parallelization,
-    search_gitignored: CONFIG_DEFAULTS.search_gitignored,
-    brave_search: hasBraveSearch,
-    firecrawl: hasFirecrawl,
-    exa_search: hasExaSearch,
-    tavily_search: hasTavilySearch,
-    ref_search: hasRefSearch,
-    perplexity: hasPerplexity,
-    jina: hasJina,
-    serply_search: hasSerplySearch,
+    ...TEMPLATE_FLAT_SETTINGS,
+    ...detectedSearch,
     git: {
       branching_strategy: CONFIG_DEFAULTS.branching_strategy,
       create_tag: true,
@@ -472,16 +515,70 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     },
   };
 
+  // The template writes `commit_docs` and `search_gitignored` flat, and the
+  // loader reads a flat key before its nested twin, so a layer that sets only
+  // the nested spelling (`planning.commit_docs`, the spelling
+  // config-save-defaults keeps) would lose to the template's default. Each such
+  // key is read as the loader's global-defaults branch reads the store
+  // (_getGlobalTwinValue) from the highest layer that holds it: the choices,
+  // then the user defaults. A flat null leaves the template's default, as the
+  // loader resolves a null to its default. The flat key stays, as the template
+  // always writes it: a workstream config needs it to override the root's. A
+  // nested twin in the new project is given the same value, so the two
+  // spellings agree (#5681).
+  for (const twin of TEMPLATE_FLAT_TWINS) {
+    const { key, section, field } = twin;
+    let resolved: unknown = hardcoded[key];
+    for (const layer of [choices, safeDefaults] as Record<string, unknown>[]) {
+      const value = _getGlobalTwinValue(layer, twin);
+      if (value === undefined) continue;
+      if (value !== null) resolved = value;
+      break;
+    }
+    config[key] = resolved;
+    const projectSection = config[section];
+    if (isPlainObject(projectSection) && Object.prototype.hasOwnProperty.call(projectSection, field)) {
+      config[section] = { ...projectSection, [field]: resolved };
+    }
+  }
+
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
   return { config, defaultsRewrite };
 }
 
-/** Persist a plan's user defaults rewrite, best-effort as it always was. */
+/** How long the best-effort depth rewrite waits for the installer lock: not at all. */
+const DEPTH_REWRITE_LOCK_WAIT_MS = 0;
+
+/**
+ * Persist the `depth` -> `granularity` migration the plan applied in memory.
+ * The store is the one config-save-defaults writes, so this is written the same
+ * way: under the installer's lock on `.gsd/`, re-read and migrated as it is now
+ * (a save that landed after the plan read the store is kept, #5681), through an
+ * exclusive temp file renamed over it. Best effort, as before: the migration is
+ * redone on every read, so a lock that is not free at once or a store that is
+ * refused leaves the store as it is.
+ */
 function persistDefaultsRewrite(plan: NewProjectConfigPlan): void {
   if (plan.defaultsRewrite === null) return;
+  const defaultsPath = plan.defaultsRewrite.path;
+  // Taking the lock creates `.gsd/`; a store whose directory is gone has
+  // nothing to migrate.
+  if (!fs.existsSync(path.dirname(defaultsPath))) return;
+  let release: () => void;
   try {
-    platformWriteSync(plan.defaultsRewrite.path, plan.defaultsRewrite.contents);
-  } catch { /* intentionally empty */ }
+    // No wait: a held lock, or one a crash left naming no owner (never
+    // reclaimed), skips the rewrite instead of holding up project creation.
+    release = installerMigrations.acquireInstallMigrationLock(path.dirname(defaultsPath), { timeoutMs: DEPTH_REWRITE_LOCK_WAIT_MS });
+  } catch {
+    return;
+  }
+  try {
+    updateDefaultsStore(defaultsPath, migrateDepthToGranularity, { createMissing: false });
+  } catch {
+    // best effort: the store is left as it was
+  } finally {
+    try { release(); } catch { /* best effort */ }
+  }
 }
 
 /**
@@ -526,8 +623,17 @@ function isConfigSection(cwd: string, keyPath: string): boolean {
   return hasChildConfigKeys(cwd, keyPath);
 }
 
+/** Which command is checking its settings, and how it reads a null. */
+interface ConfigChoicesOptions {
+  /** The command named in a refusal. */
+  verb: 'config-new-project' | 'config-save-defaults';
+  /** Keep a null as the request to clear its key, instead of leaving it out. */
+  keepNull: boolean;
+}
+
 /**
- * Hold `config-new-project` choices to the rules `config-set` applies (#5268).
+ * Hold a command's settings to the rules `config-set` applies: the choices of
+ * `config-new-project` (#5268) and the settings of `config-save-defaults` (#5681).
  *
  * Choices arrive nested (`{"workflow":{"research":true}}`) while the schema
  * and `config-set` address dotted leaf paths (`workflow.research`), so the
@@ -541,9 +647,16 @@ function isConfigSection(cwd: string, keyPath: string): boolean {
  * each value is the one `config-set` would persist (a normalizing rule's
  * result where one applies). An empty object is a section with nothing set:
  * refused as an unknown key unless its name is a real section, and left out
- * of the result either way.
+ * of the result either way. A null choice is left out too, unless
+ * `options.keepNull` keeps it as the request to clear the key.
  */
-function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = ''): Record<string, unknown> {
+function validateConfigChoices(
+  cwd: string,
+  choices: Record<string, unknown>,
+  options: ConfigChoicesOptions,
+  prefix = '',
+): Record<string, unknown> {
+  const { verb, keepNull } = options;
   const checked: Record<string, unknown> = {};
   for (const key of Object.keys(choices)) {
     const kp = prefix ? `${prefix}.${key}` : key;
@@ -564,7 +677,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
       const dotIsInsideAnId = prefix !== '' && DYNAMIC_KEY_PATTERNS.some((family) => family.test(head) && family.test(kp));
       if (!dotIsInsideAnId) {
         error(
-          `Invalid choice key "${key}" for config-new-project. Nest it instead of using a dotted key, e.g. {"workflow":{"research":true}}.`,
+          `Invalid choice key "${key}" for ${verb}. Nest it instead of using a dotted key, e.g. {"workflow":{"research":true}}.`,
           ERROR_REASON.CONFIG_INVALID_KEY,
         );
       }
@@ -578,7 +691,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
       if (Object.keys(value).length === 0 && !isValidConfigKey(kp, cwd) && !isConfigSection(cwd, kp)) {
         assertKnownConfigKey(cwd, kp);
       }
-      const section = validateNewProjectChoices(cwd, value, kp);
+      const section = validateConfigChoices(cwd, value, options, kp);
       // Empty as given, or emptied by null choices: it sets nothing.
       if (Object.keys(section).length > 0) checked[key] = section;
       continue;
@@ -588,7 +701,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     // the name unknown, which misdescribes a real section; say what is wrong.
     if (!isValidConfigKey(kp, cwd) && isConfigSection(cwd, kp)) {
       error(
-        `Invalid choice "${kp}" for config-new-project: it is a section, so its value must be an object of settings, e.g. {"workflow":{"research":true}}.`,
+        `Invalid choice "${kp}" for ${verb}: it is a section, so its value must be an object of settings, e.g. {"workflow":{"research":true}}.`,
         ERROR_REASON.CONFIG_INVALID_KEY,
       );
     }
@@ -607,7 +720,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     if (kp.split('.').some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
       error('Invalid config key (prototype pollution guard): ' + kp, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
-    if (value === null) continue;
+    if (value === null && !keepNull) continue;
     checked[key] = checkedValue;
   }
   return checked;
@@ -656,7 +769,7 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // #5268: refuse what config-set refuses, before the first write — and
   // before the existing-config check, so a refused choice is reported
   // whether or not the project already has a config.
-  const checkedChoices = validateNewProjectChoices(cwd, userChoices);
+  const checkedChoices = validateConfigChoices(cwd, userChoices, { verb: 'config-new-project', keepNull: false });
 
   // Idempotent: don't overwrite existing config
   if (fs.existsSync(configPath)) {
@@ -694,6 +807,374 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // creation that fails before here leaves the defaults file as it was.
   persistDefaultsRewrite(plan);
   output({ created: true, path: '.planning/config.json' }, raw, 'created');
+}
+
+/**
+ * Settings with two spellings, as [legacy, canonical]: each flat key the loader
+ * reads ahead of its nested twin (config-loader's NESTED_TWINS). A save of
+ * either spelling removes the other.
+ */
+const SPELLING_TWINS: readonly (readonly [string, string])[] =
+  NESTED_TWINS.map(({ key, section, field }) => [key, `${section}.${field}`] as const);
+
+/**
+ * Retired keys, as [retired, replacement]: `depth`, which the loader and
+ * new-project creation read only when `granularity` is absent. A save of the
+ * replacement removes the retired key; the `config-set` rules refuse a save of
+ * the retired key itself.
+ */
+const RETIRED_SPELLINGS: readonly (readonly [string, string])[] = [['depth', 'granularity']];
+
+/** The value at a one- or two-segment config path, or undefined: the loader's nested lookup. */
+function readPath(obj: Record<string, unknown>, dotted: string): unknown {
+  const [head, field] = dotted.split('.');
+  return field === undefined ? obj[head] : _getConfigNested(obj, head, field);
+}
+
+/** `obj` without the value at a one- or two-segment config path; a section left empty is dropped. */
+function withoutPath(obj: Record<string, unknown>, dotted: string): Record<string, unknown> {
+  const [head, field] = dotted.split('.');
+  const result: Record<string, unknown> = { ...obj };
+  if (field === undefined) {
+    delete result[head];
+  } else if (isPlainObject(result[head])) {
+    const section: Record<string, unknown> = { ...result[head] };
+    delete section[field];
+    if (Object.keys(section).length === 0) delete result[head];
+    else result[head] = section;
+  }
+  return result;
+}
+
+/**
+ * Remove from `store` the other spelling of every setting `patch` sets or
+ * clears; one it gives only an empty object leaves both spellings as stored. A stale
+ * legacy value keeps winning over a saved canonical one, and a stale canonical
+ * value is copied into every new project beside a saved legacy one. `patch` has
+ * passed the `config-set` key rules, which accept the canonical spellings and a
+ * few legacy ones (`commit_docs`).
+ */
+function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  let result: Record<string, unknown> = { ...store };
+  for (const [legacy, canonical] of SPELLING_TWINS) {
+    if (setsValue(readPath(patch, canonical))) result = withoutPath(result, legacy);
+    if (setsValue(readPath(patch, legacy))) result = withoutPath(result, canonical);
+  }
+  for (const [retired, replacement] of RETIRED_SPELLINGS) {
+    if (setsValue(readPath(patch, replacement))) result = withoutPath(result, retired);
+  }
+  return result;
+}
+
+/** An object whose leaves are all empty objects (`{}` included): a patch that sets nothing. */
+function isHollowPatch(value: unknown): boolean {
+  return isPlainObject(value) && Object.values(value).every(isHollowPatch);
+}
+
+/** Whether a patch value sets or clears its key: present (a null clears) and not hollow. */
+function setsValue(value: unknown): boolean {
+  return value !== undefined && !isHollowPatch(value);
+}
+
+/**
+ * Settings that are a scalar or a section: the CONFIG_KEY_ALIASES entries whose
+ * field lives under the flat key itself. `parallelization` is a boolean, or an
+ * object whose `enabled` field holds it.
+ */
+const SCALAR_OR_SECTION = CONFIG_KEY_ALIASES
+  .filter(({ key, section }) => section === key)
+  .map(({ key, field }) => ({ key, field }));
+
+/**
+ * `store` and `patch` with each scalar-or-section setting in one shape where
+ * they differ, so the merge keeps what a boolean meant: a stored boolean under a
+ * patch that sets a section field is read as `{ <field>: boolean }`, and a saved
+ * boolean over a stored section is saved as its `<field>`. A stored
+ * `parallelization: false` then stays `enabled: false` beside a saved
+ * `max_concurrent_agents`, `{"enabled":null}` clears it, and a saved `true`
+ * keeps a stored section's other fields (#5681). Only a boolean is carried: the
+ * loader reads a top-level non-boolean as the default, and carried into
+ * `enabled` it would be read as itself (a stored `0` would turn the setting off).
+ */
+function alignScalarSections(
+  store: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): { store: Record<string, unknown>; patch: Record<string, unknown> } {
+  let alignedStore = store;
+  let alignedPatch = patch;
+  for (const { key, field } of SCALAR_OR_SECTION) {
+    const stored = store[key];
+    const given = patch[key];
+    if (typeof stored === 'boolean' && isPlainObject(given) && setsValue(given)) {
+      alignedStore = { ...alignedStore, [key]: { [field]: stored } };
+    } else if (isPlainObject(stored) && typeof given === 'boolean') {
+      alignedPatch = { ...alignedPatch, [key]: { [field]: given } };
+    }
+  }
+  return { store: alignedStore, patch: alignedPatch };
+}
+
+/**
+ * Deep-merge `patch` into the global defaults `base`: objects merge key by key,
+ * a null removes the key (as `config-set <key> null` clears one), and anything
+ * else replaces. A patch that sets nothing under a key leaves what is stored
+ * there as it was: an empty object, at any depth, sets nothing (it merges into
+ * a copy of what is stored, or into nothing), and neither does a null for a key
+ * the stored value does not hold. A stored section the patch empties is dropped.
+ */
+function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete merged[key];
+    } else if (isPlainObject(value)) {
+      // A section patch. Over a stored non-object it is merged into nothing,
+      // and replaces the stored value only if it sets something. A stored
+      // scalar-or-section setting reaches here already in section form
+      // (alignScalarSections), so its scalar is kept as the section's field.
+      const stored = merged[key];
+      const section = mergeIntoGlobalDefaults(isPlainObject(stored) ? stored : {}, value);
+      if (Object.keys(section).length > 0) merged[key] = section;
+      else if (isPlainObject(stored) && Object.keys(stored).length > 0) delete merged[key];
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Save settings as global defaults (#5681): merge them into
+ * `$GSD_HOME/.gsd/defaults.json` instead of replacing the file, so keys the
+ * settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+ * `resolve_model_ids`, unlisted `workflow` keys …) survive. The settings are held
+ * to the `config-set` rules first, as `config-new-project` holds its choices,
+ * since this store seeds every new project; a null clears its key. A saved
+ * setting removes its other spelling (SPELLING_TWINS). A missing file is
+ * created; an unreadable or non-object one is refused rather than overwritten.
+ * A symlinked store is written through, so the link survives; a dangling link
+ * is refused. The read-modify-write holds the installer's lock on `.gsd/`.
+ */
+function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, raw: boolean): void {
+  let settings: unknown;
+  try {
+    settings = JSON.parse(settingsJson ?? '');
+  } catch (err) {
+    error('Invalid JSON for config-save-defaults: ' + (err as Error).message, ERROR_REASON.USAGE);
+  }
+  if (!isPlainObject(settings)) {
+    error('Invalid settings for config-save-defaults: expected a JSON object of config keys.', ERROR_REASON.USAGE);
+  }
+  const unchecked: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
+  // The detected search flags are never saved; the result lists the ones given
+  // so a caller can tell they were dropped (#5681).
+  const skipped = DETECTED_SEARCH_INTEGRATIONS
+    .map(({ key }) => key)
+    .filter((key) => Object.prototype.hasOwnProperty.call(unchecked, key));
+  for (const key of skipped) delete unchecked[key];
+  const patch = validateConfigChoices(cwd, unchecked, { verb: 'config-save-defaults', keepNull: true });
+  // Both spellings of one setting would both be stored, and the loader and
+  // new-project creation each read a different one first.
+  const twin = SPELLING_TWINS.find(([legacy, canonical]) => setsValue(readPath(patch, legacy)) && setsValue(readPath(patch, canonical)));
+  if (twin) {
+    error(`Invalid settings for config-save-defaults: "${twin[0]}" and "${twin[1]}" are one setting; give only one of them.`, ERROR_REASON.USAGE);
+  }
+  // New-project creation reads a twin the template writes flat only when its
+  // value has the template's type, while the loader reads any value, so a
+  // stored string "false" would reach the loader and not new projects.
+  for (const { key, section, field } of TEMPLATE_FLAT_TWINS) {
+    const want = typeof TEMPLATE_FLAT_SETTINGS[key];
+    for (const spelling of [key, `${section}.${field}`]) {
+      const value = readPath(patch, spelling);
+      if (setsValue(value) && value !== null && typeof value !== want) {
+        const shown = typeof value === 'number' ? String(value) : JSON.stringify(value);
+        error(`Invalid settings for config-save-defaults: "${spelling}" must be a ${want}, got ${shown}.`, ERROR_REASON.USAGE);
+      }
+    }
+  }
+  // The loader reads a `parallelization` that is neither a boolean nor an object
+  // as no setting, so saving one would report a save that sets nothing. A null
+  // still clears the key.
+  const parallelization = readPath(patch, 'parallelization');
+  if (parallelization !== null && isUnreadGlobalDefault('parallelization', parallelization)) {
+    const shown = typeof parallelization === 'number' ? String(parallelization) : JSON.stringify(parallelization);
+    error(`Invalid settings for config-save-defaults: "parallelization" must be a boolean or an object, got ${shown}.`, ERROR_REASON.USAGE);
+  }
+
+  const gsdDir = path.join(resolveGsdHome(), '.gsd');
+  const defaultsPath = path.join(gsdDir, 'defaults.json');
+  // The installer's defaults writers take this lock for their read-modify-write
+  // (bin/install.js); holding it too serializes a save with them and with
+  // another save, so none of them drops a key the other wrote.
+  let release: () => void;
+  try {
+    // Called through the module, not a destructured copy, so a test can hold the
+    // lock with a zero timeout instead of the 30 s default.
+    release = installerMigrations.acquireInstallMigrationLock(gsdDir);
+  } catch (err) {
+    // A lock that was waited on carries `lockHolder`: the owner it names, or null
+    // when its contents name none. The installer reclaims a lock whose owner has
+    // exited when it can remove the file, never one it cannot read, so the
+    // refusal says when the user should remove it (#5681).
+    const lockPath = path.join(gsdDir, installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
+    const waited = Object.prototype.hasOwnProperty.call(err, 'lockHolder');
+    const holder = (err as { lockHolder?: { pid: number; acquiredAt?: unknown } | null }).lockHolder;
+    let message = `Cannot save ${defaultsPath}: ${(err as Error).message}.`;
+    const fields: Record<string, unknown> = { lock_path: lockPath };
+    if (holder) {
+      message = `Cannot save ${defaultsPath}: ${lockPath} is held by pid ${holder.pid}. Save again when that GSD install or settings save has finished; if pid ${holder.pid} is not running, remove ${lockPath} and save again.`;
+      fields['holder_pid'] = holder.pid;
+      if (typeof holder.acquiredAt === 'string') fields['holder_since'] = holder.acquiredAt;
+    } else if (waited) {
+      message = `Cannot save ${defaultsPath}: ${lockPath} names no owner, so it is never reclaimed. If no GSD install or settings save is running, remove ${lockPath} and save again.`;
+    }
+    return error(message, ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE, fields);
+  }
+  // The store is read and written under the lock, and the lock is released
+  // before anything is reported, so a release failure cannot replace the save's
+  // own result: it is added to that result's one error line.
+  let outcome: { created: boolean } | { message: string; reason: ErrorReasonValue };
+  try {
+    outcome = updateDefaultsStore(defaultsPath, (existing) => {
+      const aligned = alignScalarSections(existing, patch);
+      return mergeIntoGlobalDefaults(dropShadowedSpellings(aligned.store, aligned.patch), aligned.patch);
+    });
+  } catch (err) {
+    try {
+      release();
+    } catch {
+      // the unexpected error is the one to surface
+    }
+    throw err;
+  }
+  let releaseFailure = '';
+  try {
+    release();
+  } catch (err) {
+    releaseFailure = (err as Error).message;
+  }
+  if ('reason' in outcome) {
+    return error(releaseFailure ? `${outcome.message} Also: ${releaseFailure}.` : outcome.message, outcome.reason);
+  }
+  const result = { saved: true, created: outcome.created, path: defaultsPath, skipped };
+  if (releaseFailure) {
+    error(`Saved ${defaultsPath}, but: ${releaseFailure}.`, ERROR_REASON.CONFIG_DEFAULTS_LOCK_RELEASE_FAILED, result);
+  }
+  output(result, raw, 'saved');
+}
+
+/**
+ * The read-modify-write of the global defaults store, run while the caller holds
+ * the installer's lock on `.gsd/`: read and check the store, pass it to `update`,
+ * and write what it returns. A null from `update` writes nothing. A missing store
+ * is read as `{}` and created, unless `createMissing` is false, when nothing is
+ * written. Used by config-save-defaults and by new-project creation's `depth`
+ * migration, the two writers of the store outside the installer.
+ */
+function updateDefaultsStore(
+  defaultsPath: string,
+  update: (existing: Record<string, unknown>) => Record<string, unknown> | null,
+  { createMissing = true }: { createMissing?: boolean } = {},
+): { created: boolean } | { message: string; reason: ErrorReasonValue } {
+  // A dangling link is not a missing store: writing would replace the link.
+  let isLink = false;
+  try {
+    isLink = fs.lstatSync(defaultsPath).isSymbolicLink();
+  } catch {
+    // absent
+  }
+  const created = !isLink && !fs.existsSync(defaultsPath);
+  if (created && !createMissing) return { created: false };
+  let existing: Record<string, unknown> = {};
+  // A store kept as a symlink (into a dotfiles repo) is read and written at its
+  // target: the atomic write renames over its path, which would replace the link.
+  let storePath = defaultsPath;
+  let storeMode = 0o666; // openExclusiveTempSync's creation default, narrowed by the umask
+  if (!created) {
+    const invalid = ERROR_REASON.CONFIG_DEFAULTS_INVALID;
+    try {
+      storePath = fs.realpathSync(defaultsPath);
+    } catch (err) {
+      return { message: `Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`, reason: invalid };
+    }
+    // Read as a bounded regular file, as the loader reads it (#5759): a FIFO or
+    // device cannot block the save, and a store the loader would refuse (not a
+    // regular file, or over CONFIG_MAX_BYTES) is refused rather than merged into.
+    let text: string | null;
+    try {
+      text = configLoader.readConfigFileBounded(storePath);
+    } catch (err) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it cannot be read as a config file (${(err as Error).message}).`, reason: invalid };
+    }
+    if (text === null) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it disappeared while being read. Save again.`, reason: invalid };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`, reason: invalid };
+    }
+    if (!isPlainObject(parsed)) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`, reason: invalid };
+    }
+    existing = parsed;
+    // The rename gives the store the replacement's mode, so a private store
+    // (0600) is replaced by a file created with its mode, never a wider one.
+    // If the mode cannot be read, the replacement is private: narrowing an
+    // existing store is safe, widening one is not.
+    try {
+      storeMode = fs.statSync(storePath).mode & 0o777;
+    } catch {
+      storeMode = 0o600;
+    }
+  }
+
+  // The merge and the serializer recurse, so a store the loader reads (JSON.parse
+  // is iterative) can still be nested too deeply for them: refuse that store with
+  // its own reason rather than letting the stack overflow reach the command.
+  let data: string;
+  try {
+    const updated = update(existing);
+    if (updated === null) return { created: false };
+    data = JSON.stringify(updated, null, 2) + '\n';
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return { message: `Refusing to overwrite ${defaultsPath}: it is nested too deeply to merge into (${err.message}). Flatten it, then save again.`, reason: ERROR_REASON.CONFIG_DEFAULTS_INVALID };
+  }
+  // The cap holds for what is written as well as for what is read: a store over
+  // CONFIG_MAX_BYTES is one the loader and the next save both refuse, so a save
+  // that would grow the store past it writes nothing.
+  const size = Buffer.byteLength(data, 'utf8');
+  if (size > configLoader.CONFIG_MAX_BYTES) {
+    return { message: `Refusing to save ${defaultsPath}: the saved store would be ${size} bytes, over the ${configLoader.CONFIG_MAX_BYTES}-byte limit a config file is read under. Nothing was written.`, reason: ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED };
+  }
+
+  // Written to a temp file and renamed over the store, never written in place:
+  // when platformWriteSync cannot use its temp file it falls back to rewriting
+  // the target in place, which leaves the store half-written until its restore
+  // runs, and lost if the restore fails too. Same pattern as
+  // installer-migrations' atomicWriteInstallState. The temp file is
+  // created exclusively under a random name (#5759), so an entry already at a
+  // temp-file name, a link or a FIFO, is never opened, written through or blocked on.
+  let tmpPath: string | null = null;
+  try {
+    const temp = openExclusiveTempSync(storePath, undefined, storeMode);
+    tmpPath = temp.tmpPath;
+    try {
+      fs.writeFileSync(temp.fd, data, 'utf8');
+    } finally {
+      fs.closeSync(temp.fd);
+    }
+    retryRenameSync(tmpPath, storePath);
+  } catch (err) {
+    // Only a temp file this call created exclusively is removed.
+    if (tmpPath !== null) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
+    }
+    return { message: 'Failed to write defaults.json: ' + (err as Error).message, reason: ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED };
+  }
+  return { created };
 }
 
 /**
@@ -1767,6 +2248,11 @@ export = {
   encodeConfigValue,
   cmdConfigSetModelProfile,
   cmdConfigNewProject,
+  cmdConfigSaveDefaults,
+  DETECTED_SEARCH_INTEGRATIONS,
+  mergeIntoGlobalDefaults,
+  SPELLING_TWINS,
+  RETIRED_SPELLINGS,
   cmdConfigPath,
   cmdMigrateConfig,
   // Exported for programmatic use by capability-writer and tests
