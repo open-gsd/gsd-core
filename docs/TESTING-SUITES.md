@@ -27,9 +27,9 @@ This project's `tests/` directory uses **filename suffix markers** to group test
 
 Examples:
 - `tests/agent-frontmatter.test.cjs` — `unit`
-- `tests/prompt-injection-guards.security.test.cjs` — `security`
-- `tests/installer-end-to-end.install.test.cjs` — `install`
-- `tests/sdk-mutation-stress.slow.test.cjs` — `slow`
+- `tests/injection-patterns-parity.security.test.cjs` — `security`
+- `tests/agent-tools.install.test.cjs` — `install`
+- `tests/graphify-auto-update.slow.test.cjs` — `slow`
 - `tests/loop-walk.qa.test.cjs` — `qa`
 - `tests/cli-parity.process.test.cjs` — `unit`, marked as starting real processes
 

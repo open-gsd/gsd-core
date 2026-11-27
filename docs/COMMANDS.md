@@ -156,6 +156,8 @@ Gather phase context through adaptive questioning before planning.
 | `--analyze` | Add trade-off analysis during discussion |
 | `--power` | File-based bulk question answering from a prepared answers file |
 | `--assumptions` | Surface Claude's implementation assumptions about the phase without an interactive session |
+| `--chain` | Interactive discussion, then auto-advance to plan-phase and execute-phase (the downstream behavior of `--auto`, but the discussion itself is never auto-answered) |
+| `--text` | Replace every `AskUserQuestion` menu with a plain-text numbered list; also enabled by `workflow.text_mode: true`. Overlays combine in the fixed order `--analyze` → `--batch` → `--text` |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
 **Produces:** `{phase}-CONTEXT.md`, `{phase}-DISCUSSION-LOG.md` (audit trail)
@@ -212,6 +214,10 @@ Research, plan, and verify a phase.
 | `--view` | Research-only modifier: when used with `--research-phase`, print existing RESEARCH.md to stdout and exit (no spawn). |
 | `--gaps` | Gap closure mode (reads VERIFICATION.md, skips research) |
 | `--skip-verify` | Skip plan checker verification loop |
+| `--skip-ui` | Skip the UI-SPEC check for frontend phases; plans without a UI design contract |
+| `--text` | Replace every `AskUserQuestion` menu with a plain-text numbered list (required for Claude Code remote sessions, where TUI menus do not work); also enabled by `workflow.text_mode: true` |
+| `--chunked` | Chunked planning: a short outline task, then one short planner task per plan, each plan committed individually so an interrupted run resumes from the last committed plan; also enabled by `workflow.plan_chunked: true`. See [Enable concurrent per-plan planners](how-to/enable-concurrent-chunked-planning.md) |
+| `--force` | Replan a phase whose status is `Complete`; without it the gate exits 1. Emits a WARNING banner. `--reviews` on a closed phase is never overridable |
 | `--prd <file>` | Use a PRD file instead of discuss-phase for context |
 | `--ingest <path-or-glob>` | Use ADR file(s) instead of discuss-phase for context synthesis |
 | `--ingest-format <auto\|nygard\|madr\|narrative>` | Optional ADR parser format override for `--ingest` |
@@ -277,6 +283,8 @@ Cross-AI plan convergence loop — replan with review feedback until no HIGH con
 | Reviewer flags | No | Pass through every reviewer lane flag: `--claude`, `--codex`, `--coderabbit`, `--opencode`, `--qwen`, `--cursor`, `--agy` / `--antigravity`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--kimi-code` |
 | `--all` | No | Run every configured reviewer. Lanes are dispatched **sequentially by default**; set `review.parallel_lanes` to `true` to dispatch them concurrently within a single review pass |
 | `--max-cycles N` | No | Override cycle cap (default 3) |
+| `--text` | No | Replace every `AskUserQuestion` menu with a plain-text numbered list; also enabled by `workflow.text_mode: true` |
+| `--ws <name>` | No | Scope the run to a workstream |
 | `--on-escalation ask\|exit` | No | What happens when cycles run out without converging. `ask` (default) shows the Proceed anyway / Manual review question. `exit` asks nothing, writes no state, prints the final `CYCLE_SUMMARY` line and both concern sections, and ends with `CONVERGENCE_STATUS: <status> cycles=<n> current_high=<N> current_actionable=<M> open_conflicts=<K>` where `<status>` is `open_conflicts`, `stalled` or `max_cycles` (a converged run ends with `converged`). Any other value is refused before cycle 1. See [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md) |
 
 `/gsd-review --cycle-summary` returns the same `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` counters and concern sections for callers that assemble review and replanning themselves; the loop's counting rules live there once. Absent when no review ran.
@@ -328,6 +336,9 @@ Execute all plans in a phase with wave-based parallelization, or run a specific 
 |----------|----------|-------------|
 | `N` | **Yes** | Phase number to execute |
 | `--wave N` | No | Execute only Wave `N` in the phase |
+| `--gaps-only` | No | Execute only gap-closure plans (`gap_closure: true`), as produced by `/gsd-plan-phase --gaps`; refuses to run when the plan index carries no `gap_closure` key |
+| `--interactive` | No | Run plans sequentially inline (no subagents, wave grouping ignored); before each plan, offer execute / review-first / skip / stop |
+| `--tdd` | No | Enforce test-driven order for this run, equivalent to `workflow.tdd_mode: true` |
 | `--cross-ai` | No | Delegate execution to an external AI CLI (uses `workflow.cross_ai_command`) |
 | `--no-cross-ai` | No | Force local execution even if cross-AI is enabled in config |
 | `--force-mvp-gate "<reason>"` | No | Record an attributed acceptance for the phase's TDD review violations (reason required) and re-run the review |
@@ -352,6 +363,7 @@ User acceptance testing with auto-diagnosis.
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `N` | No | Phase number (defaults to last executed phase) |
+| `--ws <name>` | No | Scope the run to a workstream |
 
 **Prerequisites:** Phase has been executed
 **Produces:** `{phase}-UAT.md`, fix plans if issues found
@@ -386,6 +398,8 @@ A deliverable is auto-passed **only** when `human_judgment: false`, its `verific
 ```bash
 node gsd-tools.cjs uat classify-coverage --summary .planning/phases/01-foundation/01-01-SUMMARY.md
 ```
+
+The SUMMARY path is required: `--summary <path>`, or `--file <path>` as an alias. When both are given `--summary` wins. The path must be inside the project root.
 
 ---
 
@@ -1207,6 +1221,8 @@ a git repo — "unknown" is reported as unknown, not as fresh.
 
 **Context warnings inactive on a plugin-only Claude Code install (`W032`).** The gsd-core Claude Code plugin registers the context monitor hook (`gsd-context-monitor.js`) but not the statusline that feeds it: the monitor reads `/tmp/claude-ctx-{session_id}.json`, and `gsd-statusline.js` is the only writer, so on a plugin-only install the 35% and 25% remaining warnings never fire. `W032` fires when Claude Code's settings (the global config dir, then the project's `.claude/settings.json` and `settings.local.json`, later scopes overriding earlier ones; managed settings are not read) enable the `gsd-core` plugin — or the plugin is auto-discovered under `<config dir>/skills/` — and the effective `statusLine` command does not contain `gsd-statusline`. An npm install wires the statusline and reports nothing; a statusline of another tool still reports because it does not write the bridge, and so does a wrapper script that calls `gsd-statusline` under a name that does not contain it. The same gap covers the opt-in hooks (`hooks.workflow_guard`, `hooks.community`, `graphify.auto_update`), which only the npm installer registers. Fix: run the npm installer with `npx @opengsd/gsd-core@latest --global`; add `--force-statusline` to replace a statusLine that is already set (a `--local` install skips the statusLine without it). A warning, so it makes the health status `degraded`; other runtimes are not checked.
 
+**Project skills that defeat the scoped discovery read (`W033`).** Agents discover your project skills by reading each skill's frontmatter and opening the whole `SKILL.md` only when its `description` fits the task (`gsd-core/references/project-skills-discovery.md`). Two kinds of skill escape that bound, and health adds one WARNING per skill and cause: a `SKILL.md` with no non-empty string frontmatter `description` (discovery reads it in full on every agent spawn), and a `SKILL.md` of more than 500 lines (the limit the [Agent Skills specification](https://agentskills.io/specification) gives for a main `SKILL.md`, loaded in full whenever the skill is relevant). It checks `.claude/skills/` and `.agents/skills/` under the project, names the path in each finding, skips GSD's own `gsd-*` directories, and counts a line as a newline-terminated segment, so LF, CRLF and a missing final newline agree. The fix is to add a `description` that says what the skill does and when to use it, or to move detail into the skill's `references/` directory. The 500-line limit is fixed, not a config key. Not auto-fixable. The check reads `SKILL.md` only when it is a regular file of at most 256 KiB, opens at most 200 skill directories per root (sorted, after the name filter; the directory listing itself is not capped), and skips a directory whose name has characters outside letters, digits, `.`, `_` and `-`; an unreadable root or file gives no finding. Skill roots of other runtimes (`.cursor/skills`, `.github/skills`, `.codex/skills`) and global roots are not checked.
+
 **Verification report status outside the closed set (`W030`).** A phase's `*-VERIFICATION.md` may carry only `status: passed`, `gaps_found`, or `human_needed`. Any other value — `verified`, `Passed`, `stale`, a number — is a hard error for every other command that reads the report (`verification_status_invalid`); `/gsd-health` instead reports the file as a WARNING naming the value and the accepted set, so the check itself never fails on the defect it diagnoses. Set the report's frontmatter `status:` to an accepted value, or delete the report and re-run the phase's verification with `/gsd-execute-phase` (a deleted report reads `missing`, which routes there). Not auto-fixable. See [`verification status`](CLI-TOOLS.md#verification-status-the-verification-verdict-5118).
 
 **STATE.md far over its line target (`W031`).** STATE.md is a digest with a 100-line target (`templates/state.md`). When the file is more than 3x that (over 300 lines), health adds a WARNING naming the line count. Run `gsd-tools state prune` to archive old Decisions and Recently Completed entries; it does not touch the Quick Tasks table. For that table, `gsd-tools milestone archive-quick <version>` (the command [`/gsd-cleanup`](#gsd-cleanup) offers, opt-in) moves every directory under `.planning/quick/` into `milestones/<version>-quick/` and then resets the table. The reset runs whenever at least one directory exists under `.planning/quick/`, whether or not a table row links to it, and it deletes every row. That includes rows without a task directory, such as those `/gsd-fast` logs, and their text is archived nowhere, so copy them out (or trim them) before running `archive-quick`. `gsd-tools milestone archive-quick <version> --dry-run` lists the directories it would move. When `.planning/quick/` holds no directory, `archive-quick` leaves the table alone, so trim it by hand. Not auto-fixable: `--repair` never touches STATE.md for this warning, because which history to archive is your call.
@@ -1248,6 +1264,7 @@ Run 2–5 focused feasibility experiments before committing to an implementation
 | `idea` | No | The technical question or approach to investigate |
 | `--quick` | No | Skip intake conversation; use `idea` text directly |
 | `--wrap-up` | No | Package completed spike findings into a reusable project-local skill |
+| `--text` | No | Replace `AskUserQuestion` menus with plain-text numbered lists |
 
 **Produces:** `.planning/spikes/NNN-experiment-name/` with code, results, and README; `.planning/spikes/MANIFEST.md`
 **`--wrap-up` produces:** `.claude/skills/spike-findings-[project]/` skill file
@@ -1320,11 +1337,7 @@ Extract reusable patterns, anti-patterns, and architectural decisions from compl
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `N` | **Yes** | Phase number to extract learnings from |
-
-| Flag | Description |
-|------|-------------|
-| `--all` | Extract learnings from all completed phases |
-| `--format` | Output format: `markdown` (default), `json` |
+| `--ws <name>` | No | Scope the run to a workstream |
 
 **Prerequisites:** Phase has been executed (SUMMARY.md files exist)
 **Produces:** `.planning/phases/{phase-dir}/{padded-phase}-LEARNINGS.md`
@@ -1338,7 +1351,7 @@ Extract reusable patterns, anti-patterns, and architectural decisions from compl
 
 ```bash
 /gsd-extract-learnings 3                    # Extract learnings from phase 3
-/gsd-extract-learnings --all                # Extract from all completed phases
+/gsd-extract-learnings 3 --ws search        # Scope to a workstream
 ```
 
 ---
@@ -1981,6 +1994,7 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 | `--lm-studio` | Include LM Studio server review |
 | `--llama-cpp` | Include llama.cpp server review |
 | `--all` | Include all available reviewers (CLI + local model servers) |
+| `--cycle-summary` | Not a reviewer: end the run with the machine-readable `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` line and both concern sections. Never changes which lanes run; a lone `--cycle-summary` counts as no reviewer flags. Emits nothing when no review ran |
 
 **No `jq`, `curl`, or `timeout` prerequisite.** Reviewer lanes used to shell out to these for JSON parsing, HTTP calls, and wall-clock bounding, which made five lanes unavailable on a stock Windows/Git-Bash host (no `jq`) and left one lane unbounded on stock macOS (no `timeout` or `gtimeout`). GSD now does all three itself, so every lane runs with nothing on your `PATH` but the reviewer's own CLI. A lane that declares an external tool it genuinely needs still reports itself unavailable with an install hint rather than running into an empty review.
 
@@ -2158,6 +2172,32 @@ Threads are lightweight cross-session knowledge stores for work that spans multi
 /gsd-thread close fix-deploy-key    # Mark thread as resolved
 /gsd-thread fix-deploy-key-auth     # Resume thread
 /gsd-thread "Investigate TCP timeout in pasta service"  # Create new
+```
+
+---
+
+### `/gsd-inbox`
+
+Triage open GitHub issues and PRs against the project's issue and PR templates and `CONTRIBUTING.md`. Classifies each item (feature, enhancement, bug, chore, fix PR, enhancement PR, feature PR), reports template completeness and gate violations, and optionally labels or closes non-compliant items.
+
+| Flag | Description |
+|------|-------------|
+| `--issues` | Review only issues (skip PRs) |
+| `--prs` | Review only PRs (skip issues) |
+| `--label` | Apply the recommended labels after review (`needs-triage`, `needs-review`, `gate-violation`) |
+| `--close-incomplete` | Close issues scoring below 50% template completeness and PRs with gate violations, each with an explanatory comment. Asks for confirmation (close all / pick / skip) before closing anything |
+| `--repo owner/repo` | Override the repository (defaults to the current git remote) |
+
+With no flags, both issues and PRs are reviewed and nothing is changed. Requires the `gh` CLI, authenticated.
+
+**Prerequisites:** `gh` authenticated; a GitHub remote (or `--repo`)
+**Produces:** a triage report, written to `.planning/INBOX-TRIAGE.md` when `.planning/` exists and otherwise printed to the console
+
+```bash
+/gsd-inbox                                  # Review issues and PRs, report only
+/gsd-inbox --prs                            # PRs only
+/gsd-inbox --issues --label                 # Review issues and apply recommended labels
+/gsd-inbox --repo open-gsd/gsd-core         # Another repository
 ```
 
 ---

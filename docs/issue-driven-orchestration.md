@@ -1,16 +1,19 @@
-# Issue-Driven Orchestration with GSD
+# Issue-driven orchestration explained
 
-**Status:** stable workflow guide
+**Status:** stable
 **Audience:** developers who track work in GitHub Issues, Linear, Jira, or
-similar issue trackers and want to drive AI-assisted implementation
-through GSD's existing primitives.
+similar issue trackers and want to understand how GSD's existing primitives
+fit an issue-driven loop, and why that loop is safe.
 
-## What this guide is
+## What this page is
 
-A recipe for combining commands GSD already ships into an issue-tracker
-→ workspace → plan/execute → verify/review → PR loop. It is documentation
-only. No new commands, no daemon, no tracker integration — every command
-referenced below already exists in GSD today.
+An explanation of how commands GSD already ships combine into an
+issue-tracker → workspace → plan/execute → verify/review → PR loop, and why
+the loop is built the way it is. It is documentation only. No new commands,
+no daemon, no tracker integration — every command referenced below already
+exists in GSD today. To run the loop, follow
+[How to drive GSD Core from a tracker issue](how-to/drive-gsd-from-a-tracker-issue.md);
+this page is the background to those steps.
 
 The shape is inspired by OpenAI's open-source [Symphony orchestration
 reference](https://openai.com/index/open-source-codex-orchestration-symphony/)
@@ -61,50 +64,17 @@ review, explicit confirmation for follow-up creation). Symphony's
 "continuous orchestration" framing is intentionally not adopted — see
 [Non-goals](#non-goals).
 
-## End-to-end flow
+## The loop in one paragraph
 
-The canonical issue → PR loop, written so it can run from a single
-tracker issue end-to-end. Replace bracketed placeholders before running.
-
-1. **Pick the tracker issue.** Choose one issue from your tracker (GitHub,
-   Linear, etc.) that is well-scoped enough for autonomous implementation
-   — bounded scope, observable acceptance criteria, no upstream
-   dependencies that block execution.
-2. **Map to a GSD phase.** If the issue maps onto an existing phase in
-   `ROADMAP.md`, select it. If not, run `/gsd-new-milestone` (for a new
-   milestone of related issues) or open a phase via `/gsd-phase` /
-   `/gsd-phase --insert`. Capture the tracker issue URL in the phase's
-   `CONTEXT.md` so traceability survives compaction.
-3. **Create an isolated workspace.** Run
-   `/gsd-workspace --new --strategy worktree <slug>` to spin up a git
-   worktree with an independent `.planning/` directory. The worktree is
-   the safety boundary: any exploration, partial commits, or aborted
-   plans stay outside `main`.
-4. **Run discuss → plan → execute through GSD.** From inside the
-   workspace, run `/gsd-discuss-phase` to clarify ambiguities,
-   `/gsd-plan-phase` to produce `PLAN.md`, and either `/gsd-manager`
-   (interactive dashboard) or `/gsd-execute-phase` / `/gsd-autonomous`
-   (unattended) to implement. Avoid driving raw `claude` invocations
-   from outside GSD — that bypasses `STATE.md` updates and the phase
-   manifest.
-5. **Demand proof-of-work.** Run `/gsd-verify-work` to walk the user
-   through UAT against the phase's acceptance criteria. Tests,
-   screenshots, log captures, and config diffs are all recorded in
-   `UAT.md`, which persists across `/clear` and feeds gaps into
-   `/gsd-plan-phase --gaps` when verification surfaces missed scope.
-6. **Pass through the review and ship gates.** Run `/gsd-review` to get
-   adversarial peer review of the plan from independent AI CLIs (catches
-   blind spots model-by-model), then `/gsd-ship` to open the PR with a
-   rich body assembled from the planning artifacts. Both gates require a
-   human decision before anything reaches the remote.
-7. **Capture follow-up work explicitly.** Use `/gsd-capture` for inline
-   notes, `/gsd-capture --seed` for ideas worth a future phase, or
-   `/gsd-new-milestone` for a coherent group of follow-ups. Creating a
-   tracker issue from a discovered follow-up requires explicit user
-   confirmation — GSD does not post to remote trackers automatically.
-
-When the PR merges, the loop closes. Auto-close keywords in the PR body
-(`Closes #NNN` / `Fixes #NNN`) close the tracker issue at merge time.
+A tracker issue becomes a phase; the phase gets an isolated workspace; GSD's
+discuss → plan → execute steps do the work inside it; `/gsd-verify-work`
+records proof; `/gsd-review` and `/gsd-ship` put a human decision in front of
+every push; follow-up work is captured locally, and the tracker is only
+touched when a person says so. The numbered procedure, with the exact
+commands and what to expect at each step, is in
+[How to drive GSD Core from a tracker issue](how-to/drive-gsd-from-a-tracker-issue.md).
+Auto-close keywords in the PR body (`Closes #NNN` / `Fixes #NNN`) close the
+tracker issue at merge time.
 
 ## Safety boundaries
 
@@ -174,6 +144,7 @@ scope for this guide.
 ## Related
 
 - [The phase loop](explanation/the-phase-loop.md) — how discuss → plan → execute → verify → ship fits together as a repeating cycle.
+- [How to drive GSD Core from a tracker issue](how-to/drive-gsd-from-a-tracker-issue.md) — the step-by-step procedure this page explains.
 - [Workspaces how-to](how-to/work-in-parallel-with-workstreams.md) — step-by-step guide to creating and managing parallel worktrees.
 - [docs index](README.md) — full table of contents for GSD Core documentation.
 - [docs/USER-GUIDE.md](./USER-GUIDE.md) — task-oriented walkthroughs of individual commands referenced above.

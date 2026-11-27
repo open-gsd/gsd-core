@@ -59,7 +59,8 @@
 //   input redirect targets (`<`, `N<`) are always checked; the command word is
 //   located past wrapper prefixes AND their own options (`sudo -u U`,
 //   `env -i VAR=x`, `timeout -s KILL 5`, `nice -n 5`, `stdbuf -oL`, `exec`;
-//   see WRAPPERS, #5627); a closed set of
+//   see WRAPPERS, #5627) and inside an `env -S '…'` string, split by env's own
+//   rules (#5514); a closed set of
 //   NON-READING commands (test/[/ls/stat/rm/touch/echo/…) exempts that
 //   segment's operands — `[ -f .env ]` and `ls .env*` are existence checks
 //   GSD's own agents run — while `cp`/`mv`/`ln`/`git` are deliberately NOT
@@ -113,13 +114,41 @@
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
-//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`), shell globs
+//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`, and a `${VAR}`
+//   inside an `env -S` string that is set, `Z=claude env -S '${Z} …'`,
+//   `P=.env env -S 'cat ${P}'`: the string is read with each `${VAR}` kept as
+//   written and with it empty, as env expands an unset name), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
-//   the option's value). Reached through the same gaps and allowed under
+//   NON-gitignored `.env`, a wrapper (or wrapper option taking a
+//   separate value) the WRAPPERS table does not list, and a plain command in
+//   an `env -S` string in the sub-command of `xargs`, a `find -exec` action or
+//   `watch -x` (`xargs env -S 'cat .env'`, `find . -exec env -S 'cat .env' \;`,
+//   `watch -x env -S 'cat .env'`), though the secret-read scan does read a
+//   shell script there (#6114; the debugger-spawn check reads none of these
+//   sub-commands, #6147); the sub-command's own words are still checked as
+//   operands. A shell reserved word before a command (`if`,
+//   `then`, `elif`, `else`,
+//   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
+//   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
+//   wrapper walk, a shell script, an `env -S` string and the debugger-spawn
+//   check behind it are not reached (`if true; then env -S 'cat .env'; fi`,
+//   `for i in 1; do env -S 'cat .env'; done`, `! env -S 'cat .env'`, which
+//   bash 5.2 and dash 0.5.12 run; `coproc env -S 'cat .env'`, which bash 5.2
+//   runs; `repeat 1 env -S 'cat .env'` and `noglob env -S 'cat .env'`, which
+//   zsh 5.9 runs; `if true; then sh -c 'cat .env'; fi`;
+//   `if true; then claude --agent gsd-debugger -p x; fi`); the command's own
+//   operands are still checked. `env -S`
+//   strings are
+//   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
+//   backslash before a blank is that blank) and uutils env's (a
+//   backslash-newline removed, a comment ended by a newline), and read as
+//   before #5514, skipped as the option's value; any reading's hit denies.
+//   Each reading applies one env's rules at every level, so a string that one
+//   env splits into a command running a different env (BSD env invoking a
+//   uutils env by path) is not read by the mix of the two.
+//   Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
 //   a `${…}` form that is not a default (`${x/y/.env}`, `${x:0:1}.env`,
 //   `${x:-${y}.env}`, whose inner expansion is unknown), or a default another
@@ -152,7 +181,9 @@
 //   gated). Commands over 1 MiB are denied outright (`command-too-large`)
 //   rather than scanned partially or waved through, and so is a command
 //   whose scan overflows the stack or needs more than eight times that much
-//   work (`command-too-complex`). (#4639 adds one more, by design: the
+//   work (`command-too-complex`), and one with an `env -S` string nested
+//   more than MAX_NESTING_DEPTH deep (`split-string-too-deep`), whose command
+//   is not read. (#4639 adds one more, by design: the
 //   value of `--env-file` under a container runtime is exempt, so the
 //   container's own command can print the interpolated environment
 //   (`alpine printenv`, `docker compose config`) — the same exposure class
@@ -189,8 +220,9 @@
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
 //         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
-//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn, and
-//         guard-error when the host opted in to deny-on-crash (#5784)
+//         split-string-too-deep | ansi-c-unterminated | ansi-c-undecodable |
+//         debugger-cli-spawn, and guard-error when the host opted in to
+//         deny-on-crash (#5784)
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
@@ -252,12 +284,14 @@ function crashFor(cause, why) {
 // Commands longer than this are denied rather than scanned (see header).
 const MAX_COMMAND_LENGTH = 1024 * 1024;
 
-// Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans. A body nested deeper is denied as
-// `nesting-too-deep` (#6136), the way an over-length command is denied, never allowed unscanned.
+// Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans, and
+// for `env -S` strings split inside a split string (#5514). A body nested deeper is denied as
+// `nesting-too-deep` (#6136), the way an over-length command is denied, never allowed unscanned;
+// an `env -S` string nested deeper is denied as `split-string-too-deep`.
 const MAX_NESTING_DEPTH = 3;
 
 // Work budget for one Bash command, in characters tokenized, across every
-// pass the scan makes over it (#5255): scanBashCommand sets it once, and every
+// pass the scan makes over it (#5255): setCommandBudget sets it once, and every
 // reading, nested rescan, second look and heredoc pass spends from it. A
 // command holding a reading trigger (`$'`, `$"`, `$${`, `$$(`, or a quote with
 // `((` or `$[`; readsEachWay) is scanned under four readings and then, when
@@ -267,7 +301,9 @@ const MAX_NESTING_DEPTH = 3;
 // own length on top, at each level; and a command holding `<<` is scanned
 // again under #5513's other heredoc readings (findSecretReadUnderOtherReadings),
 // up to three passes, or five when a heredoc tag holds a brace. A heredoc file
-// write holding a trigger therefore costs about 24 times its length. The
+// write holding a trigger therefore costs about 24 times its length. A command
+// holding an `env -S` option is scanned again under each of ENV_S_READINGS
+// (#5514), up to seven passes, all on this one budget. The
 // separators every tokenize finds are bounded separately (MAX_SCAN_SEPARATORS),
 // the debugger-spawn check's included. The most any of 1,384,856 distinct real
 // agent commands needed was 3,040,992 (a 126,708-character heredoc write). The
@@ -393,6 +429,8 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 //   long     long options that take a SEPARATE value word (`--adjustment 5`);
 //            `--opt=value` is one word and needs no entry
 //   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   split    the option whose value is itself a command line: `env -S STRING`
+//            splits STRING into words that are read in its place (#5514)
 //   operands positional words after the options (timeout's DURATION)
 // Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
 // stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
@@ -403,7 +441,7 @@ const WRAPPERS = new Map([
     // valued one (`--login` vs `--login-class`).
     flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'] }],
   ['doas', { short: 'aCu' }],
-  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
+  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true, split: { short: 'S', long: '--split-string' } }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
   ['command', {}],
@@ -1305,6 +1343,43 @@ function findTagSpanClose(str, i, reading) {
     orphanHeredocs = queue;
   }
 }
+
+// #5514: the readings of an `env -S` string, declared once. The Bash path scans
+// the command once per reading, in this order, and any reading's hit denies, so a
+// reading can add a denial but never remove one.
+//  - split: false skips the string as the option's value, so resolveCommand reads every command
+//    exactly as before #5514. It runs first, on every command. A read or a launch it finds is
+//    emitted at once, and so is any other denial until a split option is met; after one, the
+//    other denials are held, and a later reading's read or launch outranks them (scanBashReadings).
+//  - vars: 'keep' keeps `${NAME}` as written; 'drop' reads it as unset, which every env expands to nothing.
+//  - escapes: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and macOS: a backslash before a blank is that
+//    blank) or 'uutils' (uutils coreutils, Ubuntu's env since 25.10: a backslash before a newline
+//    is removed, in quotes too, and a comment ends at a newline, not the string). See splitEnvString.
+//  - runs: 'always'; 'split-or-throw' once an earlier reading met a split option or a scan threw
+//    before it could tell; 'split' once one was met. Every splitting reading then runs: an escape can
+//    build a `${` or a backslash-blank inside a nested string, so which strings a reading reaches, and
+//    what they hold, can differ from what the first saw, and no screen over them tells which to run.
+const ENV_S_READINGS = Object.freeze([
+  { name: 'unsplit', split: false, runs: 'always' },
+  { name: 'gnu', split: true, vars: 'keep', escapes: 'gnu', runs: 'split-or-throw' },
+  { name: 'bsd', split: true, vars: 'keep', escapes: 'bsd', runs: 'split' },
+  { name: 'uutils', split: true, vars: 'keep', escapes: 'uutils', runs: 'split' },
+  { name: 'gnu, unset ${NAME}', split: true, vars: 'drop', escapes: 'gnu', runs: 'split' },
+  { name: 'bsd, unset ${NAME}', split: true, vars: 'drop', escapes: 'bsd', runs: 'split' },
+  { name: 'uutils, unset ${NAME}', split: true, vars: 'drop', escapes: 'uutils', runs: 'split' },
+].map((r) => Object.freeze(r)));
+
+// The `env -S` reading the scans apply (named apart from the `reading`
+// parameter the #5255 scanners take, which is a shell's): set only by the Bash
+// path's loop over ENV_S_READINGS, and the GNU split until then. What the scans
+// report back:
+//  - splitSeen: a scan met a split option, so the readings that run on 'split' run.
+//  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
+//    command is not read. The Bash path denies it as `split-string-too-deep` rather
+//    than allow what it could not see.
+let envSReading = ENV_S_READINGS[1];
+let splitSeen = false;
+let splitTooDeep = false;
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
@@ -3278,13 +3353,14 @@ function markLaunchedCurl(words, from, to, marks, depth) {
 // shell, a launcher execs a leading `VAR=value` word, so none is skipped.
 function launchedCommandIndex(words, from, to) {
   const wrappers = furtherReading ? FURTHER_WRAPPERS : WRAPPERS;
-  let idx = from;
-  while (idx < to) {
-    const spec = wrappers.get(commandName(words[idx].text));
+  const pending = words.slice(from, to).reverse();
+  while (pending.length) {
+    const spec = wrappers.get(commandName(pending[pending.length - 1].text));
     if (!spec) break;
-    idx = skipWrapperArgs(words, idx + 1, spec);
+    pending.pop();
+    skipWrapperArgs(pending, spec, false);
   }
-  return idx < to ? idx : -1;
+  return pending.length ? to - pending.length : -1;
 }
 
 // lastSegment(text).toLowerCase(), read by hand in one pass: lastSegment's
@@ -3415,91 +3491,241 @@ function wrapperOptionWidth(word, spec) {
   return 1;
 }
 
-// Index of the first word after a wrapper's own options, assignments and
-// positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
-function skipWrapperArgs(words, start, spec) {
-  if (spec.count) return Math.min(start + 1, words.length);
+// #5514: when `word` is the wrapper's split option (env's `-S` /
+// `--split-string`), the string it carries, or null when the string is the
+// next word; undefined for any other word.
+function splitOptionValue(word, spec) {
+  if (!spec.split) return undefined;
+  if (word.startsWith('--')) {
+    const eq = word.indexOf('=');
+    const name = eq === -1 ? word : word.slice(0, eq);
+    if (name.length <= 2 || !spec.split.long.startsWith(name)) return undefined;
+    return eq === -1 ? null : word.slice(eq + 1);
+  }
+  const valued = spec.short || '';
+  for (let i = 1; i < word.length; i++) {
+    if (!valued.includes(word[i])) continue;
+    if (word[i] !== spec.split.short) return undefined; // the value of another option
+    return i === word.length - 1 ? null : word.slice(i + 1);
+  }
+  return undefined;
+}
+
+const ENV_S_ESCAPES = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+const ENV_S_BLANKS = ' \t\n\v\f\r';
+const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
+
+// The words `env -S STRING` splits STRING into, by GNU env's rules rather than
+// the shell's: blanks separate outside quotes; single quotes keep everything but
+// `\\` and `\'`; outside them `\_` separates (a space inside double quotes),
+// `\c` ends the string, `\f \n \r \t \v` are those characters and
+// `\" \# \$ \' \\` the character itself; `#` starting a word starts a comment;
+// `${VAR}` outside single quotes is env's own expansion, of a value not known
+// here: kept as written, or under `vars: 'drop'` deleted, as an unset name
+// expands (no word of its own, and a `#` after it still starts a comment).
+// Under `escapes: 'bsd'` a backslash before a blank is that blank; under
+// 'uutils' a backslash before a newline is removed, inside quotes too, and a
+// comment runs to the next newline, after which splitting goes on. Where env
+// would reject the string, the words read up to that point are returned.
+function splitEnvString(value, dialect = envSReading) {
+  const words = [];
+  let word = '';
+  let inWord = false;
+  let quote = '';
+  const end = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (dialect.escapes === 'uutils' && ch === '\\' && value[i + 1] === '\n') {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else if (ch === '\\' && (value[i + 1] === '\\' || value[i + 1] === "'")) word += value[++i];
+      else word += ch;
+      continue;
+    }
+    if (ch === '"' || (ch === "'" && quote === '')) {
+      quote = quote === ch ? '' : ch;
+      inWord = true;
+      continue;
+    }
+    if (quote === '' && ENV_S_BLANKS.includes(ch)) {
+      end();
+      continue;
+    }
+    if (quote === '' && ch === '#' && !inWord) {
+      if (dialect.escapes !== 'uutils') break;
+      const eol = value.indexOf('\n', i);
+      if (eol === -1) break;
+      i = eol;
+      continue;
+    }
+    if (ch === '$' && value[i + 1] !== '{') break;
+    if (ch === '$' && dialect.vars === 'drop') {
+      ENV_S_VAR_RE.lastIndex = i;
+      if (ENV_S_VAR_RE.test(value)) {
+        i = ENV_S_VAR_RE.lastIndex - 1;
+        continue;
+      }
+    }
+    if (ch === '\\') {
+      const next = value[++i];
+      if (next === '_' && quote === '') {
+        end();
+        continue;
+      }
+      if (next === '_') word += ' ';
+      else if (next !== undefined && ENV_S_ESCAPES[next]) word += ENV_S_ESCAPES[next];
+      else if (next !== undefined && '"#$\'\\'.includes(next)) word += next;
+      else if (dialect.escapes === 'bsd' && next !== undefined && ENV_S_BLANKS.includes(next)) word += next;
+      else break; // `\c`, or an escape env rejects
+      inWord = true;
+      continue;
+    }
+    word += ch;
+    inWord = true;
+  }
+  end();
+  return words;
+}
+
+// Pushes the words `value` splits into onto `pending`, to be read next. A
+// string split out of a split string is one level deeper; past
+// MAX_NESTING_DEPTH it is not read, and splitTooDeep makes the command deny.
+function pushSplitWords(pending, value, source) {
+  const depth = (source.splitDepth || 0) + 1;
+  if (depth > MAX_NESTING_DEPTH) {
+    splitTooDeep = true;
+    return;
+  }
+  const words = splitEnvString(value);
+  for (let k = words.length - 1; k >= 0; k--) {
+    pending.push({ kind: 'word', text: words[k], quoted: 'none', seg: source.seg, splitDepth: depth });
+  }
+}
+
+// Pops a wrapper's own options, assignments and positional operands
+// (`-n 5`, `-i A=1`, `-s KILL 5`, `--`) off `pending`, the words still to
+// read with the next one last. The walk is the one before #5514, with one
+// addition: `env -S STRING` puts the words STRING splits into where the option
+// stood, and env goes on reading options (#5514).
+// `splitting` is false for a walk that must keep word indices (launchedCommandIndex).
+function skipWrapperArgs(pending, spec, splitting = envSReading.split) {
+  if (spec.count) {
+    pending.pop();
+    return;
+  }
+  const top = () => pending[pending.length - 1].text;
   const assigns = spec.assigns === true ? ASSIGNMENT_RE : spec.assigns;
-  let idx = start;
+  let previous = null; // the word popped last (dashDashEndsAssigns)
+  const pop = () => {
+    const word = pending.pop();
+    if (word) previous = word.text;
+    return word;
+  };
   let optionsEnded = false;
-  while (idx < words.length) {
-    const text = words[idx].text;
-    if (assigns && !(spec.dashDashEndsAssigns && idx > 0 && words[idx - 1].text === '--')
-        && assigns.test(text)) {
-      idx++;
+  while (pending.length) {
+    const text = top();
+    if (assigns && !(spec.dashDashEndsAssigns && previous === '--') && assigns.test(text)) {
+      pop();
     } else if (spec.dash && text === '-') {
-      idx++;
+      pop();
     } else if (!optionsEnded && text === '--') {
       optionsEnded = true;
-      idx++;
+      pop();
     } else if (!optionsEnded && text.length > 1 && text.startsWith('-')) {
-      idx += wrapperOptionWidth(text, spec);
+      const word = pop();
+      const split = splitOptionValue(text, spec);
+      if (split !== undefined) splitSeen = true;
+      if (split === undefined || !splitting) {
+        if (wrapperOptionWidth(text, spec) === 2) pop();
+      } else if (split === null) {
+        const value = pop();
+        if (value) pushSplitWords(pending, value.text, value);
+      } else {
+        pushSplitWords(pending, split, word);
+      }
     } else {
       break;
     }
   }
-  if (!spec.operands) return idx;
-  idx = Math.min(idx + spec.operands, words.length);
+  for (let n = 0; n < (spec.operands || 0) && pending.length; n++) pending.pop();
   // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
-  return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
+  if (spec.operands && pending.length && top() === '--') pending.pop();
 }
 
-// Index of the first word from `start` past `VAR=val` assignments and, under
-// the further reading, the reserved words in front of them and the wider
+// Pops the words in front of a command off `pending`: `VAR=val` assignments and,
+// under the further reading, the reserved words in front of them and the wider
 // assignment forms (`A+=b`, `a[0]=x`).
-function skipShellPrefixes(words, start) {
-  let idx = furtherReading ? skipReservedWords(words, start) : start;
+function skipShellPrefixes(pending) {
+  if (furtherReading) pending.length -= reservedWordCount(pending);
   const assignment = furtherReading ? FURTHER_ASSIGNMENT_RE : ASSIGNMENT_RE;
-  while (idx < words.length && assignment.test(words[idx].text)) idx++;
-  return idx;
+  while (pending.length && assignment.test(pending[pending.length - 1].text)) pending.pop();
 }
 
-function skipReservedWords(words, start) {
-  let idx = start;
-  while (idx < words.length && words[idx].quoted === 'none') {
-    const text = words[idx].text;
+// How many words from the top of `pending` (the next word last) are reserved
+// words a command can follow.
+function reservedWordCount(pending) {
+  const at = (p) => pending[pending.length - 1 - p];
+  let p = 0;
+  while (p < pending.length && at(p).quoted === 'none') {
+    const text = at(p).text;
     if (SHELL_COMMAND_KEYWORDS.has(text)) {
-      idx++;
+      p++;
     } else if (LOOP_HEADS.has(text)) {
-      const body = bareWordIndex(words, idx + 2, 'do', 'in');
+      const body = bareWordPosition(pending, p + 2, 'do', 'in');
       if (body === -1) break;
-      idx = body + 1;
+      p = body + 1;
     } else if (text === '[[') {
       // zsh's short form runs the word after the test: `if [[ x ]] cmd`.
-      const close = bareWordIndex(words, idx + 1, ']]');
+      const close = bareWordPosition(pending, p + 1, ']]');
       if (close === -1) break;
-      idx = close + 1;
+      p = close + 1;
     } else {
       break;
     }
   }
-  return idx;
+  return p;
 }
 
-// Index of the first unquoted `text` from `start`, or -1, or -1 at a `stop` first.
-function bareWordIndex(words, start, text, stop) {
-  for (let idx = start; idx < words.length; idx++) {
-    if (words[idx].quoted !== 'none') continue;
-    if (words[idx].text === text) return idx;
-    if (words[idx].text === stop) return -1;
+// Position from the top of `pending` of the first unquoted `text` from `start`,
+// or -1, or -1 at a `stop` first.
+function bareWordPosition(pending, start, text, stop) {
+  for (let p = start; p < pending.length; p++) {
+    const word = pending[pending.length - 1 - p];
+    if (word.quoted !== 'none') continue;
+    if (word.text === text) return p;
+    if (word.text === stop) return -1;
   }
   return -1;
 }
 
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
-// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
+// `timeout -s KILL 5`, `nice -n 5`, `env -S 'cmd …'`, …), or null when nothing
+// but prefixes remain. Linear in the words read: a split string is pushed onto
+// the pending stack rather than spliced into a copy of the list. `word` is the
+// command word as written: after a split string it can be one of that string's
+// words, which `words` does not hold.
 function resolveCommand(words) {
   const wrappers = furtherReading ? FURTHER_WRAPPERS : WRAPPERS;
-  let idx = skipShellPrefixes(words, 0);
-  while (idx < words.length) {
-    const spec = wrappers.get(lastSegment(words[idx].text).toLowerCase());
+  const pending = words.slice().reverse();
+  skipShellPrefixes(pending);
+  while (pending.length) {
+    const spec = wrappers.get(lastSegment(pending[pending.length - 1].text).toLowerCase());
     if (!spec) break;
-    idx = skipWrapperArgs(words, idx + 1, spec);
-    if (spec.keyword) idx = skipShellPrefixes(words, idx);
+    pending.pop();
+    skipWrapperArgs(pending, spec);
+    if (spec.keyword) skipShellPrefixes(pending);
   }
-  if (idx >= words.length) return null;
-  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+  if (!pending.length) return null;
+  const head = pending.pop();
+  return { base: lastSegment(head.text).toLowerCase(), operands: pending.reverse(), word: head.text };
 }
 
 /**
@@ -4036,6 +4262,12 @@ let budgetSize = MAX_SCAN_CHARACTERS;
 // the whole command. `budget` is for tests, which pin the boundary on a small
 // one; the hook passes none.
 function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+  setCommandBudget(budget, separatorBudget);
+  return scanBashReading(command);
+}
+
+// Sets the budgets one Bash command's scans share (scanBashCommand).
+function setCommandBudget(budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
   scanBudget = budget;
   readerSteps = budget;
   budgetSize = budget;
@@ -4043,6 +4275,12 @@ function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget 
   separatorSize = separatorBudget;
   readerSpent = false;
   scanSpent = false;
+}
+
+// scanBashCommand's scan of `command`, on what is left of the budgets: the hook
+// runs it once per `env -S` reading (ENV_S_READINGS) after setting them once, so
+// every reading of a command spends from the one budget (#5514).
+function scanBashReading(command) {
   budgetHeld = true;
   try {
     const first = findSecretRead(command, 0);
@@ -4074,8 +4312,10 @@ function scanDebuggerSpawn(command) {
 
 // The further reading of `command` (#5779, furtherReading): the secret and
 // debugger-spawn scans again, with the command resolved past the words the plain
-// walk stops at. main runs it last, after scanBashCommand and scanDebuggerSpawn
-// allowed, so it can add a denial and cannot lose one. It runs once without bash's
+// walk stops at. main runs it last, after scanBashReadings allowed, so it can add
+// a denial and cannot lose one. It reads an `env -S` string as next did before
+// #5514 (the 'unsplit' reading), and judges the #4432 read-only line under that
+// reading. It runs once without bash's
 // subscript joins and, only when that pass saw where a join could start, once more
 // with them. Both passes share a budget of its own, the size the plain scans get,
 // so whether it reads a line never turns on what they spent, and a command's work
@@ -4085,17 +4325,16 @@ function scanDebuggerSpawn(command) {
 //     for its own, and one in the spawn scan is thrown, as from scanDebuggerSpawn;
 //   - a spent budget is `command-too-complex` too: a line it could not finish is
 //     unread, and one that needs both passes is denied from half the plain size;
-//   - any other error is a reading's bug (readingBug), and null.
+//   - any other error is a scan error, as one scanBashReadings catches: null, and
+//     furtherThrew set, so main gives the command the host's crash policy (#5784).
 // A hook timeout is the adapter's: Claude Code reads it as no decision; Pi refuses.
+let furtherThrew = false;
 function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
-  scanBudget = budget;
-  readerSteps = budget;
-  budgetSize = budget;
-  separatorSteps = separatorBudget;
-  separatorSize = separatorBudget;
-  readerSpent = false;
-  scanSpent = false;
+  setCommandBudget(budget, separatorBudget);
+  furtherThrew = false;
   budgetHeld = true;
+  envSReading = ENV_S_READINGS[0];
+  exemption.bashReadOnly = null;
   furtherReading = true;
   joinCandidate = false;
   try {
@@ -4111,12 +4350,13 @@ function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudg
   } catch (e) {
     if (e instanceof RangeError) throw e;
     if (e === SCAN_BUDGET_SPENT) return { code: 'command-too-complex', text: '' };
-    if (readingBug === null) readingBug = e;
+    furtherThrew = true;
     return null;
   } finally {
     budgetHeld = false;
     furtherReading = false;
     subscriptJoins = false;
+    envSReading = ENV_S_READINGS[1];
   }
 }
 
@@ -4275,7 +4515,9 @@ function chargeSeparators(n) {
 // the command is bounded as a whole. The others — the debugger-spawn check, the
 // exemption's read-only check and a process substitution's first segment —
 // charge separators only: their cost is per segment, a tokenize alone is cheap
-// per character, and they read text the scan has already charged.
+// per character, and they read text the scan has already charged. Under a
+// splitting `env -S` reading the debugger-spawn check charges characters as well
+// (#5514): it recurses into `eval` and shell bodies once per reading.
 function tokenizeCharged(str, reading, chargeCharacters = false) {
   if (chargeCharacters) chargeScan(str.length);
   const result = tokenize(str, reading);
@@ -4434,7 +4676,7 @@ function scanCommand(command, depth, reading) {
 
     // The command word holds a default (`${x:-cat} .env`, `time ${x:-cat .env}`): the segment is read as the script it
     // becomes when each default is expanded (#6132).
-    const rawBase = words[words.length - operands.length - 1].text;
+    const rawBase = cmd.word;
     if (rawBase.includes('${')) {
       const named = paramVariants(rawBase);
       if (named.overflow) return secretRead(rawBase);
@@ -4624,9 +4866,12 @@ function debuggerAgentInOperands(expandedOperands) {
 }
 
 // One reading of findDebuggerCliSpawn: `reading` is false for the plain
-// reading, or the shell whose reading it is (scanCommand).
+// reading, or the shell whose reading it is (scanCommand). Under a splitting
+// `env -S` reading the check charges its characters too: it runs once per
+// reading, and uncharged it is work the readings repeat outside the command's
+// budget (#5514). The first reading charges as before #5514.
 function findDebuggerCliSpawnUnder(command, depth, reading) {
-  const { tokens, nested } = tokenizeCharged(command, reading);
+  const { tokens, nested } = tokenizeCharged(command, reading, envSReading.split);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -5697,6 +5942,10 @@ function reasonFor(code, tool, target) {
       'alternatives, or holds too many brace groups to expand, and cannot be checked for ' +
       'secret-file matches. Use a narrower glob.';
   }
+  if (code === 'split-string-too-deep') {
+    return `Secret read guard: this Bash command nests env -S strings more than ${MAX_NESTING_DEPTH} deep, ` +
+      'so the command they run cannot be checked. Run that command without the nested env -S strings.';
+  }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
       'A shell-spawned debugger runs detached, returns no structured result, and the debug checkpoint never advances. ' +
@@ -5818,6 +6067,58 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
+// The Bash path's scans of `command`: one pass per reading of ENV_S_READINGS, in
+// its order (#5514), all on the one budget set here for the command, so the
+// readings together do no more work than one scan may. Returns the block the
+// hook emits (null when none) and whether a scan threw. A read or a launch a pass
+// finds is returned before the next reading runs, so nothing a later reading does
+// can lose it. Any other block (`command-too-complex`, an undecodable `$'…'` word)
+// is returned at once too while no split option has been met, as `next` emits it;
+// once one has, it is held and returned after the last reading, unless a later one
+// names a read or a launch, as findSecretRead ranks its own readings. Each of the
+// two scans (the secret scan with its heredoc readings, then the spawn check) runs
+// under its own catch. A stack overflow there is held as `command-too-complex`, the
+// deny main's catch gives one; any other error finds nothing. Either way the scans
+// after it still run, and the command gets the crash verdict only when nothing
+// denies it (main). Tests call it in process with a small budget, and can pass the
+// spawn check (`spawnCheck`): no command is known that overflows it alone.
+function scanBashReadings(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS, spawnCheck = scanDebuggerSpawn) {
+  setCommandBudget(budget, separatorBudget);
+  splitSeen = false;
+  splitTooDeep = false;
+  let threw = false;
+  let held = null;
+  const attempt = (scan) => {
+    try {
+      return scan();
+    } catch (e) {
+      threw = true;
+      return e instanceof RangeError ? { code: 'command-too-complex', text: '' } : null;
+    }
+  };
+  try {
+    for (const r of ENV_S_READINGS) {
+      if (r.runs === 'split' && !splitSeen) continue;
+      if (r.runs === 'split-or-throw' && !splitSeen && !threw) continue;
+      envSReading = r;
+      // The #4432 exemption's read-only line (F3) is judged under this reading,
+      // never under the reading that ran first: a split string can hold a
+      // command that writes or runs a program where the unsplit reading saw `cat`.
+      exemption.bashReadOnly = null;
+      for (const scan of [scanBashReading, spawnCheck]) {
+        const block = attempt(() => scan(command));
+        if (block === null) continue;
+        if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn' || !splitSeen) return { block, threw };
+        if (held === null) held = block;
+      }
+      if (splitTooDeep) return { block: { code: 'split-string-too-deep', text: '' }, threw };
+    }
+    return { block: held, threw };
+  } finally {
+    envSReading = ENV_S_READINGS[1];
+  }
+}
+
 // How long the hook waits for its stdin to close (#5784). Exported so the
 // stdin-timer tests build their cells from it rather than repeat it.
 const STDIN_TIMEOUT_MS = 3000;
@@ -5887,10 +6188,8 @@ function main() {
       if (command === '') allow(undefined);
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       exemption.bashLine = command;
-      const hit = scanBashCommand(command);
-      if (hit !== null) emitBlock(hit.code, tool, hit.text);
-      const spawn = scanDebuggerSpawn(command);
-      if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
+      const { block, threw } = scanBashReadings(command);
+      if (block !== null) emitBlock(block.code, tool, block.text);
       const further = scanFurtherReading(command);
       if (further !== null) emitBlock(further.code, tool, further.text);
       if (readingBug !== null) {
@@ -5900,15 +6199,19 @@ function main() {
         // default, a guard-error block when the host opted in.
         crashFor(GUARD_ERROR_CAUSE.READING_FAILED, 'a shell reading failed');
       }
+      // An error in a scan that is not an overflow is a hook error that
+      // scanBashReadings or scanFurtherReading caught before the catch below could
+      // see it, so it takes the host's crash policy as that catch does (#5784).
+      if (threw || furtherThrew) crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
       allow(undefined);
     } catch (e) {
       // A stack overflow is a limit, not a bug: failing open on it allows a
       // read the check had not reached. findSecretRead turns its own into
-      // `command-too-complex`; the debugger-spawn scan unwraps `timeout`,
-      // which the secret scan does not, so its tokenizer can overflow on a
-      // body the secret scan never read. Any other error fails open — never
-      // block valid tool calls due to hook errors — unless the host opted in
-      // to DENY; ON_CRASH is declared at module top (#3911, #5784).
+      // `command-too-complex`, and scanBashReadings holds one the debugger-spawn
+      // check throws as the same block. Any RangeError that still reaches this
+      // catch is denied the same way. Any other error fails open — never block
+      // valid tool calls due to hook errors — unless the host opted in to DENY;
+      // ON_CRASH is declared at module top (#3911, #5784).
       if (e instanceof RangeError && tool === 'Bash') emitBlock('command-too-complex', tool, '');
       crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
     }
@@ -5916,7 +6219,7 @@ function main() {
 }
 
 module.exports = {
-  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, scanFurtherReading, tokenize, workSpent, MAX_SCAN_SEPARATORS,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanBashReadings, scanDebuggerSpawn, scanFurtherReading, tokenize, workSpent, MAX_SCAN_SEPARATORS,
   GUARD_ERROR_CAUSE, MAX_SCAN_CHARACTERS, PRINTED_WORD_COST, STDIN_TIMEOUT_MS,
 };
 

@@ -299,11 +299,13 @@ describe('frontmatter get SECURITY.md threats_open — type contract', () => {
 
 describe('real registry ship:pre — structural guards', () => {
 
-  test('ship:pre byLoopPoint entry has only gates (no steps/contributions) and includes security + broken-windows', () => {
+  test('ship:pre byLoopPoint entry has two gates and only the advisor-prefilter contribution (no steps) and includes security + broken-windows', () => {
     const entry = realRegistry.byLoopPoint['ship:pre'];
     assert.ok(entry, 'ship:pre must exist in byLoopPoint');
     assert.strictEqual(entry.steps.length, 0, 'ship:pre must have 0 steps');
-    assert.strictEqual(entry.contributions.length, 0, 'ship:pre must have 0 contributions');
+    // #4795: the opt-in advisor-prefilter capability contributes one orchestrator fragment here.
+    assert.deepEqual(entry.contributions.map(c => [c.capId, c.into]), [['advisor-prefilter', 'orchestrator']],
+      'ship:pre must have exactly 1 contribution (advisor-prefilter into orchestrator)');
     // Two predicate-style gates as of #1950: security (workflow.security_enforcement)
     // and broken-windows (workflow.windows_enforce). Both default-off in tests via
     // their respective when keys; both surface in the registry regardless of activation.
