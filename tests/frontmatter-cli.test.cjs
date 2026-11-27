@@ -715,7 +715,7 @@ describe('#6278: frontmatter set/merge refuses a dotted field whose prefix is an
   });
 
   // The refusal is an output({error}) payload, a DEGRADED outcome: exit 0 under the default v1
-  // exit contract, exitCodeFor('DEGRADED') under v2 (docs/json-errors.md). Nothing is written under either.
+  // exit contract, exitCodeFor('DEGRADED') under v2 (json-errors.md). Nothing is written under either.
   for (const [contract, exitCode] of [['v1', 0], ['v2', exitCodeFor('DEGRADED')]]) {
     test(`under --exit-contract=${contract} the refusal exits ${exitCode} and writes nothing`, () => {
       const file = writeTempFile(REPORTED_DOC);
