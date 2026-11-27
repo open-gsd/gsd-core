@@ -178,6 +178,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 - [Context engineering](explanation/context-engineering.md) — how context rot forms and how GSD Core prevents it
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
+- [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md) — why `planning inspect` and the `.planning/state.json` contract each declare their own schema
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
