@@ -15,6 +15,17 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const store = require('../gsd-core/bin/lib/session-store.cjs');
 
 const NO_KEYS = Object.fromEntries(store.SESSION_ENV_KEYS.map((k) => [k, '']));
+
+/** True when the symlink was created; false when this platform run may not create one (Windows without the privilege). */
+function trySymlink(target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath);
+    return true;
+  } catch (err) {
+    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) return false;
+    throw err;
+  }
+}
 const STATE = [
   '---', 'gsd_state_version: 1.0', 'status: executing', '---', '',
   '# Project State', '', '## Current Position', '', 'Phase: 1 of 1', 'Status: Executing', '',
@@ -115,10 +126,10 @@ describe('session verbs', () => {
       assert.equal(exists('sessions'), false);
     });
 
-    test('recordSessionRefusesSymlinkedSessionsDir: nothing is written through the link and STATE.md is still updated', () => {
+    test('recordSessionRefusesSymlinkedSessionsDir: nothing is written through the link and STATE.md is still updated', (t) => {
       const elsewhere = path.join(tmp, 'elsewhere');
       fs.mkdirSync(elsewhere);
-      fs.symlinkSync(elsewhere, path.join(planning, 'sessions'));
+      if (!trySymlink(elsewhere, path.join(planning, 'sessions'))) { t.skip('symlink privilege unavailable'); return; }
       const out = json(run(['state', 'record-session', '--stopped-at', 'x', '--session', 's1']));
       assert.equal(out.session_record.written, false);
       assert.equal(typeof out.session_record.reason, 'string');
@@ -126,11 +137,11 @@ describe('session verbs', () => {
       assert.match(state(), /\*\*Stopped at:\*\* x/);
     });
 
-    test('recordSessionNeverWritesThroughSymlink: a symlinked record file leaves its target untouched', () => {
+    test('recordSessionNeverWritesThroughSymlink: a symlinked record file leaves its target untouched', (t) => {
       fs.mkdirSync(path.join(planning, 'sessions'));
       const victim = path.join(tmp, 'victim.txt');
       fs.writeFileSync(victim, 'keep');
-      fs.symlinkSync(victim, path.join(planning, 'sessions', 's1.json'));
+      if (!trySymlink(victim, path.join(planning, 'sessions', 's1.json'))) { t.skip('symlink privilege unavailable'); return; }
       json(run(['state', 'record-session', '--stopped-at', 'x', '--session', 's1']));
       assert.equal(fs.readFileSync(victim, 'utf-8'), 'keep');
     });

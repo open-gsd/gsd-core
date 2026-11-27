@@ -16,6 +16,17 @@ const store = require('../gsd-core/bin/lib/session-store.cjs');
 const cases = require('./fixtures/session-handoff-cases.json').cases;
 
 const NO_KEYS = Object.fromEntries(store.SESSION_ENV_KEYS.map((k) => [k, '']));
+
+/** True when the symlink was created; false when this platform run may not create one (Windows without the privilege). */
+function trySymlink(target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath);
+    return true;
+  } catch (err) {
+    if (err && (err.code === 'EPERM' || err.code === 'EACCES')) return false;
+    throw err;
+  }
+}
 const TERMINAL_KEYS = ['TMUX_PANE', 'TERM_SESSION_ID', 'WT_SESSION', 'ZELLIJ_SESSION_NAME', 'CLAUDE_CODE_SSE_PORT', 'TTY', 'SSH_TTY'];
 
 describe('sanitizeSessionId', () => {
@@ -194,14 +205,24 @@ describe('listHandoffs and listRecords', () => {
     put('HANDOFF.a2.json', pad(store.HANDOFF_MAX_BYTES - base));
     put('HANDOFF.a3.json', pad(store.HANDOFF_MAX_BYTES - base + 1));
     put('HANDOFF.a4.json', '{not json');
-    fs.symlinkSync(path.join(planning, 'HANDOFF.a1.json'), path.join(planning, 'HANDOFF.a5.json'));
     fs.mkdirSync(path.join(planning, 'HANDOFF.a6.json'));
     const { handoffs, skipped } = store.listHandoffs(planning);
     assert.deepEqual(handoffs.map((h) => h.file).sort(), ['HANDOFF.a1.json', 'HANDOFF.a2.json']);
     const reasons = Object.fromEntries(skipped.map((s) => [s.file, s.reason]));
-    assert.deepEqual(Object.keys(reasons).sort(), ['HANDOFF.a3.json', 'HANDOFF.a4.json', 'HANDOFF.a5.json', 'HANDOFF.a6.json']);
+    assert.deepEqual(Object.keys(reasons).sort(), ['HANDOFF.a3.json', 'HANDOFF.a4.json', 'HANDOFF.a6.json']);
     for (const reason of Object.values(reasons)) assert.equal(typeof reason, 'string');
     assert.ok(fs.existsSync(path.join(planning, 'HANDOFF.a3.json')), 'a skipped file is never deleted');
+  });
+
+  test('listHandoffsSkipsSymlinks: a handoff-named symlink is skipped with a reason and its target is untouched', (t) => {
+    put('HANDOFF.a1.json', {});
+    if (!trySymlink(path.join(planning, 'HANDOFF.a1.json'), path.join(planning, 'HANDOFF.a5.json'))) {
+      t.skip('creating a symlink needs a privilege this platform run does not have');
+      return;
+    }
+    const { handoffs, skipped } = store.listHandoffs(planning);
+    assert.deepEqual(handoffs.map((h) => h.file), ['HANDOFF.a1.json']);
+    assert.deepEqual(skipped.map((s) => [s.file, s.reason]), [['HANDOFF.a5.json', 'symlink']]);
   });
 
   test('a file that is not named like a handoff is not listed or skipped', () => {

@@ -112,6 +112,8 @@ build/
 /gsd-core/bin/lib/markdown-sectionizer.cjs
 # #3311: new module (milestone lock) — emitted artifact, never edited.
 /gsd-core/bin/lib/milestone-lock.cjs
+# #6796: new module (per-session pause store) — emitted artifact, never edited.
+/gsd-core/bin/lib/session-store.cjs
 # #5551: new module (git info/exclude helper) — emitted artifact, never edited.
 /gsd-core/bin/lib/git-info-exclude.cjs
 # #2657: these two (markdown-table.cjs, write-set.cjs) already had the

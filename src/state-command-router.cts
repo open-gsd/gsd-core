@@ -43,6 +43,8 @@ interface StateModule {
   cmdStateAddRoadmapEvolution(cwd: string, opts: Record<string, string | boolean | null | undefined>, raw: boolean): void;
   cmdStateResolveBlocker(cwd: string, text: string | null | undefined, raw: boolean): void;
   cmdStateRecordSession(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
+  cmdStateSessionResume(cwd: string, opts: Record<string, string | boolean | null | undefined>, raw: boolean): void;
+  cmdStateSessions(cwd: string, opts: Record<string, string | null | undefined>, raw: boolean): void;
   cmdStateBeginPhase(cwd: string, phase: string | null | undefined, name: string | null | undefined, plans: number | null, raw: boolean): void;
   cmdSignalWaiting(cwd: string, type: string | null | undefined, question: string | null | undefined, options: string | null | undefined, phase: string | null | undefined, raw: boolean): void;
   cmdSignalResume(cwd: string, raw: boolean): void;
@@ -174,11 +176,36 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       },
       'resolve-blocker': () => state.cmdStateResolveBlocker(cwd, strArg(parseNamedArgsOrExit(args, { valueFlags: ['text'], positionals: 2 }, error), 'text'), raw),
       'record-session': () => {
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['stopped-at', 'resume-file'], positionals: 2 }, error);
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['stopped-at', 'resume-file', 'session', 'role', 'role-id'], positionals: 2 }, error);
         // Pass resume_file as-is (undefined when --resume-file was not provided) so
         // cmdStateRecordSession can distinguish "caller explicitly passed a value" from
         // "option was not supplied" and apply the template-default-only replacement guard.
-        state.cmdStateRecordSession(cwd, { stopped_at: strArg(a, 'stopped-at'), resume_file: strArg(a, 'resume-file') }, raw);
+        // #6796: session/role/role_id are likewise undefined unless passed; only an explicit
+        // --session writes `.planning/sessions/<id>.json` (a runtime key alone never does).
+        state.cmdStateRecordSession(cwd, {
+          stopped_at: strArg(a, 'stopped-at'),
+          resume_file: strArg(a, 'resume-file'),
+          session: strArg(a, 'session'),
+          role: strArg(a, 'role'),
+          role_id: strArg(a, 'role-id'),
+        }, raw);
+      },
+      // #6796 (ADR-4962): per-session pause. The session id comes from --session or a
+      // runtime key, never a terminal token; with neither, both verbs write and delete nothing.
+      'session-resume': () => {
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['session', 'role', 'role-id', 'handoff', 'action'], booleanFlags: ['keep-handoff'], positionals: 2 }, error);
+        state.cmdStateSessionResume(cwd, {
+          session: strArg(a, 'session'),
+          role: strArg(a, 'role'),
+          role_id: strArg(a, 'role-id'),
+          handoff: strArg(a, 'handoff'),
+          action: strArg(a, 'action'),
+          keep_handoff: a['keep-handoff'] === true,
+        }, raw);
+      },
+      sessions: () => {
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['session', 'role', 'role-id'], positionals: 2 }, error);
+        state.cmdStateSessions(cwd, { session: strArg(a, 'session'), role: strArg(a, 'role'), role_id: strArg(a, 'role-id') }, raw);
       },
       'begin-phase': () => {
         const a = parseNamedArgsOrExit(args, { valueFlags: ['phase', 'name', 'plans'], positionals: 2 }, error);

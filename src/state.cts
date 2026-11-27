@@ -51,8 +51,17 @@ const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, 
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent, platformRestoreFileSync, platformReadBytesSync, type FileIdentity } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningPaths, resolvePhaseIdConvention } = planningWorkspace;
+const { planningDir, planningPaths, planningRoot, resolvePhaseIdConvention } = planningWorkspace;
 import { realClock } from './clock.cjs';
+// #6796: leaf module; it imports nothing from state.cts, so there is no cycle.
+import {
+  sanitizeRoleId,
+  writeRecord as writeSessionRecord,
+  resolveIdentity as resolveSessionIdentity,
+  listSessions as listSessionHandoffs,
+  consumeHandoffs,
+  type RecordWriteResult as SessionRecordWriteResult,
+} from './session-store.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, propagateCommentChannel, FRONTMATTER_UNPARSEABLE } = frontmatter;
@@ -394,6 +403,12 @@ interface StateAddRoadmapEvolutionOptions {
 interface StateRecordSessionOptions {
   stopped_at?: string;
   resume_file?: string | null;
+  /** #6796: an explicit `--session` also writes `.planning/sessions/<id>.json`. */
+  session?: string | null;
+  role?: string | null;
+  role_id?: string | null;
+  /** `state session-resume` reuses this transaction and prints its own payload. */
+  silent?: boolean;
 }
 
 interface StateSnapshotSession {
@@ -2159,7 +2174,28 @@ function boundedContinuation(text: string): string {
   return `${text.slice(0, end)}…`;
 }
 
-function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, raw: boolean): void {
+/**
+ * #6796: the per-session record an explicit `--session` writes beside the STATE.md
+ * `## Session` block (ADR-4962). Null when no `--session` was passed. A field the
+ * caller did not pass keeps its prior value; `role_id` is derived here, never by
+ * workflow prose.
+ */
+function writeSessionRecordForOptions(cwd: string, options: StateRecordSessionOptions, now: string): SessionRecordWriteResult | null {
+  if (typeof options.session !== 'string' || options.session.trim() === '') return null;
+  const role = typeof options.role === 'string' && options.role !== '' ? options.role : undefined;
+  const roleIdGiven = typeof options.role_id === 'string' && options.role_id !== '';
+  return writeSessionRecord(planningRoot(cwd), {
+    session_id: options.session,
+    ...(options.stopped_at ? { stopped_at: options.stopped_at } : {}),
+    last_session: now,
+    ...(options.resume_file !== undefined && options.resume_file !== null ? { resume_file: options.resume_file } : {}),
+    ...(role !== undefined ? { role } : {}),
+    ...(role !== undefined || roleIdGiven ? { role_id: sanitizeRoleId(options.role_id) ?? sanitizeRoleId(role) } : {}),
+  });
+}
+
+/** Returns whether STATE.md was written; with `options.silent` nothing is printed. */
+function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, raw: boolean): boolean {
   // #4186: a bare invocation is a usage error, not a heartbeat write. The
   // pre-#4186 handler accepted zero arguments and still refreshed
   // `Last session` / `Last Date` / `last_updated` — a caller probing the
@@ -2175,11 +2211,15 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   // #4998: every field this writes is single-line; a line break in a value
   // would forge sibling lines (U+2028/U+2029 included — the readers' `m`-flag
   // anchors match there too), so it is refused before anything is touched.
-  for (const [flag, value] of [['--stopped-at', options.stopped_at], ['--resume-file', options.resume_file]] as const) {
+  // #6796: the session flags land in the per-session record, so they get the same single-line rule.
+  for (const [flag, value] of [['--stopped-at', options.stopped_at], ['--resume-file', options.resume_file], ['--session', options.session], ['--role', options.role], ['--role-id', options.role_id]] as const) {
     if (typeof value === 'string' && FIELD_LINE_BREAK_RE.test(value)) error(`state record-session: ${flag} must be a single line`);
   }
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  if (!fs.existsSync(statePath)) {
+    if (!options.silent) output({ error: 'STATE.md not found' }, raw, undefined);
+    return false;
+  }
 
   const now = realClock.nowIso();
   const updated: string[] = [];
@@ -2525,6 +2565,13 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   // #4998 review: read back where the fields were written — the session section.
   const reconciledUpdated = reconcileReportedFields(statePath, preWriteState, updated, divergedFields, NO_SECTION_TARGETS, true);
 
+  // #6796: an explicit --session also writes the per-session record, after the STATE.md
+  // transaction so a failed STATE write never leaves a record claiming a stop STATE.md
+  // does not show. Null when no --session was passed: nothing is written and the
+  // payload is byte-identical to the pre-#6796 one.
+  const sessionRecord = writeSessionRecordForOptions(cwd, options, now);
+  const sessionExtra = sessionRecord === null ? undefined : { session_record: sessionRecord };
+
   // #4998: name every field left whole because its value wraps, and how to fix it.
   const skippedRows = skippedFields;
   const skippedDisclosure = skippedRows.map(({ field, reason, continuation }) => (reason === 'wrapped_value'
@@ -2573,25 +2620,28 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       replacedRecord['Resume File'] = priorRecord.resumeFile;
     }
     if (Object.keys(replacedRecord).length > 0) result['replacedRecord'] = replacedRecord;
-    output(result, raw, 'true');
+    if (sessionExtra) result['session_record'] = sessionExtra.session_record;
+    if (!options.silent) output(result, raw, 'true');
+    return true;
   } else if (skippedRows.length > 0) {
     // #4998: every field the call would have changed wraps — nothing written.
-    declineNoOp(
+    if (!options.silent) declineNoOp(
       raw,
       'recorded',
       'every session field to update was left unchanged — see skipped',
       skippedDisclosure.join('\n[gsd-tools] WARNING: '),
-      { skipped: skippedRows },
+      { skipped: skippedRows, ...sessionExtra },
     );
   } else if (updated.length === 0) {
     // Nothing was ever attempted — no --stopped-at/--resume-file supplied
     // and no existing Last session/Last Date/Stopped At/Resume File labels
     // to touch.
-    declineNoOp(
+    if (!options.silent) declineNoOp(
       raw,
       'recorded',
       'no session fields found in STATE.md to update',
       'state record-session skipped — no session fields found in STATE.md to update.',
+      sessionExtra,
     );
   } else {
     // #3957: `updated` (pre-reconciliation) was non-empty — a rewrite
@@ -2602,13 +2652,119 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
     // from the "nothing was ever attempted" case above: the prior single
     // reason collapsed both into 'No session fields found in STATE.md',
     // which was simply wrong for this case.
-    declineNoOp(
+    if (!options.silent) declineNoOp(
       raw,
       'recorded',
       'the matched session field(s) already held the reported value — no bytes changed',
       'state record-session skipped — the matched session field(s) already held the reported value; no bytes changed.',
+      sessionExtra,
     );
   }
+  return false;
+}
+
+interface LegacyStatusRepair {
+  before: string | null;
+  after: string | null;
+  cleared: boolean;
+  reason?: string;
+}
+
+/**
+ * #6796 (ADR-4962 Decision 5): a legacy frontmatter-only `status: paused` has no
+ * workflow that clears it. Repair it from the body `Status:` line, and only when
+ * no `Paused At:` line (body or frontmatter `paused_at`) still claims the pause.
+ * The write goes through the ordinary seam with the one field declared through
+ * its `authoritativeFm` option, so preservation is not bypassed for any other
+ * field; ADR-3408 §8.3's closed exception list is not extended.
+ */
+function repairLegacyPausedStatus(cwd: string, statePath: string): LegacyStatusRepair {
+  const content = platformReadSync(statePath) || '';
+  const fm = extractFrontmatter(content) as Record<string, unknown>;
+  const before = typeof fm['status'] === 'string' ? fm['status'] : null;
+  const unchanged = (reason: string): LegacyStatusRepair => ({ before, after: before, cleared: false, reason });
+  if (before === null || before.trim().toLowerCase() !== 'paused') return unchanged('status is not paused');
+  const visible = readableBoldLabels(maskFencedLines(stripFrontmatter(content)));
+  if (fm['paused_at'] || stateExtractField(visible, 'Paused At') !== null) return unchanged('a Paused At line still claims the pause');
+  const bodyStatus = stateExtractField(visible, 'Status');
+  const after = bodyStatus === null ? null : normalizeStateStatus(bodyStatus, null);
+  const lifecycle: readonly string[] = stateMdSchemaMod.STATUS_LIFECYCLE_ENUM;
+  if (after === null || after === 'paused' || after === 'unknown' || !lifecycle.includes(after)) {
+    return unchanged('the body Status line does not name a non-paused status');
+  }
+  readModifyWriteStateMd(statePath, (current) => {
+    const { existingFm, body, reassemble } = stateTransitionMod.beginFrontmatterReassembly(current, statePath);
+    existingFm['status'] = after;
+    return reassemble(body);
+  }, cwd, { authoritativeFm: { status: after } });
+  const written = extractFrontmatter(platformReadSync(statePath) || '') as Record<string, unknown>;
+  const finalStatus = typeof written['status'] === 'string' ? written['status'] : null;
+  return { before, after: finalStatus, cleared: finalStatus !== null && finalStatus !== 'paused' };
+}
+
+interface StateSessionIdentityOptions {
+  session?: string | null;
+  role?: string | null;
+  role_id?: string | null;
+}
+
+interface StateSessionResumeOptions extends StateSessionIdentityOptions {
+  handoff?: string | null;
+  action?: string | null;
+  keep_handoff?: boolean;
+}
+
+function assertSingleLineSessionFlags(verb: string, flags: ReadonlyArray<readonly [string, string | null | undefined]>): void {
+  for (const [flag, value] of flags) {
+    if (typeof value === 'string' && FIELD_LINE_BREAK_RE.test(value)) error(`state ${verb}: ${flag} must be a single line`);
+  }
+}
+
+/**
+ * #6796: `state session-resume` — the resumed session records "Session resumed,
+ * proceeding to <action>", repairs a legacy paused status, and unlinks only its
+ * own handoff. With no session id (no `--session`, no runtime key) it writes and
+ * deletes nothing. Every failure is reported in the payload, never thrown.
+ */
+function cmdStateSessionResume(cwd: string, options: StateSessionResumeOptions, raw: boolean): void {
+  assertSingleLineSessionFlags('session-resume', [['--session', options.session], ['--role', options.role], ['--role-id', options.role_id], ['--handoff', options.handoff], ['--action', options.action]]);
+  const planning = planningRoot(cwd);
+  const statePath = planningPaths(cwd).state;
+  const identity = resolveSessionIdentity(planning, { session: options.session, role: options.role, role_id: options.role_id });
+  let recorded = false;
+  let sessionRecord: SessionRecordWriteResult | null = null;
+  let status: LegacyStatusRepair = { before: null, after: null, cleared: false, reason: 'no session id' };
+  if (identity.session_id !== null) {
+    const stoppedAt = options.action ? `Session resumed, proceeding to ${options.action}` : 'Session resumed';
+    const roleFlags = {
+      ...(typeof options.role === 'string' && options.role !== '' ? { role: options.role } : {}),
+      ...(typeof options.role_id === 'string' && options.role_id !== '' ? { role_id: options.role_id } : {}),
+    };
+    if (fs.existsSync(statePath)) {
+      recorded = cmdStateRecordSession(cwd, { stopped_at: stoppedAt, session: identity.session_id, silent: true, ...roleFlags }, raw);
+      status = repairLegacyPausedStatus(cwd, statePath);
+    } else {
+      status = { before: null, after: null, cleared: false, reason: 'STATE.md not found' };
+      sessionRecord = writeSessionRecordForOptions(cwd, { stopped_at: stoppedAt, session: identity.session_id, ...roleFlags }, realClock.nowIso());
+    }
+  }
+  const handoff = consumeHandoffs(planning, identity, { adopt: options.handoff ?? null, keep: options.keep_handoff === true });
+  output({
+    session_id: identity.session_id,
+    role_id: identity.role_id,
+    recorded,
+    ...(sessionRecord === null ? {} : { session_record: sessionRecord }),
+    status,
+    handoff,
+  }, raw, 'true');
+}
+
+/** #6796: `state sessions` — read-only view of every handoff and record, with who owns each. */
+function cmdStateSessions(cwd: string, options: StateSessionIdentityOptions, raw: boolean): void {
+  assertSingleLineSessionFlags('sessions', [['--session', options.session], ['--role', options.role], ['--role-id', options.role_id]]);
+  const planning = planningRoot(cwd);
+  const identity = resolveSessionIdentity(planning, { session: options.session, role: options.role, role_id: options.role_id });
+  output(listSessionHandoffs(planning, identity), raw, 'true');
 }
 
 /**
@@ -8387,6 +8543,8 @@ export = {
   cmdStateAddRoadmapEvolution,
   cmdStateResolveBlocker,
   cmdStateRecordSession,
+  cmdStateSessionResume,
+  cmdStateSessions,
   cmdStateSnapshot,
   cmdStateJson,
   cmdStateBeginPhase,
