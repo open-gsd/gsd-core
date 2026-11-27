@@ -32,13 +32,12 @@ function makeTree(t, { registry, files }) {
   return { root, dir };
 }
 
-const messages = (tree) => textContracts.run(tree).map((f) => f.message);
+// A temporary tree holds just this contract, so the engine's shipped-count minimum is lowered to that one.
+const messages = (tree) => textContracts.run({ ...tree, minContracts: 1 }).map((f) => f.message);
 
 describe('handoff-grammar-readers-registered (#6797)', () => {
   test('theShippedTreePasses: every reader of the grammar in the real repo is registered', () => {
-    const findings = textContracts.run({ root: ROOT, dir: path.join(ROOT, 'scripts', 'static-checks', 'text-contracts') })
-      .filter((f) => f.message.startsWith(`${CONTRACT}:`));
-    assert.deepEqual(findings, []);
+    assert.deepEqual(textContracts.run({ root: ROOT, only: [CONTRACT], minContracts: 1 }), []);
   });
 
   test('aRegisteredFollowerPasses', (t) => {
