@@ -7324,6 +7324,9 @@ describe('gsd-secret-read-guard: xargs -i and -l, whose value is attached only (
     "echo txt | xargs -i sh -c 'cat notes.{}'",
     "echo x | xargs -l sh -c 'echo hi'",
     'xargs -l cat <<< notes.txt',
+    // The word after -i or -l is the command, so a grep pattern is grep's, as without them.
+    'xargs -i grep .env f',
+    'echo x | xargs -l grep .env f',
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
@@ -7358,6 +7361,14 @@ describe('gsd-secret-read-guard: an xargs replace string inside an option cluste
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
+});
+
+describe('gsd-secret-read-guard: a filter between printf or echo and xargs -I, listed under Not covered (#5779)', () => {
+  // The changeset's Not covered list names it; pinned as allowed so a change to it is seen.
+  test("allows: echo ENV | tr A-Z a-z | xargs -I{} sh -c 'cat .{}'", () => {
+    const cmd = "echo ENV | tr A-Z a-z | xargs -I{} sh -c 'cat .{}'";
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
 });
 
 describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", () => {
