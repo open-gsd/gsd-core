@@ -290,23 +290,11 @@ The auditor never modifies implementation code — only test files and VALIDATIO
 
 ### Assumptions Discussion Mode
 
-By default, `/gsd-discuss-phase` asks open-ended questions about your implementation preferences. Assumptions mode inverts this: GSD reads your codebase first, surfaces structured assumptions about how it would build the phase, and asks only for corrections.
-
-**Enable:** Set `workflow.discuss_mode` to `'assumptions'` via `/gsd-settings`.
-
-See [docs/workflow-discuss-mode.md](workflow-discuss-mode.md) for the full discuss-mode reference.
+By default `/gsd-discuss-phase` asks open-ended questions about your implementation preferences. Assumptions mode inverts this: GSD reads your codebase first, surfaces structured assumptions about how it would build the phase, and asks only for corrections. Turn it on with `workflow.discuss_mode: 'assumptions'` via `/gsd-settings`. The steps are in [How to discuss a phase](how-to/discuss-a-phase.md), and the full reference is [workflow-discuss-mode.md](workflow-discuss-mode.md).
 
 ### Decision Coverage Gates
 
-The discuss-phase captures implementation decisions in CONTEXT.md under a `<decisions>` block as numbered bullets (`- **D-01:** …`). Two gates ensure those decisions survive into plans and shipped code.
-
-**Plan-phase translation gate (blocking).** After planning, GSD refuses to mark the phase planned until every trackable decision appears in at least one plan's scanned surfaces: front-matter `must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective` heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>` tag body.
-
-**Verify-phase validation gate (non-blocking).** During verification, GSD searches plans, SUMMARY.md, modified files, and recent commit messages for each trackable decision. Misses are logged to VERIFICATION.md as a warning section; verification status is unchanged.
-
-**Opting a decision out.** Move it under the `### Claude's Discretion` heading inside `<decisions>`, or tag it: `- **D-08 [informational]:** …`, `- **D-09 [folded]:** …`, `- **D-10 [deferred]:** …`.
-
-**Disabling the gates.** Set `workflow.context_coverage_gate: false` in `.planning/config.json` (or via `/gsd-settings`). Default is `true`. The key must sit under `workflow`; a top-level `context_coverage_gate` is ignored and the gates stay on.
+Decisions captured in CONTEXT.md as numbered bullets (`- **D-01:** …`) are checked twice: a blocking gate after planning refuses to mark the phase planned until every trackable decision appears in a plan, and a non-blocking gate during verification logs misses to VERIFICATION.md. What the gates scan, how to write decisions they accept, and how to opt a decision out are in [Decision coverage gates explained](explanation/decision-coverage-gates.md). To turn both gates off, set `workflow.context_coverage_gate: false` (the key must sit under `workflow`); see [`workflow.context_coverage_gate`](CONFIGURATION.md#decision-coverage-gates-workflowcontext_coverage_gate).
 
 ### Execution Wave Coordination
 
