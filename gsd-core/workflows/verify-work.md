@@ -566,8 +566,8 @@ Choice [K]:
 (TEXT_MODE: present this as a plain-text numbered list per the text-mode convention and wait for the typed choice.)
 
 **If the user chooses [P]:**
-1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing backlog heading for CLI number `999.{n}` in the scoped ROADMAP.md (`${PLANNING_ROOT}/ROADMAP.md`) — scan the headings rather than counting them, since numbering may be non-contiguous. If that ROADMAP.md does not exist, create it containing only a `## Backlog` section and use `1`.
-2. Append to that `## Backlog` section one backlog entry per deferred follow-up (each with its own `999.{backlog_number}` heading, incrementing per entry), with `test`/`idea`/`deferred_at` verbatim from the section's YAML and `{idea}` flattened to a single line (newlines → spaces — a multi-line response would corrupt the single-line entry; this mirrors `next.md`'s use of a slug for the same reason):
+1. `{backlog_number}` = the smallest positive integer unused by any backlog heading for CLI number `999.{n}` in the scoped ROADMAP.md (`${PLANNING_ROOT}/ROADMAP.md`); scan the headings, don't count them, since numbering may be non-contiguous. If it does not exist, create it with only a `## Backlog` section and use `1`.
+2. Append to that `## Backlog` section one backlog entry per deferred follow-up (each with its own `999.{backlog_number}` heading, incrementing per entry), with `test`/`idea`/`deferred_at` verbatim from the section's YAML and `{idea}` flattened to a single line (newlines → spaces, as `next.md` does with its slug, so a multi-line response cannot corrupt the entry):
 
 ```markdown
 ### {backlog_phase_display}: Follow-up — Phase {phase_num} deferred UAT follow-up: Test {test} (BACKLOG)
