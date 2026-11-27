@@ -97,6 +97,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Interpret scope-conformance warnings](how-to/interpret-scope-conformance-warnings.md) — read the advisory the worktree-wave merge emits when a plan branch commits outside its declared scope
 - [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md) — read the advisory GSD Core emits when a `/gsd-*` trigger is installed at both scopes and one silently wins, and tell "nothing to report" apart from "could not look"
 - [Interpret `state validate` results](how-to/interpret-state-validate-results.md) — read the `scope` reason codes and tell "nothing to report" apart from "could not look"
+- [Park an idea for later](how-to/park-an-idea-for-later.md) — choose between the backlog, a seed and a thread, then park, review, promote or close the idea
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
 - [Enable live-DOM verification](how-to/enable-live-dom-verification.md) — opt a project into browser-backed UI acceptance checks during execution, handle the browser-profile lock, and tell "nothing to report" apart from "could not look"
