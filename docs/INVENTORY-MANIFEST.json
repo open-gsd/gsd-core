@@ -612,6 +612,7 @@
       "section-manifest.cjs",
       "security.cjs",
       "semver-compare.cjs",
+      "session-store.cjs",
       "settings-jsonc.cjs",
       "shell-command-projection.cjs",
       "smart-entry.cjs",

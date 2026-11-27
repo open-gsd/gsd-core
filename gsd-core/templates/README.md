@@ -21,7 +21,7 @@ These files live directly at `.planning/` — not inside phase subdirectories.
 | `LEARNINGS.md` | *(inline)* | `/gsd:extract-learnings`, `/gsd:execute-phase` (gated: `features.global_learnings`) | Phase retrospective learnings for future plans |
 | `THREADS.md` | *(inline)* | `/gsd:thread` | Persistent discussion threads |
 | `config.json` | `config.json` | `/gsd:new-project`, `/gsd:health --repair` | Project-specific GSD configuration |
-| `CLAUDE.md` | *(inline)* | `/gsd-profile` | Auto-assembled Claude Code context file |
+| `CLAUDE.md` | *(inline)* | `/gsd:new-project`, `/gsd:profile-user` | Auto-assembled context file, written to `.claude/CLAUDE.md` (`AGENTS.md`, `GEMINI.md` and similar on other runtimes) |
 | `RETROSPECTIVE.md` | *(inline)* | `/gsd:complete-milestone` | Living milestone retrospective updated at each milestone close |
 | `WINDOWS.md` | *(none)* | broken-windows ledger (`src/broken-windows.cts`) | Tracked known-broken items pending resolution (#3224) |
 | `STATE-ARCHIVE.md` | *(none)* | `state.cts`'s `cmdStatePrune` | Pruned historical STATE.md entries |
@@ -50,8 +50,8 @@ These files live inside a phase directory. They are NOT checked by W019 (which o
 | `NN-MM-SUMMARY.md` | `summary.md` | `/gsd:execute-phase` | Post-execution summary with learnings |
 | `NN-CONTEXT.md` | `context.md` | `/gsd:discuss-phase` | Scoped discussion decisions for the phase |
 | `NN-RESEARCH.md` | `research.md` | `/gsd:plan-phase`, `/gsd:plan-phase --research-phase <N>` | Technical research for the phase |
-| `NN-VALIDATION.md` | `VALIDATION.md` | `/gsd:plan-phase` (Nyquist) | Validation architecture (Nyquist method) |
-| `NN-UAT.md` | `UAT.md` | `/gsd:validate-phase` | User acceptance test results |
+| `NN-VALIDATION.md` | `VALIDATION.md` | `/gsd:plan-phase` (Nyquist), `/gsd:validate-phase` | Validation architecture (Nyquist method) |
+| `NN-UAT.md` | `UAT.md` | `/gsd:verify-work`, `/gsd:execute-phase` (human-verification items) | User acceptance test results |
 | `NN-PATTERNS.md` | *(inline)* | `/gsd:plan-phase` (pattern mapper) | Analog file mapping for the phase |
 | `NN-UI-SPEC.md` | `UI-SPEC.md` | `/gsd:ui-phase` | UI design contract |
 | `NN-SECURITY.md` | `SECURITY.md` | `/gsd:secure-phase` | Security threat model |

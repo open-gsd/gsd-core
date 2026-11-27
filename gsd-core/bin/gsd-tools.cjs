@@ -205,6 +205,11 @@
  *   state record-session               Update session continuity
  *     --stopped-at "..."
  *     [--resume-file path]
+ *     [--session ID] [--role TEXT] [--role-id SLUG]   Also write .planning/sessions/<ID>.json
+ *   state session-resume               Resume this session: record it, repair a legacy paused status, remove its own handoff
+ *     [--session ID] [--role TEXT] [--role-id SLUG] [--action TEXT] [--handoff NAME] [--keep-handoff]
+ *   state sessions                     List handoffs and session records; who owns each (read-only)
+ *     [--session ID] [--role TEXT] [--role-id SLUG]
  *
  * Compound Commands (workflow-specific initialization):
  *   init execute-phase <phase>         All context for execute-phase workflow

@@ -264,6 +264,8 @@ module.exports = {
   "tests/secret-read-exemptions.test.cjs",
   "tests/security.test.cjs",
   "tests/self-test-report-policy.test.cjs",
+  "tests/session-store.test.cjs",
+  "tests/session-verbs.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
   "tests/shared-install-fixture.test.cjs",

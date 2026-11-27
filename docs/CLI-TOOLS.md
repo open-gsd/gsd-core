@@ -161,8 +161,17 @@ node gsd-tools.cjs state add-blocker --text "..."
 node gsd-tools.cjs state add-blocker --text-file path
 node gsd-tools.cjs state resolve-blocker --text "..."
 
-# Record session continuity (at least one of --stopped-at / --resume-file is required)
-node gsd-tools.cjs state record-session --stopped-at "..." [--resume-file path]
+# Record session continuity (at least one of --stopped-at / --resume-file is required).
+# --session also writes .planning/sessions/<session_id>.json beside the STATE.md ## Session block;
+# --role / --role-id label the session (role_id is the ASCII slug the CLI derives).
+node gsd-tools.cjs state record-session --stopped-at "..." [--resume-file path] [--session ID] [--role TEXT] [--role-id SLUG]
+
+# Per-session pause (ADR-4962): the resumed session records "Session resumed, proceeding to <action>",
+# repairs a legacy frontmatter-only `status: paused`, and removes only its own handoff.
+node gsd-tools.cjs state session-resume [--session ID] [--role TEXT] [--role-id SLUG] [--action TEXT] [--handoff NAME] [--keep-handoff]
+
+# Read-only: every handoff and session record under .planning/, who owns each, and whether this session is paused
+node gsd-tools.cjs state sessions [--session ID] [--role TEXT] [--role-id SLUG]
 
 # Phase start — update STATE.md Status/Last activity for a new phase. When some of the phase's plans
 # already have summaries (a gap-closure re-entry), Current Plan and `Plan: N of M` start at the first
@@ -178,6 +187,14 @@ node gsd-tools.cjs state signal-resume
 `state update`, `state patch` and `state record-session` take single-line values: a value containing a line break — CR, LF, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR, each of which starts a new line for the STATE.md readers — is refused with an error naming the field or flag, before anything is written.
 
 `state record-session` lists the fields it wrote under `updated`, and under `replacedRecord` any Stopped At / Resume File value the write displaced (the `None` placeholder is not a record). In the session section, a line inside a fenced code block is an example: no session writer (`record-session`, `state update`/`patch` of a session field, `phase complete`) changes it, and neither the frontmatter sync nor `state-snapshot` reads it as a field. A field whose current value continues onto the next line is left unchanged, because a single-line write would orphan the rest (a line directly below shaped `words: text` counts as a continuation unless its label is bold or one STATE.md defines, such as `Resume file` or `Status`, since a wrapped sentence can take that shape): it is listed under `skipped` as `{ "field", "reason": "wrapped_value", "continuation" }` with a warning on stderr (the continuation is echoed up to 200 characters, then `…`), and when every field to update was skipped the call reports `"recorded": false`. With no session heading, Last session, Last Date and Resume file are not written in place — `state-snapshot` reads them from a session section only — and the call appends a `## Session` section (reported as `"created": true`, which an insert into an existing section is not) holding the new Last session and Stopped at, and the passed Resume file or else the body's existing one rather than `None` (a Stopped at skipped as wrapped carries its existing value); a carried value holding U+2028/U+2029 is left out and listed as `{ "field", "reason": "line_separator" }`, and when the document ends inside an unclosed code fence nothing is appended (it would land inside the fence) and each field the call writes (Last session, and Stopped at or Resume file when passed) that was not written in place or skipped for another reason is listed with `"reason": "unclosed_fence"`. `state record-session`, `state update` and `state patch` write a session field (Stopped At, Paused At, Resume File, Last session, Last Date) inside the session section — not a fenced example there, and not a copy in another section such as `## Session Continuity Archive` — which is where the frontmatter sync and `state-snapshot` read it. `record-session` inserts a field the section lacks; `state update` and `state patch` report it updated, and a document whose session section lacks the field, or that has no session section, reports it not found and is left unchanged. `state patch`, like `state update`, reports a field that already holds the requested value as updated. `state update` and `state patch` replace a field's first line only and do not check for a wrapped value, so a continuation line below it stays in place: fold a wrapped value onto one line before updating it with them.
+
+**Per-session pause (ADR-4962).** A session is paused when a handoff file that belongs to it exists under `.planning/`. The handoff filename grammar is owned by `src/session-store.cts`: `HANDOFF.latest.<role_id>.json` (one slot per role, with `.continue-here.latest.<role_id>.md`), `HANDOFF.<session_id>.json` (a session without a role), `HANDOFF.claimed.<role_id>.<session_id>.json` (a resume in progress), and the legacy `HANDOFF.json` + `.continue-here.md`, which stays resumable. A keyed file is owned by its filename; the legacy file is owned by any session unless its body names a different role. The session id comes from `--session`, else the first set of `GSD_SESSION_KEY`, `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `OPENCODE_SESSION_ID`, `GEMINI_SESSION_ID`, `CURSOR_SESSION_ID`, `WINDSURF_SESSION_ID` (the workstream store's own list in its own order, minus the terminal-identity keys, so one session never gets two ids); a terminal, tmux or TTY identity is never used, so with none of these set `session_id` is `null` and `session-resume` writes and deletes nothing.
+
+`state record-session --session S` also writes `.planning/sessions/S.json` (`session_id`, `role`, `role_id`, `stopped_at`, `last_session`, `resume_file`; a field the call does not pass keeps its earlier value) and adds `session_record: { written, path | reason }` to its output. Without `--session` the output and STATE.md are unchanged and no record is written, even when a runtime key is set. A `sessions/` directory or record path that is a symlink or not a regular file is not written through: the record is reported `written: false` with a `reason` and the STATE.md write stands.
+
+`state session-resume` reports `{ session_id, role_id, recorded, status, handoff }`. `status` is `{ before, after, cleared }`, plus `reason` when nothing changed: a legacy frontmatter `status: paused` is repaired from the body `Status:` line only when no `Paused At:` line (or frontmatter `paused_at`) claims the pause. `handoff` is `{ removed, failed, refused? }`: `removed` lists the caller's own handoff and its `.continue-here` companion, `failed` any unlink that could not complete (for example `EBUSY` on Windows), and `refused` a `--handoff` name that is not a plain handoff file name. `--handoff NAME` adopts that one file instead, including another session's (a role-less session after `/clear` takes over its old session's file), except a `HANDOFF.claimed.*` file held by a different session, which is a resume in progress and is refused with `refused: "claimed by another session"`; `--keep-handoff` removes nothing. The legacy status repair does not depend on owning a handoff: any caller with a session id may clear a stuck frontmatter `paused`, since the value is project-wide and no shipped workflow clears it.
+
+`state sessions` is read-only and reports `{ session_id, role_id, paused, handoffs, records, skipped }`: each handoff carries `kind`, `role_id`, `session_id`, `is_self` and `continue_here_path`; `skipped` lists files that were not read, each with a `reason` (`symlink`, `not a regular file`, `EFBIG` over 256 KiB, `invalid JSON`, `not a JSON object`, or the errno).
 
 ### State Snapshot
 
@@ -238,8 +255,8 @@ node gsd-tools.cjs phase complete <phase>
 # Exit 0 when passed, 1 when not (#5170); a phase it cannot read is error() with empty stdout
 node gsd-tools.cjs phase uat-passed <phase> [--require-verification]
 
-# Index plans with waves and status
-node gsd-tools.cjs phase-plan-index <phase>
+# Index plans with waves and status (the output is always JSON; --json is accepted and changes nothing)
+node gsd-tools.cjs phase-plan-index <phase> [--json]
 
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
@@ -711,7 +728,7 @@ Read and write `.planning/config.json`.
 node gsd-tools.cjs config-ensure-section
 
 # Set a config value (dot notation)
-node gsd-tools.cjs config-set <key> <value>
+node gsd-tools.cjs config-set <key> <value> [--dry-run]
 
 # Get a config value
 node gsd-tools.cjs config-get <key> [--default <value>] [--raw]
@@ -725,6 +742,8 @@ node gsd-tools.cjs migrate-config
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 ```
+
+`config-set --dry-run` validates the key and value and prints what would change (`dry_run: true`, the key, its new value and its previous value, masked for secrets) without writing `config.json`.
 
 `config-get` prints the key's value as JSON. A key absent from the config falls back to the
 project root config (when a workstream is active), then to `--default`, then to the key's
@@ -1696,12 +1715,18 @@ Assembles a reviewer prompt from the given sections within a token budget, write
 gsd-tools review-lane plan [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
 gsd-tools review-lane sections [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
 gsd-tools review-lane invoke --slug <lane> [--as <name>] [--agent <name>] [--model <id>] [--prompt-file <f>] [--explicit] [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] [--json]
+gsd-tools review-lane flags [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane availability [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane dispatch-step [--explicit <flags>] [--depth <n>] [--base-sha <sha>] [--cap-id <id> --point <point>] [--run-dir <dir>] [--repo-root <dir>]
 ```
 
-The lane roster is the first-party lanes plus installed third-party lanes. Without `--selected` every lane is used; `--run-dir` (default `.`) is where prompts and results are written; `--repo-root` defaults to the working directory.
+The lane roster is the first-party lanes plus installed third-party lanes. Without `--selected` every lane is used (`dispatch-step` always uses the whole roster and does not take it); `--run-dir` (default `.`) is where prompts and results are written; `--repo-root` defaults to the working directory.
 
 - **`plan`** prints a JSON array with one entry per lane: `{ slug, ok, section, transport, promptBudget, promptCapSource, contextWindowTokens, promptPath }`. A lane that cannot run has `ok: false` with a `reason`.
 - **`sections`** prints one `<slug><TAB><reviews section>` line per lane.
+- **`flags`** prints the reviewer flags the roster declares, one per line in roster order, for the first-party and installed lanes (a lane can declare more than one, for example `--antigravity` and `--agy`). Only flags of the form `--` followed by lowercase letters, digits and hyphens are printed, so the output is safe to word-split in a shell loop; with no flag there is no output and no trailing newline.
+- **`availability`** prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`), in roster order. The probe is a bounded GET of `/v1/models` on the host `review.<lane>_host` names, or the lane's built-in default host when that key is unset. A host left at the built-in default counts as `available` only when the listing answers with a 2xx OpenAI-style `/v1/models` response, and warnings go to stderr.
+- **`dispatch-step`** is what a capability step calls to run the reviewer lanes a caller asked for. `--explicit` is a comma-separated list of lane flags; `--depth` and `--base-sha` are passed through to the dispatch. `--cap-id` and `--point` together name the capability and loop point whose `supportsReviewerLanes` trait is resolved; giving only one of them prints a warning and leaves the trait off. The changed file paths are read from stdin, one per line (none when stdin is a terminal).
 - **`invoke`** runs the lane named by `--slug` and prints its result as JSON; an unknown or not-ok lane prints `{ slug, ok: false, reason, detail }`. `--as <name>` runs the lane as a [reviewer instance](CONFIGURATION.md#review-settings) of that name, writing `gsd-review-<name>.md` under `--run-dir`, with `--model` and `--agent` supplying the instance's model and agent. `--prompt-file` substitutes a different prompt. `--explicit` marks the lane as explicitly requested. A prompt over the lane's cap is refused, never trimmed.
 
 ### Loop hooks
@@ -1711,6 +1736,14 @@ gsd-tools loop render-hooks <point> [--config-dir <path>] [--runtime <runtime>] 
 ```
 
 Renders the active loop extension-point hooks for `<point>` (for example `plan:pre`) and prints `{ point, activeHooks, rendered }`, plus `warnings` and `skippedHooks` when there are any. `--config-dir` selects the runtime config directory; `--runtime` names the runtime explicitly instead of using the persisted one; `--active-cap <id>` makes the command print only `true` or `false`, whether that capability has an active hook at the point; `--after-fingerprint` drops `verify:post` steps whose declared artifact already exists in that phase directory, and errors when the directory cannot be read. Any other `loop` subcommand is an error.
+
+### Package legitimacy
+
+```bash
+gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <package> [<package> ...]
+```
+
+Looks each package up in the registry API of its ecosystem (npm, PyPI or crates.io) and prints the results as JSON, one entry per package, each with a `verdict`. `--ecosystem` is required and must be `npm`, `pypi` or `crates`; at least one package name is required; either missing is a usage error. A registry or network failure does not fail the command: that package gets a degraded verdict with the failed lookups noted in its `signals` and `reasons`. The command needs network access. How `gsd-phase-researcher` uses the verdicts is described under [`/gsd-plan-phase`](COMMANDS.md#gsd-plan-phase).
 
 ### Assumption delta
 
@@ -1822,6 +1855,10 @@ node gsd-tools.cjs stats [json|table]
 
 # Progress rendering (human-readable)
 node gsd-tools.cjs progress [json|table|bar]
+
+# Progress as one bar: { bar, percent, completed, total }, and with --raw only the bar text,
+# e.g. [░░░░░░░░░░░░░░░░░░░░] 0/0 plans
+node gsd-tools.cjs progress bar
 
 # Progress as typed JSON surface (#455)
 node gsd-tools.cjs progress --json
