@@ -11,7 +11,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | Surface | Items | Documented | Fully documented | Missing items | Missing options |
 |---------|------:|-----------:|-----------------:|--------------:|----------------:|
 | [Slash commands](#slash-commands) | 72 | 72 | 72 | 0 | 0 |
-| [`gsd-tools` verbs](#gsd-tools-verbs) | 96 | 96 | 96 | 0 | 0 |
+| [`gsd-tools` verbs](#gsd-tools-verbs) | 97 | 97 | 97 | 0 | 0 |
 | [Config keys](#config-keys) | 129 | 129 | 129 | 0 | 0 |
 | [Agents](#agents) | 36 | 36 | 36 | 0 | 0 |
 | [Hooks](#hooks) | 30 | 30 | 30 | 0 | 0 |
@@ -118,6 +118,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `config-ensure-section` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
 | `config-new-project` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | 1/1 | — |
 | `config-path` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | n/a | — |
+| `config-save-defaults` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
 | `config-set` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | 1/1 | — |
 | `config-set-model-profile` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
 | `context-predicates` | [CLI-TOOLS.md#query-context-predicates](../CLI-TOOLS.md#query-context-predicates) | Reference | 3/3 | — |
