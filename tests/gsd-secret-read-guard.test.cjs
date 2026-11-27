@@ -7381,6 +7381,8 @@ describe('gsd-secret-read-guard: an xargs replace string inside an option cluste
     "printf 'txt\\n' | xargs -0I {} sh -c 'cat notes.{}'",
     "printf 'notes\\n' | xargs -tI {} sh -c 'cat {}.txt'",
     "echo x | xargs -0I {} sh -c 'echo hi'",
+    // After `--`, `-0I` is the command GNU xargs runs, not an option.
+    "echo x | xargs -- -0I {} sh -c 'cat .env'",
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {

@@ -3932,7 +3932,9 @@ function searchOperandIndices(spec, operands) {
 // A short-option cluster whose replace-string flag is its last letter
 // (`-0I {}`, `-tI {}`, `-rI {}`): the next word is the replace string, as for
 // a bare `-I`. A letter before it that takes a value takes the rest of the
-// cluster instead (XARGS_SHORT_VALUE, XARGS_SHORT_ATTACHED).
+// cluster instead (XARGS_SHORT_VALUE, XARGS_SHORT_ATTACHED). xargsSubCommand
+// skips that word only where xargsCommandIndex puts the command after it, so
+// a cluster that is itself an option's value, or follows `--`, is not read so.
 function clusterEndsInReplaceFlag(t) {
   if (t.length < 3 || t[0] !== '-' || t[1] === '-') return false;
   for (let c = 1; c < t.length; c++) {
@@ -3952,7 +3954,7 @@ function xargsSubCommand(operands) {
     if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
     if (t.startsWith('--arg-file=')) { argFile = true; continue; }
     if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
-    if (clusterEndsInReplaceFlag(t)) { m++; continue; }
+    if (clusterEndsInReplaceFlag(t) && xargsCommandIndex(operands, 0, operands.length) > m + 1) { m++; continue; }
     if (t.startsWith('--') && t.includes('=')) continue;
     if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
     return { subIdx: m, argFile };
