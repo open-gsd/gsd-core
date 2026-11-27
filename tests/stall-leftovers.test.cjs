@@ -68,6 +68,17 @@ describe('stall-leftovers (#6086)', () => {
     assert.equal(process.kill(process.pid, 0), true, 'a recorded non-sleep pid is never signalled');
   });
 
+  test('killRecordedStalls with a marker also ends a stall whose pid was never recorded (a hook that started after the file was read)', { skip }, () => {
+    const marker = 'sleep 31.0874';
+    // a stall no pid file knows about: the late hook of a loaded host, reparented once its shell exits
+    const r = runHook('-c', [`${marker} & echo $!`], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.outcome, OUTCOME.EXITED);
+    assert.deepEqual(leftoversOf(marker), [marker], 'the unrecorded stall is alive');
+    const missing = path.join(os.tmpdir(), 'gsd-6086-no-such-pid-file.txt');
+    killRecordedStalls(missing, marker);
+    assertNoLeftoverStall(assert, marker, 'unrecorded stall');
+  });
+
   test('where ps is unavailable the helpers report null instead of asserting', { skip: POSIX && 'POSIX has ps' }, () => {
     assert.equal(leftoversOf('sleep 1'), null);
     assert.doesNotThrow(() => assertNoLeftoverStall(assert, 'sleep 1', 'win32'));

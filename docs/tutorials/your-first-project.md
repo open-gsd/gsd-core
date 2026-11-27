@@ -7,7 +7,7 @@
 ![level](https://img.shields.io/badge/level-beginner-3fb950?style=flat-square)
 ![time](https://img.shields.io/badge/time-30–45%20min-f0883e?style=flat-square)
 ![runtime](https://img.shields.io/badge/runtime-Claude%20Code-8957e5?style=flat-square)
-![node](https://img.shields.io/badge/Node-22%2B-2f81f7?style=flat-square)
+![node](https://img.shields.io/badge/Node-24%2B-2f81f7?style=flat-square)
 ![npm](https://img.shields.io/badge/npm-10%2B-cb3837?style=flat-square)
 
 </div>
@@ -16,7 +16,7 @@
 > **This is the one guaranteed path.** You will build a tiny app, run **every**
 > command in the core loop exactly once, and — the part most tutorials skip —
 > understand *why* each step exists. This tutorial uses **Claude Code**; GSD
-> works in 15+ runtimes — see [Install on your runtime](../how-to/install-on-your-runtime.md)
+> works in 18 runtimes — see [Install on your runtime](../how-to/install-on-your-runtime.md)
 > for the flag and command syntax for yours.
 
 ---
@@ -129,7 +129,7 @@ loop, not a toolchain.
 
 | You need | Check with | "Good" looks like |
 |----------|------------|-------------------|
-| **Node.js 22+** | `node --version` | `v22.x.x` or higher |
+| **Node.js 24+** | `node --version` | `v24.x.x` or higher |
 | **npm 10+** | `npm --version` | `10.x.x` or higher |
 | **Claude Code** | `claude --version` | installed and opens |
 | **Git** | `git --version` | installed |
@@ -148,7 +148,7 @@ git remote get-url origin
 
 ```mermaid
 flowchart LR
-    A[node --version ≥ 22?] -->|no| A1[Install/upgrade Node] --> A
+    A[node --version ≥ 24?] -->|no| A1[Install/upgrade Node] --> A
     A -->|yes| B[npm --version ≥ 10?]
     B -->|no| B1[Install/upgrade npm] --> B
     B -->|yes| C[Claude Code installed?]
@@ -177,7 +177,7 @@ different runtime? See [Install on your runtime](../how-to/install-on-your-runti
 for its flag. You'll see a summary of what was installed, e.g.:
 
 ```text
-✓ Installed 71 commands to commands/ (gsd-<cmd>.md flat form)
+✓ Installed 72 commands to commands/ (gsd-<cmd>.md flat form)
 ✓ Installed agents
 ```
 
