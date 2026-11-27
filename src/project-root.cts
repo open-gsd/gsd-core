@@ -17,29 +17,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { walkUpForPlanning } from './project-context.cjs';
 
-// #4894: an operator-supplied `--project-dir` IS the project root — the
-// dispatcher validates it and skips the ancestor walk-up for `cwd`, but code
-// that derives a root from a PHASE DIRECTORY (verification) never sees `cwd`.
-// The dispatcher records the validated root here, once per process, and those
-// callers resolve through `resolveProjectRoot`. `null` (the default, and what
-// the dispatcher sets when the flag is absent) leaves `findProjectRoot`'s
-// walk-up as the only source of truth, so no-flag behavior is unchanged.
-let explicitProjectRoot: string | null = null;
-
-export function setExplicitProjectRoot(root: string | null): void {
-  explicitProjectRoot = root;
-}
-
-export function resolveProjectRoot(startDir: string): string {
-  return explicitProjectRoot ?? findProjectRoot(startDir);
-}
-
 /**
  * #6043 (ADR-4908): the ancestor walk moved verbatim to `project-context.cts`
- * (`walkUpForPlanning`), which the resolver also owns. This stays a one-line
- * delegate for its remaining callers (init, state, consentProjectRoot, the
- * gsd-tools skew check, hooks/lib/isolation-sentinel.js); Phase 2 migrates them.
- * It never spawns git.
+ * (`walkUpForPlanning`), which the resolver also owns. #6820 (Phase 2a) moved
+ * every `src/` and `gsd-tools` consumer onto `resolveProjectContext` and deleted
+ * the `--project-dir` module global (`setExplicitProjectRoot` / `resolveProjectRoot`:
+ * the context carries `source: 'explicit'` instead). What is left is a one-line
+ * delegate for `consentProjectRoot` below and for hooks/lib/isolation-sentinel.js,
+ * which Phase 5 (#6047) retires under the lint ratchet. It never spawns git.
  */
 export function findProjectRoot(startDir: string): string {
   return walkUpForPlanning(startDir).root;

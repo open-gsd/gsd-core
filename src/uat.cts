@@ -47,6 +47,7 @@ const { reportStatusOf, isReportContained, VERIFICATION_STATUS } = verificationM
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
 import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
@@ -432,13 +433,40 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
 
 // ─── cmdRenderCheckpoint ──────────────────────────────────────────────────────
 
-function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: boolean): void {
+/**
+ * #6820 (ADR-4908 §3): a planning artifact is contained against the root its
+ * content really lives in. Under the `gsd-planning-out-of-repo.md` layout
+ * (`.planning -> ../<repo>-planning`) the realpath of `.planning/phases/...`
+ * sits outside `ctx.projectRoot`, so a path that is lexically under the
+ * project's `.planning` entry (or already under the store's own root) is checked
+ * against `ctx.planningRoot`; anything else keeps the project-root containment.
+ * Both checks go through `requireSafePath`, so a traversal or a symlink that
+ * leaves the chosen root is still refused.
+ */
+function resolveUatArtifactPath(ctx: ProjectContext, filePath: string): string {
+  const lexical = path.resolve(ctx.projectRoot, filePath);
+  const under = (root: string, candidate: string): string | null => {
+    const rel = path.relative(root, candidate);
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : null;
+  };
+  const viaEntry = under(path.join(ctx.projectRoot, '.planning'), lexical);
+  const viaStore = under(ctx.planningRoot, lexical);
+  const rel = viaEntry ?? viaStore;
+  if (rel !== null) {
+    return requireSafePath(rel, ctx.planningRoot, 'UAT file', PathAcceptance.RelativeOnly);
+  }
+  return requireSafePath(filePath, ctx.projectRoot, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+}
+
+function cmdRenderCheckpoint(ctx: ProjectContext, options: { file?: string } = {}, raw: boolean): void {
+  const cwd = ctx.projectRoot;
   const filePath = options.file;
   if (!filePath) {
     error('UAT file required: use uat render-checkpoint --file <path>');
+    return;
   }
 
-  const resolvedPath = requireSafePath(filePath, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  const resolvedPath = resolveUatArtifactPath(ctx, filePath);
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${filePath}`);
   }
@@ -454,7 +482,9 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
   const responseLanguage = typeof config.response_language === 'string' ? config.response_language : undefined;
   const checkpoint = buildCheckpoint(currentTest as Required<Omit<CurrentTest, 'complete'>> & { complete: false }, responseLanguage);
   output({
-    file_path: toPosixPath(path.relative(cwd, resolvedPath)),
+    file_path: toPosixPath(path.relative(cwd, resolvedPath).startsWith('..')
+      ? path.join('.planning', path.relative(ctx.planningRoot, resolvedPath))
+      : path.relative(cwd, resolvedPath)),
     test_number: currentTest.number,
     test_name: currentTest.name,
     checkpoint,

@@ -136,7 +136,7 @@ import stateMdSchemaMod = require('./state-md-schema.cjs');
 
 // #2573 D5: used to pin `git rev-parse` to the project's own repo. Imports only
 // node builtins, so it introduces no cycle on this path.
-import { findProjectRoot } from './project-root.cjs';
+import { resolveProjectContext } from './project-context.cjs';
 // #3311: advisory (phase, session) claim over the single Current Position slot.
 // Imports only node builtins + planning-workspace + active-workstream-store, so
 // it introduces no cycle on this path.
@@ -4008,7 +4008,7 @@ function readGitHeadSha(cwd: string | undefined): string | null {
   // subprocess on this path (the caller holds the STATE lock).
   let projectRoot: string;
   try {
-    projectRoot = findProjectRoot(cwd);
+    projectRoot = resolveProjectContext(cwd).projectRoot;
   } catch {
     return null; // cannot prove which repo would answer → unknown
   }

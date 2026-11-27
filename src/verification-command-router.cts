@@ -9,6 +9,7 @@
  * compiled to gsd-core/bin/lib/verification-command-router.cjs (gitignored).
  */
 
+import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
@@ -16,10 +17,10 @@ const { routeCjsCommandFamily } = cjsCommandRouterAdapter;
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface VerificationModule {
-  cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw: boolean): void;
-  cmdVerificationAllSummarized(cwd: string, phaseDirArg: string | undefined, tokens: string[], raw: boolean): void;
+  cmdVerificationStatus(ctx: ProjectContext, phaseDirArg: string | undefined, raw: boolean): void;
+  cmdVerificationAllSummarized(ctx: ProjectContext, phaseDirArg: string | undefined, tokens: string[], raw: boolean): void;
   cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined, raw: boolean): void;
-  cmdVerificationFingerprint(cwd: string, phaseDirArg: string | undefined, files: string[], raw: boolean): void;
+  cmdVerificationFingerprint(ctx: ProjectContext, phaseDirArg: string | undefined, files: string[], raw: boolean): void;
   cmdVerificationAppendAudit(cwd: string, fileArg: string | undefined, argTokens: string[], raw: boolean): void;
 }
 
@@ -27,6 +28,8 @@ interface RouteVerificationCommandOptions {
   verification: VerificationModule;
   args: string[];
   cwd: string;
+  /** #6820: the ProjectContext the dispatcher resolved once for this process. */
+  ctx: ProjectContext;
   raw: boolean;
   error: (message: string) => void;
 }
@@ -39,6 +42,7 @@ function routeVerificationCommand({
   verification,
   args,
   cwd,
+  ctx,
   raw,
   error,
 }: RouteVerificationCommandOptions): void {
@@ -50,10 +54,10 @@ function routeVerificationCommand({
     unknownMessage: (_subcommand: string, available: string[]) =>
       `Unknown verification subcommand. Available: ${available.join(', ')}`,
     handlers: {
-      status: () => verification.cmdVerificationStatus(cwd, args[2], raw),
-      'all-summarized': () => verification.cmdVerificationAllSummarized(cwd, args[2], args.slice(3), raw),
+      status: () => verification.cmdVerificationStatus(ctx, args[2], raw),
+      'all-summarized': () => verification.cmdVerificationAllSummarized(ctx, args[2], args.slice(3), raw),
       'resolve-file': () => verification.cmdVerificationResolveFile(cwd, args[2], raw),
-      fingerprint: () => verification.cmdVerificationFingerprint(cwd, args[2], args.slice(3), raw),
+      fingerprint: () => verification.cmdVerificationFingerprint(ctx, args[2], args.slice(3), raw),
       'append-audit': () => verification.cmdVerificationAppendAudit(cwd, args[2], args.slice(3), raw),
     },
   });

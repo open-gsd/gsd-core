@@ -23,7 +23,7 @@ import configLoader = require('./config-loader.cjs');
 import configValueResolver = require('./config-value-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
 import capabilityLedger = require('./capability-ledger.cjs');
-import { findProjectRoot } from './project-root.cjs';
+import { resolveProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolver = require('./model-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -4646,7 +4646,7 @@ function cmdAgentSkills(
   }
 
   // Anchor to project root before loading config (#1415/#1366 cwd-drift fix).
-  const projectRoot = findProjectRoot(cwd);
+  const projectRoot = resolveProjectContext(cwd).projectRoot;
   const { config, source, degraded } = loadConfigResolved(projectRoot);
   const diagnostics = { warnings: [] as string[] };
   let block = buildAgentSkillsBlock(
