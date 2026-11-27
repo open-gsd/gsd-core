@@ -4338,13 +4338,24 @@ function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudg
   exemption.bashReadOnly = null;
   furtherReading = true;
   joinCandidate = false;
+  // Each scan runs under its own catch, as scanBashReadings runs its own, so one
+  // that throws leaves the scans and the pass after it their say.
+  const attempt = (scan) => {
+    try {
+      return scan();
+    } catch (e) {
+      if (e instanceof RangeError || e === SCAN_BUDGET_SPENT) throw e;
+      furtherThrew = true;
+      return null;
+    }
+  };
   try {
     for (const joins of [false, true]) {
       if (joins && !joinCandidate) break;
       subscriptJoins = joins;
-      const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+      const hit = attempt(() => findSecretRead(command, 0)) || attempt(() => findSecretReadUnderOtherReadings(command));
       if (hit !== null) return hit;
-      const spawn = findDebuggerCliSpawnEitherWay(command);
+      const spawn = attempt(() => findDebuggerCliSpawnEitherWay(command));
       if (spawn !== null) return { code: 'debugger-cli-spawn', text: spawn };
     }
     return null;
