@@ -102,7 +102,8 @@ case "$OWN" in
     fi ;;
   *) HANDOFF=".planning/$OWN" ;;
 esac
-if [ -n "$HANDOFF" ]; then
+# A claim is proven by the file being there, not by mv's exit status (#6873): on Windows a losing session's mv was seen to exit 0 and leave nothing to read.
+if [ -n "$HANDOFF" ] && [ -f "$HANDOFF" ]; then
   echo "HANDOFF_FILE=$HANDOFF"
   cat "$HANDOFF"
 elif [ -n "$ROLE_ID" ]; then
