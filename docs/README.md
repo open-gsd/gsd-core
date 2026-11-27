@@ -17,7 +17,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 ## How-to guides
 
-- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 16 supported runtimes
+- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 18 supported runtimes
 - [Start a GSD workflow from Pi](how-to/start-a-gsd-workflow-from-pi.md) — run `/skill:gsd-<command>` (or `/gsd <command>`) in Pi instead of getting a JSON dump from `/gsd`
 - [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) — exempt one committed file, such as a placeholder `.env.production`, from the secret-read guard while every other secret file stays blocked
