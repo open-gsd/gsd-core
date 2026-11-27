@@ -484,7 +484,7 @@ describe('project-context CLI: workspace and verb', () => {
     test('verificationRefusesToReadWithoutAContext', (t) => {
       const { phaseDir } = mkTwoProjects(t, { aHasFile: true });
       // ADR-4908 section 6: ctx is required; there is no phase-dir walk-up fallback to fall into.
-      assert.throws(() => verification.readVerificationStatus(phaseDir), /Cannot read properties of undefined/);
+      assert.throws(() => verification.readVerificationStatus(phaseDir), (err) => err instanceof TypeError);
     });
 
     test('fingerprintHonorsProjectDirFromAnyCwd', (t) => {

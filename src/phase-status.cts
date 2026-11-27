@@ -259,7 +259,7 @@ export function phaseStatus(phaseDir: string, deps: PhaseStatusDeps = {}): { val
   const { verification, planScan, resolveProjectContext } = owners();
   const scan = planScan.scanPhasePlans(phaseDir);
   const completion = verification.isPhaseComplete(phaseDir, {
-    // phaseStatus is keyed by a phase directory and none of its eleven callers (commands, init, phase,
+    // phaseStatus is keyed by a phase directory and none of its callers (commands, init, phase,
     // roadmap) holds a ProjectContext yet; the context is resolved here, once, through the seam. 2b/2c
     // (#6821/#6822) thread the caller's context in as those verbs take `ctx`.
     ctx: resolveProjectContext(phaseDir),
