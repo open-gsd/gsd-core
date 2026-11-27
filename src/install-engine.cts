@@ -505,6 +505,87 @@ function hasExistingSymlinkBetween(
   return false;
 }
 
+/**
+ * Whether a symlink's target is genuinely absent. Only ENOENT and ENOTDIR mean
+ * that: a link loop (ELOOP) or an unreadable directory (EACCES) also fail to
+ * resolve, but saying "the target does not exist" there would be wrong.
+ */
+function linkTargetIsMissing(linkPath: string): boolean {
+  try {
+    installFs().realpathSync(linkPath);
+    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  }
+}
+
+/**
+ * Why `resolveSymlinkedLeafWritePath`, or the installer's settings pre-check
+ * built on it, refused a file, set as the thrown error's `code` (#5037).
+ * Callers and tests tell the refusals apart by this code; the message is for
+ * the user and may be reworded.
+ */
+const SYMLINKED_LEAF_REFUSAL = Object.freeze({
+  /** A symlink the install root does not trust, and no opt-in. */
+  NOT_TRUSTED: 'SYMLINKED_LEAF_NOT_TRUSTED',
+  /** The link's target does not exist, with or without the opt-in. */
+  TARGET_MISSING: 'SYMLINKED_LEAF_TARGET_MISSING',
+  /** The link resolves to the install root itself or cannot be resolved, so the opt-in would not help. */
+  NOT_FOLLOWABLE: 'SYMLINKED_LEAF_NOT_FOLLOWABLE',
+  /**
+   * With the opt-in, the link's target is in a directory this process cannot write, so the temp file
+   * the write puts beside it cannot be created. Thrown by the installer's settings pre-check
+   * (`assertSettingsWriteAllowed`), so a caller can stop before it changes anything else.
+   */
+  TARGET_NOT_WRITABLE: 'SYMLINKED_LEAF_TARGET_NOT_WRITABLE',
+});
+
+/**
+ * The path a temp-file-and-rename save (`atomicWriteFileSync`,
+ * `platformWriteSync`) should be handed for `targetPath`, a file under
+ * `installRoot` that may be a user-owned symlink (#5037): a rename onto a
+ * link replaces it with a plain file, and the real file stops getting changes.
+ *
+ * A plain or missing file is returned unchanged. A symlinked `targetPath` is
+ * refused unless `GSD_ALLOW_SYMLINKED_DEST` is set; with it, the link's real
+ * target is returned, so the rename lands there and the link stays. A link
+ * `hasExistingSymlinkBetween` refuses even with following allowed (dangling,
+ * looped, or pointing at the install root) is refused with that reason either
+ * way, since the opt-in would not help; `tryLstat` sees a dangling link where
+ * `existsSync` would not. `label` names the writer at the start of each
+ * refusal, and each refusal sets a `SYMLINKED_LEAF_REFUSAL` code.
+ */
+function resolveSymlinkedLeafWritePath(installRoot: string, targetPath: string, label: string): string {
+  const stat = tryLstat(targetPath);
+  if (!stat || !stat.isSymbolicLink()) return targetPath;
+  if (hasExistingSymlinkBetween(installRoot, targetPath, { allowOptInFollow: true })) {
+    if (linkTargetIsMissing(targetPath)) {
+      const err = new Error(
+        `${label} "${targetPath}" is a symlink whose target does not exist, so it was not written. ` +
+          'Point the link at an existing file or remove it, then re-run.',
+      ) as Error & { code: string };
+      err.code = SYMLINKED_LEAF_REFUSAL.TARGET_MISSING;
+      throw err;
+    }
+    const err = new Error(
+      `${label} "${targetPath}" is a symlink GSD will not follow, even with GSD_ALLOW_SYMLINKED_DEST set, ` +
+        `because it resolves to the install root "${installRoot}" itself or cannot be resolved, so it was not written.`,
+    ) as Error & { code: string };
+    err.code = SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE;
+    throw err;
+  }
+  if (!isSymlinkedDestOptIn()) {
+    const err = new Error(
+      `${label} "${targetPath}" is a symlink the install root "${installRoot}" does not trust, so it was not written. ` +
+        'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.',
+    ) as Error & { code: string };
+    err.code = SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED;
+    throw err;
+  }
+  return installFs().realpathSync(targetPath);
+}
+
 // ---------------------------------------------------------------------------
 // User-artifact staging root
 // ---------------------------------------------------------------------------
@@ -2464,6 +2545,8 @@ export = {
   _copyStaged,
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
+  resolveSymlinkedLeafWritePath,
+  SYMLINKED_LEAF_REFUSAL,
   _resolveUserArtifactStagingRoot,
   _tryResolveUserArtifactStagingRoot,
   migrateLegacyDevPreferencesToSkill,
