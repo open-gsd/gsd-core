@@ -17,6 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 process.env['GSD_TEST_MODE'] = '1';
 const {
@@ -4805,11 +4806,7 @@ function prepareInstallSymlinkUpgrade(t, { allowOptIn = false, legacyCleanup = f
     [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir, ...(legacyCleanup ? [] : ['--no-legacy-cleanup'])],
     {
       cwd: process.cwd(),
-      env: installerEnv({
-        HOME: root,
-        USERPROFILE: root,
-        GSD_ALLOW_SYMLINKED_DEST: allowOptIn ? '1' : '',
-      }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_ALLOW_SYMLINKED_DEST: allowOptIn ? '1' : '' } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     },
   );
@@ -4931,7 +4928,7 @@ describe('#5179 install refusal preserves the previous install', () => {
       [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', configDir, '--no-legacy-cleanup'],
       {
         cwd: process.cwd(),
-        env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+        env: installerEnv(isolatedEnv({ home: root, override: { GSD_ALLOW_SYMLINKED_DEST: '' } })),
         timeoutMs: INSTALL_TIMEOUT_MS,
       },
     );
@@ -5026,7 +5023,7 @@ function prepareInstallSymlinkBranchUpgrade(t, {
   if (scope === 'global') args.push('--config-dir', configDir);
   const result = runNode(args, {
     cwd: scope === 'local' ? root : process.cwd(),
-    env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: allowOptIn ? '1' : '' }),
+    env: installerEnv(isolatedEnv({ home: root, override: { GSD_ALLOW_SYMLINKED_DEST: allowOptIn ? '1' : '' } })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   return {
@@ -5123,7 +5120,7 @@ describe('#5179 Codex rollback arming', () => {
       if (!injected) throw new Error('the VERSION writer was not reached');
     `;
     const result = runNode(['-e', script], {
-      cwd: root, env: installerEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS,
+      cwd: root, env: installerEnv(isolatedEnv({ home: root })), timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
     assert.equal(fs.readFileSync(versionPath, 'utf8'), '0.0.1\n', 'the armed pre-config rollback must restore VERSION');
@@ -5254,7 +5251,7 @@ describe('#5179 preflight branch coverage', () => {
 
     const result = runNode([INSTALL_SCRIPT, '--claude', '--local', '--no-legacy-cleanup'], {
       cwd: root,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_ALLOW_SYMLINKED_DEST: '' } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
@@ -5371,7 +5368,7 @@ describe('#5179 migration refusal ordering', () => {
         }
         throw error;
       }
-      const env = installerEnv({ HOME: root, USERPROFILE: root });
+      const env = installerEnv(isolatedEnv({ home: root }));
       if (allowOptIn) env.GSD_ALLOW_SYMLINKED_DEST = '1';
       else delete env.GSD_ALLOW_SYMLINKED_DEST;
       const result = runNode([INSTALL_SCRIPT, '--qwen', '--global', '--config-dir', configDir, '--no-legacy-cleanup'], {

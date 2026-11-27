@@ -3368,8 +3368,8 @@ describe('no-duplicate-fold-marker rule', () => {
     });
   });
 
-  // tests/review-default-reviewers-workflow.test.cjs reuses the fold alias for
-  // an ordinary describe block. Those carry no uniqueness obligation.
+  // The fold alias may be reused for an ordinary describe block. Those carry no
+  // uniqueness obligation.
   test('valid: __foldDescribe titles without a folded: prefix are ignored', () => {
     ruleTester.run('no-duplicate-fold-marker', noDuplicateFoldMarker, {
       valid: [

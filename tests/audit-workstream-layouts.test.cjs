@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 function seedPhaseArtifact(dir, kind) {
   fs.mkdirSync(dir, { recursive: true });
@@ -63,9 +64,9 @@ describe('#5042: debug sessions use the shared root directory', () => {
     fs.writeFileSync(path.join(debugDir, 'login-fails.md'),
       '---\nstatus: investigating\n---\n## Current Focus\nlogin failure\n');
 
-    const result = runGsdTools(['audit-open', '--json'], tmpDir, {
-      GSD_WORKSTREAM: 'alpha', HOME: tmpDir, USERPROFILE: tmpDir,
-    });
+    const result = runGsdTools(['audit-open', '--json'], tmpDir, isolatedEnv({
+      home: tmpDir, override: { GSD_WORKSTREAM: 'alpha' },
+    }));
     assert.ok(result.success, result.error);
     const audit = JSON.parse(result.output);
     assert.equal(audit.counts.debug_sessions, 1);
@@ -80,9 +81,9 @@ describe('#5042: debug sessions use the shared root directory', () => {
     fs.writeFileSync(path.join(workstreamDebugDir, 'wrong-location.md'),
       '---\nstatus: investigating\n---\n## Current Focus\nwrong location\n');
 
-    const result = runGsdTools(['audit-open', '--json'], tmpDir, {
-      GSD_WORKSTREAM: 'alpha', HOME: tmpDir, USERPROFILE: tmpDir,
-    });
+    const result = runGsdTools(['audit-open', '--json'], tmpDir, isolatedEnv({
+      home: tmpDir, override: { GSD_WORKSTREAM: 'alpha' },
+    }));
     assert.ok(result.success, result.error);
     const audit = JSON.parse(result.output);
     assert.equal(audit.counts.debug_sessions, 0);

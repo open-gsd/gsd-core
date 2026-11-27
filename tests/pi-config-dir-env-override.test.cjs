@@ -40,6 +40,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { INSTALL_SCRIPT, installerEnv, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -71,7 +72,7 @@ function runPiGlobalInstall(home, extraEnv = {}) {
     cwd: home,
     encoding: 'utf8',
     timeout: INSTALL_TIMEOUT_MS,
-    env: installerEnv({ HOME: home, USERPROFILE: home, ...extraEnv }),
+    env: installerEnv(isolatedEnv({ home, override: extraEnv })),
   });
   assert.strictEqual(result.status, 0,
     `installer exited with status ${result.status}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);

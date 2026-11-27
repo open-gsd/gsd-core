@@ -40,6 +40,7 @@ const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 function useIsolatedHome(t) {
@@ -6101,7 +6102,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const PROFILE_OUTPUT = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'profile-output.cjs');
@@ -6132,7 +6133,7 @@ describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-prefe
         // it -- and the writer under test resolves them env-FIRST. Sandboxing
         // HOME alone let an ambient CLAUDE_CONFIG_DIR win, and the SKILL.md
         // landed in the developer's live config dir instead of tmpHome.
-        env: Object.assign({}, process.env, TEST_ENV_BASE, { HOME: tmpHome, USERPROFILE: tmpHome, GSD_HOME: tmpHome }),
+        env: isolatedEnv({ home: tmpHome, override: { GSD_HOME: tmpHome } }),
         encoding: 'utf-8',
         // See WRITER_SUBPROCESS_TIMEOUT_MS's own doc comment (top of file)
         // for the full rationale.
@@ -7674,7 +7675,7 @@ describe('#2218 cross-scope shadowing', () => {
     // order matters for this fixture (a separate test covers order-independence).
     globalInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--global'], {
       cwd: root,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(globalInstallResult.exitCode, 0,
@@ -7688,7 +7689,7 @@ describe('#2218 cross-scope shadowing', () => {
     // installer directly instead, with cwd pinned at the project dir.
     localInstallResult = runNode([INSTALL_SCRIPT, '--claude', '--local'], {
       cwd: projectDir,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(localInstallResult.exitCode, 0,
@@ -7806,7 +7807,7 @@ describe('#2873 C1-C6 — install-time shadow report (spawned installer wiring)'
   function spawnInstall(args, cwd, root, nodeFlags = []) {
     return runNode([...nodeFlags, INSTALL_SCRIPT, ...args], {
       cwd,
-      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root }),
+      env: installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
   }
@@ -8677,16 +8678,16 @@ describe('install() global codex — @~/.claude include rewrite (#4667)', () => 
       configDir,
     ], {
       cwd: tmpCodexHome,
-      env: {
-        ...process.env,
-        ...__isolatedNpmEnv4667(),
-        HOME: tmpCodexHome,
-        USERPROFILE: tmpCodexHome,
-        GSD_HOME: tmpCodexHome,
-        GSD_TEST_MODE: '',
-        NO_UPDATE_NOTIFIER: '1',
-        npm_config_update_notifier: 'false',
-      },
+      env: isolatedEnv({
+        home: tmpCodexHome,
+        base: __isolatedNpmEnv4667(),
+        override: {
+          GSD_HOME: tmpCodexHome,
+          GSD_TEST_MODE: '',
+          NO_UPDATE_NOTIFIER: '1',
+          npm_config_update_notifier: 'false',
+        },
+      }),
       encoding: 'utf8',
       timeout: INSTALL_TIMEOUT_MS,
     });
@@ -8787,16 +8788,16 @@ describe('installed @ includes resolve to installed files (#5123)', () => {
     if (configDir) args.push('--config-dir', configDir);
     const result = __spawnSync4667(process.execPath, args, {
       cwd: home,
-      env: {
-        ...process.env,
-        ...__isolatedNpmEnv4667(),
-        HOME: home,
-        USERPROFILE: home,
-        GSD_HOME: home,
-        GSD_TEST_MODE: '',
-        NO_UPDATE_NOTIFIER: '1',
-        npm_config_update_notifier: 'false',
-      },
+      env: isolatedEnv({
+        home,
+        base: __isolatedNpmEnv4667(),
+        override: {
+          GSD_HOME: home,
+          GSD_TEST_MODE: '',
+          NO_UPDATE_NOTIFIER: '1',
+          npm_config_update_notifier: 'false',
+        },
+      }),
       encoding: 'utf8',
       timeout: INSTALL_TIMEOUT_MS,
     });

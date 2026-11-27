@@ -26,6 +26,7 @@ const {
   makeHandlerRefusal,
   makeHandlerFailure,
 } = require('../gsd-core/bin/lib/command-routing-hub.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─── Frozen taxonomy lock ─────────────────────────────────────────────────────
 // #175: SdkDispatchFailed and SdkLoadFailed are removed from the closed enum.
@@ -984,7 +985,7 @@ test('bug #167: query meta-command prefixes direct gsd-tools calls', async (t) =
   // HOME/USERPROFILE point at the fixture so ~/.gsd/defaults.json resolves
   // inside it (absent) rather than in the developer's home — the idiom
   // runGsdTools's own doc comment prescribes for exactly this.
-  const sandbox = { HOME: fixture, USERPROFILE: fixture };
+  const sandbox = isolatedEnv({ home: fixture });
 
   const direct = await runGsdToolsAsync(['init.progress'], fixture, sandbox);
   assert.equal(direct.success, true, `init.progress failed: ${direct.error || direct.output}`);

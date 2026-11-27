@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const repoRoot = path.join(__dirname, '..');
 
@@ -737,7 +738,7 @@ describe('#3544: spawned installer — gsd-core/ spec tree @-refs resolve on til
   function spawnInstall(args, home) {
     return runNode([INSTALL_SCRIPT, ...args], {
       cwd: home,
-      env: installerEnv({ HOME: home, USERPROFILE: home }),
+      env: installerEnv(isolatedEnv({ home })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
   }
@@ -1194,7 +1195,7 @@ describe('#5501: spawned installer — --config-dir skills find gsd-tools under 
     runCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5501-cwd-'));
     const r = runNode([INSTALL_SCRIPT, '--claude', '--global', '--config-dir', configDir, '--minimal'], {
       cwd: home,
-      env: installerEnv({ HOME: home, USERPROFILE: home }),
+      env: installerEnv(isolatedEnv({ home })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(r.exitCode, 0, `claude --global --config-dir install failed:\n${r.stdout}\n${r.stderr}`);
@@ -1230,7 +1231,7 @@ describe('#5501: spawned installer — --config-dir skills find gsd-tools under 
     // any project, so only the install-path default can find gsd-tools.
     const r = spawnSync('bash', ['-c', `${launcher}\nprintf '%s' "$GSD_TOOLS"`], {
       cwd: runCwd,
-      env: { HOME: home, PATH: process.env.PATH },
+      env: isolatedEnv({ home, path: process.env.PATH, base: {} }),
       encoding: 'utf8',
       timeout: PROBE_TIMEOUT_MS,
     });
@@ -1797,7 +1798,7 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
     const configDir = path.join(home, rel);
     const r = runNode([INSTALL_SCRIPT, `--${runtime}`, '--global', '--config-dir', configDir, '--minimal'], {
       cwd: home,
-      env: installerEnv({ HOME: home, USERPROFILE: home }),
+      env: installerEnv(isolatedEnv({ home })),
       timeoutMs: INSTALL_TIMEOUT_MS,
     });
     assert.strictEqual(r.exitCode, 0, `${runtime} --config-dir ${rel} install failed:\n${r.stdout}\n${r.stderr}`);
@@ -1908,7 +1909,7 @@ describe('#5715: Trae local install writes the local include path (intentional c
     try {
       const r = runNode([INSTALL_SCRIPT, '--trae', '--local', '--minimal'], {
         cwd: project,
-        env: installerEnv({ HOME: home, USERPROFILE: home }),
+        env: installerEnv(isolatedEnv({ home })),
         timeoutMs: INSTALL_TIMEOUT_MS,
       });
       assert.strictEqual(r.exitCode, 0, `${r.stdout}\n${r.stderr}`);

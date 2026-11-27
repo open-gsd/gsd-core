@@ -18,6 +18,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const PLUGIN = path.join(ROOT, '.opencode', 'plugins', 'gsd-core.js');
@@ -76,9 +77,9 @@ async function runOpencode(t, { bin, v2, toolCall, lane = false }) {
     provider: { fake: { npm: '@ai-sdk/openai-compatible', name: 'Fake', options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: 'x' }, models: { m: { name: 'm', tool_call: true, limit: { context: 100000, output: 4000 } } } } },
     model: 'fake/m',
   }));
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true',
+  const env = isolatedEnv({ home, override: { XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'), XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true',
     // A shell that `cd`s into the worktree updates PWD; 2.x resolves its directory from it (E13).
-    PWD: proj };
+    PWD: proj } });
   if (lane) {
     // The real reviewer lane: gsd-tools resolves the plan for the opencode on PATH and runs it.
     const binDir = path.join(home, 'bin');
@@ -145,7 +146,7 @@ test('data dir: 2.x beside 1.x tables keeps 1.x working, but a data dir 2.x crea
   const mkHome = () => {
     const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-data-')));
     t.after(() => cleanup(home));
-    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: path.join(home, 'cfg'), XDG_CACHE_HOME: path.join(home, 'cache'), XDG_STATE_HOME: path.join(home, 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true' };
+    const env = isolatedEnv({ home, override: { GSD_HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: path.join(home, 'cfg'), XDG_CACHE_HOME: path.join(home, 'cache'), XDG_STATE_HOME: path.join(home, 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true' } });
     return { home, env, dataDir: path.join(home, 'data', 'opencode') };
   };
   const runBin = (bin, args, { home, env }) => new Promise((resolve) => {

@@ -23,6 +23,7 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const helpers = require('./helpers.cjs');
 const processSeam = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   createTempDir, cleanup, runGsdTools, runGsdToolsAsync, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, TOOLS_PATH,
@@ -803,7 +804,6 @@ test('module-level caches are reset around every in-process call (#6332)', async
 
   await t.test('the modules with per-invocation state are registered', () => {
     require('../gsd-core/bin/lib/state.cjs');
-    require('../gsd-core/bin/lib/capability-activation.cjs');
     require('../gsd-core/bin/lib/model-resolver.cjs');
     require('../gsd-core/bin/lib/unusable-input.cjs');
     const names = invocationResetNames();
@@ -812,7 +812,6 @@ test('module-level caches are reset around every in-process call (#6332)', async
       'state.diskScanCache',
       'config-loader.warnings',
       'config-loader.gitIgnoredCache',
-      'capability-activation.warnedRawConfigPaths',
       'model-resolver.unmappableWarnings',
       'unusable-input.warnedInputs',
     ]) {
@@ -828,7 +827,7 @@ test('module-level caches are reset around every in-process call (#6332)', async
     const home = tempDir(t2);
     fs.mkdirSync(path.join(project, '.planning'));
     fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ in_process_unknown_key_6332: true }));
-    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    const env = isolatedEnv({ home });
 
     const twiceInOneCall = await runInProcess(() => { loadConfig(project); loadConfig(project); }, { env });
     const first = await runInProcess(() => { loadConfig(project); }, { env });
@@ -1351,7 +1350,7 @@ test('a module default that depends on the environment follows each call (#6333)
     const learnings = require('../gsd-core/bin/lib/learnings.cjs');
     for (const home of [tempDir(t2), tempDir(t2)]) {
       const store = runInProcessSync(() => { fs.writeSync(1, learnings.DEFAULT_STORE_DIR); }, {
-        env: { ...process.env, HOME: home, USERPROFILE: home },
+        env: isolatedEnv({ home }),
       }).stdout;
       assert.equal(store, path.join(home, '.gsd', 'knowledge'));
     }
@@ -1412,7 +1411,7 @@ test('runGsdTools runs the command in this process (#6333)', async (t) => {
     const dir = tempDir(t2);
     fs.mkdirSync(path.join(dir, '.planning'));
 
-    const found = JSON.parse(runGsdTools(['verify-path-exists', '.planning'], dir, { HOME: dir, USERPROFILE: dir }).output);
+    const found = JSON.parse(runGsdTools(['verify-path-exists', '.planning'], dir, isolatedEnv({ home: dir })).output);
 
     assert.equal(found.exists, true);
   });
@@ -1438,7 +1437,7 @@ test('runGsdTools runs the command in this process (#6333)', async (t) => {
       await runGsdToolsAsync('generate-slug "Hello World"', dir),
       { success: true, output: '{\n  "slug": "hello-world"\n}', exitCode: 0 },
     );
-    const asyncCommand = await runGsdToolsAsync(['capability', 'no-such-subcommand-zz'], dir, { HOME: dir, USERPROFILE: dir });
+    const asyncCommand = await runGsdToolsAsync(['capability', 'no-such-subcommand-zz'], dir, isolatedEnv({ home: dir }));
     assert.equal(asyncCommand.success, false);
     assert.equal(asyncCommand.exitCode, 1);
     assert.match(asyncCommand.error, /Unknown capability subcommand: no-such-subcommand-zz/);

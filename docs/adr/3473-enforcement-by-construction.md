@@ -440,7 +440,7 @@ Both close #3349 and #3360, which are **read-side** defects a real parser fixes 
 
 #### 8.8 The STATE.md schema — *Enforced* — Phase 3 (#3873)
 
-> Executor: `scripts/gen-state-md-docs.cjs --check` in `lint:generated-sync`, plus `tests/docs-state-md-locale-parity.test.cjs`. `scripts/lint-state-field-drift.cjs` is retained under a different contract — see the Guard roster.
+> Executor: `scripts/gen-state-md-docs.cjs --check` in `lint:generated-sync`, plus the `docs-state-md-locale-parity` text contract (`scripts/static-checks/text-contracts/docs-state-md-locale-parity.cjs`). `scripts/lint-state-field-drift.cjs` is retained under a different contract — see the Guard roster.
 
 **Question.** Where is the set of STATE.md keys, their types, enums, cardinality, preservation policy and accepted parse shapes declared?
 

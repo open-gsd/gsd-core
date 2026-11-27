@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 function writeSkill(rootDir, name, description, body = '') {
   const skillDir = path.join(rootDir, name);
@@ -62,7 +63,7 @@ describe('skill-manifest', () => {
       const skillDir = path.join(tmpDir, '.claude', 'skills', name);
       fs.mkdirSync(skillDir, { recursive: true });
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillMd);
-      const result = runGsdTools(['skill-manifest'], tmpDir, { HOME: homeDir, USERPROFILE: homeDir });
+      const result = runGsdTools(['skill-manifest'], tmpDir, isolatedEnv({ home: homeDir }));
       assert.ok(result.success, `Command should succeed: ${result.error || result.output}`);
       const skill = JSON.parse(result.output).skills.find((s) => s.name === name);
       assert.ok(skill, `${name} is listed`);
@@ -74,7 +75,7 @@ describe('skill-manifest', () => {
     // On Windows, os.homedir() reads USERPROFILE (not HOME). The SUT scans
     // global skill roots via os.homedir(), so the test must also override
     // USERPROFILE to keep the fixture's homeDir visible.
-    const result = runGsdTools(['skill-manifest'], tmpDir, { HOME: homeDir, USERPROFILE: homeDir });
+    const result = runGsdTools(['skill-manifest'], tmpDir, isolatedEnv({ home: homeDir }));
     assert.ok(result.success, `Command should succeed: ${result.error || result.output}`);
 
     const manifest = JSON.parse(result.output);
@@ -139,7 +140,7 @@ describe('skill-manifest', () => {
   });
 
   test('writes manifest to .planning/skill-manifest.json when --write flag is used', () => {
-    const result = runGsdTools(['skill-manifest', '--write'], tmpDir, { HOME: homeDir, USERPROFILE: homeDir });
+    const result = runGsdTools(['skill-manifest', '--write'], tmpDir, isolatedEnv({ home: homeDir }));
     assert.ok(result.success, `Command should succeed: ${result.error || result.output}`);
 
     const manifestPath = path.join(tmpDir, '.planning', 'skill-manifest.json');
@@ -151,12 +152,11 @@ describe('skill-manifest', () => {
   });
 
   test('global roots honor runtime-home env overrides instead of hardcoded home paths', () => {
-    const result = runGsdTools(['skill-manifest'], tmpDir, {
-      HOME: homeDir,
-      USERPROFILE: homeDir,
-      CLAUDE_CONFIG_DIR: path.join(homeDir, 'claude-custom'),
-      CODEX_HOME: path.join(homeDir, 'codex-custom'),
-    });
+    const result = runGsdTools(['skill-manifest'], tmpDir, isolatedEnv({
+      home: homeDir,
+      claudeConfigDir: path.join(homeDir, 'claude-custom'),
+      override: { CODEX_HOME: path.join(homeDir, 'codex-custom') },
+    }));
     assert.ok(result.success, `Command should succeed: ${result.error || result.output}`);
 
     const manifest = JSON.parse(result.output);
@@ -768,7 +768,7 @@ describe('regressions: #5121 skill-manifest bounds the SKILL.md read', () => {
   ];
 
   function manifest() {
-    const result = runGsdTools(['skill-manifest'], tmpDir, { HOME: homeDir, USERPROFILE: homeDir });
+    const result = runGsdTools(['skill-manifest'], tmpDir, isolatedEnv({ home: homeDir }));
     assert.ok(result.success, `skill-manifest must exit 0: ${result.error || result.output}`);
     return JSON.parse(result.output);
   }

@@ -184,7 +184,7 @@ upgrades (multi-event hook bus; negotiated `dispatch.background`) this PR adds.
 > `capability.json`, not hardcoded). All three exist because the descriptor pipeline lacked one
 > thing: per-agent resolution context (`targetDir` + `agentName`).
 >
-> Declaring an `agents` entry also takes effect on the **surface** path (`/gsd-surface --materialize`)
+> Declaring an `agents` entry also takes effect on the **surface** path (`/gsd-surface` with `profile`, `enable`, `disable` or `reset`)
 > immediately, not only on install — the two paths are intentionally converged.
 
 ## 8. Make the shell launcher find the host's install (#5169)

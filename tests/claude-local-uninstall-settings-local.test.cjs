@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const INSTALL = path.join(__dirname, '..', 'bin', 'install.js');
@@ -35,7 +36,7 @@ describe('local Claude uninstall cleans settings.local.json (#5952)', () => {
   });
 
   function installer(args) {
-    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
+    const env = isolatedEnv({ home, override: { GSD_HOME: home } });
     delete env.CLAUDE_CONFIG_DIR;
     delete env.GSD_ALLOW_SYMLINKED_DEST;
     // bin/install.js runs its CLI main block only when GSD_TEST_MODE is unset (the test runner sets it).

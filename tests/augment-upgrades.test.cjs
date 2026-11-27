@@ -25,6 +25,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 
 const { installRuntimeFixture, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   mergeGsdMcpServerIntoSettings,
@@ -166,7 +167,7 @@ test('augment --global: reinstalling does not duplicate or clobber the gsd MCP c
   t.after(() => cleanup(root));
 
   const args = [INSTALL_SCRIPT, '--augment', '--global', '--config-dir', root];
-  const env = installerEnv({ HOME: root, USERPROFILE: root });
+  const env = installerEnv(isolatedEnv({ home: root }));
 
   const first = runNode(args, { env, timeoutMs: INSTALL_TIMEOUT_MS });
   assert.strictEqual(first.exitCode, 0, `first install failed: ${first.stderr}`);
@@ -201,7 +202,7 @@ test('augment --global: installing preserves a pre-existing unrelated mcpServers
 
   const args = [INSTALL_SCRIPT, '--augment', '--global', '--config-dir', root];
   const result = runNode(args, {
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `install failed: ${result.stderr}`);
@@ -220,7 +221,7 @@ test('augment --global uninstall removes only the GSD-owned mcpServers.gsd entry
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-augment-uninstall-'));
   t.after(() => cleanup(root));
 
-  const env = installerEnv({ HOME: root, USERPROFILE: root });
+  const env = installerEnv(isolatedEnv({ home: root }));
   const installArgs = [INSTALL_SCRIPT, '--augment', '--global', '--config-dir', root];
   const installResult = runNode(installArgs, { env, timeoutMs: INSTALL_TIMEOUT_MS });
   assert.strictEqual(installResult.exitCode, 0, `install failed: ${installResult.stderr}`);

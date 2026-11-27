@@ -2,18 +2,12 @@
 // Workflow .md files — their text IS the deployed contract the orchestrator runs.
 
 /**
- * #1857: a GSD test gate must not hang forever on a watch-mode runner.
+ * #1857, #4784: the post-merge gate's simulator-extraction pipeline, run for real.
  *
- * Three gates were UNBOUNDED or silently-continued and are the core fix. They must:
- *   - route the resolved command through the shared `normalize-test-command`
- *     helper (defeats vitest/jest watch mode), so the paths cannot drift,
- *   - bound execution with `gsd_run run-with-timeout` using the
- *     `workflow.test_gate_timeout` budget, and
- *   - surface a timeout (exit 124) with a watch-mode hint — the regression gate
- *     ABORTS, the others surface clearly (never silently ignored).
- *
- * verify-phase's gate (a fourth, already-bounded surface) was deleted with its orphan
- * workflow in #1892; the gates above are the complete live set.
+ * The text of the test gates (one-shot normalization, the timeout bound, `--raw` config reads, the Xcode
+ * construction, the package-manager fallbacks) is the `post-merge-gate-watch-mode` text contract in
+ * scripts/static-checks/text-contracts/. This file keeps the one case a contract cannot state: it extracts the
+ * gate's OWN `simctl | sed | head` pipeline and executes it against a real-format simctl line.
  */
 
 'use strict';
@@ -24,173 +18,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-// #2932: the regression-gate step was split — steps/regression-gate.md now only
-// discovers prior-phase test files and delegates (via "Read and execute") to
-// steps/regression-gate-run.md, which carries the actual command resolution,
-// normalize-test-command call, timeout bound, and watch-mode abort mechanics.
-const REGRESSION_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate.md');
-const REGRESSION_GATE_RUN = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate-run.md');
 const POST_MERGE_GATE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'post-merge-gate.md');
 
 // #4784: bounds the one-shot sed pipeline the behavioral extraction test runs
 // against a fixture line (a pure text filter on ~50 lines — never the 30s-plus
-// subprocess classes in timeouts.cjs; named so the two copies in this file
-// cannot drift).
+// subprocess classes in timeouts.cjs).
 const SIMCTL_EXTRACT_TIMEOUT_MS = 10_000;
-const AUDIT_FIX = path.join(ROOT, 'gsd-core', 'workflows', 'audit-fix.md');
-const EXECUTE_PHASE = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 
 function read(p) { return fs.readFileSync(p, 'utf-8'); }
 
-// The three gates that were unbounded/silently-continued: full normalize + configured timeout.
-// Regression gate's mechanics now live in the delegated regression-gate-run.md (#2932).
-const FULL_GATES = [
-  ['regression gate', REGRESSION_GATE_RUN],
-  ['post-merge gate', POST_MERGE_GATE],
-  ['audit-fix gate', AUDIT_FIX],
-];
-
-describe('#1857: test gates normalize to one-shot and bound with a timeout', () => {
-  for (const [label, file] of FULL_GATES) {
-    describe(label, () => {
-      test('routes the resolved command through the shared normalize-test-command helper', () => {
-        const c = read(file);
-        assert.match(c, /normalize-test-command/, `${label} must call the shared normalize-test-command helper`);
-      });
-      test('bounds execution with a timeout using the workflow.test_gate_timeout budget', () => {
-        const c = read(file);
-        assert.match(c, /workflow\.test_gate_timeout/, `${label} must read workflow.test_gate_timeout`);
-        assert.match(c, /run-with-timeout "\$TEST_GATE_TIMEOUT"/, `${label} must wrap the test command in run-with-timeout with the configured budget`);
-      });
-      test('surfaces a timeout (exit 124) with a watch-mode hint — never a silent hang', () => {
-        const c = read(file);
-        assert.match(c, /-eq 124/, `${label} must handle the timeout exit code (124)`);
-        assert.match(c, /watch\/dev mode/, `${label} must name watch/dev mode as the likely cause on timeout`);
-      });
-    });
-  }
-
-  // verify-phase's normalize-only block was removed with the orphan workflow (#1892).
-
-  test('the regression gate ABORTS (halts) on a watch-mode timeout', () => {
-    const c = read(REGRESSION_GATE);
-    assert.match(c, /REGRESSION GATE ABORTED/, 'regression gate must abort (not continue) on timeout');
-  });
-
-  test('execute-phase.md delegates the regression gate to the extracted step (size-frozen file stays lean)', () => {
-    // #5118: the delegation now runs through the ONE shared verification step
-    // execute-phase includes (execute-phase/steps/verify-phase-goal.md), which
-    // reads regression-gate.md — execute-phase.md itself stays lean.
-    assert.match(read(EXECUTE_PHASE), /steps\/verify-phase-goal\.md/, 'execute-phase.md must include the shared verification step');
-    const shared = read(path.join(path.dirname(REGRESSION_GATE), 'verify-phase-goal.md'));
-    assert.match(shared, /steps\/regression-gate\.md/, 'the shared verification step must reference the extracted regression-gate step');
-  });
-
-  test('the gates share ONE normalizer — the helper is a single source of truth', () => {
-    // The behaviour lives in src/normalize-test-command.cts; every gate invokes it
-    // by the same verb name, so a change to watch-defeat logic touches one place.
-    for (const file of [REGRESSION_GATE_RUN, POST_MERGE_GATE, AUDIT_FIX]) {
-      assert.match(read(file), /gsd_run query normalize-test-command/);
-    }
-  });
-});
-
-// #2350: `config-get KEY --default ""` WITHOUT `--raw` prints the JSON-encoded
-// empty string (the 2-byte literal `""`) for an unset key, so a `[ -z "$CMD" ]`
-// guard sees a non-empty string, SKIPS the whole Makefile/Cargo/go/npm/…
-// auto-detection cascade, and runs the literal `""` as a command → exit 127,
-// reported as a false build/test failure on any repo with no override and no
-// detectable tooling (docs-only / planning-only repos, or any repo before its
-// first build file). Every gate that resolves a build/test command this way MUST
-// pass `--raw` so an unset key is a genuinely empty bash string the `-z` guard
-// catches. This is a defect CLASS — post-merge-gate.md was the reported instance,
-// but regression-gate.md and audit-fix.md shared it, so the guard sweeps them (a
-// single-file check gave false confidence; the fourth original member,
-// verify-phase.md, was deleted as an orphan in #1892). config-get's
-// own `--raw` behaviour is covered in config-get-default.test.cjs.
-describe('#2350: every gate resolves build/test commands with --raw', () => {
-  // Each gate file that reads workflow.build_command / workflow.test_command to
-  // build a shell command it then runs. Add new gates here as they appear.
-  const GATE_FILES = [
-    ['post-merge gate', POST_MERGE_GATE],
-    ['regression gate', REGRESSION_GATE_RUN],
-    ['audit-fix gate', AUDIT_FIX],
-  ];
-
-  for (const [label, file] of GATE_FILES) {
-    test(`${label}: no build/test_command config-get line is left without --raw`, () => {
-      const lines = read(file)
-        .split('\n')
-        .filter((l) => /config-get\s+workflow\.(build|test)_command\s+--default\s+""/.test(l));
-      // The gate must actually resolve a command this way (guards against the file
-      // being renamed/refactored out from under this test without notice).
-      assert.ok(lines.length > 0, `${label} (${path.basename(file)}) should resolve a build/test command via config-get`);
-      const offending = lines.filter((l) => !/--raw/.test(l));
-      assert.deepStrictEqual(
-        offending,
-        [],
-        `${label}: every build/test_command config-get must pass --raw so an unset key is empty, not the literal ""; offending: ${offending.join(' | ')}`,
-      );
-    });
-  }
-});
-
-// ─── #4784: the Xcode arms carry -project and a machine-independent destination ──
-
 describe('#4784: Xcode gate construction', () => {
   const gate = read(POST_MERGE_GATE);
-
-  test('#4784: the Xcode gates pass -project to every constructed xcodebuild command', () => {
-    // The gate resolves XCODEPROJ (find . -maxdepth 2) and even uses it for
-    // `xcodebuild -list -json -project` — but the build/test commands used to
-    // drop it, so any project one directory down (App/App.xcodeproj) failed
-    // with exit 66: xcodebuild does not search subdirectories.
-    const constructed = gate.match(/xcodebuild (?:build|test)[^\n]*'/g) || [];
-    assert.ok(constructed.length >= 4, `expected the four Xcode command constructions, got: ${JSON.stringify(constructed)}`);
-    for (const cmd of constructed) {
-      assert.ok(
-        cmd.includes("-project '$XCODEPROJ'"),
-        `every constructed xcodebuild command must carry -project '$XCODEPROJ', got: ${cmd}`,
-      );
-    }
-  });
-
-  test('#4784: the Xcode destination derives from the machine\'s available simulators', () => {
-    // A concrete device NAME is machine state (the reporter's machine had zero
-    // devices matching the hardcoded name). The gate must resolve the first
-    // available simulator (id= destination form) and must not pin a name.
-    assert.ok(
-      gate.includes('simctl list devices available'),
-      'the gate must resolve the destination from simctl list devices available',
-    );
-    assert.ok(gate.includes('id=$XCODE_SIM'), 'the destination must reference the resolved simulator id');
-    assert.ok(
-      !gate.includes('name=iPhone 16'),
-      'the hardcoded simulator name must be gone',
-    );
-  });
-
-  test('#4784: with no available simulator the gates skip loudly instead of guaranteed failure', () => {
-    // Pin BOTH skip echoes: the build arm names workflow.build_command, the
-    // test arm names workflow.test_command (a deleting-the-echo edit must go red).
-    assert.ok(
-      /No available iOS Simulator[^\n]*workflow\.build_command/.test(gate),
-      'build-arm skip must name workflow.build_command',
-    );
-    assert.ok(
-      /No available iOS Simulator[^\n]*workflow\.test_command/.test(gate),
-      'test-arm skip must name workflow.test_command',
-    );
-    // set -u robustness: the skip paths must leave the command variables ASSIGNED.
-    const skipArms = gate.match(/if \[ -z "\$XCODE_SIM" \]; then[\s\S]*?\n {4}fi/g) || [];
-    assert.ok(skipArms.length >= 2, `expected both skip arms, got ${skipArms.length}`);
-    for (const arm of skipArms) {
-      assert.ok(
-        /(?:BUILD|TEST)_CMD=""/.test(arm),
-        'each skip arm must assign its command variable (a set -u agent shell must not abort on an unbound variable)',
-      );
-    }
-  });
 
   test('#4784: the gate\'s simulator-extraction pipeline yields a UDID from a real-format simctl line', () => {
     // Adversarial-review Finding 1 (behavioral, would have been red): the first
@@ -209,37 +47,4 @@ describe('#4784: Xcode gate construction', () => {
     assert.match(udid, /^[A-F0-9-]{8,}$/, `the pipeline must extract the UDID from a real-format line, got: ${JSON.stringify(udid)}`);
   });
 
-  test('#4784: the test-gate timeout guidance names the Xcode diagnostics collector', () => {
-    // A real iOS suite measured 854s wall clock, ~600s of it simctl diagnose
-    // collecting a sysdiagnose AFTER the suite passed — the default timeout
-    // returns 124 on a passing suite. The gate text must surface the flag.
-    assert.ok(
-      gate.includes('-collect-test-diagnostics never'),
-      'the gate must mention -collect-test-diagnostics never for Xcode suites',
-    );
-  });
-});
-
-// #5346: the four npm-only fallback sniffs resolve through ONE shared resolver.
-describe('gate fallbacks resolve the package manager through the shared verb (#5346)', () => {
-  const SITES = {
-    'post-merge-gate (build)': [POST_MERGE_GATE, 'resolve-package-manager build', 'npm run build'],
-    'post-merge-gate (test)': [POST_MERGE_GATE, 'resolve-package-manager test', 'npm test'],
-    'regression-gate-run': [REGRESSION_GATE_RUN, 'resolve-package-manager test', 'npm test'],
-    'audit-fix': [AUDIT_FIX, 'resolve-package-manager test', 'npm test'],
-  };
-
-  for (const [label, [file, call, fallback]] of Object.entries(SITES)) {
-    test(`${label}: resolves through "${call}" and keeps the literal "${fallback}" fallback`, () => {
-      const text = fs.readFileSync(file, 'utf-8');
-      assert.ok(text.includes(call), `${label} does not call ${call}`);
-      assert.ok(text.includes(`"${fallback}"`), `${label} lost its literal "${fallback}" fallback`);
-    });
-  }
-
-  test('post-merge-gate: a sniffed build script is logged and workflow.build_command is recommended', () => {
-    const text = fs.readFileSync(POST_MERGE_GATE, 'utf-8');
-    assert.match(text, /workflow\.build_command/);
-    assert.match(text, /running this project's .*build.* script/i);
-  });
 });

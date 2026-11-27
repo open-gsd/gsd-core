@@ -26,6 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
 const fc = require('fast-check');
 
@@ -302,7 +303,7 @@ describe('gsd-settings-advanced — config merge preserves unrelated keys', () =
     const result = runGsdTools(
       ['config-set', 'workflow.plan_bounce_passes', '5'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `config-set failed: ${result.error || result.output}`);
 
@@ -330,7 +331,7 @@ describe('gsd-settings-advanced — config merge preserves unrelated keys', () =
     const result = runGsdTools(
       ['config-set', 'context_window', '1000000'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `config-set context_window failed: ${result.error || result.output}`);
 
@@ -352,7 +353,7 @@ describe('gsd-settings-advanced — negative scenarios', () => {
     const result = runGsdTools(
       ['config-set', 'workflow.no_such_knob_at_all', 'true'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'config-set should reject unknown keys');
     const combined = (result.error || '') + (result.output || '');
@@ -373,7 +374,7 @@ describe('gsd-settings-advanced — negative scenarios', () => {
     const okNum = runGsdTools(
       ['config-set', 'workflow.subagent_timeout', '900'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(okNum.success);
     const c1 = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -407,7 +408,7 @@ describe('gsd-settings-advanced — negative scenarios', () => {
     const result = runGsdTools(
       ['config-set', 'workflow.subagent_timeout', 'not-a-number'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     // The CLI layer accepts the write — type validation lives in the
     // /gsd-settings-advanced workflow. If a future change adds a numeric
@@ -432,7 +433,7 @@ describe('gsd-settings-advanced — negative scenarios', () => {
     const result = runGsdTools(
       ['config-set', 'workflow.max_discuss_passes', '7'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `config-set failed: ${result.error || result.output}`);
     const stored = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -566,14 +567,14 @@ describe('#3923: planner stall threshold is configurable via /gsd-config --advan
         planner: { stall_detection_enabled: true },
       }, null, 2));
 
-      const set = runGsdTools(['config-set', 'planner.stall_threshold_minutes', value], tmpDir, { HOME: tmpDir });
+      const set = runGsdTools(['config-set', 'planner.stall_threshold_minutes', value], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(set.success, `config-set failed: ${set.error || set.output}`);
       const stored = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       assert.strictEqual(stored.planner.stall_threshold_minutes, Number(value));
       assert.strictEqual(stored.planner.stall_detection_enabled, true, 'sibling planner key clobbered');
       assert.strictEqual(stored.model_profile, 'balanced', 'top-level key clobbered');
 
-      const get = runGsdTools(['config-get', 'planner.stall_threshold_minutes', '--raw'], tmpDir, { HOME: tmpDir });
+      const get = runGsdTools(['config-get', 'planner.stall_threshold_minutes', '--raw'], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(get.success, `config-get failed: ${get.error || get.output}`);
       assert.strictEqual(get.output.trim(), value);
     });

@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, homeSandboxEnv } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('pattern-mapper config key', () => {
   let tmpDir;
@@ -28,7 +29,7 @@ describe('pattern-mapper config key', () => {
 
   test('workflow.pattern_mapper is a valid config key', () => {
     // Setting an invalid key produces an error; a valid key succeeds
-    const result = runGsdTools('config-set workflow.pattern_mapper true', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('config-set workflow.pattern_mapper true', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
   });
 
@@ -47,11 +48,11 @@ describe('pattern-mapper config key', () => {
     runGsdTools('config-new-project', tmpDir, homeSandboxEnv(tmpDir));
 
     // Set to false
-    const setResult = runGsdTools('config-set workflow.pattern_mapper false', tmpDir, { HOME: tmpDir });
+    const setResult = runGsdTools('config-set workflow.pattern_mapper false', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     // Get should return false
-    const getResult = runGsdTools('config-get workflow.pattern_mapper', tmpDir, { HOME: tmpDir });
+    const getResult = runGsdTools('config-get workflow.pattern_mapper', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(getResult.success, `config-get failed: ${getResult.error}`);
     assert.strictEqual(getResult.output, 'false');
   });
@@ -89,7 +90,7 @@ describe('init plan-phase patterns_path', () => {
   });
 
   test('patterns_path is null when no PATTERNS.md exists', () => {
-    const result = runGsdTools('init plan-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
 
     const data = JSON.parse(result.output);
@@ -101,7 +102,7 @@ describe('init plan-phase patterns_path', () => {
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
     fs.writeFileSync(path.join(phaseDir, '01-PATTERNS.md'), '# Patterns\n');
 
-    const result = runGsdTools('init plan-phase 1', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init plan-phase 1', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `init plan-phase failed: ${result.error}`);
 
     const data = JSON.parse(result.output);

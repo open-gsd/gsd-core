@@ -58,16 +58,10 @@ Before verifying, discover project context:
 
 **Project instructions:** Read `./CLAUDE.md` if it exists in the working directory. Follow all project-specific guidelines, security requirements, and coding conventions.
 
-**Project skills:** Check `.claude/skills/` or `.agents/skills/` directory if either exists:
+**Project skills:** @__GSD_PI_ENGINE_ROOT__/gsd-core/references/project-skills-discovery.md
+- Verify plans account for project skill patterns
 
 **agent_skills:** self-load per @__GSD_PI_ENGINE_ROOT__/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-plan-checker`)
-1. List available skills (subdirectories)
-2. Read `SKILL.md` for each skill (lightweight index ~130 lines)
-3. Load specific `rules/*.md` files as needed during verification
-4. Do NOT load full `AGENTS.md` files (100KB+ context cost)
-5. Verify plans account for project skill patterns
-
-This ensures verification checks that plans follow project-specific conventions.
 </project_context>
 
 <upstream_input>
@@ -966,6 +960,20 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 
 <structured_returns>
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action is to write your complete return (marker line first) to PATH with one Bash call;
+the rename keeps it from being read half-written (the directory exists):
+
+```bash
+cat > 'PATH.part' <<'GSD_RETURN_END_7f3c9a1e' && mv -f 'PATH.part' 'PATH'
+<your complete return, marker line first>
+GSD_RETURN_END_7f3c9a1e
+```
+
+Your final message carries the same return. Make no other write (no plan). If the write fails or
+is refused (a read-only sandbox), say so in your return and continue: the orchestrator's wait then
+ends on your completion result.
+
 ## VERIFICATION PASSED
 
 ```markdown
@@ -1036,6 +1044,8 @@ Plans verified. Run `/gsd:execute-phase {phase}` to proceed.
 </structured_returns>
 
 <anti_patterns>
+
+**DO NOT** write any file except the `<return_receipt>` path and its `.part` file, if your prompt gives one. You never write, split or fix a plan.
 
 **DO NOT** check code existence — that's gsd-verifier's job. You verify plans, not codebase.
 

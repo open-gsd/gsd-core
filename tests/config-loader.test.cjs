@@ -23,6 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fc = require('fast-check');
 
 // ─── module under test ────────────────────────────────────────────────────────
@@ -1796,7 +1797,7 @@ describe('#4071: global defaults merge per key inside a project', () => {
     fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(proj, '.planning', 'config.json'), JSON.stringify(obj));
   };
-  const hermeticEnv = () => ({ GSD_HOME: home, HOME: home, USERPROFILE: home });
+  const hermeticEnv = () => isolatedEnv({ home, override: { GSD_HOME: home } });
   const resolveModel = (agent = 'gsd-planner') => {
     const result = runGsdTools(['resolve-model', agent], proj, hermeticEnv());
     assert.equal(result.success, true, result.error || result.output);

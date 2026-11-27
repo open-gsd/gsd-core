@@ -7,8 +7,8 @@
  * functions rather than maintaining local copies.
  *
  * Two contracts enforced:
- *   (a) Identity: loop-resolver's _resolveActivationValue, _getNestedConfigValue,
- *       and _readRawConfigKey are the SAME function objects as
+ *   (a) Identity: loop-resolver's _resolveActivationValue and _getNestedConfigValue
+ *       are the SAME function objects as
  *       capability-activation's exports. Fails the instant a local copy is
  *       re-introduced.
  *   (b) Behavioral matrix: across a fixture matrix hitting each precedence level
@@ -56,14 +56,6 @@ describe('capability-precedence-parity: identity guard — loop-resolver re-expo
       loopResolver._getNestedConfigValue,
       capabilityActivation._getNestedConfigValue,
       '_getNestedConfigValue: loop-resolver must re-export the capability-activation.cjs function, not a local copy',
-    );
-  });
-
-  test('_readRawConfigKey is the same function in both modules', () => {
-    assert.strictEqual(
-      loopResolver._readRawConfigKey,
-      capabilityActivation._readRawConfigKey,
-      '_readRawConfigKey: loop-resolver must re-export the capability-activation.cjs function, not a local copy',
     );
   });
 

@@ -41,6 +41,7 @@ const {
   installerEnv,
   INSTALL_SCRIPT,
 } = require('./helpers/install-shared.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { cleanup } = require('./helpers.cjs');
@@ -70,7 +71,7 @@ function reinstallOpencode(root, configDir = null, scope = 'global') {
   }
   const r = runNode(args, {
     cwd,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };

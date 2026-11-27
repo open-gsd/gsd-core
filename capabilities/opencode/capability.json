@@ -136,6 +136,7 @@
       "skipSettingsUi": true,
       "skipUpdateBannerCommand": true,
       "opencodePathPrefix": true,
+      "rewritesClaudeOnlyForms": true,
       "bakesStaticAgentModel": true,
       "bakedAgentFileExtensions": [
         ".md"

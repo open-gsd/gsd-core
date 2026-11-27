@@ -129,6 +129,7 @@ const {
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
   extractPhaseDependencyTokens,
+  isNegatedDependencyLead,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   extractPhaseToken,
@@ -719,7 +720,7 @@ function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
     // review.reviewer_instances) keeps the single-file read of the workstream-aware directory.
     if (resolved.reason !== configLoader.CONFIG_REASON.NOT_CONFIGURED) return undefined;
     // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    const raw = configLoader.readConfigFileBounded(planningWorkspace.projectConfigPath(cwd));
     if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
@@ -3423,9 +3424,20 @@ function cmdInitManager(cwd: string, raw: boolean): void {
         : null;
       const depNums: string[] = [];
       const seen = new Set<string>();
-      const dependencyTokens = phaseIdConvention === 'bracket'
-        ? extractPhaseDependencyTokens(prose, phaseIdConvention)
-        : legacyManagerDependencyTokens(prose);
+      let dependencyTokens: string[];
+      if (phaseIdConvention === 'bracket') {
+        // #6507: the shared owner returns [] for a Nothing/None lead itself.
+        dependencyTokens = extractPhaseDependencyTokens(prose, phaseIdConvention);
+      } else if (isNegatedDependencyLead(prose)) {
+        // #6507: a lead negation is the writer's decision, not prose to mine —
+        // even "Nothing except Phase 1" resolves to no dependencies; guidance
+        // tells writers to use a plain list when a dependency exists. The gate
+        // stays inside this branch so the exact-none short-circuit above keeps
+        // its payload shape (no dep_phases key).
+        dependencyTokens = [];
+      } else {
+        dependencyTokens = legacyManagerDependencyTokens(prose);
+      }
       for (const token of dependencyTokens) {
         const identity = bracketIdentityKey(token);
         if (identity) {
@@ -3799,7 +3811,7 @@ function cmdInitDocsUpdate(cwd: string, raw: boolean, options: Record<string, un
  * `state:chunked-mode`/`state:plan-strategy-converge`). This DELIBERATELY
  * does not replace `update.md`'s own `parse_update_channel` case-statement
  * (`TAG="next"`/`TAG="latest"`) — issue #815's regression test
- * (`tests/update-workflow.test.cjs`) asserts that literal
+ * (the `update-workflow` text contract) asserts that literal
  * case-statement text stays in `update.md` verbatim (the npm dist-tag
  * selection has to run in the workflow's own shell before any `gsd_run`
  * round-trip), so `next_channel` exists purely to gate the `channel-banner`
@@ -4805,6 +4817,21 @@ interface SkillManifest {
   };
 }
 
+/**
+ * A directory entry that is a directory, or a symlink that resolves to one (#6719): a skill pack
+ * installed through a link is still a skill directory. A dangling link or a link to a file is not,
+ * and is skipped rather than thrown on.
+ */
+function isDirectoryEntry(parent: string, entry: fs.Dirent): boolean {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return fs.statSync(path.join(parent, entry.name)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function buildSkillManifest(cwd: string, skillsDir: string | null = null): SkillManifest {
   interface CanonicalRoot {
     root: string;
@@ -4992,7 +5019,8 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
 
     let skillCount = 0;
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // #6719: a skill installed through a directory symlink is a skill directory too.
+      if (!isDirectoryEntry(rootPath, entry)) continue;
 
       const skillMdPath = path.join(rootPath, entry.name, 'SKILL.md');
       const content = capabilityLedger.readSkillFile(skillMdPath);

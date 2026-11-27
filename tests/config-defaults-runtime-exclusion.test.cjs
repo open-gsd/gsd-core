@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('#2840 — runtime from defaults.json must not poison project config', () => {
   let tmpDir;
@@ -30,10 +31,7 @@ describe('#2840 — runtime from defaults.json must not poison project config', 
       JSON.stringify({ runtime: 'codex', model_profile: 'opus' }),
     );
 
-    const result = runGsdTools('config-ensure-section', tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = JSON.parse(
@@ -59,10 +57,7 @@ describe('#2840 — runtime from defaults.json must not poison project config', 
       JSON.stringify({ model_profile: 'haiku' }),
     );
 
-    const result = runGsdTools('config-ensure-section', tmpDir, {
-      HOME: tmpDir,
-      USERPROFILE: tmpDir,
-    });
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const config = JSON.parse(

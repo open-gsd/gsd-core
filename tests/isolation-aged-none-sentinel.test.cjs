@@ -24,6 +24,7 @@ const { spawnSync } = require('node:child_process');
 const { cleanup, readFileNormalized } = require('./helpers.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
@@ -201,8 +202,8 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
   });
   after(() => { cleanup(root); cleanup(project); });
 
-  const env = (extra) => ({
-    ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root, RUNTIME_DIR: REPO.replace(/\\/g, '/'), CLAUDE_ENV_FILE: '', ...extra,
+  const env = (extra) => isolatedEnv({
+    home: root, override: { GSD_HOME: root, RUNTIME_DIR: REPO.replace(/\\/g, '/'), CLAUDE_ENV_FILE: '', ...extra },
   });
 
   // The harness sources the gate's bash fences, and Part 1 extracts plan fields with jq. Skip (never pass

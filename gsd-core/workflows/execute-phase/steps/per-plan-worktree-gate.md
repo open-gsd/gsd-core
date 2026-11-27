@@ -113,6 +113,8 @@ if [ -n "$SUBMODULE_PATHS" ] && [ "$USE_WORKTREES_FOR_PLAN" != "false" ]; then
 fi
 ```
 
+**TDD gate split (#4696).** After the gate above and before the plan joins `WAVE_WORKTREE_PLANS`, run Part 1 of `gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md` for the plan. A `type: tdd` plan whose RED and GREEN/REFACTOR gates are configured with different models comes back with `USE_WORKTREES_FOR_PLAN=false` and `TDD_GATE_SPLIT=true`: store both with its decision. Every other plan comes back unchanged.
+
 After running this for the plan, the dispatch branches in `execute_waves` step 3 MUST gate on `USE_WORKTREES_FOR_PLAN` for the current plan, not on the project-level `USE_WORKTREES`. Track which plans in this wave actually used worktrees (append `plan_id` to a `WAVE_WORKTREE_PLANS` accumulator when `USE_WORKTREES_FOR_PLAN != false`) — the post-wave cleanup step (5.5) uses this to decide whether worktree-merge cleanup is needed at all.
 
 **Store the decision per plan (#5516).** `USE_WORKTREES_FOR_PLAN` is one shared value: the next plan's decision overwrites it. Keep each plan's answer as `plan_id → value` (for example `WAVE_PLAN_ISOLATION="03-01-api=false 03-02-docs=true"`) so step 3 can restore the dispatched plan's own value just before its dispatch (the value after `<plan_id>=`). `PLAN_FILES` and `PLAN_DELETIONS` above are shared the same way, and step 3 passes them to `worktree.record-agent` / `worktree.create`: re-run the extraction block above on the dispatched plan's JSON to restore them. This part does **not** write the isolation record.

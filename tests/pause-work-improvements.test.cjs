@@ -360,6 +360,7 @@ const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { span } = require('./helpers/doc-bash-span.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -512,7 +513,7 @@ describe('#4805 — discovery runs without any external search binary', { skip: 
   // Run `snippet` under `shell` with a PATH holding nothing, so any external command (find included) fails.
   function runWithoutBinaries(shell, args, snippet, cwd) {
     const abs = spawnSync('sh', ['-c', `command -v ${shell}`], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }).stdout.trim();
-    const r = spawnSync(abs, [...args, snippet], { cwd, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS, env: { PATH: emptyBin, HOME: tmpDir } });
+    const r = spawnSync(abs, [...args, snippet], { cwd, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS, env: isolatedEnv({ home: tmpDir, path: emptyBin, base: {} }) });
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };
   }
 

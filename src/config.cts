@@ -21,7 +21,7 @@ const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
+const { planningDir, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
@@ -328,6 +328,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   const hasPerplexity = !!(process.env['PERPLEXITY_API_KEY'] || fs.existsSync(perplexityKeyFile));
   const jinaKeyFile = path.join(gsdHome, '.gsd', 'jina_api_key');
   const hasJina = !!(process.env['JINA_API_KEY'] || fs.existsSync(jinaKeyFile));
+  const serplyKeyFile = path.join(gsdHome, '.gsd', 'serply_api_key');
+  const hasSerplySearch = !!(process.env['SERPLY_API_KEY'] || fs.existsSync(serplyKeyFile));
 
   // Load user-level defaults from $GSD_HOME/.gsd/defaults.json if available
   const globalDefaultsPath = configLoader.globalDefaultsPath(gsdHome);
@@ -361,6 +363,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     ref_search: hasRefSearch,
     perplexity: hasPerplexity,
     jina: hasJina,
+    serply_search: hasSerplySearch,
     git: {
       branching_strategy: CONFIG_DEFAULTS.branching_strategy,
       create_tag: true,
@@ -849,7 +852,7 @@ function _unsetNestedValue(
  * drift apart).
  */
 function loadConfigJson(cwd: string): Record<string, unknown> {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
   let config: Record<string, unknown> = {};
   try {
     // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws.
@@ -864,7 +867,7 @@ function loadConfigJson(cwd: string): Record<string, unknown> {
 }
 
 function unsetConfigValue(cwd: string, keyPath: string): UnsetConfigValueResult {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
@@ -908,7 +911,7 @@ function isNoopFlagClear(config: Record<string, unknown>, keyPath: string, parse
  * the happy path. But note that `error()` will still `exit(1)` out of the process.
  */
 function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): SetConfigValueResult {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
@@ -976,7 +979,7 @@ function setConfigValues(
     return { updated: false, results: [] };
   }
 
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
@@ -1447,7 +1450,7 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
 }
 
 function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: string | undefined): void {
-  const configPath = path.join(planningDir(cwd), 'config.json');
+  const configPath = planningWorkspace.projectConfigPath(cwd);
 
   if (!keyPath) {
     error('Usage: config-get <key.path> [--default <value>]');
@@ -1582,7 +1585,7 @@ function resolveUndeclaredFromRoot(cwd: string, kp: string): { found: boolean; v
   let current: unknown;
   try {
     // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
-    const rawRoot = configLoader.readConfigFileBounded(path.join(planningRoot(cwd), 'config.json'));
+    const rawRoot = configLoader.readConfigFileBounded(planningWorkspace.rootConfigPath(cwd));
     if (rawRoot === null) return { found: false, value: undefined };
     current = JSON.parse(rawRoot) as unknown;
   } catch {
@@ -1685,7 +1688,7 @@ function cmdConfigPath(cwd: string, _raw: boolean, workstreamContext: Workstream
   // never consumed as JSON. Passing raw=true forces plain-text output.
   const configPath = workstreamContext && workstreamContext.configPath
     ? workstreamContext.configPath
-    : path.join(planningDir(cwd), 'config.json');
+    : planningWorkspace.projectConfigPath(cwd);
   output(configPath, true, configPath);
 }
 
@@ -1710,14 +1713,14 @@ function cmdMigrateConfig(cwd: string, raw: boolean): void {
   // #3749: resolve the migration target through the project-aware resolver so
   // GSD_PROJECT scopes the write; migrateOnDisk itself cannot (see its
   // configPathOverride note).
-  const scopedConfigPath = path.join(planningDir(cwd, ws || undefined), 'config.json');
-  const report = migrateOnDisk(cwd, ws || undefined, scopedConfigPath);
+  const scopedConfigPath = planningWorkspace.projectConfigPath(cwd, ws || undefined);
+  const report = migrateOnDisk(cwd, scopedConfigPath);
 
   // #3760: deduplicated on (path, reason), so a repeated invocation stays quiet.
   if (report.skipped.length > 0) {
     warnUnusableInput({
       reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT,
-      source: path.join(planningDir(cwd, ws || undefined), 'config.json'),
+      source: planningWorkspace.projectConfigPath(cwd, ws || undefined),
     });
   }
 

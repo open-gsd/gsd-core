@@ -4,8 +4,9 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempGitProject, createTempDir, cleanup, runGsdTools, runGsdToolsCaptured } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runNode, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 
 // #5219 (ADR-5057 §4 arm C): the context-drift gate is its own module; the check router formats its result.
@@ -371,13 +372,12 @@ describe('verify context-drift CLI', () => {
   // verb's non-blocking arm is reached by calling the command function directly in a child
   // process (planningDir is what throws on '../x').
   function runVerbDirect(env) {
-    const { TEST_ENV_BASE } = require('./helpers.cjs');
     const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
     const script = routeContextDriftStatement(tmp, '01-setup');
     return runNode(['-e', script], {
       cwd: tmp,
       timeoutMs: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '', ...env },
+      env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, GSD_WORKSTREAM: '', ...env } }),
     });
   }
 
@@ -437,7 +437,6 @@ describe('verify context-drift CLI', () => {
   });
 
   test('a phases tree that exists but cannot be examined is unreadable, not a skip (#5170)', () => {
-    const { TEST_ENV_BASE } = require('./helpers.cjs');
     const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
     const phasesDir = path.join(tmp, '.planning', 'phases');
     fs.mkdirSync(phasesDir, { recursive: true });
@@ -452,7 +451,7 @@ describe('verify context-drift CLI', () => {
     const r = runNode(['-e', script], {
       cwd: tmp,
       timeoutMs: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '' },
+      env: isolatedEnv({ home: tmp, override: { GSD_HOME: tmp, GSD_WORKSTREAM: '' } }),
     });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     const data = JSON.parse(r.stdout);
@@ -469,10 +468,6 @@ describe('verify context-drift CLI', () => {
 // NOTHING to stderr; and config is workstream-aware through the resolver `config-get` shares: with
 // GSD_WORKSTREAM the workstream's config.json is read first, then the project root's.
 describe('verify context-drift: workflow.context_drift_action through the gate-config reader (#5139)', () => {
-  const { TEST_ENV_BASE } = require('./helpers.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-  const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-
   let tmp;
   beforeEach(() => { tmp = createTempGitProject('gsd-ctx-drift-cfg-'); });
   afterEach(() => cleanup(tmp));
@@ -492,13 +487,15 @@ describe('verify context-drift: workflow.context_drift_action through the gate-c
     fs.appendFileSync(path.join(tmp, dir, '03-CONTEXT.md'), 'D-99\n');
   }
 
+  // In-process, not a spawned binary (#6569): the subject here is a config read, not a process, so
+  // there is no spawn limit for a co-scheduled install test on a Windows shard to push the call past
+  // (TESTING-STANDARDS.md, "In-process CLI tests", rule 1). `runGsdToolsCaptured` keeps stderr for a
+  // successful command, which the "nothing on stderr" cases below assert on.
   function drift(workstream) {
-    const r = runNode([TOOLS, 'verify', 'context-drift', '03-feature'], {
-      cwd: tmp,
-      timeoutMs: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
-    });
-    assertSeamExit(assert, r, 0, 'verify context-drift failed');
+    const r = runGsdToolsCaptured(['verify', 'context-drift', '03-feature'], tmp, isolatedEnv({
+      home: tmp, override: { GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
+    }));
+    assert.equal(r.exitCode, 0, `verify context-drift failed: ${r.stderr}`);
     return { data: JSON.parse(r.stdout), stderr: r.stderr };
   }
 

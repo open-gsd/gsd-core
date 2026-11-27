@@ -35,7 +35,7 @@
  * workflow file against real temp-directory filesystem states — not a mock,
  * not a source-text grep of the fix. Extracting the fence line-by-line (not
  * a single fence-spanning regex — matches this repo's established
- * extraction idiom, e.g. tests/no-hardcoded-home-gsd-tools.test.cjs) reads
+ * extraction idiom, e.g. the no-hardcoded-home-gsd-tools text contract) reads
  * workflow markdown, not source code; `local/no-source-grep` targets
  * readFileSync of .cjs/.cts/.js/.mjs/.mts/.ts SOURCE files, which this is
  * not. All subprocess calls route through tests/helpers/process-seam.cjs

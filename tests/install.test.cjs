@@ -39,6 +39,7 @@ const os = require('node:os');
 
 const { createTempDir, createTempProject, cleanup, parseFrontmatter, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const pkg = require('../package.json');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -1422,6 +1423,34 @@ describe('install — --devin-desktop CLI flag routes to windsurf runtime (#792)
   test('--windsurf and --devin-desktop both resolve to ["windsurf"]', () => {
     assert.deepStrictEqual(selectRuntimesFromArgs(['--windsurf']), ['windsurf']);
     assert.deepStrictEqual(selectRuntimesFromArgs(['--devin-desktop']), ['windsurf']);
+  });
+});
+
+// #6743: the usage text is a literal that must track the flag parser. It listed the
+// retired --gemini (the parser refuses it) and omitted flags the parser accepts.
+describe('install — --help matches the accepted flags (#6743)', () => {
+  const helpText = () => {
+    const r = runNode([path.join(__dirname, '..', 'bin', 'install.js'), '--help'], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, `--help must exit 0, got ${r.exitCode}: ${r.stderr}`);
+    return r.stdout;
+  };
+  const lists = (text, flag) => new RegExp(`${flag}(?![\\w-])`).test(text);
+
+  test('lists --dry-run, --both, --devin-desktop and --skills-root', () => {
+    const text = helpText();
+    for (const flag of ['--dry-run', '--both', '--devin-desktop', '--skills-root']) {
+      assert.ok(lists(text, flag), `${flag} is accepted by the installer but missing from --help`);
+    }
+  });
+
+  test('does not advertise the retired --gemini runtime', () => {
+    assert.ok(!lists(helpText(), '--gemini'), '--gemini is refused by the installer (#1928) and must not be listed in --help');
+  });
+
+  test('lists every runtime flag the parser selects', () => {
+    const text = helpText();
+    const missing = selectRuntimesFromArgs(['--all']).map((id) => `--${id}`).filter((flag) => !lists(text, flag));
+    assert.deepEqual(missing, [], 'runtime flags accepted by --all but absent from --help');
   });
 });
 // ─── Section N: Windsurf workflow slash-command install (#1615) ─────────────
@@ -7478,7 +7507,7 @@ function installAndRead(runtime) {
   const res = spawnSync(
     process.execPath,
     [INSTALL, `--${runtime}`, '--global', '--config-dir', dir],
-    { encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, env: { ...process.env, HOME: dir, USERPROFILE: dir, GSD_HOME: dir } },
+    { encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS, env: isolatedEnv({ home: dir, override: { GSD_HOME: dir } }) },
   );
   assert.strictEqual(res.status, 0, `install --${runtime} failed: ${res.stderr || res.stdout}`);
   const wf = path.join(dir, 'gsd-core', 'workflows', 'execute-phase.md');
@@ -7584,7 +7613,7 @@ test('real install: cursor negotiates --worktree through its own emitted gate an
     // vars otherwise leak in and make capability discovery host-dependent.
     const res = seamRunNode(
       [INSTALL, '--cursor', '--global', '--config-dir', dir],
-      { env: installSpawnEnv({ HOME: dir, USERPROFILE: dir }), timeoutMs: INSTALL_TIMEOUT_MS },
+      { env: installSpawnEnv(isolatedEnv({ home: dir })), timeoutMs: INSTALL_TIMEOUT_MS },
     );
     assert.strictEqual(res.outcome, 'exited', `install --cursor did not complete: ${res.outcome}`);
     assert.strictEqual(res.exitCode, 0, `install --cursor failed: ${res.stderr || res.stdout}`);
@@ -7662,7 +7691,7 @@ test('real install: cursor negotiates --worktree through its own emitted gate an
       // GSD_RUNTIME outranks the config tier in resolveRuntime, so an ambient
       // one in the developer's shell would satisfy this test without the
       // install's own config ever being read. Blank it explicitly.
-      const hermeticEnv = { ...process.env, HOME: dir, USERPROFILE: dir, GSD_HOME: dir };
+      const hermeticEnv = isolatedEnv({ home: dir, override: { GSD_HOME: dir } });
       delete hermeticEnv.GSD_RUNTIME;
 
       // Seam again — `runHook` documents `interpreter: 'bash'` for a shell
@@ -7929,8 +7958,9 @@ describe('#3026: installer --help documents every accepted runtime flag', () => 
       '--claude', '--opencode', '--kilo', '--codex', '--kimi',
       '--copilot', '--antigravity', '--cursor', '--windsurf', '--augment',
       '--trae', '--qwen', '--hermes', '--cline', '--codebuddy',
-      '--zcode', '--pi', '--gemini',
+      '--zcode', '--pi',
     ];
+    // --gemini is retired (#1928, #6743): the installer refuses it, so --help must not list it.
 
     const missing = acceptedRuntimeFlags.filter(
       f => !EXCLUDED_FLAGS.has(f) && !helpText.includes(f),
@@ -8074,18 +8104,12 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
       process.execPath,
       [INSTALL_BIN, '--claude', '--global', '--dry-run'],
       {
-        env: {
-          ...process.env,
-          HOME: tmpHome,
-          USERPROFILE: tmpHome,
-          GSD_HOME: tmpHome,
-          // Redirect Claude config dir into isolated tmp home
-          CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
-          // Suppress slow stale-SDK npm check
-          GSD_SKIP_STALE_SDK_CHECK: '1',
-          // Do NOT set GSD_TEST_MODE — we want the main() block to run
-          GSD_TEST_MODE: undefined,
-        },
+        // GSD_TEST_MODE is stripped by isolatedEnv, so main() runs; stale-SDK npm check suppressed
+        env: isolatedEnv({
+          home: tmpHome,
+          claudeConfigDir: path.join(tmpHome, '.claude'),
+          override: { GSD_HOME: tmpHome, GSD_SKIP_STALE_SDK_CHECK: '1' },
+        }),
         cwd: REPO_ROOT,
         encoding: 'utf8',
         timeout: DRY_RUN_INSTALL_TIMEOUT_MS,
@@ -8153,15 +8177,11 @@ describe('#607 --dry-run flag: spawned installer exits 0 and mutates nothing', (
       process.execPath,
       [INSTALL_BIN, '--claude', '--uninstall', '--dry-run'],
       {
-        env: {
-          ...process.env,
-          HOME: tmpHome,
-          USERPROFILE: tmpHome,
-          GSD_HOME: tmpHome,
-          CLAUDE_CONFIG_DIR: path.join(tmpHome, '.claude'),
-          GSD_SKIP_STALE_SDK_CHECK: '1',
-          GSD_TEST_MODE: undefined,
-        },
+        env: isolatedEnv({
+          home: tmpHome,
+          claudeConfigDir: path.join(tmpHome, '.claude'),
+          override: { GSD_HOME: tmpHome, GSD_SKIP_STALE_SDK_CHECK: '1' },
+        }),
         cwd: REPO_ROOT,
         encoding: 'utf8',
         timeout: DRY_RUN_INSTALL_TIMEOUT_MS,

@@ -26,6 +26,7 @@ const os = require('os');
 const fs = require('fs');
 const { parseFrontmatter, createTempDir, cleanup } = require('./helpers.cjs');
 const { listAgentFiles } = require('./helpers/agent-roster.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   getConfigDirFromHome,
@@ -2070,7 +2071,7 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     const { runNode } = require('./helpers/process-seam.cjs');
     const files = linked(t, { base: project, rel: 'AGENTS.md' }, 'user content\n');
     if (!files) return;
-    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
+    const env = isolatedEnv({ home, override: { GSD_HOME: home } });
     delete env.GSD_ALLOW_SYMLINKED_DEST;
     delete env.COPILOT_CONFIG_DIR;
     delete env.COPILOT_HOME;

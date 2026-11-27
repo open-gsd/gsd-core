@@ -391,6 +391,22 @@ already imports both install-time resolvers), never a mocked CLI. C5 additionall
 guard **failing**: reintroduce one deleted merge, watch the rule go red, remove it again. A guard
 that has never been observed red is an assumption.
 
+*C5 amendment (#6032).* The guard landed as `local/no-adhoc-config-merge` over `src/**`, `hooks/**`,
+`gsd-core/bin/**`, `scripts/**` and `bin/**`, with three shapes: (a) a read of a layer file whose
+path was built outside the boundary, (b) a spread merge of two parsed config objects, and (c) one
+function reading two or more different layers, so a precedence walk written with the owner's path
+helpers is still caught. Write, probe, report and compare sites never match, by shape. The permanent
+`resolverInternal` boundary is the five files that name layer locations: `src/config-value-resolver.cts`,
+`src/config-loader.cts`, `src/planning-workspace.cts` (the owner of `planningDir`, so of
+`projectConfigPath` and `rootConfigPath`), `hooks/lib/config-read.js` (hooks are standalone files
+and cannot require the built library, so the hook-side equivalent is pinned to the loader by
+`tests/layer-path-helpers.test.cjs`) and `hooks/gsd-statusline.js` (the Claude-only hook that reads
+Claude Code's own settings layers for display; `hooks/lib` ships to every runtime, so that code stays
+in the hook). The census at `9bcb0be79a` found 41 layer-path constructions
+in 25 files that C1–C4 had left; all of them now take their path from the owner, the four walks
+moved into it (`claudeSettingsLayers`, `readConfigFilesQuiet`, the resolver's
+`allowUndeclared`), and the `temporary` section is empty at merge.
+
 ### The #4588 boundary, restated
 
 #4588 separately investigates what a current Claude Code harness actually honours when it forks a

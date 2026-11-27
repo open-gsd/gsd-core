@@ -71,16 +71,18 @@ function baseEnv(extra = {}) {
 }
 
 /**
- * Run a hook with a payload on stdin (or, for C4, no `input` key at all —
- * see below). Thin wrapper over the process-seam so every case in this file
+ * Run a hook with a payload on stdin (or, for C4, with `holdStdin` — see
+ * below). Thin wrapper over the process-seam so every case in this file
  * shares one spawn path and one required timeout. The default is the
  * staged-hook class bound: the git-probing guards in this table run up to 3
  * sequential probes of BLOCKING_GUARD_PROBE_TIMEOUT_MS plus node start/kill
  * overhead, which the quick/probe classes cannot hold on a starved runner.
+ * With `holdStdin` the seam's async path runs and the return is a Promise.
  */
-function runHook(name, { payload, cwd, env, timeoutMs = STAGED_HOOK_SCRIPT_TIMEOUT_MS } = {}) {
+function runHook(name, { payload, cwd, env, timeoutMs = STAGED_HOOK_SCRIPT_TIMEOUT_MS, holdStdin } = {}) {
   const opts = { env: baseEnv(env), timeoutMs };
   if (cwd !== undefined) opts.cwd = cwd;
+  if (holdStdin !== undefined) opts.holdStdin = holdStdin;
   if (payload !== undefined) {
     opts.input = typeof payload === 'string' ? payload : JSON.stringify(payload);
   }
@@ -197,6 +199,11 @@ const TABLE = [
   {
     file: 'gsd-secret-read-guard.js',
     stdinTimeoutMs: 3000,
+    // The default. A host can select DENY instead with
+    // GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784); runHook builds every child env
+    // from TEST_ENV_BASE alone, so this row always sees the default. The opt-in
+    // is covered by tests/gsd-secret-read-guard.test.cjs and
+    // tests/gsd-secret-read-guard-stdin-timer.test.cjs.
     declaredOnCrash: 'allow',
     allow: () => ({ payload: { tool_name: 'Bash', tool_input: { command: 'cd /proj && grep -n foo src/a.js' } } }),
     // #4221: a plain secret-file read through Bash — the exact compound shape
@@ -476,21 +483,28 @@ describe('hooks-crash-policy: C3 crash -> declared ON_CRASH policy', () => {
 });
 
 // ---------------------------------------------------------------------------
-// C4 — stdin never closes: no `input` is supplied to the seam at all, so the
-// child's stdin pipe is left open. Only the hook's OWN bounded stdin-timeout
-// (-> allow() -> terminateNow -> a real process.exit) can end it; a bare
-// `process.exitCode = N` inside that timer would never actually terminate a
-// process still blocked reading stdin. Never assert on elapsed time — only
-// that it terminated, and with what code.
+// C4 — stdin never closes: every row passes `holdStdin` to the seam, which
+// spawns with async `spawn` and never writes or ends the child's stdin, so
+// EOF is impossible for the whole run (#5837: the pre-fix rows supplied no
+// `input`, the seam's spawnSync path closed stdin at once, and every row
+// ended on the EOF path without ever reaching a stdin timer). Only the hook's
+// OWN bounded stdin-timeout (-> allow() -> terminateNow -> a real
+// process.exit) can end it; a bare `process.exitCode = N` inside that timer
+// would never actually terminate a process still blocked reading stdin.
+// Never assert on elapsed time — only that it terminated, and with what code.
 // ---------------------------------------------------------------------------
 
 describe('hooks-crash-policy: C4 stdin never closes -> bounded termination, not a hang', () => {
   for (const row of TABLE) {
-    test(`${row.file}: unclosed stdin still terminates`, () => {
+    test(`${row.file}: unclosed stdin still terminates`, async () => {
       const outerTimeoutMs = (row.stdinTimeoutMs ?? 3000) + 10000;
-      // No `payload` key at all -> the seam omits `options.input` -> the
-      // child's stdin is never written to or closed by the parent.
-      const r = runHook(row.file, { timeoutMs: outerTimeoutMs });
+      // holdStdin -> the seam's async path: stdin unwritten-then-open for the
+      // whole run. EXITED with code 0 below is then reachable only through
+      // the hook's own stdin timer — except the two `stdinTimeoutMs: null`
+      // rows (`gsd-ensure-canonical-path.js`, `gsd-path-export.js`), whose
+      // hooks never read stdin and exit on their own; those rows pin that the
+      // held pipe does not introduce a hang.
+      const r = await runHook(row.file, { timeoutMs: outerTimeoutMs, holdStdin: true });
       assert.equal(
         r.outcome, OUTCOME.EXITED,
         `expected the hook's own stdin-timeout to terminate it before the outer ` +
@@ -706,6 +720,42 @@ describe('hooks-crash-policy: hooks/dist/lib parity (#3911 review finding)', () 
     const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.outcome, OUTCOME.EXITED, `expected a clean exit; got ${r.outcome} stderr=${r.stderr}`);
     assert.equal(r.exitCode, 2, `expected HOOK_DENY's registered exit code 2; stdout=${r.stdout} stderr=${r.stderr}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// crash()'s optional stderrPayload (#5784): forwarded to deny() on the DENY
+// branch only. Driven in a child, because crash() terminates the process.
+// ---------------------------------------------------------------------------
+
+describe('hooks-crash-policy: crash() stderrPayload reaches fd 2 on DENY only (#5784)', () => {
+  const HOOK_EXIT_PATH = path.join(HOOKS_DIR, 'lib', 'hook-exit.js');
+  function runCrash(argsSource) {
+    const script = [
+      `const { crash } = require(${JSON.stringify(HOOK_EXIT_PATH)});`,
+      `crash(${argsSource});`,
+    ].join('\n');
+    return runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
+  }
+
+  test('DENY writes the payload to stdout and stderrPayload to stderr', () => {
+    const r = runCrash(`'deny', { decision: 'block', reason: 'plain reason' }, 'plain reason'`);
+    assert.equal(r.exitCode, 2, `stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.deepEqual(JSON.parse(r.stdout), { decision: 'block', reason: 'plain reason' });
+    assert.equal(r.stderr, 'plain reason');
+  });
+
+  test('DENY with no stderrPayload still writes the payload to both streams', () => {
+    const r = runCrash(`'deny', { decision: 'block', reason: 'plain reason' }`);
+    assert.equal(r.exitCode, 2, `stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.deepEqual(JSON.parse(r.stderr), JSON.parse(r.stdout));
+  });
+
+  test('ALLOW ignores stderrPayload and writes nothing to either stream', () => {
+    const r = runCrash(`'allow', undefined, 'plain reason'`);
+    assert.equal(r.exitCode, 0, `stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr, '');
   });
 });
 

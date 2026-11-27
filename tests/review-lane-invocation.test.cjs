@@ -22,6 +22,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   REVIEWER_LANES,
@@ -998,7 +999,7 @@ describe('#5049: --prompt-file reaches every prompt channel', () => {
               encoding: 'utf8',
               timeout: INVOKE_TIMEOUT_MS,
               killSignal: 'SIGKILL',
-              env: { ...process.env, HOME: dir, USERPROFILE: dir, PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
+              env: isolatedEnv({ home: dir, path: `${binDir}${path.delimiter}${process.env.PATH}` }),
             },
           );
           assert.ok(fs.existsSync(seen), `the ${bin} shim never ran`);

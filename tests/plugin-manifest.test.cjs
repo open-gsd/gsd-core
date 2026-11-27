@@ -24,7 +24,8 @@ const ROOT = path.resolve(__dirname, '..');
 const identity = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
 const pkg = require(path.join(ROOT, 'package.json'));
 const { MANAGED_HOOKS } = require(path.join(ROOT, 'hooks', 'managed-hooks-registry.cjs'));
-const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { loaderSpawnEnv, loaderSpawnArgs } = require('./helpers/claude-loader-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { BLOCKING_GUARD_TIMEOUT_S, BLOCKING_GUARD_NAMES } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs'));
@@ -425,13 +426,10 @@ describe('C: plugin.json schema validation', () => {
   //
   // So point it at a real throwaway dir rather than at nothing.
   const claudeCliHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2665-claude-cli-'));
-  const claudeCliEnv = () => ({
-    ...process.env,
-    ...TEST_ENV_BASE,
-    HOME: claudeCliHome,
-    USERPROFILE: claudeCliHome,
-    GSD_HOME: claudeCliHome,
-    CLAUDE_CONFIG_DIR: path.join(claudeCliHome, '.claude'),
+  const claudeCliEnv = () => isolatedEnv({
+    home: claudeCliHome,
+    claudeConfigDir: path.join(claudeCliHome, '.claude'),
+    override: { GSD_HOME: claudeCliHome },
   });
 
   const claudeAvailable = (() => {
@@ -1325,7 +1323,7 @@ describe('H: skills surface projection (#1596)', () => {
     t.after(() => cleanup(home));
     // #6091: no credential or provider variable, offline npm, and hooks disabled, so this run neither authenticates
     // (no model call on the developer's account) nor lets the SessionStart update worker reach the registry.
-    const env = loaderSpawnEnv(process.env, { ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') });
+    const env = loaderSpawnEnv(process.env, isolatedEnv({ home, claudeConfigDir: path.join(home, '.claude'), override: { GSD_HOME: home } }));
     const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
     if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
     const res = spawnSync('claude', loaderSpawnArgs(ROOT), { encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT, input: '' });

@@ -4,7 +4,7 @@
 // blocker must not revert a completed gap-closure round or trigger another
 // --gaps cycle. Content-assertion contract for the gsd-verifier agent (same
 // basis as tests/verifier-behavior-unverified.test.cjs and
-// tests/verifier-deferred-items.test.cjs — the agent .md file IS the deployed
+// the verifier-deferred-items text contract — the agent .md file IS the deployed
 // product; testing its text tests the shipped contract).
 //
 // Maintainer approval was narrowed to condition C only (deterministic

@@ -73,7 +73,7 @@ run the query without it from inside an agent.
 - **No new config keys.** This reuses the existing `agent_skills` map and the existing
   `buildAgentSkillsBlock` / `cmdAgentSkills` machinery (`src/init.cts`). The 22 consumer
   agent types are mirrored in `tests/agent-skills.test.cjs` (`CONSUMER_AGENTS`) and
-  guarded against drift by `tests/agent-skills-bootstrap.test.cjs`.
+  guarded against drift by the `agent-skills-bootstrap` text contract.
 - **Checkers / read-only agents.** Bash is universal across consumer agents, so
   self-load works for plan-checkers, verifiers, and auditors too; the bootstrap assumes
   no tool an agent lacks.

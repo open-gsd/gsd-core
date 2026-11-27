@@ -370,7 +370,7 @@ describe('#3771 checker states the property and marks the example non-binding', 
         `few-shot issue example lacks required_property:\n${block.trim().slice(0, 200)}`);
     }
     // The smaller-alternative rule is NOT demonstrated here on purpose: this file is the
-    // CHECKER's calibration set, fixed by tests/few-shot-calibration.test.cjs at 2 positive +
+    // CHECKER's calibration set, fixed by the few-shot-calibration text contract at 2 positive +
     // 2 negative, and the rule is about what the PLANNER may do with a hint. It is normative in
     // the checker and in planner-revision.md, and pinned by the assertions in this suite.
     assert.match(flat(FEW_SHOT), /because the binding payload is the property rather than the example, the planner may satisfy it a different way/,

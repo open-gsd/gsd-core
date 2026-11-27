@@ -55,6 +55,7 @@ const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempDir, createTempProject, createTempGitProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
 const {
   REASON_CODE, REMEDY, remedyFor, composeRemedyText, describeRecordedDegradeRemedy, PHASE_ARG_SOURCE,
@@ -87,17 +88,8 @@ function runHook(payload, cwd, extraEnv = {}) {
   const env = { ...process.env };
   delete env.GSD_RUNTIME;
   Object.assign(env, extraEnv);
-  // Production code resolves the home directory via `os.homedir()` (correct,
-  // cross-platform), which on Windows reads `USERPROFILE`, not `HOME` —
-  // `os.homedir()` never honors `HOME` there. Tests below override `HOME` to
-  // redirect `os.homedir()` hermetically; mirror the override onto
-  // `USERPROFILE` too so that redirection actually takes effect on Windows
-  // instead of silently leaking the real CI runner's profile directory.
-  if ('HOME' in extraEnv) env.USERPROFILE = extraEnv.HOME;
-  // #5017: the defaults store root is GSD_HOME when set, and the test runner exports a sandbox
-  // GSD_HOME to every test — so redirecting only HOME no longer redirects the store. A test that
-  // redirects HOME redirects the store with it, unless it names GSD_HOME itself.
-  if ('HOME' in extraEnv && !('GSD_HOME' in extraEnv)) env.GSD_HOME = extraEnv.HOME;
+  // extraEnv comes from isolatedEnv(): HOME and USERPROFILE are redirected together (os.homedir() on Windows), and a test names GSD_HOME itself (#5017).
+  // The wrapper starts from process.env, so ambient GSD_* still reaches the hook: isolatedEnv's stripping does not apply here.
   const r = runHookSeam(HOOK_PATH, [], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     cwd,
@@ -463,7 +455,7 @@ describe('gsd-agent-isolation-guard.js: #3045 MAJOR 2 — undeterminable runtime
     // a developer machine that ever installed GSD for a non-Claude runtime
     // would have ~/.gsd/defaults.json's real `runtime` leak in here and
     // silently flip this test's expectation depending on who runs it.
-    const r = runHook(agentPayload(), unconfiguredProject, { HOME: unconfiguredProject });
+    const r = runHook(agentPayload(), unconfiguredProject, isolatedEnv({ home: unconfiguredProject, override: { GSD_HOME: unconfiguredProject } }));
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.equal(r.stdout, '');
   });
@@ -495,7 +487,7 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER 2 — default-install fail
     // and no ~/.gsd/defaults.json runtime either).
     writeSentinel(unconfiguredHarnessProject, { isolation: 'harness-worktree', harnessFlag: null });
     t.after(() => cleanup(path.join(unconfiguredHarnessProject, '.gsd')));
-    const r = runHook(agentPayload(), unconfiguredHarnessProject, { HOME: unconfiguredHarnessProject });
+    const r = runHook(agentPayload(), unconfiguredHarnessProject, isolatedEnv({ home: unconfiguredHarnessProject, override: { GSD_HOME: unconfiguredHarnessProject } }));
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr} — must DENY, not silently allow`);
     const out = JSON.parse(r.stdout);
     assert.equal(out.decision, 'block');
@@ -515,7 +507,7 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER 2 — default-install fail
     fs.mkdirSync(path.join(home, '.gsd'), { recursive: true });
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'claude' }));
 
-    const r = runHook(agentPayload(), unconfiguredHarnessProject, { HOME: home });
+    const r = runHook(agentPayload(), unconfiguredHarnessProject, isolatedEnv({ home: home, override: { GSD_HOME: home } }));
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr} — defaults.json runtime must be enforced`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
@@ -528,10 +520,10 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER 2 — default-install fail
     fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'claude' }));
 
     // Only the GSD_HOME store names a runtime; the home directory has none.
-    const r = runHook(agentPayload(), unconfiguredHarnessProject, { HOME: home, GSD_HOME: gsdHome });
+    const r = runHook(agentPayload(), unconfiguredHarnessProject, isolatedEnv({ home: home, override: { GSD_HOME: gsdHome } }));
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr} — GSD_HOME defaults runtime must be enforced`);
     // A blank GSD_HOME falls back to the home directory, which has no store -> inert.
-    const blank = runHook(agentPayload(), unconfiguredHarnessProject, { HOME: home, GSD_HOME: '' });
+    const blank = runHook(agentPayload(), unconfiguredHarnessProject, isolatedEnv({ home: home, override: { GSD_HOME: '' } }));
     assert.equal(blank.status, 0, `stdout: ${blank.stdout} stderr: ${blank.stderr} — blank GSD_HOME must fall back to HOME`);
   });
 
@@ -543,7 +535,7 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER 2 — default-install fail
     // config.json's own `runtime: claude` must take precedence.
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({ runtime: 'windsurf' }));
 
-    const r = runHook(agentPayload(), harnessProject, { HOME: home });
+    const r = runHook(agentPayload(), harnessProject, isolatedEnv({ home: home, override: { GSD_HOME: home } }));
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
   });
@@ -962,7 +954,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--phase', '7'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'harness-worktree');
@@ -981,7 +973,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--json', '--phase', '3', '--plan', 'plan-b'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     const parsed = JSON.parse(result.output);
@@ -998,7 +990,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--phase', '4', '--force-isolation', 'none'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     // routeDispatchIsolation's own stdout still reflects the FORCED value.
@@ -1015,7 +1007,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--force-isolation', 'bogus-mode'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'harness-worktree');
@@ -1026,14 +1018,14 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const dir = createTempProject('gsd-3045-resolver-');
     t.after(() => cleanup(dir));
     // Phase-level resolve (as the "Resolve ISOLATION" step performs it).
-    runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '9'], dir, { GSD_RUNTIME: 'claude', HOME: dir });
+    runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '9'], dir, isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }));
     assert.equal(readSentinelRaw(dir).plan, null);
 
     // Per-plan gate degrades THIS plan to sequential (submodule intersection).
     const r = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--phase', '9', '--plan', 'plan-sub', '--force-isolation', 'none'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(r.success, true, r.error);
 
@@ -1049,7 +1041,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--phase', '2', '--plan', 'p1'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     const read = readSentinel(dir);
     assert.equal(read.present, true);
@@ -1073,7 +1065,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     assert.equal(forkBase.exitCode, 0, forkBase.stderr);
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'], dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, USERPROFILE: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(readSentinelRaw(dir).isolation, 'harness-worktree');
@@ -1088,7 +1080,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   test('a second dispatch leaves the new local ignore file unchanged (#5086)', (t) => {
     const dir = createTempProject('gsd-5086-idempotent-');
     t.after(() => cleanup(dir));
-    const env = { GSD_RUNTIME: 'claude', HOME: dir, USERPROFILE: dir };
+    const env = isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } });
     const ignorePath = path.join(dir, '.gsd', '.gitignore');
 
     for (let i = 0; i < 2; i++) {
@@ -1108,7 +1100,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     fs.writeFileSync(ignorePath, '!keep.txt\n');
     fs.writeFileSync(path.join(gsdDir, 'keep.txt'), 'keep\n');
 
-    const env = { GSD_RUNTIME: 'claude', HOME: dir, USERPROFILE: dir };
+    const env = isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } });
     for (let i = 0; i < 2; i++) {
       const result = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir, env);
       assert.equal(result.success, true, result.error);
@@ -1132,7 +1124,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
 
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'none', '--json'], dir,
-      { HOME: dir, USERPROFILE: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(JSON.parse(result.output).recorded, true);
@@ -1152,7 +1144,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
 
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'none', '--json'], dir,
-      { HOME: dir, USERPROFILE: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     const recorded = JSON.parse(result.output);
@@ -1178,7 +1170,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
 
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'none', '--json'], dir,
-      { HOME: dir, USERPROFILE: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     const recorded = JSON.parse(result.output);
@@ -1208,7 +1200,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const forced = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--force-isolation', 'none'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(forced.success, true, forced.error);
     assert.equal(forced.output.trim(), 'none');
@@ -1218,7 +1210,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const requery = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(requery.success, true, requery.error);
     assert.equal(requery.output.trim(), 'none', '#3737: the opt-out must win on every host');
@@ -1235,7 +1227,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--json'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     const parsed = JSON.parse(result.output);
@@ -1255,7 +1247,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'harness-worktree');
@@ -1270,7 +1262,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'harness-worktree', 'a string "false" must degrade to the default (worktrees on), never coerce');
@@ -1298,7 +1290,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, GSD_WORKSTREAM: 'alpha' },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_WORKSTREAM: 'alpha' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'none',
@@ -1324,7 +1316,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, GSD_WORKSTREAM: 'alpha' },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_WORKSTREAM: 'alpha' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'harness-worktree',
@@ -1346,7 +1338,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
         fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(root));
         fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
         fs.writeFileSync(path.join(dir, '.planning', 'workstreams', 'alpha', 'config.json'), JSON.stringify(ws));
-        const env = { GSD_RUNTIME: 'claude', HOME: dir, GSD_WORKSTREAM: 'alpha' };
+        const env = isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_WORKSTREAM: 'alpha' } });
         // --default true mirrors the schema default so the key-absent shape
         // answers "true" (not opted out) instead of erroring — the same
         // effective value the resolver's degrade-to-false produces.
@@ -1374,9 +1366,9 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     fs.writeFileSync(path.join(dir, '.planning', 'second-product', 'config.json'), JSON.stringify({ runtime: 'claude' }));
 
     const cfg = runGsdTools(['query', 'config-get', 'workflow.use_worktrees', '--raw', '--default', 'true'], dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, GSD_PROJECT: 'second-product' });
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_PROJECT: 'second-product' } }));
     const iso = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, GSD_PROJECT: 'second-product' });
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_PROJECT: 'second-product' } }));
     assert.equal(cfg.output.trim() === 'false', false,
       'fixture self-check: config-get must NOT see the root opt-out under GSD_PROJECT alone');
     assert.equal(iso.output.trim(), 'harness-worktree',
@@ -1391,7 +1383,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     fs.writeFileSync(path.join(dir, '.planning', 'workstreams', 'alpha', 'config.json'), '{ not valid json');
 
     const iso = runGsdTools(['query', 'dispatch-isolation', '--raw'], dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, GSD_WORKSTREAM: 'alpha' });
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_WORKSTREAM: 'alpha' } }));
     assert.equal(iso.success, true, iso.error);
     assert.equal(iso.output.trim(), 'none',
       '#3963: an unreadable workstream config must degrade to the root view, matching loadConfigResolved branch B');
@@ -1407,7 +1399,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'none');
@@ -1473,7 +1465,7 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     );
   }
 
-  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+  const env = (dir) => isolatedEnv({ home: dir, claudeConfigDir: path.join(dir, '.claude'), override: { GSD_RUNTIME: 'claude' } });
 
   test('#4222: HEAD == origin/HEAD — a fresh run records the natural harness-worktree capability (nothing is sticky)', (t) => {
     const { dir } = projectWithOrigin(t, 'gsd-4222-basecheck-');
@@ -1649,7 +1641,7 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
 
     // The guard fires on the sequential inline Agent() dispatch (no
     // isolation kwarg) and must NOT deny it (#4222's user-visible symptom).
-    const r = runHook(agentPayload(), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    const r = runHook(agentPayload(), dir, isolatedEnv({ home: dir, claudeConfigDir: path.join(dir, '.claude'), override: { GSD_HOME: dir } }));
     assert.equal(r.status, 0, `guard denied a sequential dispatch after a plain re-query on a diverged repo: stdout=${r.stdout} stderr=${r.stderr}`);
   });
 
@@ -1661,7 +1653,7 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     // the capability, must still record it, or the guard allows that plan's
     // flag-less spawn.
     const { dir } = projectWithOrigin(t, 'gsd-4222-planscope-');
-    const hookEnv = { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') };
+    const hookEnv = isolatedEnv({ home: dir, claudeConfigDir: path.join(dir, '.claude'), override: { GSD_HOME: dir } });
     const dispatch = (plan) => agentPayload({
       tool_input: { subagent_type: 'gsd-executor', prompt: `[gsd:dispatch phase="1" plan="${plan}"] Execute the plan.` },
     });
@@ -1706,7 +1698,7 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
 
     const flagless = runHook(agentPayload({
       tool_input: { subagent_type: 'gsd-executor', prompt: '[gsd:dispatch phase="1" plan="01-02"] Execute the plan.' },
-    }), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    }), dir, isolatedEnv({ home: dir, claudeConfigDir: path.join(dir, '.claude'), override: { GSD_HOME: dir } }));
     assert.equal(flagless.status, 2, `the guard must refuse the flag-less spawn of a plan decided harness-worktree: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
   });
 
@@ -1722,7 +1714,7 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
 
     const flagless = runHook(agentPayload({
       tool_input: { subagent_type: 'gsd-executor', prompt: '[gsd:dispatch phase="1" plan="01-03"] Execute the plan.' },
-    }), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    }), dir, isolatedEnv({ home: dir, claudeConfigDir: path.join(dir, '.claude'), override: { GSD_HOME: dir } }));
     assert.equal(flagless.status, 2, `a phase-scoped none would let every plan of the phase spawn flag-less: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
   });
 
@@ -1750,7 +1742,7 @@ describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (C
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'harness-worktree', `--harness-flag=${cursorFlag}`, '--phase', '1'],
       dir,
-      { HOME: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     const sentinel = readSentinelRaw(dir);
@@ -1781,7 +1773,7 @@ describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (C
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'harness-worktree', '--harness-flag=--isolated', '--phase', '1'],
       dir,
-      { HOME: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(readSentinelRaw(dir).harness_flag, '--isolated');
@@ -1793,7 +1785,7 @@ describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (C
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'harness-worktree', '--harness-flag', '--worktree', '--phase', '1'],
       dir,
-      { HOME: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(readSentinelRaw(dir).harness_flag, null, 'space form must not swallow a value shaped like a flag');
@@ -1802,7 +1794,7 @@ describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (C
   test('record-dispatch-isolation still errors with usage text when --isolation is missing', (t) => {
     const dir = createTempProject('gsd-3045-resolver-');
     t.after(() => cleanup(dir));
-    const result = runGsdTools(['query', 'record-dispatch-isolation'], dir, { HOME: dir });
+    const result = runGsdTools(['query', 'record-dispatch-isolation'], dir, isolatedEnv({ home: dir }));
     assert.equal(result.success, false);
     assert.match(result.error, /Usage: record-dispatch-isolation/);
   });
@@ -1813,7 +1805,7 @@ describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (C
     const result = runGsdTools(
       ['query', 'record-dispatch-isolation', '--isolation', 'none', '--phase', '5', '--plan', 'plan-x'],
       dir,
-      { HOME: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error);
     const sentinel = readSentinelRaw(dir);
@@ -1868,7 +1860,7 @@ describe('#3045 MINOR — writer/reader sentinel path derivation now agrees for 
     const result = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--cwd', linked, '--phase', '1'],
       mainRepo,
-      { GSD_RUNTIME: 'claude', HOME: mainRepo },
+      isolatedEnv({ home: mainRepo, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
 
@@ -1901,7 +1893,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
     const result = runGsdTools(
       ['query', 'inspect-dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(result.success, true, result.error);
     assert.equal(result.output.trim(), 'harness-worktree');
@@ -1923,7 +1915,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
       const inspected = runGsdTools(
         ['query', 'inspect-dispatch-isolation', '--raw'],
         dir,
-        { GSD_RUNTIME: runtimeId, HOME: dir },
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: runtimeId } }),
       );
       assert.equal(inspected.success, true, inspected.error);
       assert.equal(
@@ -1935,7 +1927,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
       const dispatched = runGsdTools(
         ['query', 'dispatch-isolation', '--raw'],
         dir,
-        { GSD_RUNTIME: runtimeId, HOME: dir },
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: runtimeId } }),
       );
       assert.equal(dispatched.success, true, dispatched.error);
       assert.equal(
@@ -1963,7 +1955,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
       const result = runGsdTools(
         ['query', 'inspect-dispatch-isolation', '--raw', flag, value, '--json-errors'],
         dir,
-        { GSD_RUNTIME: 'claude', HOME: dir },
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
       );
       assert.equal(result.success, false, `${flag} must be a usage error, not a silently ignored argument`);
       const envelope = JSON.parse(result.error.trim().split('\n').filter(Boolean).pop());
@@ -1991,7 +1983,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
     const dispatched = runGsdTools(
       ['query', 'dispatch-isolation', '--raw', '--force-isolation', 'none'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(dispatched.success, true, dispatched.error);
     assert.equal(dispatched.output.trim(), 'none', 'force is honoured on the recording verb');
@@ -1999,7 +1991,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
     const inspected = runGsdTools(
       ['query', 'inspect-dispatch-isolation', '--raw'],
       dir,
-      { GSD_RUNTIME: 'claude', HOME: dir },
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } }),
     );
     assert.equal(inspected.success, true, inspected.error);
     assert.equal(
@@ -2021,7 +2013,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
     const inspected = runGsdTools(
       ['query', 'inspect-dispatch-isolation', '--json'],
       inspectDir,
-      { GSD_RUNTIME: 'cursor', HOME: inspectDir },
+      isolatedEnv({ home: inspectDir, override: { GSD_RUNTIME: 'cursor' } }),
     );
     assert.equal(inspected.success, true, inspected.error);
     const inspectedJson = JSON.parse(inspected.output);
@@ -2031,7 +2023,7 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
     const dispatched = runGsdTools(
       ['query', 'dispatch-isolation', '--json'],
       dispatchDir,
-      { GSD_RUNTIME: 'cursor', HOME: dispatchDir },
+      isolatedEnv({ home: dispatchDir, override: { GSD_RUNTIME: 'cursor' } }),
     );
     assert.equal(dispatched.success, true, dispatched.error);
     const dispatchedJson = JSON.parse(dispatched.output);
@@ -2064,13 +2056,13 @@ describe('#2486 regression: inspect-dispatch-isolation is the sentinel-free read
     const inspected = runGsdTools(
       ['query', 'inspect-dispatch-isolation', '--json', '--cwd-target', 'wt'],
       inspectDir,
-      { GSD_RUNTIME: 'codex', HOME: inspectDir },
+      isolatedEnv({ home: inspectDir, override: { GSD_RUNTIME: 'codex' } }),
     );
     assert.equal(inspected.success, true, inspected.error);
     const dispatched = runGsdTools(
       ['query', 'dispatch-isolation', '--json', '--cwd-target', 'wt'],
       dispatchDir,
-      { GSD_RUNTIME: 'codex', HOME: dispatchDir },
+      isolatedEnv({ home: dispatchDir, override: { GSD_RUNTIME: 'codex' } }),
     );
     assert.equal(dispatched.success, true, dispatched.error);
 
@@ -2382,7 +2374,7 @@ describe('gsd-agent-isolation-guard.js: #5682 — interleaved per-dispatch recor
 // record on a plain query instead of racing the shell for the file. Every
 // test drives the real CLI (runGsdTools) and reads the sentinel it wrote.
 describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade instead of clobbering it', () => {
-  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+  const env = (dir) => isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } });
 
   function shellDegradesToNone(dir, scopeArgs = []) {
     // The per-plan gate's re-record shape: the shell decided `none` where the
@@ -2580,7 +2572,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     const r = runHook(
       agentPayload({ tool_input: { subagent_type: 'gsd-executor', description: 'Execute plan plan-a of phase 7' } }),
       dir,
-      { HOME: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(r.status, 0, `the degraded dispatch must be allowed — stdout: ${r.stdout} stderr: ${r.stderr}`);
   });
@@ -2639,7 +2631,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       resolveIsolationBlock(file),
       'printf "ISOLATION=%s\\nUSE_WORKTREES=%s\\n" "$ISOLATION" "$USE_WORKTREES"',
     ].join('\n'));
-    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, ...extraEnv };
+    const childEnv = isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', ...extraEnv } });
     delete childEnv.CLAUDE_ENV_FILE;
     return runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
   }
@@ -2657,7 +2649,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       const T0 = 1_000_000_000_000;
       const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
       const degrade = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--plan', 'plan-a', '--force-isolation', 'none'], dir,
-        { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', ...pinned(T0) } }));
       assert.equal(degrade.success, true, degrade.error);
       assert.equal(readSentinelRaw(dir).written_at, T0, 'precondition: the held degrade was written at T0');
       const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`, pinned(T0 + 60000));
@@ -2681,7 +2673,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       const T0 = 1_000_000_000_000;
       const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
       const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
-        { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+        isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', ...pinned(T0) } }));
       assert.equal(r.success, true, r.error);
       const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`, pinned(T0 + 60000));
       assert.equal(run.exitCode, 0, run.stderr);
@@ -2782,7 +2774,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     t.after(() => cleanup(dir));
     const T0 = 1_000_000_000_000;
     const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0) });
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0) } }));
     assert.equal(r.success, true, r.error);
     const perPlanBlock = perPlanReRecordBlock();
     const script = path.join(dir, 'per-plan.sh');
@@ -2795,7 +2787,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       perPlanBlock,
       'printf "USE_WORKTREES_FOR_PLAN=%s\\n" "$USE_WORKTREES_FOR_PLAN"',
     ].join('\n'));
-    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0 + 60000) };
+    const childEnv = isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0 + 60000) } });
     delete childEnv.CLAUDE_ENV_FILE;
     const run = runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(run.exitCode, 0, run.stderr);
@@ -2816,7 +2808,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     const T0 = 1_000_000_000_000;
     const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
     const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
-      { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+      isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', ...pinned(T0) } }));
     assert.equal(r.success, true, r.error);
     const gsdRun = `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`;
     const resolve = runResolveBlock(dir, GATE_SOURCES[1][1], gsdRun, pinned(T0 + 60000));
@@ -2832,7 +2824,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       `PHASE_NUMBER=7; plan_id=plan-a; USE_WORKTREES_FOR_PLAN=false; _RENEW_HELD=${JSON.stringify(printed[1])}`,
       perPlanReRecordBlock(),
     ].join('\n'));
-    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0 + 120000) };
+    const childEnv = isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', ...pinned(T0 + 120000) } });
     delete childEnv.CLAUDE_ENV_FILE;
     const run = runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(run.exitCode, 0, run.stderr);
@@ -2889,7 +2881,7 @@ describe('#4630 — the isolation record states who decided it, so a re-query kn
   function git(args, cwd) {
     return gitOrThrow(args, { cwd });
   }
-  const env = (dir) => ({ GSD_RUNTIME: 'claude', HOME: dir });
+  const env = (dir) => isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude' } });
 
   function writeClaudeConfig(dir) {
     fs.writeFileSync(
@@ -3118,7 +3110,7 @@ describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a
   const A = { phase: '21', plan: '21-13' };
   const B = { phase: '23', plan: '23-15' };
   const T0 = 1_000_000_000_000;
-  const env = (dir, now) => ({ GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+  const env = (dir, now) => isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) } });
   const scope = ({ phase, plan } = {}) => [...(phase ? ['--phase', phase] : []), ...(plan ? ['--plan', plan] : [])];
   const query = (dir, now, args) => {
     const r = runGsdTools(['query', 'dispatch-isolation', ...args], dir, env(dir, now));
@@ -3416,7 +3408,7 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
   // A fixed epoch for every timestamp, pinned in gsd-tools through the clock
   // seam (GSD_NOW_MS under GSD_TEST_MODE, #474): no row reads the wall clock.
   const T0 = 1_000_000_000_000;
-  const env = (dir, now) => ({ GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+  const env = (dir, now) => isolatedEnv({ home: dir, override: { GSD_RUNTIME: 'claude', GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) } });
   const query = (dir, now, args) => {
     const r = runGsdTools(['query', 'dispatch-isolation', ...args], dir, env(dir, now));
     assert.equal(r.success, true, r.error);

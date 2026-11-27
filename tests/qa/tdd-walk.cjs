@@ -31,7 +31,7 @@
  *
  * This module extracts each backend's real bash via `indexOf`/`slice` on the
  * fenced-code markers (NEVER a backtracking regex over the whole file — see
- * `tests/tdd-single-statement.test.cjs`'s `restatesCycle()` header for the
+ * the `tdd-single-statement` text contract's `restatesCycle` header for the
  * documented #4228 incident: a lazy-quantifier regex over a 47KB file pinned
  * a Windows CI runner for 32 minutes), substitutes the plan's placeholders,
  * and executes the result via a real `bash -c` subprocess against a real

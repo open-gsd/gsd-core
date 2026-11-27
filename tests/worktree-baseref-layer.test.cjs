@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runGit, runNode } = require('./helpers/process-seam.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -27,8 +28,7 @@ function withProject(layers, run) {
   const cwd = path.join(root, 'repo');
   fs.mkdirSync(cwd, { recursive: true });
   fs.mkdirSync(userDir, { recursive: true });
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: userDir };
-  for (const key of ['GSD_HOME', 'GSD_WORKSTREAM', 'GSD_PROJECT']) delete env[key];
+  const env = isolatedEnv({ home, claudeConfigDir: userDir });
   const git = (...args) => {
     const r = runGit(args, { cwd, env });
     assert.equal(r.exitCode, 0, r.stderr);

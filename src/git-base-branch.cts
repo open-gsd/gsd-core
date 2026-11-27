@@ -30,7 +30,6 @@
  * tests can run without touching the real filesystem or spawning real git.
  */
 
-import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -150,7 +149,7 @@ function readEffectiveGitConfig(
   let config: Record<string, unknown> = {};
 
   if (deps?.readFile && !deps.loadConfig) {
-    const raw = deps.readFile(path.join(cwd, '.planning', 'config.json'));
+    const raw = deps.readFile(configLoader.rootConfigPath(cwd));
     if (raw) {
       try {
         const parsed: unknown = JSON.parse(raw);

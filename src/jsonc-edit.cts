@@ -366,9 +366,13 @@ export function isEditableJsonc(text: string): boolean {
  * "could not parse, do not touch the file" handling.
  */
 export function parseJsonc(content: string): unknown {
-  let text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+  const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
   let stripped = '';
   let inString = false;
+  // #5989: hold a comma seen outside a string; drop it only when the next
+  // emitted non-whitespace char is `}` or `]`. The old post-strip regex
+  // `,\s*[}\]]` had no string state and rewrote values like "x,}y".
+  let pendingComma = false;
   let i = 0;
   while (i < text.length) {
     const c = text[i];
@@ -383,6 +387,10 @@ export function parseJsonc(content: string): unknown {
       if (c === '"') inString = false;
       i++;
     } else if (c === '"') {
+      if (pendingComma) {
+        stripped += ',';
+        pendingComma = false;
+      }
       inString = true;
       stripped += c;
       i++;
@@ -391,12 +399,27 @@ export function parseJsonc(content: string): unknown {
     } else if (c === '/' && next === '*') {
       i += 2;
       while (i < text.length - 1 && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      // #5990: this loop can stop before EOF without ever seeing a closer.
+      if (!(text[i] === '*' && text[i + 1] === '/')) throw new SyntaxError('Unterminated block comment');
       i += 2;
+    } else if (c === ',') {
+      if (pendingComma) stripped += ',';
+      pendingComma = true;
+      i++;
+    } else if (/\s/.test(c)) {
+      stripped += c;
+      i++;
     } else {
+      if (c === '}' || c === ']') {
+        pendingComma = false;
+      } else if (pendingComma) {
+        stripped += ',';
+        pendingComma = false;
+      }
       stripped += c;
       i++;
     }
   }
-  text = stripped.replace(/,(\s*[}\]])/g, '$1');
-  return JSON.parse(text) as unknown;
+  if (pendingComma) stripped += ',';
+  return JSON.parse(stripped) as unknown;
 }

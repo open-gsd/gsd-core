@@ -44,7 +44,7 @@ const WORKFLOWS_DIR = path.resolve(__dirname, '..', '.github', 'workflows');
  * This guard covers the base-ref FETCH only. The shallow *checkout* depth on
  * changeset-required.yml / docs-required.yml is a separate, deliberate cost
  * control with fail-closed semantics, owned by
- * tests/policy-lint-shallow-checkout.test.cjs — do not conflate the two.
+ * the policy-lint-shallow-checkout text contract — do not conflate the two.
  */
 const THREE_DOT_WORKFLOWS = [
   { file: 'mutation.yml', consumer: 'scripts/mutation-matrix.cjs' },

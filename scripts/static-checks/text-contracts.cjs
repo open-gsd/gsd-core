@@ -26,7 +26,7 @@ const path = require('node:path');
 const CONTRACT_DIR = path.join(__dirname, 'text-contracts');
 // The number of shipped contracts. A test pins it to the directory's count, so deleting a contract
 // file (or adding one without raising this) fails instead of passing by absence.
-const MIN_CONTRACTS = 41;
+const MIN_CONTRACTS = 168;
 
 const lf = (text) => text.replace(/\r\n/g, '\n');
 const describePattern = (pattern) => (pattern instanceof RegExp ? String(pattern) : JSON.stringify(pattern));

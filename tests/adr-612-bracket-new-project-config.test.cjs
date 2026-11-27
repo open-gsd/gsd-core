@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const projects = new Set();
 afterEach(() => {
@@ -25,7 +26,7 @@ describe('#4304 / ADR-612 Decision 2: new-project default remains unchanged', ()
     const result = runGsdTools(
       ['config-new-project', '{}'],
       dir,
-      { HOME: dir, USERPROFILE: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error || result.output);
 
@@ -41,7 +42,7 @@ describe('#4304 / ADR-612 Decision 2: new-project default remains unchanged', ()
     const result = runGsdTools(
       ['config-new-project', choices],
       dir,
-      { HOME: dir, USERPROFILE: dir },
+      isolatedEnv({ home: dir }),
     );
     assert.equal(result.success, true, result.error || result.output);
 
