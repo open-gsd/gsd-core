@@ -393,6 +393,15 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   },
   'review-lane.plan': { positionals: 2, valueFlags: RUN_LANE_COMMON },
   'review-lane.sections': { positionals: 2, valueFlags: RUN_LANE_COMMON },
+
+  // ─── per-session pause (#6796, ADR-4962) ───────────────────────────
+  // The session id comes from --session or a runtime key, never a terminal token; with neither, both verbs write and delete nothing.
+  'state.session-resume': {
+    positionals: 2,
+    valueFlags: ['session', 'role', 'role-id', 'handoff', 'action'],
+    booleanFlags: ['keep-handoff'],
+  },
+  'state.sessions': { positionals: 2, valueFlags: ['session', 'role', 'role-id'] },
 });
 
 /**

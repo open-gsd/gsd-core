@@ -146,13 +146,14 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [ROADMAP phase-list entry grammar](reference/roadmap-phase-entry.md) — the one accepted form of a `- [ ] **Phase N: Name**` checklist entry, shared by every reader
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
+- [Runtime install contracts](reference/runtime-install-contracts.md) — the installed file layout, the per-runtime install contract matrix, and the upstream docs each row was checked against
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
 - [Templates](reference/templates.md) — every file under `gsd-core/templates/`, the artifact it produces, and what references it
 - [Environment variables and file formats](reference/environment-variables.md) — every variable the installer, `gsd-tools`, hooks and plugins read, and the state files GSD writes outside `.planning/`
 - [Installer flags](reference/installer-flags.md) — every option of `npx @opengsd/gsd-core`: runtime flags, location, skill profiles, cleanup and hook-path behavior
 - [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
-- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not
+- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not; `npm run lint:generated-sync` fails when the page is stale or any item or option is undocumented
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
 - [Exit code reference](reference/exit-codes.md) — generated catalogue of every registered process exit code, its name, meaning, and owning module, plus the reserved bands and the v1/v2 exit contract
 - [Capability manifest](reference/capability-manifest.md) — the full `capability.json` schema and validation rules

@@ -22,7 +22,6 @@ A narrative companion guide to GSD Core — orient yourself here, then follow th
 - [Usage Examples](#usage-examples)
 - [Troubleshooting](#troubleshooting)
 - [Recovery Quick Reference](#recovery-quick-reference)
-- [Project File Structure](#project-file-structure)
 - [Related](#related)
 
 For driving GSD directly from a GitHub / Linear / Jira issue, see the
@@ -929,65 +928,7 @@ See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md)
 
 ### Manual install / no-Node.js setup
 
-If you cannot run the GSD installer, you cannot use the source files in `agents/` directly — they are in Claude Code's native frontmatter format. For OpenCode, two transformations are required:
-
-| Field | GSD source format | OpenCode-valid format | Action |
-|---|---|---|---|
-| `tools:` | `Read, Bash, Grep` (comma-string) | Not a frontmatter field | Remove the `tools:` line entirely |
-| `color:` | Plain CSS color name | Hex or OpenCode semantic name | Convert to hex or remove |
-
-**Alternative:** run the installer on any machine with Node.js:
-
-```bash
-npx @opengsd/gsd-core@latest --opencode --global
-```
-
-### Installing for Cline
-
-```bash
-npx @opengsd/gsd-core --cline --global   # applies to all projects
-npx @opengsd/gsd-core --cline --local    # this project only
-```
-
-### Installing for CodeBuddy
-
-```bash
-npx @opengsd/gsd-core --codebuddy --global
-```
-
-GSD installs four surfaces for CodeBuddy: `/gsd-*` slash commands in `~/.codebuddy/commands/`, subagents in `~/.codebuddy/agents/`, model-invocable skills in `~/.codebuddy/skills/`, and `settings.json` hooks. The skills are emitted with `user-invocable: false` so the slash commands are the single `/` menu surface (no duplicate entries).
-
-### Installing for Qwen Code
-
-```bash
-npx @opengsd/gsd-core --qwen --global
-```
-
-### Installing for Prerelease Editions
-
-Set the runtime's `*_CONFIG_DIR` env var to the prerelease directory before running the installer:
-
-```bash
-WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --windsurf --global
-```
-
-**Env-var reference for supported runtimes:**
-
-| Runtime | Stable default | Override env var |
-|---|---|---|
-| Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
-| Codex | (per Codex CLI) | `--config-dir` flag |
-| Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` (or `COPILOT_HOME`) |
-| Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR` |
-| Windsurf / Devin Desktop | `~/.codeium/windsurf` | `WINDSURF_CONFIG_DIR` |
-| Antigravity | auto-detected | `ANTIGRAVITY_CONFIG_DIR` |
-| Augment | `~/.augment` | `AUGMENT_CONFIG_DIR` |
-| Trae | `~/.trae` | `TRAE_CONFIG_DIR` |
-| Qwen Code | `~/.qwen` | `QWEN_CONFIG_DIR` |
-| Kilo | `~/.config/kilo` | `KILO_CONFIG_DIR` |
-| CodeBuddy | `~/.codebuddy` | `CODEBUDDY_CONFIG_DIR` |
-| Cline | `~/.cline` | `CLINE_CONFIG_DIR` |
+If you cannot run the GSD installer, the source files in `agents/` are in Claude Code's native frontmatter format and must be transformed per runtime before they load. The manual-transform walkthrough and the copy-the-output alternative are in [Installing without Node.js](how-to/install-on-your-runtime.md#installing-without-nodejs).
 
 ### Using Claude Code with Non-Anthropic Providers
 
@@ -1132,48 +1073,6 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
 | Want session summary for stakeholder | `/gsd-pause-work --report`                                               |
 | Don't know what step is next         | `/gsd-progress --next`                                                   |
 | Parallel execution build errors      | Update GSD or set `parallelization.enabled: false`                       |
-
----
-
-## Project File Structure
-
-```text
-.planning/
-  PROJECT.md              # Project vision and context (always loaded)
-  REQUIREMENTS.md         # Scoped v1/v2 requirements with IDs
-  ROADMAP.md              # Phase breakdown with status tracking
-  STATE.md                # Decisions, blockers, session memory
-  config.json             # Workflow configuration
-  MILESTONES.md           # Completed milestone archive (absent until the first /gsd-complete-milestone — see "The implicit first milestone")
-  HANDOFF.json            # Structured session handoff (from /gsd-pause-work)
-  research/               # Domain research from /gsd-new-project
-  reports/                # Session reports (from /gsd-pause-work --report)
-  todos/
-    pending/              # Captured ideas awaiting work
-    completed/             # Completed todos
-  debug/                  # Active debug sessions
-    resolved/             # Archived debug sessions
-  spikes/                 # Feasibility experiments (from /gsd-spike)
-    NNN-name/             # Experiment code + README with verdict
-    MANIFEST.md           # Index of all spikes
-  sketches/               # HTML mockups (from /gsd-sketch)
-    NNN-name/             # index.html (2-3 variants) + README
-    themes/
-      default.css         # Shared CSS variables for all sketches
-    MANIFEST.md           # Index of all sketches with winners
-  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase or /gsd-onboard)
-  onboarding/             # Brownfield onboarding summary (from /gsd-onboard)
-  phases/
-    XX-phase-name/
-      XX-YY-PLAN.md       # Atomic execution plans
-      XX-YY-SUMMARY.md    # Execution outcomes and decisions
-      CONTEXT.md          # Your implementation preferences
-      RESEARCH.md         # Ecosystem research findings
-      VERIFICATION.md     # Post-execution verification results
-      XX-UI-SPEC.md       # UI design contract (from /gsd-ui-phase)
-      XX-UI-REVIEW.md     # Visual audit scores (from /gsd-ui-review)
-  ui-reviews/             # Screenshots from /gsd-ui-review (gitignored)
-```
 
 ---
 
