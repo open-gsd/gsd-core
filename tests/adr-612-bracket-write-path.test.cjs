@@ -13,6 +13,23 @@ const { tokenizeHeadings } = require('../gsd-core/bin/lib/markdown-sectionizer.c
 
 const projects = new Set();
 
+function snapshotTree(root) {
+  const snapshot = [];
+  (function visit(dir, rel) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const relPath = path.join(rel, entry.name);
+      const absPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        snapshot.push({ type: 'directory', path: relPath });
+        visit(absPath, relPath);
+      } else {
+        snapshot.push({ type: 'file', path: relPath, bytes: fs.readFileSync(absPath).toString('base64') });
+      }
+    }
+  })(root, '');
+  return snapshot;
+}
+
 afterEach(() => {
   for (const dir of projects) cleanup(dir);
   projects.clear();
@@ -872,22 +889,6 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   // discovers (primary and Phase Details), and every validation — locating
   // the header and computing the ROADMAP edit — must happen before any
   // directory is created.
-  function snapshotTree(root) {
-    const snapshot = [];
-    (function visit(dir, rel) {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        const relPath = path.join(rel, entry.name);
-        const absPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          snapshot.push({ type: 'directory', path: relPath });
-          visit(absPath, relPath);
-        } else {
-          snapshot.push({ type: 'file', path: relPath, bytes: fs.readFileSync(absPath).toString('base64') });
-        }
-      }
-    })(root, '');
-    return snapshot;
-  }
 
   function removalFixture(tokens, directoryTokens = tokens) {
     const dir = project('adr-612-removal-contract-');
@@ -1023,9 +1024,13 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
         assert.equal(result.phase_number, 5);
         assert.equal(result.padded, '05');
         assert.equal(result.directory, '.planning/phases/CK.02-05-custom-auth');
+        assert.equal(fs.statSync(path.join(dir, result.directory)).isDirectory(), true);
         const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
         assert.match(roadmap, /### \[CK\.02\] 05: Custom Auth/);
         assert.doesNotMatch(roadmap, /Depends on/);
+        cleanup(planning(dir, 'phases', 'CK.02-99-later'));
+        writeConfig(dir, 'bracket');
+        assert.equal(run(['phase', 'add', 'Following'], dir).phase_number, 6);
       });
     }
     for (const supplied of ['05', 'AUTH', 'CK.2-05', 'CK.02-5', 'CK.02-05-01', 'CK.02-05-tail', 'XX.02-05', 'CK.03-05', '[CK.02]  05', ' CK.02-05']) {
@@ -1052,16 +1057,16 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
 
-    test('phase add --id refuses under the bracket convention', () => {
+    test('phase add rejects AUTH without custom naming and accepts legacy custom AUTH', () => {
       const dir = project('adr-612-bracket-add-custom-id-');
       writeBracketFixture(dir);
       const before = snapshotTree(planning(dir));
 
-      const result = runGsdTools(['phase', 'add', '--id', 'AUTH', 'Custom Auth'], dir);
+      const result = runGsdTools(['--json-errors', 'phase', 'add', '--id', 'AUTH', 'Custom Auth'], dir);
 
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /custom/);
-      assert.match(result.error, /canonical bracket id|phase_naming/);
+      assert.equal(JSON.parse(result.error).reason, 'phase_naming_not_custom');
+      assert.equal(JSON.parse(result.error).message, 'phase_naming is not custom for this project; configure phase_naming as "custom" before using a custom ID');
       assert.deepEqual(snapshotTree(planning(dir)), before);
 
       // Outside the bracket convention --id and phase_naming custom keep
@@ -1083,11 +1088,11 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       writeCustomNamingConfig(dir);
       const before = snapshotTree(planning(dir));
 
-      const result = runGsdTools(['phase', 'add', 'Custom Auth'], dir);
+      const result = runGsdTools(['--json-errors', 'phase', 'add', 'Custom Auth'], dir);
 
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /phase_naming/);
-      assert.match(result.error, /canonical bracket id|phase_naming/);
+      assert.equal(JSON.parse(result.error).reason, 'usage');
+      assert.equal(JSON.parse(result.error).message, 'phase_naming custom requires a canonical bracket id for the active project and milestone; pass it to phase add --id.');
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
 
@@ -1097,11 +1102,11 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       writeCustomNamingConfig(dir);
       const before = snapshotTree(planning(dir));
 
-      const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["Custom Auth","Custom Billing"]'], dir);
+      const result = runGsdTools(['--json-errors', 'phase', 'add-batch', '--descriptions', '["Custom Auth","Custom Billing"]'], dir);
 
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /phase_naming/);
-      assert.match(result.error, /canonical bracket id|phase_naming/);
+      assert.equal(JSON.parse(result.error).reason, 'usage');
+      assert.equal(JSON.parse(result.error).message, 'phase_naming custom requires individual phase add --id commands with canonical bracket ids; phase add-batch cannot supply ids.');
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
   });
@@ -2249,4 +2254,53 @@ describe('#4304 M-1 bracket dependencies use declared milestone phases', () => {
       });
     }
   }
+});
+
+
+describe('#6657 supplied bracket identity regressions', () => {
+  test('M2 sentinel and safe-integer boundaries refuse with usage and zero writes', () => {
+    for (const [token, accepted] of [['00', false], ['01', true], ['998', true], ['999', false], ['1000', true], ['9007199254740993', false], ['05.00', false], ['05.01', true], ['05.998', true], ['05.999', false], ['05.1000', true], ['05.9007199254740993', false]]) {
+      const dir = project();
+      writeEmptyBracketFixture(dir);
+      fs.writeFileSync(planning(dir, 'config.json'), JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket', phase_naming: 'custom' }));
+      const before = snapshotTree(planning(dir));
+      const result = runGsdTools(['--json-errors', 'phase', 'add', '--id', `CK.02-${token}`, 'Boundary'], dir, isolatedEnv({ home: dir }));
+      assert.equal(result.success, accepted, token);
+      if (!accepted) {
+        const failure = JSON.parse(result.error);
+        assert.equal(failure.reason, 'usage', token);
+        assert.equal(failure.message, 'Pass a canonical bracket id for the active project and milestone to phase add --id.');
+        assert.deepEqual(snapshotTree(planning(dir)), before, token);
+      } else {
+        const added = JSON.parse(result.output);
+        assert.equal(fs.statSync(path.join(dir, added.directory)).isDirectory(), true);
+      }
+    }
+  });
+
+  test('m3 full identity collision scan covers subphase, heading-only and sibling reservations', () => {
+    for (const scenario of ['heading-only', 'subphase-directory', 'subphase-alias-directory', 'sibling-heading', 'sibling-directory']) {
+      const dir = gitProject('6657-collision-');
+      writeEmptyBracketFixture(dir);
+      fs.writeFileSync(planning(dir, 'config.json'), JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket', phase_naming: 'custom' }));
+      let reservation = dir;
+      if (scenario.startsWith('sibling')) {
+        reservation = path.join(dir, 'sibling');
+        gitOrThrow(['worktree', 'add', '--detach', reservation, 'HEAD'], { cwd: dir });
+        writeEmptyBracketFixture(reservation);
+      }
+      if (scenario.endsWith('directory')) fs.mkdirSync(planning(reservation, 'phases', scenario === 'subphase-alias-directory' ? 'ck.02-5.1-existing' : 'CK.02-05.01-existing'), { recursive: true });
+      else fs.appendFileSync(planning(reservation, 'ROADMAP.md'), '\n### [ck.02] Phase 5.1: Existing\n');
+      const before = snapshotTree(planning(dir));
+      const result = runGsdTools(['--json-errors', 'phase', 'add', '--id', 'CK.02-05.01', 'Different Slug'], dir, isolatedEnv({ home: dir }));
+      assert.equal(result.success, false, scenario);
+      const failure = JSON.parse(result.error);
+      assert.equal(failure.reason, 'phase_id_collision', scenario);
+      assert.equal(failure.message, 'Phase CK.02-05.01 already exists', scenario);
+      assert.deepEqual(snapshotTree(planning(dir)), before, scenario);
+      // Foreign qualifiers and fenced examples cannot reserve another active identity.
+      fs.appendFileSync(planning(dir, 'ROADMAP.md'), '\n### [XX.02] 05.02: Other project\n\n### [CK.03] 05.02: Other milestone\n\n```md\n### [CK.02] 05.02: Example\n```\n');
+      assert.equal(runGsdTools(['phase', 'add', '--id', 'CK.02-05.02', 'Sibling Child'], dir, isolatedEnv({ home: dir })).success, true, scenario);
+    }
+  });
 });

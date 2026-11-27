@@ -250,15 +250,20 @@ node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--incl
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
 
-### Bracket phase ids (`phase remove`, `phase next-decimal`)
+### Custom bracket phase IDs
+
+New-project project_code derives from the PROJECT.md title when it exists, otherwise from the directory name.
+Derived codes contain at most six characters, including a digit-leading `P` prefix.
 
 With custom naming, `phase add "Auth" --id CK.02-05` or
 `--id "[CK.02] 05"` accepts a canonical active-milestone identity, preserving
 its number even when higher IDs exist. Invalid, foreign, unpadded, plan or
-slug-suffixed IDs fail with reason `usage` and zero writes. Output matches a
+slug-suffixed IDs fail with reason `usage`; duplicates fail with `phase_id_collision`, both with zero writes.
+Sentinel phase/subphase numbers (00, 999) and integers outside the safe range are invalid. Output matches a
 generated bracket add; inferred dependencies are omitted. Custom bracket add
 without an ID and custom add-batch refuse; use `phase add --id`.
 
+### Bracket phase ids (`phase remove`, `phase next-decimal`)
 
 When `phase_id_convention` is `"bracket"` (see [CONFIGURATION.md](CONFIGURATION.md)),
 these commands work on the active milestone's `[CODE.MM] NN` identities:

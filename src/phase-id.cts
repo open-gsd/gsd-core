@@ -1769,9 +1769,15 @@ function recordedPhaseKey(id: string): string {
 const CUSTOM_PHASE_ID_FILE = '.phase-id';
 type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; unmarkedDirectories?: string[]; directoryIdsByRoot?: Record<string, Record<string, string>>; configError?: {path: string; message: string} };
 
+/** The deprecated naming alias has the same meaning at every config boundary. */
+function normalizePhaseNaming(value: unknown): unknown {
+  return typeof value === 'string' && value.toLowerCase() === 'sequential' ? 'generated' : value;
+}
+
 /** Naming policy is supplied by the config owner; grammar remains pure. */
 function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', knownIds: string[] = []): PhaseDirectoryContext {
-  return { phaseNaming: typeof config.phase_naming === 'string' ? config.phase_naming.toLowerCase() : config.phase_naming, projectCode: config.project_code as string | null ?? null, roadmap, knownIds };
+  const naming = normalizePhaseNaming(config.phase_naming);
+  return { phaseNaming: typeof naming === 'string' ? naming.toLowerCase() : naming, projectCode: config.project_code as string | null ?? null, roadmap, knownIds };
 }
 
 /** #5676: the single owner of the numeric phase-token source per convention. */
@@ -2475,6 +2481,7 @@ const phaseIdExports = {
   phaseTokenMatches,
   matchPhaseDirs,
   phaseLookupQuery,
+  normalizePhaseNaming,
   phaseDirectoryContext,
   phaseScanTokenSource,
   phaseDirectoryName,

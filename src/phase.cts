@@ -75,6 +75,7 @@ const {
   BRACKET_DIR_PREFIX_SRC,
   tokenizePhaseDependencyReferences,
   foldBracketId,
+  bracketQualifiedKey,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdDisplayMod = require('./phase-id-display.cjs');
@@ -116,6 +117,7 @@ const {
   milestoneVersionAtOffset,
   blankCodeAndComments,
   scanMilestonePhaseIds,
+  collectTablePhaseRows,
   // #4304: every recognized milestone heading in the document,
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
   listMilestoneHeadings,
@@ -1836,6 +1838,7 @@ function collectBracketPhaseNumbers(
   roadmapContent: string,
   phasesDir: string,
   context: BracketWriteContext,
+  identities?: Set<string>,
 ): Set<number> {
   const used = new Set<number>();
   addBracketRoadmapPhaseNumbers(roadmapContent, used, context);
@@ -1845,6 +1848,13 @@ function collectBracketPhaseNumbers(
   }
   used.delete(0);
   used.delete(999);
+  if (identities) {
+    for (const token of scanExistingBracketPhaseTokens(phasesDir, roadmapContent, context)) {
+      const [phase, subphase] = token.split('.');
+      const key = bracketQualifiedKey(bracketDirPrefix(bracketPhaseId(context, phase, subphase)).slice(0, -1), 'bracket');
+      if (key) identities.add(key);
+    }
+  }
   return used;
 }
 
@@ -1883,6 +1893,7 @@ function collectSiblingWorktreePhaseNums(
   cwd: string,
   used: Set<number>,
   bracketContext?: BracketWriteContext,
+  identities?: Set<string>,
 ): void {
   let porcelain: string;
   try {
@@ -1911,7 +1922,9 @@ function collectSiblingWorktreePhaseNums(
     const wt = line.slice('worktree '.length).trim();
     if (!wt || path.resolve(wt) === path.resolve(cwd)) continue;
     try {
-      collectPhaseDirNums(path.join(siblingPlanningDir(wt), 'phases'), used, bracketContext);
+      const phases = path.join(siblingPlanningDir(wt), 'phases');
+      if (bracketContext && identities) collectBracketPhaseNumbers('', phases, bracketContext, identities);
+      collectPhaseDirNums(phases, used, bracketContext);
     } catch {
       /* worktree has no .planning (or no copy of this scope) — normal, contributes nothing */
     }
@@ -1928,7 +1941,9 @@ function collectSiblingWorktreePhaseNums(
           && siblingProject.trim() === bracketContext.project
           && milestoneToken(siblingVersion) === bracketContext.milestone
         ) {
-          addBracketRoadmapPhaseNumbers(extractCurrentMilestone(content, wt), used, bracketContext);
+          const activeContent = extractCurrentMilestone(content, wt);
+          addBracketRoadmapPhaseNumbers(activeContent, used, bracketContext);
+          if (identities) collectBracketPhaseNumbers(activeContent, path.join(siblingPlanningDir(wt), 'phases'), bracketContext, identities);
         }
         continue;
       }
@@ -2029,6 +2044,8 @@ function suppliedBracketIdentity(context: BracketWriteContext, supplied: string)
   try {
     const id = parsePhaseId(supplied);
     const token = bracketDirPrefix(id).slice(0, -1);
+    if ([id.phase, id.subphase].some(value => value !== undefined
+      && (!Number.isSafeInteger(Number(value)) || isSentinelPhaseId(Number(value))))) throw new Error('invalid phase number');
     if (id.plan || (supplied !== renderPhaseId(id) && supplied !== token)
       || id.project !== context.project || id.milestone !== context.milestone) throw new Error('identity mismatch');
     return id;
@@ -2037,9 +2054,11 @@ function suppliedBracketIdentity(context: BracketWriteContext, supplied: string)
   }
 }
 
-function requireBracketCustomId(naming: unknown, customId?: string): void {
+function requireBracketCustomId(naming: unknown, customId?: string, batch = false): void {
   if (naming === 'custom' && !customId) {
-    error('phase_naming custom requires a canonical bracket id; pass a canonical bracket id to phase add --id.', ERROR_REASON.USAGE);
+    error(batch
+      ? 'phase_naming custom requires individual phase add --id commands with canonical bracket ids; phase add-batch cannot supply ids.'
+      : 'phase_naming custom requires a canonical bracket id for the active project and milestone; pass it to phase add --id.', ERROR_REASON.USAGE);
   }
 }
 
@@ -2169,12 +2188,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (bracketContext) {
       const supplied = suppliedId;
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
-      const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
-      collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
+      const identities = supplied ? new Set<string>() : undefined;
+      const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext, identities);
+      collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext, identities);
       _newPhaseId = supplied ? (supplied.subphase ? `${supplied.phase}.${supplied.subphase}` : Number(supplied.phase)) : nextPhaseNum(maxPhaseNum(usedPhaseNums));
-      if (supplied && (usedPhaseNums.has(Number(_newPhaseId))
-        || bracketIdsInContext(phasesOnDisk, bracketContext).some(entry => renderPhaseId(entry.id) === renderPhaseId(supplied))
-        || tokenizeHeadings(content).some(heading => heading.text.split(':')[0].trim() === renderPhaseId(supplied)))) {
+      if (supplied && identities?.has(bracketQualifiedKey(bracketDirPrefix(supplied).slice(0, -1), 'bracket')!)) {
         error(`Phase ${customId} already exists`, ERROR_REASON.PHASE_ID_COLLISION);
       }
       _dirName = bracketDirNameOrRefuse(supplied ?? bracketPhaseId(bracketContext, _newPhaseId), slug, description);
@@ -2279,7 +2297,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
   }
-  if (convention === 'bracket') requireBracketCustomId(naming.phaseNaming);
+  if (convention === 'bracket') requireBracketCustomId(naming.phaseNaming, undefined, true);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const results = withPlanningLock(cwd, () => {
@@ -2479,6 +2497,50 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
   return decimalSet;
 }
 
+/** Reader-resolvable full tokens shared by decimal allocation and custom-ID collision checks. */
+function scanExistingBracketPhaseTokens(
+  phasesDir: string,
+  roadmapContent: string,
+  context: BracketWriteContext,
+  meta?: { bracketSpellingFound: boolean },
+  base?: string,
+): Set<string> {
+  const tokens = new Set<string>();
+  const addToken = (bracketId: string | undefined, token: string): void => {
+    const parts = token.split('.');
+    if (parts.length > 2 || parts.some(part => !/^\d+$/.test(part) || !Number.isSafeInteger(Number(part)))) return;
+    if (base !== undefined && Number(parts[0]) !== Number(base)) return;
+    if (bracketId) {
+      if (foldBracketId(bracketId) !== foldBracketId(`${context.project}.${context.milestone}`)) return;
+      if (meta) meta.bracketSpellingFound = true;
+    }
+    tokens.add(token);
+  };
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    const token = phaseKeyFromDir(dir, 'bracket');
+    if (!matchPhaseDirs([dir], token, 'bracket', context).matches.includes(dir)) continue;
+    addToken(bracketQualifiedKey(dir, 'bracket') ? `${context.project}.${context.milestone}` : undefined, token);
+  }
+  const intro = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, 'bracket', true);
+  const entryPattern = new RegExp(
+    `^${intro}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}[ \\t]*:`,
+    'i',
+  );
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    const match = entryPattern.exec(heading.text);
+    if (match) addToken(match[1], match[2]);
+  }
+  const fencedLines = fencedRoadmapLineNumbers(roadmapContent);
+  for (const [index, line] of roadmapContent.split('\n').entries()) {
+    if (fencedLines.has(index + 1)) continue;
+    const checklist = parsePhaseChecklistLine(line.replace(/\r$/, ''), 'bracket');
+    if (checklist) addToken(checklist.bracketId, checklist.phaseToken);
+  }
+  for (const row of collectTablePhaseRows(roadmapContent)) addToken(undefined, row.id);
+  return tokens;
+}
+
 function scanExistingBracketDecimalPhaseNumbers(
   phasesDir: string,
   roadmapContent: string,
@@ -2486,58 +2548,11 @@ function scanExistingBracketDecimalPhaseNumbers(
   context: BracketWriteContext,
   meta?: { bracketSpellingFound: boolean },
 ): Set<number> {
-  // A bracket repository can be mid-migration, and add-backlog deliberately
-  // remains a legacy sentinel writer. Inventory is therefore the UNION of
-  // the legacy spellings and the canonical bracket spellings that readers
-  // accept. Do not route the 999 parent exclusively through
-  // scanMilestonePhaseIds: that reader intentionally excludes the icebox
-  // range for milestone counting, while allocation must include it.
+  // Keep the legacy 999 backlog inventory while sharing the scoped bracket reader scan.
   const decimalSet = scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, base);
-  for (const token of scanMilestonePhaseIds(roadmapContent, 'bracket')) {
-    const [phase, subphase, extra] = String(token).split('.');
-    if (!extra && Number(phase) === Number(base) && /^\d+$/.test(subphase ?? '')) {
-      decimalSet.add(Number(subphase));
-    }
-  }
-  for (const { id } of bracketIdsInContext(phasesDir, context)) {
-    if (Number(id.phase) !== Number(base)) continue;
-    if (meta) meta.bracketSpellingFound = true;
-    if (id.subphase) decimalSet.add(Number(id.subphase));
-  }
-
-  const intro = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, 'bracket', true);
-  const entryPattern = new RegExp(
-    `^${intro}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}[ \\t]*:`,
-    'i',
-  );
-  const addRoadmapToken = (bracketId: string | undefined, token: string): void => {
-    const [phase, subphase, extra] = token.split('.');
-    if (extra || Number(phase) !== Number(base) || !/^\d+$/.test(subphase ?? '')) return;
-    if (bracketId) {
-      if (foldBracketId(bracketId) !== foldBracketId(`${context.project}.${context.milestone}`)) return;
-      if (meta) meta.bracketSpellingFound = true;
-    }
-    decimalSet.add(Number(subphase));
-  };
-
-  // tokenizeHeadings is the fence-aware reader surface and, unlike the
-  // milestone membership scanner, retains sentinel headings for this
-  // allocation-specific inventory.
-  for (const heading of tokenizeHeadings(roadmapContent)) {
-    if (heading.level < 2 || heading.level > 4) continue;
-    const match = entryPattern.exec(heading.text);
-    if (match) addRoadmapToken(match[1], match[2]);
-  }
-
-  // The manager accepts bracket checklist rows without requiring a detail
-  // heading. Match that same phase-intro grammar here so ROADMAP-only children
-  // still reserve their number. Fenced examples are documentation, not live
-  // inventory.
-  const fencedLines = fencedRoadmapLineNumbers(roadmapContent);
-  for (const [index, line] of roadmapContent.split('\n').entries()) {
-    if (fencedLines.has(index + 1)) continue;
-    const checklist = parsePhaseChecklistLine(line.replace(/\r$/, ''), 'bracket');
-    if (checklist) addRoadmapToken(checklist.bracketId, checklist.phaseToken);
+  for (const token of scanExistingBracketPhaseTokens(phasesDir, roadmapContent, context, meta, base)) {
+    const [, subphase] = token.split('.');
+    if (subphase !== undefined) decimalSet.add(Number(subphase));
   }
   return decimalSet;
 }

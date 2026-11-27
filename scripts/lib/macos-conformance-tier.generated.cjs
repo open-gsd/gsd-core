@@ -10,6 +10,7 @@ module.exports = {
   "tests/6420-plan-document-linear.test.cjs",
   "tests/6503-api-coverage-probe-install-lookup.test.cjs",
   "tests/active-workstream-store.unit.test.cjs",
+  "tests/adr-612-bracket-new-project-config.test.cjs",
   "tests/adr-612-bracket-phase-remove.test.cjs",
   "tests/adr-612-bracket-write-path.test.cjs",
   "tests/adr-index-gate.test.cjs",

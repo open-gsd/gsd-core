@@ -9,7 +9,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { parsePhaseId } from './phase-id.cjs';
+import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5067 CJS bounded-read diagnostics
+import configFileRead = require('./config-file-read.cjs');
+const { printablePath } = configFileRead;
+import { parsePhaseId, normalizePhaseNaming } from './phase-id.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
@@ -163,7 +167,8 @@ function encodeConfigValue(kp: string, value: unknown, sourceText?: string): { j
 }
 
 function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: string): void {
-  const { json, text } = encodeConfigValue(kp, value, sourceText);
+  const projected = kp === 'phase_naming' ? normalizePhaseNaming(value) : value;
+  const { json, text } = encodeConfigValue(kp, projected, projected === value ? sourceText : undefined);
   output(json, raw, text);
 }
 
@@ -296,7 +301,30 @@ function deriveProjectCode(name: string): string {
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2').match(/[A-Za-z0-9]+/g) || [];
   let code = (words.length > 1 ? words.map(word => word[0]).join('') : words[0] || '').toUpperCase().slice(0, 6);
   if (/^[0-9]/.test(code)) code = `P${code}`;
-  return code || 'PROJ';
+  return code.slice(0, 6) || 'PROJ';
+}
+
+/** Read only a bounded regular-file prefix; a planted link or FIFO supplies no title. */
+function newProjectTitle(root: string): string | null {
+  const projectPath = path.join(planningDir(root, null), 'PROJECT.md');
+  let fd: number | undefined;
+  try {
+    const before = fs.lstatSync(projectPath);
+    if (!before.isFile()) return null;
+    fd = fs.openSync(projectPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) return null;
+    const prefix = Buffer.alloc(4096);
+    const length = fs.readSync(fd, prefix, 0, prefix.length, 0);
+    let text = prefix.subarray(0, length).toString('utf8');
+    // A heading cut by the byte bound is not a complete title.
+    if (opened.size > length) text = text.slice(0, text.lastIndexOf('\n') + 1);
+    return tokenizeHeadings(text).find(heading => heading.level === 1)?.text.trim() || null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 /**
@@ -487,22 +515,26 @@ function planNewProjectConfig(userChoices: Record<string, unknown>, newProjectRo
     },
   };
 
-  if (config['phase_naming'] === 'sequential') config['phase_naming'] = 'generated';
+  if (typeof config['phase_naming'] === 'string' && config['phase_naming'].toLowerCase() === 'sequential') {
+    process.stderr.write('Warning: phase_naming "sequential" is deprecated; use "generated".\n');
+    config['phase_naming'] = normalizePhaseNaming(config['phase_naming']);
+  }
   if (newProjectRoot && config['phase_id_convention'] === 'bracket') {
-    if (config['project_code'] == null) {
-      let name = path.basename(newProjectRoot);
-      try {
-        const project = fs.readFileSync(path.join(planningDir(newProjectRoot, null), 'PROJECT.md'), 'utf8');
-        const title = project.match(/^# +(.+?)[ \t]*$/m);
-        if (title) name = title[1].trim();
-      } catch { /* No project title: use the directory name. */ }
-      config['project_code'] = deriveProjectCode(name);
-    }
+    const derive = (): string => deriveProjectCode(newProjectTitle(newProjectRoot) ?? path.basename(newProjectRoot));
+    if (config['project_code'] == null) config['project_code'] = derive();
     try {
       const id = parsePhaseId(`${String(config['project_code'])}.01-01`);
       if (id.project !== config['project_code']) throw new Error('Invalid project code');
     } catch {
-      error('Invalid project_code for bracket: start with an uppercase ASCII letter, followed by uppercase ASCII letters, digits or underscores.', ERROR_REASON.USAGE);
+      const fromChoices = Object.prototype.hasOwnProperty.call(choices, 'project_code');
+      const optOut = 'Set phase_id_convention: "sequential" to keep a legacy code.';
+      if (!fromChoices) {
+        config['project_code'] = derive();
+        const source = printablePath(globalDefaultsPath);
+        process.stderr.write(`Warning: Invalid project_code from global defaults (${source}); derived ${String(config['project_code'])}. ${optOut}\n`);
+      } else {
+        error(`Invalid project_code from choices for bracket: start with an uppercase ASCII letter, followed by uppercase ASCII letters, digits or underscores. ${optOut}`, ERROR_REASON.USAGE);
+      }
     }
   }
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
@@ -1197,7 +1229,7 @@ function normalizeSecretReadExemptEntry(entry: unknown): string | null {
  * to persist, so it is refused through `error()` instead.
  */
 function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val: string): unknown {
-  if (kp === 'phase_naming' && parsedValue === 'sequential') {
+  if (kp === 'phase_naming' && typeof parsedValue === 'string' && parsedValue.toLowerCase() === 'sequential') {
     process.stderr.write('Warning: phase_naming "sequential" is deprecated; use "generated".\n');
     return 'generated';
   }

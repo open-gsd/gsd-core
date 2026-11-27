@@ -651,8 +651,8 @@ Recommended options:
 
 Create `{config_path}` with all settings (CLI fills in remaining defaults automatically):
 
-Initialization defaults to bracket IDs and derives project_code; explicit codes
-win. Set phase_id_convention to sequential for legacy initialization; null is
+Initialization defaults to bracket IDs. project_code derives from the
+PROJECT.md title when it exists, otherwise from the directory name; explicit codes win. Set phase_id_convention to sequential for legacy initialization; null is
 not an opt-out. Let config-new-project own derivation.
 
 ```bash
