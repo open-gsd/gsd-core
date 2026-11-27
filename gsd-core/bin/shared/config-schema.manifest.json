@@ -43,6 +43,7 @@
     "workflow.plan_review_convergence",
     "workflow.agent_hint_routing",
     "workflow.cross_runtime_execution",
+    "workflow.security_audit_phase",
     "code_quality.fallow.enabled",
     "code_quality.fallow.scope",
     "code_quality.fallow.profile",

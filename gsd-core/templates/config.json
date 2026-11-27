@@ -10,6 +10,7 @@
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
+    "security_audit_phase": false,
     "discuss_mode": "discuss",
     "research_before_questions": false,
     "code_review_command": null,

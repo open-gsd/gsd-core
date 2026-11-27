@@ -66,6 +66,7 @@
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
+    "security_audit_phase": false,
     "context_guard_mode": "warn"
   },
   "planning": {

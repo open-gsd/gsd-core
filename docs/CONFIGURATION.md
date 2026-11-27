@@ -65,6 +65,7 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
+    "security_audit_phase": false,
     "post_planning_gaps": true,
     "build_command": null,
     "test_command": null
@@ -1482,6 +1483,7 @@ These keys live under `workflow.*` — that is where the workflows and installer
 | `workflow.security_enforcement` | boolean | `true` | Enable threat-model-anchored security verification via `/gsd-secure-phase`. When `false`, security checks are skipped entirely |
 | `workflow.security_asvs_level` | number (1-3) | `1` | OWASP ASVS verification level. Level 1 = opportunistic, Level 2 = standard, Level 3 = comprehensive |
 | `workflow.security_block_on` | string | `"high"` | Minimum threat severity that blocks phase advancement. The auditor counts only open threats at or above this severity toward the blocking gate; `none` disables severity blocking. Options: `"critical"`, `"high"`, `"medium"`, `"low"`, `"none"` |
+| `workflow.security_audit_phase` | boolean | `false` | **Default-off** (absent = disabled, unlike the keys above). Milestone-close security-audit reminder (#6222). When `true` and `/gsd-complete-milestone` finds no evidence that a security audit of the code the milestone ships ran during the milestone, it prints a non-blocking reminder to run one before closing. The reminder is tool-agnostic — it suggests using whatever audit skill/tooling is installed and directs reporting "no audit tooling available" instead of fabricating results. When `false`, the close is unchanged and nothing is printed. |
 
 ### Injection blocking (top-level `security.*`)
 

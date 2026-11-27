@@ -33,6 +33,7 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   // single source of truth, matching workflow.smart_zone_tokens /
   // planning.pr_strict / workflow.inline_plan_threshold below.
   'workflow.compact_content': CONFIG_DEFAULTS.compact_content,
+'workflow.security_audit_phase': CONFIG_DEFAULTS.security_audit_phase,
   // Derived from the defaults manifest rather than restated, so the manifest
   // stays the single source of truth for the smart-zone budget (#2630).
   'workflow.smart_zone_tokens': CONFIG_DEFAULTS.smart_zone_tokens,

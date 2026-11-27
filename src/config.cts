@@ -1238,6 +1238,15 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
     }
   }
 
+  // Security-audit milestone-close reminder (#6222) — boolean only. The
+  // complete-milestone reminder is gated on a real `true`, so any other stored
+  // value would be silently ignored (accept-then-discard).
+  if (kp === 'workflow.security_audit_phase') {
+    if (typeof parsedValue !== 'boolean') {
+      error(`Invalid workflow.security_audit_phase '${val}'. Must be a boolean (true or false).`);
+    }
+  }
+
   // Planner watchdog opt-out (#4570) — only a real boolean may change the
   // default-on policy. In particular, string "false" must not disable it.
   if (kp === 'planner.stall_detection_enabled') {

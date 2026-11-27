@@ -322,6 +322,7 @@ const CONFIG_DEFAULTS = {
   security_enforcement: _getNestedConfigDefault('workflow', 'security_enforcement'),
   security_asvs_level: _getNestedConfigDefault('workflow', 'security_asvs_level'),
   security_block_on: _getNestedConfigDefault('workflow', 'security_block_on'),
+  security_audit_phase: _getNestedConfigDefault('workflow', 'security_audit_phase'),
   post_planning_gaps: _getNestedConfigDefault('workflow', 'post_planning_gaps'),
   research_before_questions: _getNestedConfigDefault('workflow', 'research_before_questions'), // #3894
   smart_zone_tokens: _getNestedConfigDefault('workflow', 'smart_zone_tokens'),
