@@ -12,6 +12,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md) — bring GSD Core to a brownfield repo
 - [Build your first capability](tutorials/build-your-first-capability.md) — author a tiny declarative capability and watch it act in the loop
 - [Install your first capability](tutorials/install-your-first-capability.md) — install a third-party capability end-to-end: consent, verify, check for updates, remove
+- [Embed GSD in a new host](tutorials/embed-gsd-in-a-new-host.md) — embed the orchestration loop into a brand-new host, step by step
 
 ---
 
@@ -115,6 +116,17 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Clean up get-shit-done-cc](cleanup-get-shit-done-cc.md) — remove leftover old-package artifacts that cause a spurious `⬆ /gsd-update` indicator after migrating to `@opengsd/gsd-core`
 - [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md) — resolve the branch-divergence condition that halts parallel phase execution
 - [Recover and troubleshoot](how-to/recover-and-troubleshoot.md) — fix common problems, rebuild context, and uninstall
+- [Run a long-running job asynchronously](how-to/async-external-jobs.md) — run a legitimately long execute task through the SLURM adapter
+- [Author a host plugin](how-to/author-a-host-plugin.md) — for external tool authors who want to embed GSD's orchestration
+- [Add a `command-exit-zero` gate to a capability](how-to/command-exit-zero-gate.md) — a recipe for capability authors
+- [Connect a host to the GSD companion MCP server](how-to/connect-gsd-mcp-server.md) — make an MCP-capable host talk to GSD
+- [Enable cross-session memory with MemPalace](how-to/enable-cross-session-memory-with-mempalace.md) — durable memory across sessions and projects: recall before planning, capture at each phase boundary
+- [Import a capability from a URL](how-to/import-a-capability-from-a-url.md) — install a published capability from a git repository, an npm package, a tarball or a local path
+- [Publish a capability](how-to/publish-a-capability.md) — prepare the manifest, validate locally and release it so others can `gsd capability install` it
+- [Remove or disable a capability](how-to/remove-a-capability.md) — delete a capability and its shared configuration, or toggle it off without touching files
+- [Version and upgrade a capability](how-to/version-a-capability.md) — keep a manifest correctly versioned as an author, or apply updates safely as a consumer
+- [Update manually (non-npm install)](manual-update.md) — update when `npx @opengsd/gsd-core@latest` is unavailable
+- [Add custom PR body sections](ship-pr-body-sections.md) — make `/gsd-ship` carry user stories, acceptance criteria, risks or approval notes
 
 ---
 
@@ -144,6 +156,15 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Workflow fragments](reference/workflow-fragments.md) — in-file `<!-- gsd:section -->` marker grammar for fragmentizing workflow markdown at emission time
 - [Partition rules for compact-content splits](PARTITION-RULES.md) — the protected-content list, sentinel syntax, and the five CI checks a `workflow.compact_content` spine/detail split must obey
 - [Reviewer Lane Registry](registries/reviewer-registry.md) — generated catalogue of third-party reviewer lanes, with their flags, transport, and install commands
+- [Host Integration capability matrix](reference/host-integration-capability-matrix.md) — maintainer-facing source of truth for the `hostIntegration` block of every runtime
+- [Host-Integration Interface](reference/host-integration-interface.md) — the normative reference for the interface (ADR-1239)
+- [Long-running operations](reference/long-running-operations.md) — the operation-classification policy and the async external-job contract
+- [OpenCode 2.x verification matrix](reference/opencode-v2-verification-matrix.md) — every GSD feature that reaches OpenCode, exercised on a real OpenCode 2.x
+- [Per-runtime skill mapping matrix](reference/skill-mapping-matrix.md) — where each runtime places skills, commands and agents
+- [Testing suites](TESTING-SUITES.md) — the filename-suffix markers that group `tests/` into named suites, and where a new test goes
+- [Installer migration architecture](installer-migrations.md) — the migration layer for GSD installs and upgrades
+- [Beta features](BETA.md) — opt-in features that may change or be removed without notice
+- [Canary stream](CANARY.md) — the earliest preview channel, built from the `dev` integration branch
 
 ---
 
@@ -162,11 +183,19 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
 - [Context monitoring](context-monitor.md) — context window monitoring hook architecture
 - [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
+- [Claude orchestration capability (BETA)](explanation/claude-orchestration-capability.md) — why the capability exists and how it fits the loop
+- [Interface versioning and deprecation policy](explanation/interface-versioning-policy.md) — how the Host-Integration Interface (ADR-1239) evolves
+- [The live-DOM UAT capability](explanation/live-dom-uat-capability.md) — why GSD can drive a browser during execution, and why from a purpose-built agent
+- [Branching model](branching.md) — a plain-English guide to where work happens, where it merges, and why
 
 ---
 
 ## Related
 
 - [What's new in 1.7.0](whats-new-1.7.0.md) — curated highlights of the 1.7.0 release
+- [User guide](USER-GUIDE.md) — a narrative companion that orients you, then links into the dedicated docs
+- [Branch protection rollout](branch-protection.md) — the four ruleset specs under `.github/rulesets/`
+- [Contributor standards](contributor-standards.md) — standards for `CONTEXT.md`, `docs/adr/` and AI-agent-assisted contributions
+- [Legacy release notes](RELEASE-NOTES-LEGACY.md) — frozen history of the earlier package names, `1.0.0` to `1.42.x`
 - [Root README](../README.md) — landing page, quickstart, and documentation overview
 - [Changelog](../CHANGELOG.md) — release history
