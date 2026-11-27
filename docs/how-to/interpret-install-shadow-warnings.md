@@ -23,7 +23,7 @@ A realistic install-time warning:
   - gsd-plan-phase: local/commands shadowed by global/skills
 ```
 
-For a runtime whose global scope also installs **skills** (12 of the 19 supported runtimes install `skills` at both scopes), the wording is deliberately different, because nothing disappears — the loser is merely overridden, not orphaned:
+For a runtime whose global scope also installs **skills** (13 of the 19 runtimes in the capability registry install `skills` at both scopes), the wording is deliberately different, because nothing disappears — the loser is merely overridden, not orphaned:
 
 ```
 1 trigger shadowed: the local skills entry is overridden by global skills.
