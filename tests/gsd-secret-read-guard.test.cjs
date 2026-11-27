@@ -7332,6 +7332,34 @@ describe('gsd-secret-read-guard: xargs -i and -l, whose value is attached only (
   }
 });
 
+describe('gsd-secret-read-guard: an xargs replace string inside an option cluster (#5779)', () => {
+  const DENIED = [
+    ["printf 'env\\n' | xargs -0I{} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | xargs -tI{} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | xargs -rI{} sh -c 'cat .{}'", '.env'],
+    ["xargs -tI{} sh -c 'cat .{}' <<< env", '.env'],
+  ];
+  for (const [cmd, expectedPath] of DENIED) {
+    test(`denies ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+    });
+  }
+  test('in process: every row above blocks through the exported scanners', () => {
+    for (const [cmd, expectedPath] of DENIED) assert.deepEqual(bashVerdict(cmd), { code: 'secret-read', text: expectedPath }, cmd);
+  });
+
+  const ALLOWED = [
+    "printf 'txt\\n' | xargs -0I{} sh -c 'cat notes.{}'",
+    "printf 'txt\\n' | xargs -tI{} sh -c 'cat notes.{}'",
+    "printf 'txt\\n' | xargs -rI{} sh -c 'cat notes.{}'",
+  ];
+  for (const cmd of ALLOWED) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
 describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", () => {
   // bash, dash and zsh take the first word past their options as the script:
   // `--` or a lone `-` ends them, `-o`/`-O` take a value, and the next word

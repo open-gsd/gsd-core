@@ -5135,8 +5135,9 @@ function xargsCommandIndex(operands, from, to) {
 // `--replace[=R]` (any unambiguous prefix; `{}` when no R), unless a later
 // `-L`, `-l`, `--max-lines`, or `-n` / `--max-args` with a count other than
 // 1, cancels it. null when xargs appends the input
-// after the command's words.
-function xargsReplaceString(operands, from, to) {
+// after the command's words. With `cancels` false, nothing cancels it
+// (xargsReplaceStrs).
+function xargsReplaceString(operands, from, to, cancels = true) {
   let rep = null;
   for (let m = from; m < to; m++) {
     const t = operands[m].text;
@@ -5147,10 +5148,10 @@ function xargsReplaceString(operands, from, to) {
       if (name.length >= 3 && '--replace'.startsWith(name)) {
         rep = eq === -1 ? '{}' : t.slice(eq + 1);
       } else if (name.length >= 7 && '--max-lines'.startsWith(name)) {
-        rep = null;
+        if (cancels) rep = null;
       } else if (name.length >= 7 && '--max-args'.startsWith(name)) {
         const v = eq !== -1 ? t.slice(eq + 1) : m + 1 < to ? operands[m + 1].text : '';
-        if (v !== '1') rep = null;
+        if (v !== '1' && cancels) rep = null;
         if (eq === -1) m++;
       } else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) {
         m++;
@@ -5170,10 +5171,10 @@ function xargsReplaceString(operands, from, to) {
       // GNU lets the last of -I/-i/--replace and -L/-l/--max-lines/-n win: a
       // later -L, or -n with any count but 1, puts xargs back to appending
       // its input.
-      if (t[c] === 'L' || t[c] === 'l') rep = null;
+      if ((t[c] === 'L' || t[c] === 'l') && cancels) rep = null;
       if (t[c] === 'n') {
         const v = c < t.length - 1 ? t.slice(c + 1) : m + 1 < to ? operands[m + 1].text : '';
-        if (v !== '1') rep = null;
+        if (v !== '1' && cancels) rep = null;
       }
       if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
       if (XARGS_SHORT_VALUE.includes(t[c])) {
@@ -5221,7 +5222,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     if (subIsShell) {
       // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
       // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-      const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), words, depth);
+      const hit = scanXargsShellScripts(subOperands, xargsReplaceStrs(operands, subIdx), words, depth);
       if (hit) return hit;
     }
     // Each word as written and as xargs hands it on, kept per word list (pipedWordsReadSecret).
@@ -5265,9 +5266,9 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
 // prints (printedWords: `printf 'env\n' | xargs -I{} sh -c 'cat .{}'`), also
 // when a `tee` or a bare `cat` passes them on (xargsPrinter).
 function pipedShellScriptsRead(operands, subIdx, subOperands, prev, printer, depth) {
-  const replaceStr = xargsReplaceStr(operands, subIdx);
-  return scanXargsShellScripts(subOperands, replaceStr, prev.operands, depth)
-    || (printer !== null && scanXargsShellScripts(subOperands, replaceStr, printedWords(printer, operands, xargsCommandIndex(operands, 0, operands.length)), depth))
+  const replaceStrs = xargsReplaceStrs(operands, subIdx);
+  return scanXargsShellScripts(subOperands, replaceStrs, prev.operands, depth)
+    || (printer !== null && scanXargsShellScripts(subOperands, replaceStrs, printedWords(printer, operands, xargsCommandIndex(operands, 0, operands.length)), depth))
     || null;
 }
 
@@ -5471,7 +5472,7 @@ function segmentFedText(s, bySeg) {
 function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter, curl, depth) {
   const words = xargsFedWords(operands, s, bySeg, sepAfter, curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
   if (words === null) return null;
-  const hit = shellOperands === null ? null : scanXargsShellScripts(shellOperands, xargsReplaceStr(operands, subIdx), words, depth);
+  const hit = shellOperands === null ? null : scanXargsShellScripts(shellOperands, xargsReplaceStrs(operands, subIdx), words, depth);
   return hit || xargsPipedReadsSecret(operands, { base: '', operands: words }, curl);
 }
 
@@ -5738,17 +5739,15 @@ function xargsUnquoted(text) {
   return text.replace(/["'\\]/g, '');
 }
 
-// xargs's replace string: `-I STR`, `-ISTR`, `-i[STR]`, `--replace[=STR]` (default `{}`), or null without one.
-function xargsReplaceStr(operands, subIdx) {
-  for (let i = 0; i < subIdx; i++) {
-    const t = operands[i].text;
-    if (t === '-I') return operands[i + 1] ? operands[i + 1].text : null;
-    if (t.startsWith('-I') && t.length > 2) return t.slice(2);
-    if (t === '-i' || t === '--replace') return '{}';
-    if (t.startsWith('-i') && t.length > 2 && !t.startsWith('--')) return t.slice(2);
-    if (t.startsWith('--replace=')) return t.slice('--replace='.length) || '{}';
-  }
-  return null;
+// The replace strings a shell script under xargs is read with, from the
+// options before the sub-command (xargsReplaceString, so a cluster holding one
+// counts: `-0I{}`, `-tI{}`, `-rI{}`): as GNU xargs reads them, where a later
+// `-L` or `-n` cancels one, and with nothing cancelling it (`-I{} -L1`).
+// null among them is xargs appending its input.
+function xargsReplaceStrs(operands, subIdx) {
+  const gnu = xargsReplaceString(operands, 0, subIdx);
+  const kept = xargsReplaceString(operands, 0, subIdx, false);
+  return gnu === kept ? [gnu] : [gnu, kept];
 }
 
 // The words xargsReadWords cuts from the fed text of segment `s`, kept per
@@ -5784,12 +5783,14 @@ function markJudgedWords(words, s, bySeg) {
 
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
-// (quotes and backslashes removed), is read as the script, or substituted into it.
-function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
+// (quotes and backslashes removed), is read as the script, or substituted into it, for each of `replaceStrs`.
+function scanXargsShellScripts(shellOperands, replaceStrs, upstream, depth) {
   const cIdxs = dashCIndices(shellOperands);
-  for (let i = 0; i < cIdxs.length; i++) {
-    const hit = xargsShellScriptsAt(shellOperands, cIdxs[i], replaceStr, upstream, depth);
-    if (hit) return hit;
+  for (let r = 0; r < replaceStrs.length; r++) {
+    for (let i = 0; i < cIdxs.length; i++) {
+      const hit = xargsShellScriptsAt(shellOperands, cIdxs[i], replaceStrs[r], upstream, depth);
+      if (hit) return hit;
+    }
   }
   return null;
 }
