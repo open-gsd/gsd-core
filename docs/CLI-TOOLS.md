@@ -238,8 +238,8 @@ node gsd-tools.cjs phase complete <phase>
 # Exit 0 when passed, 1 when not (#5170); a phase it cannot read is error() with empty stdout
 node gsd-tools.cjs phase uat-passed <phase> [--require-verification]
 
-# Index plans with waves and status
-node gsd-tools.cjs phase-plan-index <phase>
+# Index plans with waves and status (the output is always JSON; --json is accepted and changes nothing)
+node gsd-tools.cjs phase-plan-index <phase> [--json]
 
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
@@ -1696,12 +1696,18 @@ Assembles a reviewer prompt from the given sections within a token budget, write
 gsd-tools review-lane plan [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
 gsd-tools review-lane sections [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
 gsd-tools review-lane invoke --slug <lane> [--as <name>] [--agent <name>] [--model <id>] [--prompt-file <f>] [--explicit] [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] [--json]
+gsd-tools review-lane flags [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane availability [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane dispatch-step [--explicit <flags>] [--depth <n>] [--base-sha <sha>] [--cap-id <id> --point <point>] [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
 ```
 
 The lane roster is the first-party lanes plus installed third-party lanes. Without `--selected` every lane is used; `--run-dir` (default `.`) is where prompts and results are written; `--repo-root` defaults to the working directory.
 
 - **`plan`** prints a JSON array with one entry per lane: `{ slug, ok, section, transport, promptBudget, promptCapSource, contextWindowTokens, promptPath }`. A lane that cannot run has `ok: false` with a `reason`.
 - **`sections`** prints one `<slug><TAB><reviews section>` line per lane.
+- **`flags`** prints the reviewer flags the roster declares, one per line in roster order, for the first-party and installed lanes (a lane can declare more than one, for example `--antigravity` and `--agy`). Only flags of the form `--` followed by lowercase letters, digits and hyphens are printed, so the output is safe to word-split in a shell loop; with no flag there is no output and no trailing newline.
+- **`availability`** prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`), in roster order. The probe is a bounded GET of `/v1/models` on the host `review.<lane>_host` names, or the lane's built-in default host when that key is unset.
+- **`dispatch-step`** is what a capability step calls to run the reviewer lanes a caller asked for. `--explicit` is a comma-separated list of lane flags; `--depth` and `--base-sha` are passed through to the dispatch. `--cap-id` and `--point` together name the capability and loop point whose `supportsReviewerLanes` trait is resolved; giving only one of them prints a warning and leaves the trait off. The changed file paths are read from stdin, one per line (none when stdin is a terminal).
 - **`invoke`** runs the lane named by `--slug` and prints its result as JSON; an unknown or not-ok lane prints `{ slug, ok: false, reason, detail }`. `--as <name>` runs the lane as a [reviewer instance](CONFIGURATION.md#review-settings) of that name, writing `gsd-review-<name>.md` under `--run-dir`, with `--model` and `--agent` supplying the instance's model and agent. `--prompt-file` substitutes a different prompt. `--explicit` marks the lane as explicitly requested. A prompt over the lane's cap is refused, never trimmed.
 
 ### Loop hooks
@@ -1711,6 +1717,14 @@ gsd-tools loop render-hooks <point> [--config-dir <path>] [--runtime <runtime>] 
 ```
 
 Renders the active loop extension-point hooks for `<point>` (for example `plan:pre`) and prints `{ point, activeHooks, rendered }`, plus `warnings` and `skippedHooks` when there are any. `--config-dir` selects the runtime config directory; `--runtime` names the runtime explicitly instead of using the persisted one; `--active-cap <id>` makes the command print only `true` or `false`, whether that capability has an active hook at the point; `--after-fingerprint` drops `verify:post` steps whose declared artifact already exists in that phase directory, and errors when the directory cannot be read. Any other `loop` subcommand is an error.
+
+### Package legitimacy
+
+```bash
+gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <package> [<package> ...]
+```
+
+Looks each package up in the registry API of its ecosystem (npm, PyPI or crates.io) and prints the results as JSON, one entry per package, each with a `verdict`. `--ecosystem` is required and must be `npm`, `pypi` or `crates`; at least one package name is required; either missing is a usage error. A registry failure ends the command with `package-legitimacy: <message>`. The command needs network access. How `gsd-phase-researcher` uses the verdicts is described under [`/gsd-plan-phase`](COMMANDS.md#gsd-plan-phase).
 
 ### Assumption delta
 
@@ -1822,6 +1836,10 @@ node gsd-tools.cjs stats [json|table]
 
 # Progress rendering (human-readable)
 node gsd-tools.cjs progress [json|table|bar]
+
+# Progress as one bar: { bar, percent, completed, total }, and with --raw only the bar text,
+# e.g. [░░░░░░░░░░░░░░░░░░░░] 0/0 plans
+node gsd-tools.cjs progress bar
 
 # Progress as typed JSON surface (#455)
 node gsd-tools.cjs progress --json

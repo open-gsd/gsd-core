@@ -14,15 +14,15 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | [`gsd-tools` verbs](#gsd-tools-verbs) | 96 | 96 | 96 | 0 | 0 |
 | [Config keys](#config-keys) | 129 | 129 | 129 | 0 | 0 |
 | [Agents](#agents) | 36 | 36 | 36 | 0 | 0 |
-| [Hooks](#hooks) | 29 | 29 | 29 | 0 | 0 |
+| [Hooks](#hooks) | 30 | 30 | 30 | 0 | 0 |
 | [Templates](#templates) | 39 | 39 | 39 | 0 | 0 |
-| [Installer flags](#installer-flags) | 35 | 35 | 35 | 0 | 0 |
+| [Installer flags](#installer-flags) | 37 | 37 | 37 | 0 | 0 |
 
 ## Slash commands
 
 **Source:** `commands/gsd/*.md` (command name and `argument-hint` flags).
 
-**Rule:** A command is documented when a `COMMANDS.md` section headed by `/gsd-<command>` exists (or, for a command with no section of its own, any section that names it); each `--flag` of its `argument-hint` must appear in that section.
+**Rule:** A command is documented when a `COMMANDS.md` section headed by `/gsd-<command>` exists (a command with no section of its own, such as a namespace router, counts through a section whose own text names it); each `--flag` of its `argument-hint` must appear in that section or its subsections.
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
@@ -37,7 +37,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `/gsd-code-review` | [COMMANDS.md#gsd-code-review](../COMMANDS.md#gsd-code-review) | Reference | 5/5 | — |
 | `/gsd-complete-milestone` | [COMMANDS.md#gsd-complete-milestone](../COMMANDS.md#gsd-complete-milestone) | Reference | n/a | — |
 | `/gsd-config` | [COMMANDS.md#gsd-config](../COMMANDS.md#gsd-config) | Reference | 3/3 | — |
-| `/gsd-context` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
+| `/gsd-context` | [COMMANDS.md#namespace-meta-skills](../COMMANDS.md#namespace-meta-skills) | Reference | n/a | — |
 | `/gsd-debug` | [COMMANDS.md#gsd-debug](../COMMANDS.md#gsd-debug) | Reference | 1/1 | — |
 | `/gsd-discuss-phase` | [COMMANDS.md#gsd-discuss-phase](../COMMANDS.md#gsd-discuss-phase) | Reference | 8/8 | — |
 | `/gsd-docs-update` | [COMMANDS.md#gsd-docs-update](../COMMANDS.md#gsd-docs-update) | Reference | 2/2 | — |
@@ -50,11 +50,11 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `/gsd-graphify` | [COMMANDS.md#gsd-graphify](../COMMANDS.md#gsd-graphify) | Reference | n/a | — |
 | `/gsd-health` | [COMMANDS.md#gsd-health](../COMMANDS.md#gsd-health) | Reference | 2/2 | — |
 | `/gsd-help` | [COMMANDS.md#gsd-help](../COMMANDS.md#gsd-help) | Reference | 2/2 | — |
-| `/gsd-ideate` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
+| `/gsd-ideate` | [COMMANDS.md#namespace-meta-skills](../COMMANDS.md#namespace-meta-skills) | Reference | n/a | — |
 | `/gsd-import` | [COMMANDS.md#gsd-import](../COMMANDS.md#gsd-import) | Reference | 2/2 | — |
 | `/gsd-inbox` | [COMMANDS.md#gsd-inbox](../COMMANDS.md#gsd-inbox) | Reference | 5/5 | — |
 | `/gsd-ingest-docs` | [COMMANDS.md#gsd-ingest-docs](../COMMANDS.md#gsd-ingest-docs) | Reference | 3/3 | — |
-| `/gsd-manage` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
+| `/gsd-manage` | [COMMANDS.md#namespace-meta-skills](../COMMANDS.md#namespace-meta-skills) | Reference | n/a | — |
 | `/gsd-manager` | [COMMANDS.md#gsd-manager](../COMMANDS.md#gsd-manager) | Reference | 1/1 | — |
 | `/gsd-map-codebase` | [COMMANDS.md#gsd-map-codebase](../COMMANDS.md#gsd-map-codebase) | Reference | 3/3 | — |
 | `/gsd-mempalace-capture` | [COMMANDS.md#gsd-mempalace-capture](../COMMANDS.md#gsd-mempalace-capture) | Reference | n/a | — |
@@ -72,8 +72,8 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `/gsd-pr-branch` | [COMMANDS.md#gsd-pr-branch](../COMMANDS.md#gsd-pr-branch) | Reference | n/a | — |
 | `/gsd-profile-user` | [COMMANDS.md#gsd-profile-user](../COMMANDS.md#gsd-profile-user) | Reference | 2/2 | — |
 | `/gsd-progress` | [COMMANDS.md#gsd-progress](../COMMANDS.md#gsd-progress) | Reference | 5/5 | — |
-| `/gsd-project` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
-| `/gsd-quality` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
+| `/gsd-project` | [COMMANDS.md#namespace-meta-skills](../COMMANDS.md#namespace-meta-skills) | Reference | n/a | — |
+| `/gsd-quality` | [COMMANDS.md#namespace-meta-skills](../COMMANDS.md#namespace-meta-skills) | Reference | n/a | — |
 | `/gsd-quick` | [COMMANDS.md#gsd-quick](../COMMANDS.md#gsd-quick) | Reference | 4/4 | — |
 | `/gsd-quick-batch` | [COMMANDS.md#gsd-quick-batch](../COMMANDS.md#gsd-quick-batch) | Reference | 5/5 | — |
 | `/gsd-resume-work` | [COMMANDS.md#gsd-resume-work](../COMMANDS.md#gsd-resume-work) | Reference | n/a | — |
@@ -95,7 +95,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `/gsd-update` | [COMMANDS.md#gsd-update](../COMMANDS.md#gsd-update) | Reference | 5/5 | — |
 | `/gsd-validate-phase` | [COMMANDS.md#gsd-validate-phase](../COMMANDS.md#gsd-validate-phase) | Reference | n/a | — |
 | `/gsd-verify-work` | [COMMANDS.md#gsd-verify-work](../COMMANDS.md#gsd-verify-work) | Reference | 1/1 | — |
-| `/gsd-workflow` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
+| `/gsd-workflow` | [COMMANDS.md#namespace-meta-skills](../COMMANDS.md#namespace-meta-skills) | Reference | n/a | — |
 | `/gsd-workspace` | [COMMANDS.md#gsd-workspace](../COMMANDS.md#gsd-workspace) | Reference | 3/3 | — |
 | `/gsd-workstreams` | [COMMANDS.md#gsd-workstreams](../COMMANDS.md#gsd-workstreams) | Reference | n/a | — |
 
@@ -103,244 +103,244 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 
 **Source:** `docs/CLI-SURFACE-MANIFEST.json` (verb, aliases and declared flags).
 
-**Rule:** A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` names it (dotted verbs also as `a b`); each declared flag must appear in a section that names the verb.
+**Rule:** A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` is headed by its name (dotted verbs also as `a b`, or an alias) or has a usage line that invokes it (`gsd-tools [query] <verb>`, `node gsd-tools.cjs [query] <verb>`, `gsd_run query <verb>`) or a table row keyed by it; a mention in prose does not count. Each declared flag must appear in that section or its subsections.
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
-| `agent-skills` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `assumption-delta.scan` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `check-commit` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `classify-confidence` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
-| `commit` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
-| `commit-docs-guard.disable` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `commit-docs-guard.enable` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `commit-to-subrepo` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `config-ensure-section` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `config-new-project` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `config-path` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `config-set` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `config-set-model-profile` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `context-predicates` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `current-timestamp` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `detect-custom-files` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `dispatch-capacity` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 7/7 | — |
-| `dispatch-should-flatten` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `drift-guard.authority` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `drift-guard.phase-status` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `drift-guard.severity` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `effort.sync` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 4/4 | — |
-| `frontmatter.get` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `frontmatter.merge` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `frontmatter.set` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `frontmatter.validate` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `history-digest` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `inspect-dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 6/6 | — |
-| `learnings.copy` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `learnings.delete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `learnings.list` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `learnings.prune` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `learnings.query` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `list-seeds` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `list-todos` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `loop.render-hooks` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
-| `migrate-config` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `milestone.archive-quick` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `milestone.complete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 8/8 | — |
-| `normalize-test-command` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `package-legitimacy.check` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 1/1 | — |
-| `phase-plan-index` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `pr-subrepo` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `progress.bar` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `project-context` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
-| `project-instruction-file` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `prompt-budget` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 12/12 | — |
-| `quick-tasks-append` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 5/5 | — |
-| `quick-tasks-migrate` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `record-dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 7/7 | — |
-| `research-plan` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `research-store.get` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `research-store.put` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 5/5 | — |
-| `resolve-agent` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
-| `resolve-dispatch-type` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `resolve-execution` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 5/5 | — |
-| `resolve-granularity` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `resolve-model` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `resolve-package-manager` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `restore-custom-files` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `review-lane.availability` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 3/3 | — |
-| `review-lane.dispatch-step` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 8/8 | — |
-| `review-lane.explicit-from-argv` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `review-lane.flags` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 3/3 | — |
-| `review-lane.invoke` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 10/10 | — |
-| `review-lane.plan` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `review-lane.sections` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `runtime-identity` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
-| `scaffold` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `select-revert-commits` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `skills-root` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `stamp-codebase-map` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `state-snapshot` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `stats.json` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `summary-extract` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `teams-status` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `template.fill` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 6/6 | — |
-| `template.select` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `todo.complete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `todo.match-phase` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `uat.classify-coverage` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 2/2 | — |
-| `uat.complete-session` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `uat.render-checkpoint` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `update-context` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `user-story.validate` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `verify-path-exists` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `verify-summary` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `websearch` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `workstream.complete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `workstream.create` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
-| `workstream.get` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `workstream.list` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `workstream.progress` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `workstream.set` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `workstream.status` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
+| `agent-skills` | [CLI-TOOLS.md#agent-skills](../CLI-TOOLS.md#agent-skills) | Reference | 2/2 | — |
+| `assumption-delta.scan` | [CLI-TOOLS.md#assumption-delta](../CLI-TOOLS.md#assumption-delta) | Reference | 2/2 | — |
+| `check-commit` | [CLI-TOOLS.md#commit-guard](../CLI-TOOLS.md#commit-guard) | Reference | n/a | — |
+| `classify-confidence` | [CLI-TOOLS.md#classify-confidence](../CLI-TOOLS.md#classify-confidence) | Reference | 4/4 | — |
+| `commit` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | 4/4 | — |
+| `commit-docs-guard.disable` | [CLI-TOOLS.md#commit-guard](../CLI-TOOLS.md#commit-guard) | Reference | n/a | — |
+| `commit-docs-guard.enable` | [CLI-TOOLS.md#commit-guard](../CLI-TOOLS.md#commit-guard) | Reference | n/a | — |
+| `commit-to-subrepo` | [CLI-TOOLS.md#commit-to-subrepo-message---files-path](../CLI-TOOLS.md#commit-to-subrepo-message---files-path) | Reference | 1/1 | — |
+| `config-ensure-section` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
+| `config-new-project` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | 1/1 | — |
+| `config-path` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | n/a | — |
+| `config-set` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | 1/1 | — |
+| `config-set-model-profile` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
+| `context-predicates` | [CLI-TOOLS.md#query-context-predicates](../CLI-TOOLS.md#query-context-predicates) | Reference | 3/3 | — |
+| `current-timestamp` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | n/a | — |
+| `detect-custom-files` | [CLI-TOOLS.md#update-backup-and-restore](../CLI-TOOLS.md#update-backup-and-restore) | Reference | 1/1 | — |
+| `dispatch-capacity` | [CLI-TOOLS.md#dispatch](../CLI-TOOLS.md#dispatch) | Reference | 1/1 | — |
+| `dispatch-isolation` | [CLI-TOOLS.md#executor-routing-and-dispatch-identity](../CLI-TOOLS.md#executor-routing-and-dispatch-identity) | Reference | 7/7 | — |
+| `dispatch-should-flatten` | [CLI-TOOLS.md#dispatch](../CLI-TOOLS.md#dispatch) | Reference | 1/1 | — |
+| `drift-guard.authority` | [CLI-TOOLS.md#drift-guard-authority](../CLI-TOOLS.md#drift-guard-authority) | Reference | n/a | — |
+| `drift-guard.phase-status` | [CLI-TOOLS.md#drift-guard-phase-status---phase-n](../CLI-TOOLS.md#drift-guard-phase-status---phase-n) | Reference | 1/1 | — |
+| `drift-guard.severity` | [CLI-TOOLS.md#drift-guard-severity---status-status---authority-authority](../CLI-TOOLS.md#drift-guard-severity---status-status---authority-authority) | Reference | 2/2 | — |
+| `effort.sync` | [COMMANDS.md#effort-sync](../COMMANDS.md#effort-sync) | Reference | 4/4 | — |
+| `frontmatter.get` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 1/1 | — |
+| `frontmatter.merge` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 1/1 | — |
+| `frontmatter.set` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 2/2 | — |
+| `frontmatter.validate` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 1/1 | — |
+| `history-digest` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | n/a | — |
+| `inspect-dispatch-isolation` | [CLI-TOOLS.md#executor-routing-and-dispatch-identity](../CLI-TOOLS.md#executor-routing-and-dispatch-identity) | Reference | 6/6 | — |
+| `learnings.copy` | [CLI-TOOLS.md#learnings--the-global-knowledge-store](../CLI-TOOLS.md#learnings--the-global-knowledge-store) | Reference | n/a | — |
+| `learnings.delete` | [CLI-TOOLS.md#learnings--the-global-knowledge-store](../CLI-TOOLS.md#learnings--the-global-knowledge-store) | Reference | n/a | — |
+| `learnings.list` | [CLI-TOOLS.md#learnings--the-global-knowledge-store](../CLI-TOOLS.md#learnings--the-global-knowledge-store) | Reference | n/a | — |
+| `learnings.prune` | [CLI-TOOLS.md#learnings--the-global-knowledge-store](../CLI-TOOLS.md#learnings--the-global-knowledge-store) | Reference | 1/1 | — |
+| `learnings.query` | [CLI-TOOLS.md#learnings--the-global-knowledge-store](../CLI-TOOLS.md#learnings--the-global-knowledge-store) | Reference | 1/1 | — |
+| `list-seeds` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | n/a | — |
+| `list-todos` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | n/a | — |
+| `loop.render-hooks` | [CLI-TOOLS.md#loop-hooks](../CLI-TOOLS.md#loop-hooks) | Reference | 4/4 | — |
+| `migrate-config` | [CLI-TOOLS.md#config-commands](../CLI-TOOLS.md#config-commands) | Reference | n/a | — |
+| `milestone.archive-quick` | [CLI-TOOLS.md#milestone-commands](../CLI-TOOLS.md#milestone-commands) | Reference | 1/1 | — |
+| `milestone.complete` | [CLI-TOOLS.md#milestone-complete-refuses-an-untrustworthy-window](../CLI-TOOLS.md#milestone-complete-refuses-an-untrustworthy-window) | Reference | 8/8 | — |
+| `normalize-test-command` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | n/a | — |
+| `package-legitimacy.check` | [CLI-TOOLS.md#package-legitimacy](../CLI-TOOLS.md#package-legitimacy) | Reference | 1/1 | — |
+| `phase-plan-index` | [CLI-TOOLS.md#phase-commands](../CLI-TOOLS.md#phase-commands) | Reference | 1/1 | — |
+| `pr-subrepo` | [CLI-TOOLS.md#pr-subrepo-message---repo-path---branch-name](../CLI-TOOLS.md#pr-subrepo-message---repo-path---branch-name) | Reference | 2/2 | — |
+| `progress.bar` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | n/a | — |
+| `project-context` | [COMMANDS.md#gsd-tools-query-project-context](../COMMANDS.md#gsd-tools-query-project-context) | Reference | n/a | — |
+| `project-instruction-file` | [CLI-TOOLS.md#project-instruction-file---runtime-id](../CLI-TOOLS.md#project-instruction-file---runtime-id) | Reference | 1/1 | — |
+| `prompt-budget` | [CLI-TOOLS.md#prompt-budget](../CLI-TOOLS.md#prompt-budget) | Reference | 12/12 | — |
+| `quick-tasks-append` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | 5/5 | — |
+| `quick-tasks-migrate` | [CLI-TOOLS.md#quick-tasks-migrate](../CLI-TOOLS.md#quick-tasks-migrate) | Reference | n/a | — |
+| `record-dispatch-isolation` | [CLI-TOOLS.md#executor-routing-and-dispatch-identity](../CLI-TOOLS.md#executor-routing-and-dispatch-identity) | Reference | 7/7 | — |
+| `research-plan` | [CLI-TOOLS.md#research-plan-research-store-get-research-store-put--the-research-cache](../CLI-TOOLS.md#research-plan-research-store-get-research-store-put--the-research-cache) | Reference | 1/1 | — |
+| `research-store.get` | [CLI-TOOLS.md#research-plan-research-store-get-research-store-put--the-research-cache](../CLI-TOOLS.md#research-plan-research-store-get-research-store-put--the-research-cache) | Reference | 1/1 | — |
+| `research-store.put` | [CLI-TOOLS.md#research-plan-research-store-get-research-store-put--the-research-cache](../CLI-TOOLS.md#research-plan-research-store-get-research-store-put--the-research-cache) | Reference | 5/5 | — |
+| `resolve-agent` | [CLI-TOOLS.md#executor-routing-and-dispatch-identity](../CLI-TOOLS.md#executor-routing-and-dispatch-identity) | Reference | 4/4 | — |
+| `resolve-dispatch-type` | [CLI-TOOLS.md#dispatch](../CLI-TOOLS.md#dispatch) | Reference | 2/2 | — |
+| `resolve-execution` | [CLI-TOOLS.md#execution-settings](../CLI-TOOLS.md#execution-settings) | Reference | 5/5 | — |
+| `resolve-granularity` | [CLI-TOOLS.md#resolve-granularity-phase-type---granularity-coarsestandardfine](../CLI-TOOLS.md#resolve-granularity-phase-type---granularity-coarsestandardfine) | Reference | 1/1 | — |
+| `resolve-model` | [CLI-TOOLS.md#model-resolution](../CLI-TOOLS.md#model-resolution) | Reference | 1/1 | — |
+| `resolve-package-manager` | [CLI-TOOLS.md#resolve-package-manager-script](../CLI-TOOLS.md#resolve-package-manager-script) | Reference | n/a | — |
+| `restore-custom-files` | [CLI-TOOLS.md#update-backup-and-restore](../CLI-TOOLS.md#update-backup-and-restore) | Reference | 2/2 | — |
+| `review-lane.availability` | [CLI-TOOLS.md#review-lanes](../CLI-TOOLS.md#review-lanes) | Reference | 3/3 | — |
+| `review-lane.dispatch-step` | [CLI-TOOLS.md#review-lanes](../CLI-TOOLS.md#review-lanes) | Reference | 8/8 | — |
+| `review-lane.explicit-from-argv` | [CLI-TOOLS.md#review-lane-explicit-from-argv---selected-ab---run-dir-dir---repo-root-dir----argument](../CLI-TOOLS.md#review-lane-explicit-from-argv---selected-ab---run-dir-dir---repo-root-dir----argument) | Reference | 3/3 | — |
+| `review-lane.flags` | [CLI-TOOLS.md#review-lanes](../CLI-TOOLS.md#review-lanes) | Reference | 3/3 | — |
+| `review-lane.invoke` | [CLI-TOOLS.md#review-lanes](../CLI-TOOLS.md#review-lanes) | Reference | 10/10 | — |
+| `review-lane.plan` | [CLI-TOOLS.md#review-lanes](../CLI-TOOLS.md#review-lanes) | Reference | 3/3 | — |
+| `review-lane.sections` | [CLI-TOOLS.md#review-lanes](../CLI-TOOLS.md#review-lanes) | Reference | 3/3 | — |
+| `runtime-identity` | [COMMANDS.md#runtime-identity](../COMMANDS.md#runtime-identity) | Reference | n/a | — |
+| `scaffold` | [CLI-TOOLS.md#scaffold-commands](../CLI-TOOLS.md#scaffold-commands) | Reference | 2/2 | — |
+| `select-revert-commits` | [CLI-TOOLS.md#select-revert-commits---range-git-range---phase-id----plan-id](../CLI-TOOLS.md#select-revert-commits---range-git-range---phase-id----plan-id) | Reference | 3/3 | — |
+| `skills-root` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | n/a | — |
+| `stamp-codebase-map` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | 1/1 | — |
+| `state-snapshot` | [CLI-TOOLS.md#state-snapshot](../CLI-TOOLS.md#state-snapshot) | Reference | n/a | — |
+| `stats.json` | [CLI-TOOLS.md#stats-json](../CLI-TOOLS.md#stats-json) | Reference | n/a | — |
+| `summary-extract` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | 1/1 | — |
+| `teams-status` | [CLI-TOOLS.md#query-teams-status](../CLI-TOOLS.md#query-teams-status) | Reference | 1/1 | — |
+| `template.fill` | [CLI-TOOLS.md#template-commands](../CLI-TOOLS.md#template-commands) | Reference | 6/6 | — |
+| `template.select` | [CLI-TOOLS.md#template-commands](../CLI-TOOLS.md#template-commands) | Reference | n/a | — |
+| `todo.complete` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | 1/1 | — |
+| `todo.match-phase` | [CLI-TOOLS.md#todo-match-phase-phase](../CLI-TOOLS.md#todo-match-phase-phase) | Reference | n/a | — |
+| `uat.classify-coverage` | [COMMANDS.md#summary-coverage-block](../COMMANDS.md#summary-coverage-block) | Reference | 2/2 | — |
+| `uat.complete-session` | [CLI-TOOLS.md#uat-complete-session-uat-file---message-text](../CLI-TOOLS.md#uat-complete-session-uat-file---message-text) | Reference | 1/1 | — |
+| `uat.render-checkpoint` | [CLI-TOOLS.md#uat-render-checkpoint---file-path](../CLI-TOOLS.md#uat-render-checkpoint---file-path) | Reference | 1/1 | — |
+| `update-context` | [CLI-TOOLS.md#environment-and-codebase-map-helpers](../CLI-TOOLS.md#environment-and-codebase-map-helpers) | Reference | 3/3 | — |
+| `user-story.validate` | [CLI-TOOLS.md#user-storyvalidate---story-text](../CLI-TOOLS.md#user-storyvalidate---story-text) | Reference | 1/1 | — |
+| `verify-path-exists` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | n/a | — |
+| `verify-summary` | [CLI-TOOLS.md#verification-commands](../CLI-TOOLS.md#verification-commands) | Reference | 1/1 | — |
+| `websearch` | [CLI-TOOLS.md#utility-commands](../CLI-TOOLS.md#utility-commands) | Reference | 2/2 | — |
+| `workstream.complete` | [CLI-TOOLS.md#workstream-complete-name](../CLI-TOOLS.md#workstream-complete-name) | Reference | n/a | — |
+| `workstream.create` | [CLI-TOOLS.md#workstreams](../CLI-TOOLS.md#workstreams) | Reference | 2/2 | — |
+| `workstream.get` | [CLI-TOOLS.md#workstreams](../CLI-TOOLS.md#workstreams) | Reference | n/a | — |
+| `workstream.list` | [CLI-TOOLS.md#workstreams](../CLI-TOOLS.md#workstreams) | Reference | n/a | — |
+| `workstream.progress` | [CLI-TOOLS.md#workstreams](../CLI-TOOLS.md#workstreams) | Reference | n/a | — |
+| `workstream.set` | [CLI-TOOLS.md#workstreams](../CLI-TOOLS.md#workstreams) | Reference | n/a | — |
+| `workstream.status` | [CLI-TOOLS.md#workstream-status-name](../CLI-TOOLS.md#workstream-status-name) | Reference | n/a | — |
 
 ## Config keys
 
 **Source:** `VALID_CONFIG_KEYS` in `src/config-schema.cts`.
 
-**Rule:** A key is documented when `CONFIGURATION.md` has a table row that starts with the key and carries a type and a default; a key mentioned only in prose is listed as `prose`.
+**Rule:** A key is documented when `CONFIGURATION.md` has a table row whose first cell is the key. The row's own table must have a non-empty Type (or Options), Default and Description cell, read by column header; a table without such a column leaves that option missing. A key mentioned only in prose is listed as `prose`.
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
-| `agent_skills_security.trusted_global_roots` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `agent_tools` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `audit.enabled` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `brave_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `capabilities.auto_update` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `capabilities.strict_known_registries` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `claude_md_assembly.mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `claude_md_path` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `code_quality.fallow.enabled` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `code_quality.fallow.mcp` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `code_quality.fallow.profile` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `code_quality.fallow.scope` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `commit_docs` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `context` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `context_window` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `effort.default` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `exa_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `executor.stall_detect_interval_minutes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `executor.stall_threshold_minutes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `fast_mode.enabled` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `features.global_learnings` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `features.thinking_partner` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `firecrawl` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `gates.confirm_milestone_scope` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `gates.confirm_transition` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `gates.execute_next_plan` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.allow_default_branch_commits` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.base_branch` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.branching_strategy` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.create_tag` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.milestone_branch_template` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.phase_branch_template` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.protected_branches` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.quick_branch_template` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `git.repo_tagging` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `granularity` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `graphify.auto_update` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `graphify.build_timeout` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `graphify.graph_path` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.commit_types` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.community` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.context_critical_threshold` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.context_warning_threshold` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.context_warnings` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.secret_read_exempt` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `hooks.workflow_guard` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `jina` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `learnings.max_inject` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `manager.flags.discuss` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `manager.flags.execute` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `manager.flags.plan` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `model_policy.budget` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `model_policy.high` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `model_policy.low` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `model_policy.medium` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `model_policy.provider` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `model_profile` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `parallelization` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `perplexity` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `phase_id_convention` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `phase_naming` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `plan_review.source_grounding` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `plan_review.source_grounding_authority` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planner.stall_detect_interval_minutes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planner.stall_detection_enabled` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planner.stall_threshold_minutes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planning.chunked_parallel` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planning.commit_docs` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planning.pr_strict` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planning.search_gitignored` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `planning.sub_repos` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `project_code` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `ref_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `resolve_model_ids` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `response_language` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `review.default_reviewers` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `review.max_prompt_tokens` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `review.max_prompt_tokens_per_reviewer` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `review.parallel_lanes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `runtime` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `search_gitignored` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `security.injection_blocking` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `serply_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `ship.pr_body_sections` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `statusline.context_position` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `statusline.show_context_tokens` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `statusline.show_git` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `statusline.show_last_command` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `statusline.show_state_freshness` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `statusline.state_format` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `tavily_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.agent_hint_routing` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.auto_advance` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.auto_prune_state` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.build_command` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.code_review_command` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.code_review_depth_overrides` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.compact_content` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.context_coverage_gate` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.context_guard_mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.cross_ai_command` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.cross_ai_execution` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.cross_ai_timeout` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.cross_runtime_execution` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.discuss_mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.human_verify_mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.inline_plan_threshold` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.max_discuss_passes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.mvp_mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.node_repair` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.node_repair_budget` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.plan_bounce` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.plan_bounce_passes` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.plan_bounce_script` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.plan_check` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.plan_chunked` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.plan_review_convergence` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.research_before_questions` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.skip_discuss` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.smart_zone_tokens` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.specless_probe_fallback` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.subagent_timeout` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.test_command` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.test_gate_timeout` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.text_mode` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.use_worktrees` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.verifier` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `workflow.worktree_skip_hooks` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
+| `agent_skills_security.trusted_global_roots` | [CONFIGURATION.md#agent-skills-injection](../CONFIGURATION.md#agent-skills-injection) (table) | Reference | 3/3 | — |
+| `agent_tools` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `audit.enabled` | [CONFIGURATION.md#settings](../CONFIGURATION.md#settings) (table) | Reference | 3/3 | — |
+| `brave_search` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `capabilities.auto_update` | [CONFIGURATION.md#capability-trust-capabilities](../CONFIGURATION.md#capability-trust-capabilities) (table) | Reference | 3/3 | — |
+| `capabilities.strict_known_registries` | [CONFIGURATION.md#capability-trust-capabilities](../CONFIGURATION.md#capability-trust-capabilities) (table) | Reference | 3/3 | — |
+| `claude_md_assembly.mode` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `claude_md_path` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `code_quality.fallow.enabled` | [CONFIGURATION.md#code-quality-settings](../CONFIGURATION.md#code-quality-settings) (table) | Reference | 3/3 | — |
+| `code_quality.fallow.mcp` | [CONFIGURATION.md#code-quality-settings](../CONFIGURATION.md#code-quality-settings) (table) | Reference | 3/3 | — |
+| `code_quality.fallow.profile` | [CONFIGURATION.md#code-quality-settings](../CONFIGURATION.md#code-quality-settings) (table) | Reference | 3/3 | — |
+| `code_quality.fallow.scope` | [CONFIGURATION.md#code-quality-settings](../CONFIGURATION.md#code-quality-settings) (table) | Reference | 3/3 | — |
+| `commit_docs` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `context` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `context_window` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `effort.default` | [CONFIGURATION.md#settings](../CONFIGURATION.md#settings) (table) | Reference | 3/3 | — |
+| `exa_search` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `executor.stall_detect_interval_minutes` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `executor.stall_threshold_minutes` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `fast_mode.enabled` | [CONFIGURATION.md#settings](../CONFIGURATION.md#settings) (table) | Reference | 3/3 | — |
+| `features.global_learnings` | [CONFIGURATION.md#feature-flags](../CONFIGURATION.md#feature-flags) (table) | Reference | 3/3 | — |
+| `features.thinking_partner` | [CONFIGURATION.md#feature-flags](../CONFIGURATION.md#feature-flags) (table) | Reference | 3/3 | — |
+| `firecrawl` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `gates.confirm_milestone_scope` | [CONFIGURATION.md#gate-settings](../CONFIGURATION.md#gate-settings) (table) | Reference | 3/3 | — |
+| `gates.confirm_transition` | [CONFIGURATION.md#gate-settings](../CONFIGURATION.md#gate-settings) (table) | Reference | 3/3 | — |
+| `gates.execute_next_plan` | [CONFIGURATION.md#gate-settings](../CONFIGURATION.md#gate-settings) (table) | Reference | 3/3 | — |
+| `git.allow_default_branch_commits` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.base_branch` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.branching_strategy` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.create_tag` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.milestone_branch_template` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.phase_branch_template` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.protected_branches` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.quick_branch_template` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `git.repo_tagging` | [CONFIGURATION.md#git-branching](../CONFIGURATION.md#git-branching) (table) | Reference | 3/3 | — |
+| `granularity` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `graphify.auto_update` | [CONFIGURATION.md#graphify-settings](../CONFIGURATION.md#graphify-settings) (table) | Reference | 3/3 | — |
+| `graphify.build_timeout` | [CONFIGURATION.md#graphify-settings](../CONFIGURATION.md#graphify-settings) (table) | Reference | 3/3 | — |
+| `graphify.graph_path` | [CONFIGURATION.md#graphify-settings](../CONFIGURATION.md#graphify-settings) (table) | Reference | 3/3 | — |
+| `hooks.commit_types` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `hooks.community` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `hooks.context_critical_threshold` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `hooks.context_warning_threshold` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `hooks.context_warnings` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `hooks.secret_read_exempt` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `hooks.workflow_guard` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `jina` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `learnings.max_inject` | [CONFIGURATION.md#feature-flags](../CONFIGURATION.md#feature-flags) (table) | Reference | 3/3 | — |
+| `manager.flags.discuss` | [CONFIGURATION.md#manager-passthrough-flags](../CONFIGURATION.md#manager-passthrough-flags) (table) | Reference | 3/3 | — |
+| `manager.flags.execute` | [CONFIGURATION.md#manager-passthrough-flags](../CONFIGURATION.md#manager-passthrough-flags) (table) | Reference | 3/3 | — |
+| `manager.flags.plan` | [CONFIGURATION.md#manager-passthrough-flags](../CONFIGURATION.md#manager-passthrough-flags) (table) | Reference | 3/3 | — |
+| `mode` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `model_policy.budget` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `model_policy.high` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `model_policy.low` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `model_policy.medium` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `model_policy.provider` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `model_profile` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `parallelization` | [CONFIGURATION.md#parallelization-settings](../CONFIGURATION.md#parallelization-settings) (table) | Reference | 3/3 | — |
+| `perplexity` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `phase_id_convention` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `phase_naming` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `plan_review.source_grounding` | [CONFIGURATION.md#plan-review-settings](../CONFIGURATION.md#plan-review-settings) (table) | Reference | 3/3 | — |
+| `plan_review.source_grounding_authority` | [CONFIGURATION.md#plan-review-settings](../CONFIGURATION.md#plan-review-settings) (table) | Reference | 3/3 | — |
+| `planner.stall_detect_interval_minutes` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `planner.stall_detection_enabled` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `planner.stall_threshold_minutes` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `planning.chunked_parallel` | [CONFIGURATION.md#planning-settings](../CONFIGURATION.md#planning-settings) (table) | Reference | 3/3 | — |
+| `planning.commit_docs` | [CONFIGURATION.md#planning-settings](../CONFIGURATION.md#planning-settings) (table) | Reference | 3/3 | — |
+| `planning.pr_strict` | [CONFIGURATION.md#planning-settings](../CONFIGURATION.md#planning-settings) (table) | Reference | 3/3 | — |
+| `planning.search_gitignored` | [CONFIGURATION.md#planning-settings](../CONFIGURATION.md#planning-settings) (table) | Reference | 3/3 | — |
+| `planning.sub_repos` | [CONFIGURATION.md#planning-settings](../CONFIGURATION.md#planning-settings) (table) | Reference | 3/3 | — |
+| `project_code` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `ref_search` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `resolve_model_ids` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `response_language` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `review.default_reviewers` | [CONFIGURATION.md#reviewer-defaults-for-gsd-review](../CONFIGURATION.md#reviewer-defaults-for-gsd-review) (table) | Reference | 3/3 | — |
+| `review.max_prompt_tokens` | [CONFIGURATION.md#review-settings](../CONFIGURATION.md#review-settings) (table) | Reference | 3/3 | — |
+| `review.max_prompt_tokens_per_reviewer` | [CONFIGURATION.md#review-settings](../CONFIGURATION.md#review-settings) (table) | Reference | 3/3 | — |
+| `review.parallel_lanes` | [CONFIGURATION.md#parallel-reviewer-lanes-for-gsd-review-3034](../CONFIGURATION.md#parallel-reviewer-lanes-for-gsd-review-3034) (table) | Reference | 3/3 | — |
+| `runtime` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `search_gitignored` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `security.injection_blocking` | [CONFIGURATION.md#injection-blocking-top-level-security](../CONFIGURATION.md#injection-blocking-top-level-security) (table) | Reference | 3/3 | — |
+| `serply_search` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `ship.pr_body_sections` | [CONFIGURATION.md#ship-settings](../CONFIGURATION.md#ship-settings) (table) | Reference | 3/3 | — |
+| `statusline.context_position` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `statusline.show_context_tokens` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `statusline.show_git` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `statusline.show_last_command` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `statusline.show_state_freshness` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `statusline.state_format` | [CONFIGURATION.md#hook-settings](../CONFIGURATION.md#hook-settings) (table) | Reference | 3/3 | — |
+| `tavily_search` | [CONFIGURATION.md#core-settings](../CONFIGURATION.md#core-settings) (table) | Reference | 3/3 | — |
+| `workflow.agent_hint_routing` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.auto_advance` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.auto_prune_state` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.build_command` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.code_review_command` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.code_review_depth_overrides` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.compact_content` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.context_coverage_gate` | [CONFIGURATION.md#decision-coverage-gates-workflowcontext_coverage_gate](../CONFIGURATION.md#decision-coverage-gates-workflowcontext_coverage_gate) (table) | Reference | 3/3 | — |
+| `workflow.context_guard_mode` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.cross_ai_command` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.cross_ai_execution` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.cross_ai_timeout` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.cross_runtime_execution` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.discuss_mode` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.human_verify_mode` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.inline_plan_threshold` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.max_discuss_passes` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.mvp_mode` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.node_repair` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.node_repair_budget` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.plan_bounce` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.plan_bounce_passes` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.plan_bounce_script` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.plan_check` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.plan_chunked` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.plan_review_convergence` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.research_before_questions` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.skip_discuss` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.smart_zone_tokens` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.specless_probe_fallback` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.subagent_timeout` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.test_command` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.test_gate_timeout` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.text_mode` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.use_worktrees` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.verifier` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
+| `workflow.worktree_skip_hooks` | [CONFIGURATION.md#workflow-toggles](../CONFIGURATION.md#workflow-toggles) (table) | Reference | 3/3 | — |
 
 ## Agents
 
@@ -389,9 +389,9 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 
 ## Hooks
 
-**Source:** `hooks/*.js` and `hooks/*.sh`.
+**Source:** `hooks/*.js`, `hooks/*.cjs` and `hooks/*.sh`.
 
-**Rule:** A hook is documented when the hooks table of `INVENTORY.md` has a row for it with an event.
+**Rule:** A hook is documented when the table under the `Hooks` heading of `INVENTORY.md` has a row whose first cell is the file name and whose Event cell is not empty.
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
@@ -424,95 +424,98 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `gsd-workflow-guard.js` | [INVENTORY.md#hooks](../INVENTORY.md#hooks) | Reference | 1/1 | — |
 | `gsd-worktree-path-guard.js` | [INVENTORY.md#hooks](../INVENTORY.md#hooks) | Reference | 1/1 | — |
 | `gsd-write-guard.js` | [INVENTORY.md#hooks](../INVENTORY.md#hooks) | Reference | 1/1 | — |
+| `managed-hooks-registry.cjs` | [INVENTORY.md#hooks](../INVENTORY.md#hooks) | Reference | 1/1 | — |
 
 ## Templates
 
 **Source:** `gsd-core/templates/**` (the registry `README.md` excluded).
 
-**Rule:** A template is documented when `reference/templates.md` names its path relative to `gsd-core/templates/`.
+**Rule:** A template is documented when `reference/templates.md` names its path, either relative to `gsd-core/templates/` or in full.
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
-| `AI-SPEC.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `codebase/architecture.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `codebase/stack.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `config.json` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `context.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `continue-here.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `copilot-instructions.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `DEBUG.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `dev-preferences.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `discussion-log.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `milestone-archive.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `milestone.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `phase-prompt.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `planner-subagent-prompt.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `project.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `requirements.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `research-project/ARCHITECTURE.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `research-project/FEATURES.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `research-project/PITFALLS.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `research-project/STACK.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `research-project/SUMMARY.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `research.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `retrospective.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `roadmap.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `SECURITY.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `spec.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `state.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `summary-complex.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `summary-minimal.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `summary-standard.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `summary.compact.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `summary.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `UAT.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `UI-SPEC.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `user-profile.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `user-setup.compact.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `user-setup.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `VALIDATION.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
-| `verification-report.md` | [reference/templates.md#templates](templates.md#templates) | Reference | n/a | — |
+| `AI-SPEC.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `DEBUG.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `SECURITY.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `UAT.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `UI-SPEC.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `VALIDATION.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `codebase/architecture.md` | [reference/templates.md#codebase-map-templates](templates.md#codebase-map-templates) | Reference | n/a | — |
+| `codebase/stack.md` | [reference/templates.md#codebase-map-templates](templates.md#codebase-map-templates) | Reference | n/a | — |
+| `config.json` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `context.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `continue-here.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `copilot-instructions.md` | [reference/templates.md#profile-and-runtime-templates](templates.md#profile-and-runtime-templates) | Reference | n/a | — |
+| `dev-preferences.md` | [reference/templates.md#profile-and-runtime-templates](templates.md#profile-and-runtime-templates) | Reference | n/a | — |
+| `discussion-log.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `milestone-archive.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `milestone.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `phase-prompt.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `planner-subagent-prompt.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `project.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `requirements.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `research-project/ARCHITECTURE.md` | [reference/templates.md#research-templates](templates.md#research-templates) | Reference | n/a | — |
+| `research-project/FEATURES.md` | [reference/templates.md#research-templates](templates.md#research-templates) | Reference | n/a | — |
+| `research-project/PITFALLS.md` | [reference/templates.md#research-templates](templates.md#research-templates) | Reference | n/a | — |
+| `research-project/STACK.md` | [reference/templates.md#research-templates](templates.md#research-templates) | Reference | n/a | — |
+| `research-project/SUMMARY.md` | [reference/templates.md#research-templates](templates.md#research-templates) | Reference | n/a | — |
+| `research.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `retrospective.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `roadmap.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `spec.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `state.md` | [reference/templates.md#project-level-templates](templates.md#project-level-templates) | Reference | n/a | — |
+| `summary-complex.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `summary-minimal.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `summary-standard.md` | [reference/templates.md#template-selection-and-fill](templates.md#template-selection-and-fill) | Reference | n/a | — |
+| `summary.compact.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `summary.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `user-profile.md` | [reference/templates.md#profile-and-runtime-templates](templates.md#profile-and-runtime-templates) | Reference | n/a | — |
+| `user-setup.compact.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `user-setup.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
+| `verification-report.md` | [reference/templates.md#phase-level-templates](templates.md#phase-level-templates) | Reference | n/a | — |
 
 ## Installer flags
 
-**Source:** the option list printed by `node bin/install.js --help`.
+**Source:** the option list printed by `node bin/install.js --help`, plus every flag `bin/install.js` tests with `args.includes`.
 
 **Rule:** A flag is documented when `reference/installer-flags.md` names it.
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
-| `--all` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--antigravity` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--augment` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--both` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--claude` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--cline` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--codebuddy` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--codex` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--config-dir` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--copilot` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--cursor` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--devin-desktop` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--dry-run` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--force-statusline` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--global` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--help` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--hermes` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--kilo` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--kimi` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--kimi-code` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--local` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--minimal` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--no-legacy-cleanup` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--opencode` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--pi` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--portable-hooks` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--profile` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--qwen` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--reclaim-kimi-legacy` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--relative-includes` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--skills-root` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--trae` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--uninstall` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--windsurf` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
-| `--zcode` | [reference/installer-flags.md#installer-flags](installer-flags.md#installer-flags) | Reference | n/a | — |
+| `--all` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--antigravity` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--augment` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--both` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--claude` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--cline` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--codebuddy` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--codex` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--config-dir` | [reference/installer-flags.md#location](installer-flags.md#location) | Reference | n/a | — |
+| `--copilot` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--core-only` | [reference/installer-flags.md#skill-profile](installer-flags.md#skill-profile) | Reference | n/a | — |
+| `--cursor` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--devin-desktop` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--dry-run` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--force-statusline` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--gemini` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--global` | [reference/installer-flags.md#location](installer-flags.md#location) | Reference | n/a | — |
+| `--help` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--hermes` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--kilo` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--kimi` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--kimi-code` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--local` | [reference/installer-flags.md#location](installer-flags.md#location) | Reference | n/a | — |
+| `--minimal` | [reference/installer-flags.md#skill-profile](installer-flags.md#skill-profile) | Reference | n/a | — |
+| `--no-legacy-cleanup` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--opencode` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--pi` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--portable-hooks` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--profile` | [reference/installer-flags.md#skill-profile](installer-flags.md#skill-profile) | Reference | n/a | — |
+| `--qwen` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--reclaim-kimi-legacy` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--relative-includes` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--skills-root` | [reference/installer-flags.md#behavior-flags](installer-flags.md#behavior-flags) | Reference | n/a | — |
+| `--trae` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--uninstall` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--windsurf` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |
+| `--zcode` | [reference/installer-flags.md#runtime-selection](installer-flags.md#runtime-selection) | Reference | n/a | — |

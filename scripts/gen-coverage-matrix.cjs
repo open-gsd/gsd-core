@@ -38,14 +38,21 @@ const DOC_TYPES = Object.freeze({
 const FLAG_RE = /--[a-z][a-z0-9-]*/g;
 const FENCE_RE = /^\s{0,3}(```|~~~)/;
 const HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+const SEPARATOR_ROW_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
+/** Deterministic, locale-free ordering (UTF-16 code units): the page must not depend on the machine's ICU data. */
+function byName(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
- * Split Markdown into sections. A heading starts a section that ends at the next
- * heading of the same or a higher level; a `#` line inside a fenced code block is
- * not a heading. Returns `{ level, title, line, text }` where `text` is the section
- * body without the heading line.
+ * Split Markdown into sections. A `#` line inside a fenced code block is not a heading. Each section is
+ * `{ level, title, line, end, own, text }`: `line` is the heading's 1-based line, `end` the 0-based index of the
+ * first line after the section (the next heading of the same or a higher level), `own` the lines up to the next
+ * heading of ANY level (the section's own prose, tables and code, without its subsections), and `text` every line
+ * up to `end` (own text plus subsections).
  */
 function parseSections(markdown) {
   const lines = String(markdown).replace(/\r\n/g, '\n').split('\n');
@@ -67,7 +74,15 @@ function parseSections(markdown) {
     for (let k = n + 1; k < heads.length; k++) {
       if (heads[k].level <= h.level) { end = heads[k].index; break; }
     }
-    return { level: h.level, title: h.title, line: h.index + 1, text: lines.slice(h.index + 1, end).join('\n') };
+    const ownEnd = n + 1 < heads.length ? heads[n + 1].index : lines.length;
+    return {
+      level: h.level,
+      title: h.title,
+      line: h.index + 1,
+      end,
+      own: lines.slice(h.index + 1, ownEnd).join('\n'),
+      text: lines.slice(h.index + 1, end).join('\n'),
+    };
   });
 }
 
@@ -92,25 +107,44 @@ function escapeRe(s) {
   return escapeRegexImpl(s);
 }
 
-/** True when `flag` occurs in `text` as a whole token (so `--ws` does not match `--wsx`). */
+/** True when `flag` occurs in `text` as a whole token: nothing identifier-like on either side (`--ws` is not in `--wsx`, `--ws_x` or `a---ws`). */
 function hasFlag(text, flag) {
-  return new RegExp(escapeRe(flag) + '(?![A-Za-z0-9-])').test(text);
+  return new RegExp('(?<![A-Za-z0-9-])' + escapeRe(flag) + '(?![A-Za-z0-9_-])').test(text);
 }
 
-/** True when `name` occurs in `text` delimited by characters that cannot continue an identifier. */
+/** True when `name` occurs in `text` as a whole token: not inside a longer identifier or path, and not as the stem of a file name (`/gsd-x.md`). */
 function mentions(text, name) {
-  return new RegExp('(?<![A-Za-z0-9._/-])' + escapeRe(name) + '(?![A-Za-z0-9_-])').test(text);
+  return new RegExp('(?<![A-Za-z0-9._/-])' + escapeRe(name) + '(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])').test(text);
 }
 
 /**
- * Sections of the given docs that mention any of `names`. `docs` is
- * `[{ file, sections }]`; the result keeps `file` and the section.
+ * True when `text` has a line that invokes the verb (`gsd-tools [query] <name>`, `node gsd-tools.cjs [query] <name>`,
+ * `gsd_run query <name>`) or a table row keyed by it (first cell a code span that starts with the verb name).
  */
-function sectionsMentioning(docs, names) {
+function invokes(text, name) {
+  const lead = '^\\s*(?:\\$\\s+)?(?:node\\s+\\S*gsd-tools(?:\\.cjs)?|gsd-tools(?:\\.cjs)?|gsd_run)\\s+(?:query\\s+)?';
+  const usage = new RegExp(lead + escapeRe(name) + '(?![A-Za-z0-9_-])', 'm');
+  const row = new RegExp('^\\s*\\|\\s*`(?:gsd-tools\\s+)?' + escapeRe(name) + '(?=[\\s`])', 'm');
+  return usage.test(text) || row.test(text);
+}
+
+/**
+ * The sections that document one of `names`. A section counts when its heading names one (`how: 'heading'`), or
+ * when its heading or its own text does (`how: 'mention'`, the default), or when its own text invokes one
+ * (`how: 'invoke'`: a heading or a usage line). Only a section's OWN text is searched, so a name mentioned under
+ * a subsection belongs to that subsection and never to the page's top heading. `docs` is `[{ file, sections }]`.
+ */
+function sectionsDocumenting(docs, names, how = 'mention') {
   const out = [];
   for (const doc of docs) {
     for (const s of doc.sections) {
-      if (names.some((n) => mentions(s.title, n) || mentions(s.text, n))) out.push({ file: doc.file, section: s });
+      const inTitle = names.some((n) => mentions(s.title, n));
+      const hit = how === 'heading'
+        ? inTitle
+        : how === 'invoke'
+          ? inTitle || names.some((n) => invokes(s.own, n))
+          : inTitle || names.some((n) => mentions(s.own, n));
+      if (hit) out.push({ file: doc.file, section: s });
     }
   }
   return out;
@@ -120,9 +154,12 @@ function locationOf(hit) {
   return { file: hit.file, anchor: githubAnchor(hit.section.title), title: hit.section.title };
 }
 
+/** An option counts as documented when it appears in the full text (own text plus subsections) of a documenting section. */
 function rowFor(item, hits, options) {
   const documented = hits.length > 0;
-  const missing = documented ? options.filter((o) => !hits.some((h) => hasFlag(h.section.title + '\n' + h.section.text, o))) : options.slice();
+  const missing = documented
+    ? options.filter((o) => !hits.some((h) => hasFlag(h.section.title + '\n' + h.section.text, o)))
+    : options.slice();
   return {
     item,
     where: documented ? locationOf(hits[0]) : null,
@@ -130,6 +167,78 @@ function rowFor(item, hits, options) {
     optionsDocumented: options.length - missing.length,
     missing,
   };
+}
+
+function cellsOf(line) {
+  return line.split('|').slice(1, -1).map((c) => c.trim());
+}
+
+/**
+ * Table rows of Markdown outside code fences, each with its header-named cells: `[{ line, cells, byHeader }]`
+ * where `line` is the 0-based line and `byHeader` maps a lower-cased header cell to that row's cell. A row belongs
+ * to the nearest header row above it in the same unbroken run of `|` lines.
+ */
+function tableRows(markdown) {
+  const lines = String(markdown).replace(/\r\n/g, '\n').split('\n');
+  const rows = [];
+  let fence = null;
+  let header = null;
+  lines.forEach((line, i) => {
+    const f = FENCE_RE.exec(line);
+    if (f) {
+      if (fence === null) fence = f[1];
+      else if (f[1] === fence) fence = null;
+      header = null;
+      return;
+    }
+    if (fence !== null) return;
+    if (!/^\s*\|/.test(line)) { header = null; return; }
+    if (SEPARATOR_ROW_RE.test(line)) return;
+    const cells = cellsOf(line);
+    const next = lines[i + 1];
+    if (header === null && next !== undefined && SEPARATOR_ROW_RE.test(next)) {
+      header = cells.map((c) => c.toLowerCase());
+      return;
+    }
+    const byHeader = {};
+    if (header !== null) header.forEach((h, k) => { byHeader[h] = cells[k] ?? ''; });
+    rows.push({ line: i, cells, byHeader });
+  });
+  return rows;
+}
+
+/** The deepest section whose range contains the 0-based line, or null. */
+function sectionAt(sections, lineIndex) {
+  let best = null;
+  for (const s of sections) {
+    if (s.line - 1 < lineIndex && lineIndex < s.end && (best === null || s.level >= best.level)) best = s;
+  }
+  return best;
+}
+
+function unquote(cell) {
+  const m = /^`([^`]+)`$/.exec(cell.trim());
+  return m ? m[1] : cell.trim();
+}
+
+/** The cell under the first header whose name is one of `names`, or null when the table has no such column. */
+function column(row, names) {
+  for (const n of names) if (Object.prototype.hasOwnProperty.call(row.byHeader, n)) return row.byHeader[n];
+  return null;
+}
+
+function filled(value) {
+  return value !== null && value.trim() !== '';
+}
+
+/** Flags printed in the option column of `node bin/install.js --help` (the text before the first run of two spaces). */
+function parseHelpFlags(helpText) {
+  const flags = new Set();
+  for (const line of String(helpText).split('\n')) {
+    if (!/^\s+(-[a-z]\b|--[a-z])/.test(line)) continue;
+    for (const f of line.trim().split(/\s{2,}/)[0].match(FLAG_RE) || []) flags.add(f);
+  }
+  return [...flags];
 }
 
 // ─── Model ───────────────────────────────────────────────────────────────────
@@ -154,7 +263,9 @@ function buildModel(inputs) {
   const agentsDoc = sec('docs/reference/agents.md', d.agents);
   const templatesDoc = sec('docs/reference/templates.md', d.templates);
   const installerDoc = sec('docs/reference/installer-flags.md', d.installer);
-  const inventoryLines = String(d.inventory).replace(/\r\n/g, '\n').split('\n');
+  const inventoryDoc = sec('docs/INVENTORY.md', d.inventory);
+  const configRows = tableRows(d.config);
+  const inventoryRows = tableRows(d.inventory);
 
   const surfaces = [];
 
@@ -162,50 +273,57 @@ function buildModel(inputs) {
     id: 'commands',
     title: 'Slash commands',
     source: '`commands/gsd/*.md` (command name and `argument-hint` flags)',
-    rule: 'A command is documented when a `COMMANDS.md` section headed by `/gsd-<command>` exists (or, for a command with no section of its own, any section that names it); each `--flag` of its `argument-hint` must appear in that section.',
+    rule: 'A command is documented when a `COMMANDS.md` section headed by `/gsd-<command>` exists (a command with no section of its own, such as a namespace router, counts through a section whose own text names it); each `--flag` of its `argument-hint` must appear in that section or its subsections.',
     rows: inputs.commands
       .map((c) => {
         const name = '/gsd-' + c.stem;
-        const all = sectionsMentioning([commandsDoc], [name]);
-        // A section headed by the command wins; a command with no section of its own (the namespace routers are
-        // described in a table) counts through any section that names it.
-        const headed = all.filter((h) => mentions(h.section.title, name));
-        return rowFor(name, headed.length ? headed : all, flagsOf(c.argumentHint));
+        const headed = sectionsDocumenting([commandsDoc], [name], 'heading');
+        return rowFor(name, headed.length ? headed : sectionsDocumenting([commandsDoc], [name]), flagsOf(c.argumentHint));
       })
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   surfaces.push({
     id: 'verbs',
     title: '`gsd-tools` verbs',
     source: '`docs/CLI-SURFACE-MANIFEST.json` (verb, aliases and declared flags)',
-    rule: 'A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` names it (dotted verbs also as `a b`); each declared flag must appear in a section that names the verb.',
+    rule: 'A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` is headed by its name (dotted verbs also as `a b`, or an alias) or has a usage line that invokes it (`gsd-tools [query] <verb>`, `node gsd-tools.cjs [query] <verb>`, `gsd_run query <verb>`) or a table row keyed by it; a mention in prose does not count. Each declared flag must appear in that section or its subsections.',
     rows: inputs.verbs
       .map((v) => {
         const names = [...new Set([v.verb, v.verb.replace(/\./g, ' '), ...(v.aliases || [])])];
-        return rowFor(v.verb, sectionsMentioning(cliDocs, names), v.flags.map((f) => '--' + f));
+        return rowFor(v.verb, sectionsDocumenting(cliDocs, names, 'invoke'), v.flags.map((f) => '--' + f));
       })
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   surfaces.push({
     id: 'config',
     title: 'Config keys',
     source: '`VALID_CONFIG_KEYS` in `src/config-schema.cts`',
-    rule: 'A key is documented when `CONFIGURATION.md` has a table row that starts with the key and carries a type and a default; a key mentioned only in prose is listed as `prose`.',
+    rule: 'A key is documented when `CONFIGURATION.md` has a table row whose first cell is the key. The row\'s own table must have a non-empty Type (or Options), Default and Description cell, read by column header; a table without such a column leaves that option missing. A key mentioned only in prose is listed as `prose`.',
     rows: inputs.configKeys
       .map((k) => {
-        const rowLine = String(d.config).split('\n').find((l) => new RegExp('^\\|\\s*`' + escapeRe(k) + '`\\s*\\|').test(l));
-        const hits = sectionsMentioning([configDoc], [k]);
-        if (!hits.length) return { item: k, where: null, optionsTotal: 3, optionsDocumented: 0, missing: ['type', 'default', 'effect'], status: 'none' };
-        if (rowLine) {
-          const cells = rowLine.split('|').slice(1, -1).map((c) => c.trim());
-          const missing = ['type', 'default', 'effect'].filter((_, i) => !cells[i + 1]);
-          return { item: k, where: locationOf(hits[0]), optionsTotal: 3, optionsDocumented: 3 - missing.length, missing, status: 'table' };
+        const row = configRows.find((r) => r.cells.length > 0 && unquote(r.cells[0]) === k);
+        if (row) {
+          const missing = [];
+          if (!filled(column(row, ['type', 'options']))) missing.push('type');
+          if (!filled(column(row, ['default']))) missing.push('default');
+          if (!filled(column(row, ['description', 'effect']))) missing.push('effect');
+          const where = sectionAt(configDoc.sections, row.line);
+          return {
+            item: k,
+            where: where ? locationOf({ file: configDoc.file, section: where }) : { file: configDoc.file, anchor: '', title: '' },
+            optionsTotal: 3,
+            optionsDocumented: 3 - missing.length,
+            missing,
+            status: 'table',
+          };
         }
+        const hits = sectionsDocumenting([configDoc], [k]);
+        if (hits.length === 0) return { item: k, where: null, optionsTotal: 3, optionsDocumented: 0, missing: ['type', 'default', 'effect'], status: 'none' };
         return { item: k, where: locationOf(hits[0]), optionsTotal: 3, optionsDocumented: 0, missing: ['type', 'default', 'effect'], status: 'prose' };
       })
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   surfaces.push({
@@ -214,50 +332,53 @@ function buildModel(inputs) {
     source: '`agents/gsd-*.md` (non-compact)',
     rule: 'An agent is documented when `reference/agents.md` has a section whose heading names it.',
     rows: inputs.agents
-      .map((a) => rowFor(a, sectionsMentioning([agentsDoc], [a]).filter((h) => mentions(h.section.title, a)), []))
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .map((a) => rowFor(a, sectionsDocumenting([agentsDoc], [a], 'heading'), []))
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   surfaces.push({
     id: 'hooks',
     title: 'Hooks',
-    source: '`hooks/*.js` and `hooks/*.sh`',
-    rule: 'A hook is documented when the hooks table of `INVENTORY.md` has a row for it with an event.',
+    source: '`hooks/*.js`, `hooks/*.cjs` and `hooks/*.sh`',
+    rule: 'A hook is documented when the table under the `Hooks` heading of `INVENTORY.md` has a row whose first cell is the file name and whose Event cell is not empty.',
     rows: inputs.hooks
       .map((h) => {
-        const line = inventoryLines.find((l) => l.startsWith('| `' + h + '` |'));
-        if (!line) return { item: h, where: null, optionsTotal: 1, optionsDocumented: 0, missing: ['event'] };
-        const cells = line.split('|').slice(1, -1).map((c) => c.trim());
-        const hasEvent = Boolean(cells[1]);
+        const hooksSection = inventoryDoc.sections.find((s) => s.level === 2 && s.title === 'Hooks');
+        const row = hooksSection
+          ? inventoryRows.find((r) => r.line >= hooksSection.line && r.line < hooksSection.end && r.cells.length > 0 && unquote(r.cells[0]) === h)
+          : undefined;
+        if (!row) return { item: h, where: null, optionsTotal: 1, optionsDocumented: 0, missing: ['event'] };
+        const hasEvent = filled(column(row, ['event']));
+        const where = sectionAt(inventoryDoc.sections, row.line);
         return {
           item: h,
-          where: { file: 'docs/INVENTORY.md', anchor: 'hooks', title: 'Hooks' },
+          where: locationOf({ file: inventoryDoc.file, section: where || hooksSection }),
           optionsTotal: 1,
           optionsDocumented: hasEvent ? 1 : 0,
           missing: hasEvent ? [] : ['event'],
         };
       })
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   surfaces.push({
     id: 'templates',
     title: 'Templates',
     source: '`gsd-core/templates/**` (the registry `README.md` excluded)',
-    rule: 'A template is documented when `reference/templates.md` names its path relative to `gsd-core/templates/`.',
+    rule: 'A template is documented when `reference/templates.md` names its path, either relative to `gsd-core/templates/` or in full.',
     rows: inputs.templates
-      .map((t) => rowFor(t, sectionsMentioning([templatesDoc], [t]), []))
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .map((t) => rowFor(t, sectionsDocumenting([templatesDoc], [t, 'gsd-core/templates/' + t]), []))
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   surfaces.push({
     id: 'installer',
     title: 'Installer flags',
-    source: 'the option list printed by `node bin/install.js --help`',
+    source: 'the option list printed by `node bin/install.js --help`, plus every flag `bin/install.js` tests with `args.includes`',
     rule: 'A flag is documented when `reference/installer-flags.md` names it.',
     rows: inputs.installerFlags
-      .map((f) => rowFor(f, sectionsMentioning([installerDoc], [f]), []))
-      .sort((a, b) => a.item.localeCompare(b.item)),
+      .map((f) => rowFor(f, sectionsDocumenting([installerDoc], [f]), []))
+      .sort((a, b) => byName(a.item, b.item)),
   });
 
   return surfaces;
@@ -348,29 +469,28 @@ function listFiles(rel, filter) {
   return out.sort();
 }
 
+/** One frontmatter field of a Markdown file, read with the repo's own parser (`src/frontmatter.cts`), never a hand-rolled fence. */
 function frontmatterField(text, field) {
-  const fm = /^---\n([\s\S]*?)\n---/.exec(text);
-  if (!fm) return '';
-  const m = new RegExp('^' + field + ':\\s*(.*)$', 'm').exec(fm[1]);
-  return m ? m[1].replace(/^["']|["']$/g, '') : '';
+  const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+  const value = extractFrontmatter(text)[field];
+  return typeof value === 'string' ? value : '';
 }
 
-function installerFlagsFromHelp() {
+/** `{ ok: true, flags }` from `node bin/install.js --help` plus every `args.includes('--flag')` in the installer, or `{ ok: false, error }`. */
+function installerFlags() {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'install.js'), '--help'], {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0' },
   });
-  if (r.status !== 0) throw new ExitError(1, `node bin/install.js --help exited with status ${r.status}`);
-  const text = r.stdout.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
-  const flags = new Set();
-  for (const line of text.split('\n')) {
-    if (!/^\s+(-[a-z]\b|--[a-z])/.test(line)) continue;
-    // Only the option column counts: the description after the gap can name other flags ("Alias of --windsurf").
-    for (const f of line.trim().split(/\s{2,}/)[0].match(FLAG_RE) || []) flags.add(f);
+  if (r.error || r.status !== 0) {
+    const why = r.error ? r.error.message : `exited with status ${r.status}: ${String(r.stderr).trim().slice(0, 300)}`;
+    return { ok: false, error: `node bin/install.js --help ${why}` };
   }
-  return [...flags];
+  const helpText = r.stdout.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
+  const tested = [...read('bin/install.js').matchAll(/args\.includes\('(--[a-z][a-z0-9-]*)'\)/g)].map((m) => m[1]);
+  return { ok: true, flags: [...new Set([...parseHelpFlags(helpText), ...tested])] };
 }
 
 function collectInputs() {
@@ -379,6 +499,8 @@ function collectInputs() {
   ensureRuntimeBuild();
   const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
   const manifest = JSON.parse(read('docs/CLI-SURFACE-MANIFEST.json'));
+  const flags = installerFlags();
+  if (!flags.ok) throw new ExitError(1, flags.error);
   return {
     commands: listFiles('commands/gsd', (f) => f.endsWith('.md') && !f.includes('/')).map((f) => {
       const text = read('commands/gsd/' + f);
@@ -389,9 +511,9 @@ function collectInputs() {
     verbs: manifest.verbs.map((v) => ({ verb: v.verb, aliases: v.aliases || [], flags: Object.keys(v.flags || {}) })),
     configKeys: [...VALID_CONFIG_KEYS],
     agents: listFiles('agents', (f) => /^gsd-[^/]*\.md$/.test(f) && !f.includes('.compact.')).map((f) => f.slice(0, -3)),
-    hooks: listFiles('hooks', (f) => /^[^/]*\.(js|sh)$/.test(f)),
+    hooks: listFiles('hooks', (f) => /^[^/]*\.(js|cjs|sh)$/.test(f)),
     templates: listFiles('gsd-core/templates', (f) => f !== 'README.md'),
-    installerFlags: installerFlagsFromHelp(),
+    installerFlags: flags.flags,
     docs: {
       commands: read('docs/COMMANDS.md'),
       cli: read('docs/CLI-TOOLS.md'),
@@ -455,4 +577,4 @@ function main() {
 
 if (require.main === module) runMain(main);
 
-module.exports = { parseSections, githubAnchor, flagsOf, hasFlag, mentions, sectionsMentioning, buildModel, renderMatrix, gaps, DOC_TYPES };
+module.exports = { parseSections, githubAnchor, flagsOf, hasFlag, mentions, invokes, sectionsDocumenting, tableRows, parseHelpFlags, byName, buildModel, renderMatrix, gaps, DOC_TYPES };
