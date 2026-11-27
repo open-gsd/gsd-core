@@ -27,7 +27,7 @@ rm -f ~/.cache/gsd/gsd-update-check.json
 
 ## Runtime flags
 
-Replace `--claude` with the flag for your runtime:
+Replace `--claude` with the flag for your runtime. The table lists the common ones; the [installer flags reference](reference/installer-flags.md) lists every runtime flag and every other option:
 
 | Runtime | Flag |
 |---|---|
