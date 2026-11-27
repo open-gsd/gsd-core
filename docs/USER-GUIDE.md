@@ -26,9 +26,10 @@ A narrative companion guide to GSD Core — orient yourself here, then follow th
 - [Related](#related)
 
 For driving GSD directly from a GitHub / Linear / Jira issue, see the
-[Issue-driven orchestration](issue-driven-orchestration.md) guide — a
-recipe that maps tracker issues onto the workspace → discuss → plan →
-execute → verify → review → ship loop using existing GSD primitives.
+[How to drive GSD Core from a tracker issue](how-to/drive-gsd-from-a-tracker-issue.md)
+guide; [Issue-driven orchestration explained](issue-driven-orchestration.md)
+maps tracker issues onto the workspace → discuss → plan → execute → verify →
+review → ship loop and says why it is safe.
 
 ---
 
