@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.997" timestamp="2026-11-24T07:33:54.818610+02:00" hostname="capture-host"><testcase classname="" name="test_collect" time="0.000"><error message="collection failure">ImportError while importing test module '/tmp/capture/test_collect.py'.
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.000" timestamp="2026-11-24T00:00:00.000000+00:00" hostname="capture-host"><testcase classname="" name="test_collect" time="0.000"><error message="collection failure">ImportError while importing test module '/tmp/capture/test_collect.py'.
 Hint: make sure your test modules/packages have valid Python names.
 Traceback:
 /usr/lib/python3.14/importlib/__init__.py:88: in import_module

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="0" tests="2" time="0.625" timestamp="2026-11-24T07:33:58.148177+02:00" hostname="capture-host"><testcase classname="test_red_teardown" name="test_target" time="0.001"><failure message="assert 1 == 2">td = None
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="0" tests="2" time="0.000" timestamp="2026-11-24T00:00:00.000000+00:00" hostname="capture-host"><testcase classname="test_red_teardown" name="test_target" time="0.000"><failure message="assert 1 == 2">td = None
 
     def test_target(td):
 &gt;       assert 1 == 2
