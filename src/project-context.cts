@@ -966,14 +966,19 @@ export function requirePlanningArtifactPath(
   const lexical = path.resolve(ctx.projectRoot, filePath);
   const entryDir = path.join(ctx.projectRoot, '.planning');
   const viaEntry = relativeInside(entryDir, lexical);
-  const rel = viaEntry ?? relativeInside(ctx.planningRoot, lexical);
-  if (rel !== null) {
-    const contained = requireSafePath(rel, ctx.planningRoot, label, PathAcceptance.RelativeOnly);
-    // The caller keeps its own spelling: a path given through the `.planning` entry stays under that entry,
-    // so a caller that makes it relative to the project root (complete-session's commit path) gets a path
-    // inside the project even where the realpath of `.planning` spells the directory differently (a Windows
-    // 8.3 temp name against its long form, a symlinked store). Containment was checked above on the realpath.
-    return { resolved: viaEntry !== null ? path.join(entryDir, rel) : contained, display: path.join('.planning', rel) };
+  if (viaEntry !== null) {
+    // The `.planning` entry itself is the containment base: requireSafePath realpaths base and candidate
+    // alike, so a `.planning` symlinked into a separate store contains `.planning/phases/...`, and `resolved`
+    // is spelled by the same realpath as the old project-root check (a caller that makes it relative to the
+    // project root, complete-session's commit path, was written against that spelling). `ctx.planningRoot`
+    // comes from `realpathSync.native`, which on Windows expands an 8.3 temp name the JS realpath keeps.
+    const resolved = requireSafePath(viaEntry, entryDir, label, PathAcceptance.RelativeOnly);
+    return { resolved, display: path.join('.planning', viaEntry) };
+  }
+  const viaStore = relativeInside(ctx.planningRoot, lexical);
+  if (viaStore !== null) {
+    const resolved = requireSafePath(viaStore, ctx.planningRoot, label, PathAcceptance.RelativeOnly);
+    return { resolved, display: path.join('.planning', viaStore) };
   }
   const resolved = requireSafePath(filePath, ctx.projectRoot, label, policy);
   return { resolved, display: path.relative(ctx.projectRoot, resolved) };
