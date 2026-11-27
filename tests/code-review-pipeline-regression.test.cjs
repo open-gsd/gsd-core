@@ -4591,6 +4591,48 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
     return { status: r.exitCode, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
   }
 
+  /**
+   * Run one fence's derivation once per id inside ONE bash process: one spawn per fence, not one per id. The
+   * derivation is builtins and runs in milliseconds, so the spawn is the only unbounded cost, and a stalled
+   * start on a loaded runner is what a per-id shape is exposed to (macOS shard 1/3 spent the whole 15 s probe
+   * bound on one `bash -s` that had nothing to do).
+   *
+   * Each id runs in its own command substitution, a fork with no exec, so no variable carries to the next id.
+   * The derivation sits in a function body because bash 3.2 (macOS /bin/bash) cannot parse a `case` pattern's
+   * lone `)` inside `$( )`. Ids travel in the environment, word-split with globbing off, so each must be
+   * digits, uppercase letters and dots; anything else is refused up front. Each id's stderr goes to a file in
+   * the test dir (cleaned with it) and returns as a fourth field (flattened, 200 characters) for failures.
+   *
+   * Returns `[{ id, status, padded, stderr }]` in input order.
+   */
+  function padEach(deriv, ids, dir) {
+    for (const id of ids) assert.match(id, /^[0-9A-Z.]+$/, `padEach carries only digits, letters and dots: ${JSON.stringify(id)}`);
+    const script = [
+      'one() {',
+      '  set -e',
+      '  export PHASE_NUMBER="$1"',
+      deriv,
+      '  printf \'%s\' "$PADDED"',
+      '}',
+      'set -f',
+      'errf="$PHASE_DIR/.padeach.err"',
+      'for id in $PHASE_IDS; do',
+      '  out=$(one "$id" 2>"$errf"); st=$?',
+      '  err=$(tr \'\\n\\t\' \'  \' <"$errf" | cut -c1-200)',
+      '  printf \'%s\\t%s\\t%s\\t%s\\n\' "$id" "$st" "$out" "$err"',
+      'done',
+      'rm -f "$errf"',
+    ].join('\n');
+    const r = runBash(script, { PHASE_DIR: dir, PHASE_IDS: ids.join(' ') });
+    assert.equal(r.status, 0, `the batching shell exited ${r.status}: ${r.stderr}`);
+    const rows = r.stdout.split('\n').map((line) => {
+      const [id, status, padded, ...rest] = line.split('\t');
+      return { id, status: Number(status), padded: padded ?? '', stderr: rest.join('\t').trim() };
+    });
+    assert.deepEqual(rows.map((row) => row.id), ids, 'one row per id, in order');
+    return rows;
+  }
+
   const stepLines = splitLines(fs.readFileSync(DISPOSITION_STEP_PATH, 'utf8'));
   // TWO fences — each markdown fence is a fresh shell, so each derives and looks up for itself.
   const lookups = findAnchoredLineIndexes(stepLines, 'REVIEW_FILE="${_pd}/${PADDED}-REVIEW.md"', 2);
@@ -4679,11 +4721,11 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
     // Driven, not argued: every shape #4748's own tests named, plus its stated regression controls.
     const dir = createTempDir();
     t.after(() => cleanup(dir));
-    for (const id of ['3A', '8', '9', '08', '09', '12A', '4B', '23.1.2', '03A.1.2', '1', '06', '36.14', '08.5']) {
-      for (const deriv of derivations) {
-        const r = runBash(`set -e\n${deriv}\nprintf '%s' "$PADDED"`, { PHASE_DIR: dir, PHASE_NUMBER: id });
-        assert.equal(r.status, 0, `bash exited ${r.status} on ${id}: ${r.stderr}`);
-        assert.equal(r.stdout, normalizePhaseName(id), `padding drifted from the canonical normalizer on ${id}`);
+    const ids = ['3A', '8', '9', '08', '09', '12A', '4B', '23.1.2', '03A.1.2', '1', '06', '36.14', '08.5'];
+    for (const deriv of derivations) {
+      for (const { id, status, padded, stderr } of padEach(deriv, ids, dir)) {
+        assert.equal(status, 0, `bash exited ${status} on ${id}: ${stderr}`);
+        assert.equal(padded, normalizePhaseName(id), `padding drifted from the canonical normalizer on ${id}`);
       }
     }
   });
@@ -4713,13 +4755,17 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
       fc.option(fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), { nil: '' }),
       fc.array(digitRun, { maxLength: 4 }),
     ).map(([run, letter, segs]) => run + letter + segs.map((s) => '.' + s).join(''));
-    fc.assert(fc.property(PHASE_ID, (id) => {
+    // Each run draws a BATCH of ids and spends one spawn per fence on the whole batch: five runs of 10 to 25
+    // ids are at least 50 ids in ten spawns, where the previous shape covered 25 ids in fifty. A failure
+    // still shrinks to the smallest batch, and the assertion names the id that drifted.
+    fc.assert(fc.property(fc.array(PHASE_ID, { minLength: 10, maxLength: 25 }), (batch) => {
       for (const deriv of derivations) {
-        const r = runBash(`set -e\n${deriv}\nprintf '%s' "$PADDED"`, { PHASE_DIR: dir, PHASE_NUMBER: id });
-        assert.equal(r.status, 0, `bash exited ${r.status} on ${id}: ${r.stderr}`);
-        assert.equal(r.stdout, normalizePhaseName(id), `padding drifted from the canonical normalizer on ${id}`);
+        for (const { id, status, padded, stderr } of padEach(deriv, batch, dir)) {
+          assert.equal(status, 0, `bash exited ${status} on ${id}: ${stderr}`);
+          assert.equal(padded, normalizePhaseName(id), `padding drifted from the canonical normalizer on ${id}`);
+        }
       }
-    }), { numRuns: 25 });
+    }), { numRuns: 5 });
   });
 });
 

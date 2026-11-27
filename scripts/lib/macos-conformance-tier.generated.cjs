@@ -131,6 +131,7 @@ module.exports = {
   "tests/gsd-validate-commit-crash-policy.test.cjs",
   "tests/gsd-validate-commit-sigpipe.test.cjs",
   "tests/gsd-write-guard.test.cjs",
+  "tests/health-diagnostic-rules/project-skills-budget.test.cjs",
   "tests/health-diagnostic-rules/worktree-health.test.cjs",
   "tests/held-query-executor-identity.test.cjs",
   "tests/helpers-cleanup.test.cjs",
