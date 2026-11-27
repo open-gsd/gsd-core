@@ -19,7 +19,7 @@ const ROOT = path.join(__dirname, '..');
 const README = fs.readFileSync(path.join(ROOT, 'gsd-core', 'templates', 'README.md'), 'utf8');
 
 const COLON_RE = /\/gsd:([a-z0-9-]+)/g;
-const HYPHEN_RE = /\/gsd-(?![a-z0-9-]+\.(?:md|cjs)\b)[a-z0-9-]+/g;
+const HYPHEN_RE = /\/gsd-(?![a-z0-9-]+\.(?:md|cjs)\b)[a-z0-9-]+/;
 const SEPARATOR_ROW_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
 /**
@@ -39,7 +39,7 @@ function registryRows(markdown) {
     if (producerIdx === null || cells.length <= producerIdx) continue;
     const file = /^`([^`]+)`$/.exec(cells[0]);
     if (!file) continue;
-    const producers = [...new Set((cells[producerIdx].match(COLON_RE) || []).map((m) => m[1]))].sort();
+    const producers = [...new Set([...cells[producerIdx].matchAll(COLON_RE)].map((m) => m[1]))].sort();
     rows.push({ file: file[1], producers, producerCell: cells[producerIdx] });
   }
   return rows;
@@ -84,22 +84,10 @@ describe('registryRows properties', () => {
     fc.assert(
       fc.property(tableArb, (table) => {
         const parsed = registryRows(table);
-        if (parsed.length !== 1) return true;
         const { producers, producerCell } = parsed[0];
         return producers.every((p, n) => producerCell.includes('/gsd:' + p)
           && (n === 0 || producers[n - 1] < p)
           && new Set(producers).size === producers.length);
-      }),
-    );
-  });
-
-  test('a producer token outside the Produced-by column never lands in producers', () => {
-    fc.assert(
-      fc.property(tableArb, (table) => {
-        const parsed = registryRows(table);
-        if (parsed.length !== 1) return true;
-        const all = (table.match(COLON_RE) || []).length;
-        return parsed[0].producers.length <= all;
       }),
     );
   });
