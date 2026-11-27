@@ -604,6 +604,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.ui_phase` | boolean | `true` | Generate UI design contracts for frontend phases |
 | `workflow.ui_safety_gate` | boolean | `true` | Prompt to run /gsd-ui-phase for frontend phases during plan-phase |
 | `workflow.assumption_delta` | boolean | `true` | Advisory architecture checkpoint during planning. When a phase makes something **plural, optional, or chosen** that used to be **singular, required, or derived** (e.g. a second auth method, a required field becoming optional, a constant becoming a parameter), the planner is prompted to re-ask whether the primary key / identity model still names the right thing (promote the new general representation vs. add it alongside). Non-blocking; fires only on a detected signal. Bare "or" is intentionally excluded (prose false-positives). Inspect a phase with `gsd_run query assumption-delta scan <phase>`. Added in #1561. A phase section that cannot be resolved returns `{"skipped":true,"reason":"phase_unresolved"}` rather than a fabricated `detected:false` (#3909) |
+| `workflow.advisor_prefilter` | boolean | `false` | **Default-off.** Enable the advisor pre-filter (#4795): at `verify:post` and `ship:pre` the orchestrator consults the Claude Code session advisor once to ask whether the output is final and consistent before the next review gate. Advisory only, silent no-op when no advisor tool is present. A string `"false"`, `"0"`, `"no"` or `"off"` counts as off. Each consult sends the full transcript to the advisor model. See [how to enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) |
 | `workflow.ui_review` | boolean | `true` | Run visual quality audit (`/gsd-ui-review`) after phase execution in autonomous mode. When `false`, the UI audit step is skipped. |
 | `workflow.live_dom_uat` | boolean | `false` | **Default-off.** Enable live-DOM verification (#2856). When `true`, a `gsd-dom-verifier` step runs after each execution wave and writes `{phase}-DOM-VERIFY.md`, and the orchestrator's automated UI verification will additionally consider `mcp__chrome-devtools__*` / `mcp__claude-in-chrome__*` when present. Browser reach is confined to `gsd-dom-verifier` — `gsd-executor`'s tool surface is unchanged in every configuration. Presence of a browser MCP server is **not** sufficient on its own: a server configured for unrelated work is never driven unless this key is on. The pre-existing `mcp__playwright__*` path is unaffected by this key. Note `chrome-devtools-mcp` holds an exclusive browser-profile lock, so concurrent waves need `--isolated` on **your** MCP server registration — GSD cannot pass it. See [Enable live-DOM verification](how-to/enable-live-dom-verification.md). |
 | `workflow.deep_verify` | boolean | `false` | **Default-off.** Enable agent-driven deep verification (#3858). When `true`, a `gsd-behavior-verifier` step runs at `verify:pre` on UI phases (phases with a `{phase}-UI-SPEC.md`): it enumerates interaction-level behaviors from the plan's `must_haves` / acceptance criteria, the SUMMARY "Files Changed" list and the files it names, executes each one it can through a browser MCP server, writes the full run to `{phase}-DEEP-VERIFY.md`, and hands verify-work only judgment items, failed behaviors and anything it could not run in `DEEP-VERIFY-CHECKPOINTS.md`. `mcp__playwright__*` is driven whenever it responds; the Chrome-family servers only while `workflow.live_dom_uat` is also `true` (an instruction the agent follows, not a runtime-enforced permission). With no browser MCP the step prints the enumerated list and routes every item to the human. See [Enable deep verification](how-to/enable-deep-verification.md). |
@@ -1098,16 +1099,25 @@ See [How to attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugi
 
 Separately from `agent_skills`, skills in `.claude/skills/` or `.agents/skills/` are found without any setting. The 21 agents that read project skills, and their compact variants, all `@`-include one instruction, [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md), and add one line of their own saying how they apply the rules. The rule is stated once instead of in 36 copies.
 
-The read is scoped (#4649):
+The read is scoped (#4649), and the listing is produced by code (#6719):
 
-1. The agent lists the skill directories and reads only each `SKILL.md` frontmatter (`name`, `description`).
-2. It reads the whole `SKILL.md` when the `description` fits the task, or when the skill has no `description`.
-3. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
-4. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
+1. For each of `.claude/skills/` and `.agents/skills/` that exists, the agent runs `gsd_run skill-manifest --skills-dir <dir>`. The [`skill-manifest`](CLI-TOOLS.md#skill-manifest) command lists each skill's `name`, `description` and `file_path` from its `SKILL.md` frontmatter, and does not emit the skill body, so the size of the listing does not depend on how long the skill bodies are (it grows with each `description` and any `TRIGGER when:` lines). A skill directory that is a symlink is listed too; a dangling link or a link to a file is skipped.
+2. The agent reads the whole `SKILL.md` only when its `description` fits the task, or when the skill has no `description` (the command reports it as an empty string, which is also what a missing, unparseable or unterminated frontmatter block gives).
+3. If the command cannot run or fails, the agent lists the subdirectories and reads only each `SKILL.md` frontmatter (`name`, `description`).
+4. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
+5. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
 
 For skill authors: write a `description` that says when the skill applies. A `SKILL.md` without one is read in full on every spawn.
 
-Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The project-skills lines in the `execute-phase`, `plan-phase` and `quick` spawn prompts and in the research `plan-pre` fragment state the same frontmatter-first read, so the saving reaches those paths too (#5248); each line is self-contained for runtimes where the agent's `@`-include does not resolve. A size warning for large skills is tracked in #5249.
+To see what an agent sees, run the same command in the project root:
+
+```bash
+node gsd-tools.cjs skill-manifest --skills-dir .claude/skills
+```
+
+An empty `skills` array with `present: true` means the directory has no skill subdirectories; `present: false` means the directory does not exist.
+
+Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The project-skills lines in the `execute-phase`, `plan-phase` and `quick` spawn prompts and in the research `plan-pre` fragment state the same frontmatter-first read, so the saving reaches those paths too (#5248); each line is self-contained for runtimes where the agent's `@`-include does not resolve. The spawn-prompt lines read the frontmatter themselves and do not run `skill-manifest`; only the shared reference does. A size warning for large skills is tracked in #5249.
 
 ---
 
