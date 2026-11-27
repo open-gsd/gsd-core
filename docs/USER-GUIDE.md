@@ -524,27 +524,13 @@ configuration wires it, and its absence does not change the gate's behavior.
 
 ## Code Review Workflow
 
-After executing a phase, run a structured code review before UAT. See [Set up cross-AI review](how-to/set-up-cross-ai-review.md) for the full workflow.
-
-```bash
-/gsd-code-review 3               # Review all changed files in phase 3
-/gsd-code-review 3 --depth=deep  # Deep cross-file review
-/gsd-code-review 3 --fix         # Fix Critical + Warning findings atomically
-/gsd-code-review 3 --fix --auto  # Fix and re-review until clean (max 3 iterations)
-/gsd-audit-fix                   # Audit + classify + fix (medium+ severity, max 5)
-```
-
-The review step slots in after execution and before UAT:
+After executing a phase, review the changed files before UAT:
 
 ```text
 /gsd-execute-phase N  ->  /gsd-code-review N  ->  /gsd-code-review N --fix  ->  /gsd-verify-work N
 ```
 
-**Optional external source-review lanes (#4209):** `/gsd-code-review` accepts the same reviewer-lane flags as `/gsd-review` (run `gsd_run review-lane flags` to list the flags your installation's roster declares, e.g. `--codex`, `--agy`). Adding one asks that lane to independently review the *same* file scope alongside the internal `gsd-code-reviewer` agent; its findings are unverified corroborating evidence that `gsd-code-reviewer` re-checks against the actual source before writing anything to `REVIEW.md` — there is still exactly one `REVIEW.md`. No reviewer-lane flag is the default and reviews with only the internal agent, unchanged from before #4209. This is separate from `/gsd-review`, which reviews `PLAN.md` files *before* execution, not source code — see [Set up cross-AI review](how-to/set-up-cross-ai-review.md).
-
-```bash
-/gsd-code-review 3 --codex       # Corroborate the internal review with the codex reviewer lane
-```
+The depth, auto-fix and external reviewer-lane flags are in [`/gsd-code-review`](COMMANDS.md#gsd-code-review), and the setup for independent reviewers is in [Set up cross-AI review](how-to/set-up-cross-ai-review.md). `/gsd-review` is a different step: it reviews `PLAN.md` files before execution, not source code.
 
 ---
 
