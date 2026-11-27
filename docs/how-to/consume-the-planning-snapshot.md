@@ -141,7 +141,11 @@ retired plan would be listed as halted beside a count that does not include it.
 `depends_on` plans in the phase instead, completed ones included (one that
 depends on itself names itself). The loop therefore prints the ids only when
 each one is the id of a halted plan in the same phase, and prints the cycle
-line otherwise.
+line otherwise. A plan in a cycle through a halted plan can get the
+`behind halted` line instead: with `01-01` and `01-02` depending on each other
+and `01-01` halted, the loop prints `01-01: halted` and
+`01-02: behind halted 01-01`, the same lines as when only `01-02` depends on
+`01-01`.
 
 `blocked_by` is incomplete around a PLAN that could not be read, or that
 resolves outside the planning root (a `plan_unreadable` diagnostic names the
