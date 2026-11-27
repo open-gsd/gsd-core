@@ -472,42 +472,19 @@ Example:
 
 ### Parallel reviewer lanes for `/gsd-review` (#3034)
 
-By default `/gsd-review` invokes reviewer lanes one at a time. That is deliberate: concurrent
-invocation can trip provider rate limits, and a lane dropped to a rate limit is a review that
-silently lost an opinion. A pass with several reviewers therefore costs roughly the sum of their
-runtimes.
-
-The lanes within one review pass have no data dependency on one another — they all inspect the
-same immutable plan snapshot. If your providers can accept concurrent requests (independent
-accounts, generous quota, or local model servers), you can opt in:
+By default `/gsd-review` invokes reviewer lanes one at a time, because concurrent invocation can trip provider rate limits. If your providers can take concurrent requests, opt in:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `review.parallel_lanes` | boolean | `false` | When `true`, dispatch independent selected reviewer lanes concurrently within a single `/gsd-review` pass. All lanes are joined before `REVIEWS.md` and consensus are rendered. |
-
-```bash
-gsd config-set review.parallel_lanes true
-/gsd-plan-review-convergence 3 --all
-```
-
-```json
-{
-  "review": {
-    "parallel_lanes": true
-  }
-}
-```
-
-**What this does not change.** Convergence cycles stay sequential — `review → replan → re-review`
-has a real data dependency, so enabling this speeds up each pass, not the number of passes.
-Per-lane timeouts, prompt budgets, diagnostic stubs, explicit-lane failure, trust/egress checks and
-result-file layout are all unchanged.
 
 **Before you enable it.** Every selected lane dispatches at once — there is no concurrency bound.
 Selecting eleven lanes issues eleven concurrent requests. Two reviewer instances backed by the same
 adapter (see below) also dispatch concurrently against that one provider, which is the most likely
 way to hit a limit. If a lane does get rate-limited it fails the way any other failing lane does:
 a diagnostic stub with captured stderr, never a silently dropped review.
+
+The steps, how to tell the outcomes apart and what the key does not speed up are in [How to enable parallel reviewer lanes](how-to/enable-parallel-reviewer-lanes.md).
 
 ### Reviewer instances for `/gsd-review` (#1517)
 
