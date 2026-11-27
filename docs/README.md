@@ -181,12 +181,14 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
 - [How GSD runs on Pi](explanation/how-gsd-runs-on-pi.md) — how commands, agent roles and guards map onto Pi's skills, tools and events, and the limits that leaves
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
+- [Agent skills dual injection](explanation/agent-skills-dual-injection.md) — why configured skills reach agents through two seams and how the dedup guard keeps one copy
+- [Decision coverage gates explained](explanation/decision-coverage-gates.md) — how the plan-phase and verify-phase decision gates work, and when a decision is exempt
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
 - [Context monitoring](context-monitor.md) — context window monitoring hook architecture and why the fire-points are defaults
-- [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
+- [Issue-driven orchestration explained](issue-driven-orchestration.md) — how GSD's primitives map onto a tracker-issue loop, why that loop is safe, and what it deliberately does not do; the steps are in the [how-to](how-to/drive-gsd-from-a-tracker-issue.md)
 - [Claude orchestration capability (BETA)](explanation/claude-orchestration-capability.md) — why the capability exists and how it fits the loop
 - [Interface versioning and deprecation policy](explanation/interface-versioning-policy.md) — how the Host-Integration Interface (ADR-1239) evolves
 - [The live-DOM UAT capability](explanation/live-dom-uat-capability.md) — why GSD can drive a browser during execution, and why from a purpose-built agent

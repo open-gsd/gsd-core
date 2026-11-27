@@ -1156,16 +1156,16 @@ describe('issue-driven-orchestration guide (#2840)', () => {
     }
   });
 
-  test('end-to-end flow enumerates at least 7 numbered steps (per acceptance criteria)', () => {
+  test('the end-to-end procedure lives in the how-to: at least 7 "Step N" sections, linked from the guide (per acceptance criteria)', () => {
     const ir = parseGuide();
     assert.ok(ir, 'guide must be present');
+    const howTo = path.join(__dirname, '..', 'docs', 'how-to', 'drive-gsd-from-a-tracker-issue.md');
+    assert.ok(fs.existsSync(howTo), 'the how-to that holds the procedure must exist');
+    const steps = (fs.readFileSync(howTo, 'utf8').match(/^## Step \d+:/gm) || []).length;
+    assert.ok(steps >= 7, `the how-to must enumerate >=7 steps; found ${steps}`);
     assert.ok(
-      ir.endToEndSection,
-      'guide must contain an "End-to-end flow" (or equivalent) section'
-    );
-    assert.ok(
-      ir.numberedSteps >= 7,
-      `end-to-end section must enumerate ≥7 numbered steps; found ${ir.numberedSteps}`
+      ir.raw.includes('how-to/drive-gsd-from-a-tracker-issue.md'),
+      'the guide must link to the how-to that holds the procedure'
     );
   });
 

@@ -1038,36 +1038,7 @@ Any GSD agent type can receive skills. The agent types that consume `agent_skill
 The `Skill` tool is granted to consumer agents deliberately and is instruction-bounded — agents use it only to load the skills listed in the `<agent_skills>` block.
 
 ### How It Works
-
-Skills reach a consumer agent through **two cooperating seams** (dual injection — see [ADR 1866](adr/1866-agent-skills-dual-injection-contract.md)):
-
-1. **Orchestrator-side (primary on Claude Code).** At spawn time, workflows call `gsd-tools query agent-skills <type>` (or legacy `node gsd-tools.cjs agent-skills <type>`) in their bash init and interpolate the resulting `<agent_skills>` block into the `Task()`/`Agent()` prompt. This is established across ~25 workflows.
-
-2. **Agent-side self-load (durable fallback).** Each of the 22 consumer agents also self-loads in its own mandatory init step — it runs `gsd_run query agent-skills <its-type> --skills-only` (the type is written into the agent file's body; `--skills-only` skips the persona fallback that non-Claude runtimes get from the plain query, so the agent never re-reads its own persona) and `Read`s every listed `SKILL.md` per [`gsd-core/references/agent-skills-bootstrap.md`](../gsd-core/references/agent-skills-bootstrap.md). This is the path that works on every runtime, including **Cursor**, where `Skill()`-delegated workflow bash init does not reliably execute and `/gsd-autonomous` delegates via flat `Skill()` calls.
-
-**Dedup guard.** If an agent's prompt already contains an `<agent_skills>` block (orchestrator already injected one), the agent skips self-load — so on runtimes where both seams run (Claude Code), the prompt never carries two copies. `query agent-skills` is read-only and idempotent: it exits 0 with an empty block when nothing is configured for the type, so self-load is zero-overhead for unconfigured agents.
-
-For project-relative and global personal skills, entries appear as `@`-includes:
-
-```xml
-<agent_skills>
-Read these user-configured skills:
-- @skills/testing-standards/SKILL.md
-- @/Users/you/.claude/skills/shared-conventions/SKILL.md
-</agent_skills>
-```
-
-For a mixed config (path-resolvable and plugin-provided skills together), entries appear interleaved in config order in a single section:
-
-```xml
-<agent_skills>
-Read these user-configured skills:
-- @skills/testing-standards/SKILL.md
-- Load the `coderabbit:code-review` skill via the Skill tool before proceeding (plugin-provided).
-</agent_skills>
-```
-
-If no skills are configured, the block is omitted (zero overhead).
+Skills reach consumer agents through two cooperating seams — orchestrator-side injection and agent-side self-load, with a dedup guard — described in [Agent skills dual injection](explanation/agent-skills-dual-injection.md) (ADR 1866). If no skills are configured, the block is omitted (zero overhead).
 
 ### CLI
 
@@ -1329,25 +1300,8 @@ Capability manifests (`capability.json`) are discovered from two scoped roots:
 
 `GSD_HOME` defaults to your home directory (`~`) when unset. Both roots are scanned on every `loadRegistry` call; neither requires config changes to activate.
 
-### Composition and first-party-wins invariant
+The composition rules — first-party-wins, the load-time `engines.gsd` compatibility gate, the gate-kind fail-open policy (#2009) and config-key federation — are described in [The capability overlay model](explanation/capability-overlay-model.md). For the manifest schema see [capability-manifest](reference/capability-manifest.md), for installation steps [import a capability from a URL](how-to/import-a-capability-from-a-url.md), and for the design record [ADR-1244](adr/1244-capability-ecosystem.md).
 
-Installed overlay capabilities are merged via the same `buildRegistry` pipeline as first-party capabilities, so all derived views (`bySkill`, `byAgent`, `byLoopPoint`, `configKeys`) cover first-party and overlay entries identically. **First-party always wins**: an overlay entry is rejected at load time if its `id`, any owned skill or agent stem, or any federated config key collides with a first-party entry, or if its `id` uses a reserved prefix (`gsd-`, `gsd-core-`, `anthropic-`). Rejected entries emit a warning and are skipped; they never crash the load loop.
-
-### Load-time `engines.gsd` compatibility gate
-
-Each overlay manifest may declare an `engines.gsd` semver range. At load time GSD evaluates this range against the running GSD version. An overlay that does not satisfy the range is **skipped with a warning** — it is never loaded and never crashes the loop. Manifests without an `engines.gsd` field are accepted unconditionally.
-
-### Gate-kind fail-open policy (#2009)
-
-If a skipped or load-failed overlay capability (for example, one whose `engines.gsd` range is incompatible) declared a `gate`-kind loop hook, the loop resolver does **not** inject a gate at that hook point (fail OPEN): the loop proceeds. Instead it emits a loud warning — to stderr and in the `loop render-hooks` envelope's `warnings` array — naming the load-failure reason and the exact remediation, `gsd capability remove <id>`, so the operator is loudly told how to clear it. Skipped capabilities whose hooks are `step` or `contribution` kind skip open too, as before — the loop proceeds without them.
-
-### Overlay config federation
-
-Config keys declared in an overlay capability's `.config` slice federate into the `loadConfig` return value via the same Federated Config channel as first-party capability keys. They appear as valid keys in `config-schema.cjs` (`isValidConfigKey`) and in the runtime config schema, so overlay capabilities can declare project-local config toggles without editing the central config schema.
-
-> **See also:** [`docs/reference/capability-manifest.md`](reference/capability-manifest.md) for the full `capability.json` schema, [`docs/how-to/import-a-capability-from-a-url.md`](how-to/import-a-capability-from-a-url.md) for installation steps, and [ADR-1244](adr/1244-capability-ecosystem.md) for the design record.
-
----
 
 ## Parallelization Settings
 
@@ -1558,24 +1512,7 @@ plans and shipped code (issue #2492).
 |---------|------|---------|-------------|
 | `workflow.context_coverage_gate` | boolean | `true` | Toggle for both decision-coverage gates. When `false`, both the plan-phase translation gate and the verify-phase validation gate skip silently. Only the nested key under `workflow` is read, exactly as `config-get workflow.context_coverage_gate` answers; a top-level `context_coverage_gate` is ignored (the config loader warns about it) and the gates stay enabled. The gates read the active workstream's `config.json` when `GSD_WORKSTREAM` is set. |
 
-### What the gates do
-
-**Plan-phase translation gate (BLOCKING).** Runs immediately after the
-existing requirements coverage gate, before plans are committed. For each
-trackable decision in `<decisions>`, it checks that the decision id
-(`D-NN`) or its text appears in at least one plan's `must_haves`,
-`truths`, or `objective` (front-matter), a `## must_haves`/`truths`/`tasks`/`objective`
-heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>`
-tag body. A miss surfaces the missing decision by id and refuses
-to mark the phase planned.
-
-**Verify-phase validation gate (NON-BLOCKING).** Runs alongside the other
-verify steps. Searches every shipped artifact (PLAN.md, SUMMARY.md, files
-modified, recent commit subjects) for each trackable decision. Misses are
-written to VERIFICATION.md as a warning section but do **not** flip the
-overall verification status. The asymmetry is deliberate — by verify time
-the work is done, and a fuzzy substring miss should not fail an otherwise
-green phase.
+Both gates, the deliberate blocking asymmetry, the decision-writing contract and the opt-out tags are discussed in [Decision coverage gates explained](explanation/decision-coverage-gates.md). The plan gate also runs standalone:
 
 ### Invoking the plan gate directly
 
@@ -1608,31 +1545,6 @@ path is not a directory"` (it names a file) or `"phase directory unreadable"`
 (it could not be read; the exit status is then UNAVAILABLE, 69). A phase
 directory that holds no PLAN file answers `reason` `"phase directory holds no
 plans"` the same way: zero plans loaded is not zero coverage.
-
-### How to write decisions the gates accept
-
-The discuss-phase template already produces `D-NN`-numbered decisions.
-The gate is happiest when:
-
-1. Every plan that implements a decision **cites the id** somewhere —
-   `must_haves.truths: ["D-12: bit offsets exposed"]` or a `D-12:` mention
-   in the plan body. Strict id match is the cheapest, deterministic path.
-2. Soft phrase matching is a fallback for paraphrases — if a 6+-word slice
-   of the decision text appears verbatim in a plan/summary, it counts.
-
-### Opt-outs
-
-A decision is **not** subject to the gates when any of the following
-apply:
-
-- It lives under the `### Claude's Discretion` heading inside `<decisions>`.
-- It is tagged `[informational]`, `[folded]`, or `[deferred]` in its
-  bullet (e.g., `- **D-08 [informational]:** Naming style for internal
-  helpers`).
-
-Use these escape hatches when a decision genuinely doesn't need plan
-coverage — implementation discretion, future ideas captured for the
-record, or items already deferred to a later phase.
 
 ---
 
