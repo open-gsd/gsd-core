@@ -5678,8 +5678,11 @@ const deps = {
 };
 
 // Non-canonical frontmatter: an unquoted gsd_state_version (the rebuild quotes
-// it) and none of the synced fields (current_phase, last_updated, progress, ...)
-// that the rebuild adds.
+// it, so the no-op guard did not fire) and none of the synced fields
+// (current_phase, last_updated, progress, ...) that the sync step then added.
+// Control rows pass on the base as well and are labelled `(control)`: only the
+// two refusals this fix changes, on non-canonical frontmatter, are fail-first.
+const FIXED_REFUSALS = new Set(['ambiguous_plan_position', 'plan_position_unreadable']);
 const NON_CANONICAL_FM = [
   '---',
   'gsd_state_version: 1.0',
@@ -5726,8 +5729,9 @@ const REFUSALS = {
 
 describe('#6168 transitionCore advancePlan returns the input document on every refusal', () => {
   for (const [reason, bodyLines] of Object.entries(REFUSALS)) {
-    for (const [shape, fm] of [['non-canonical', NON_CANONICAL_FM], ['no frontmatter', []]]) {
-      test(`${reason} (${shape} frontmatter): content strictly equals the input`, () => {
+    for (const [shape, fm] of [['non-canonical', NON_CANONICAL_FM], ['no', []]]) {
+      const control = FIXED_REFUSALS.has(reason) && fm.length > 0 ? '' : ' (control)';
+      test(`${reason} (${shape} frontmatter): content strictly equals the input${control}`, () => {
         const input = [...fm, ...bodyLines].join('\n');
         const result = transitionCore(input, { kind: 'advancePlan' }, deps);
         assert.strictEqual(result.data && result.data.error, true);
@@ -5738,6 +5742,23 @@ describe('#6168 transitionCore advancePlan returns the input document on every r
         assert.deepStrictEqual(result.updated, []);
         assert.strictEqual(result.content, input,
           `${reason}: a refusal must hand back the document it was given`);
+      });
+    }
+  }
+
+  // transitionCore masks fenced blocks before the core runs and restores them after, and a CRLF
+  // document is rebuilt with LF joins: the refusal must come back as the original bytes either way.
+  for (const reason of FIXED_REFUSALS) {
+    const fenced = [...NON_CANONICAL_FM, ...REFUSALS[reason].slice(0, 2),
+      '```', 'Plan: 1 of 9', 'Status: example', '```', '', ...REFUSALS[reason].slice(2)].join('\n');
+    const crlf = [...NON_CANONICAL_FM, ...REFUSALS[reason]].join('\r\n');
+    for (const [shape, input] of [['fenced code block', fenced], ['CRLF', crlf]]) {
+      test(`${reason} (non-canonical frontmatter, ${shape}): content strictly equals the input`, () => {
+        const result = transitionCore(input, { kind: 'advancePlan' }, deps);
+        assert.strictEqual(result.data && result.data.error, true, JSON.stringify(result.data));
+        assert.deepStrictEqual(result.updated, []);
+        assert.strictEqual(result.content, input,
+          `${reason} (${shape}): a refusal must hand back the document it was given`);
       });
     }
   }
@@ -5772,7 +5793,8 @@ describe('#6168 state advance-plan CLI leaves STATE.md byte-identical on refusal
   };
 
   for (const [reason, bodyLines] of Object.entries(REFUSALS)) {
-    test(`${reason}: non-canonical frontmatter, error unchanged and file bytes identical`, () => {
+    const cliControl = FIXED_REFUSALS.has(reason) ? '' : ' (control)';
+    test(`${reason}: non-canonical frontmatter, error unchanged and file bytes identical${cliControl}`, () => {
       const { result, before, after } = writeAndRun([...NON_CANONICAL_FM, ...bodyLines].join('\n'));
       const out = JSON.parse(result.output);
       assert.ok(typeof out.error === 'string' || out.error === true, `expected an error payload: ${result.output}`);
@@ -5780,7 +5802,7 @@ describe('#6168 state advance-plan CLI leaves STATE.md byte-identical on refusal
       assert.ok(before.equals(after), `${reason}: STATE.md was modified by a refusal`);
     });
 
-    test(`${reason}: already-canonical file stays byte-identical`, () => {
+    test(`${reason}: already-canonical file stays byte-identical (control)`, () => {
       const canonical = canonicalise();
       const broken = canonical
         .replace(/^Plan: .*$/m, bodyLines.find((l) => /^Plan: /.test(l)))
@@ -5793,7 +5815,7 @@ describe('#6168 state advance-plan CLI leaves STATE.md byte-identical on refusal
     });
   }
 
-  test('plans_outstanding decline leaves STATE.md byte-identical', () => {
+  test('plans_outstanding decline leaves STATE.md byte-identical (control)', () => {
     tmpDir = createTempProject();
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     fs.writeFileSync(statePath, [...NON_CANONICAL_FM, '# Project State', '', '## Current Position', '',
@@ -5810,8 +5832,12 @@ describe('#6168 state advance-plan CLI leaves STATE.md byte-identical on refusal
     assert.ok(before.equals(fs.readFileSync(statePath)), 'plans_outstanding must not write');
   });
 
-  test('last_plan decline and a normal advance still write', () => {
-    for (const [plan, expectAdvanced] of [['2 of 2', false], ['1 of 5', true]]) {
+  test('last_plan decline and a normal advance still write (control)', () => {
+    // Each row asserts the body line the write is for, so a frontmatter-only rewrite cannot pass it.
+    for (const [plan, expectAdvanced, writtenLine] of [
+      ['2 of 2', false, /^Status: Phase complete — ready for verification$/m],
+      ['1 of 5', true, /^Plan: 2 of 5$/m],
+    ]) {
       tmpDir = createTempProject();
       const statePath = path.join(tmpDir, '.planning', 'STATE.md');
       fs.writeFileSync(statePath, [...NON_CANONICAL_FM, '# Project State', '', '## Current Position', '',
@@ -5820,7 +5846,9 @@ describe('#6168 state advance-plan CLI leaves STATE.md byte-identical on refusal
       const result = runGsdTools('state advance-plan', tmpDir);
       const out = JSON.parse(result.output);
       assert.strictEqual(out.advanced, expectAdvanced, result.output);
-      assert.ok(!before.equals(fs.readFileSync(statePath)), `plan ${plan} must still write`);
+      const after = fs.readFileSync(statePath, 'utf8');
+      assert.doesNotMatch(before.toString('utf8'), writtenLine);
+      assert.match(after, writtenLine, `plan ${plan} must still write its body line`);
       cleanup(tmpDir); tmpDir = null;
     }
   });
