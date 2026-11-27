@@ -28,6 +28,8 @@ const {
   runGsdTools,
 } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
+const { TOOLS_PATH } = require('./helpers/gsd-tools-cli.cjs');
+const { isolatedEnv, createHermeticRoot } = require('./helpers/isolated-env.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { toPosixPath } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
@@ -167,6 +169,15 @@ const STUB_PREAMBLE = [
   '    return 0',
   '  fi',
   '',
+  // #6713: with STUB_REAL_PLAN=1 the plan call reaches real gsd-tools dispatch with the argv the shipped block
+  // built, so a flag the verb refuses fails here instead of being swallowed by the stub below.
+  '  if [ "$1" = "query" ] && [ "$2" = "review-lane" ] && [ "$3" = "plan" ] && [ "$STUB_REAL_PLAN" = "1" ]; then',
+  '    local plan_rc=0',
+  '    "$NODE_BIN" "$GSD_TOOLS_PATH" "$@" || plan_rc=$?',
+  '    echo "plan-exit:$plan_rc" >> "$TRACE"',
+  '    return "$plan_rc"',
+  '  fi',
+  '',
   '  if [ "$1" = "query" ] && [ "$2" = "review-lane" ] && [ "$3" = "plan" ]; then',
   '    shift 3',
   '    local sel',
@@ -241,12 +252,13 @@ const STUB_PREAMBLE = [
  * maps to the empty string, which is exactly how an unset config key reads
  * back through `config-get --raw`.
  */
-function buildEnv(opts, runDir, tracePath, barrierDir) {
+function buildEnv(opts, runDir, tracePath, barrierDir, home) {
   const selected = opts.selected;
   const laneCount = selected.split(',').filter((s) => s.length > 0).length;
   const deps = opts.deps || {};
   return {
-    ...process.env,
+    // #6713: the real-plan case reaches real gsd-tools, so the developer's GSD_* and config variables stay out.
+    ...(home ? isolatedEnv({ home }) : process.env),
     SELECTED_REVIEWERS: selected,
     EXPLICIT_FLAG: '',
     STUB_PARALLEL: opts.parallel === null || opts.parallel === undefined ? '' : opts.parallel,
@@ -261,6 +273,9 @@ function buildEnv(opts, runDir, tracePath, barrierDir) {
     TRACE: tracePath,
     PB_LOG: `${tracePath}.pb`,
     BARRIER_DIR: barrierDir,
+    STUB_REAL_PLAN: opts.realPlan ? '1' : '0',
+    NODE_BIN: process.execPath,
+    GSD_TOOLS_PATH: TOOLS_PATH,
   };
 }
 
@@ -271,17 +286,20 @@ function buildEnv(opts, runDir, tracePath, barrierDir) {
  */
 function runDispatch(t, opts) {
   const scriptDir = createTempDir('gsd-3034-script-');
-  const runDir = createTempDir('gsd-3034-rundir-');
+  // A real plan call walks up from its directory for project config: a hermetic root stops that walk.
+  const runDir = opts.realPlan ? createHermeticRoot('gsd-6713-rundir-') : createTempDir('gsd-3034-rundir-');
   const barrierDir = createTempDir('gsd-3034-barrier-');
+  const home = opts.realPlan ? createTempDir('gsd-6713-home-') : null;
   t.after(() => {
     cleanup(scriptDir);
     cleanup(runDir);
     cleanup(barrierDir);
+    if (home) cleanup(home);
   });
 
   const block = extractInvokeReviewersBash();
   const tracePath = path.join(scriptDir, 'trace.log');
-  const env = buildEnv(opts, runDir, tracePath, barrierDir);
+  const env = buildEnv(opts, runDir, tracePath, barrierDir, home);
 
   const scriptPath = path.join(scriptDir, 'dispatch.sh');
   const script = [
@@ -1311,5 +1329,19 @@ describe('#4351 repeated review runs accumulate evidence instead of clobbering i
     const flat = fs.readdirSync(result.diagDir)
       .filter((name) => fs.statSync(path.join(result.diagDir, name)).isFile());
     assert.deepEqual(flat, [], 'no evidence may be left flat in the diagnostics root');
+  });
+});
+
+// ─── #6713 — the shipped plan call reaches real dispatch ─────────────────
+
+describe('#6713 the shipped review-lane plan call writes the lane plan', () => {
+  test('planCallExitsZeroAndWritesJsonArray_6713', (t) => {
+    // The plan argv is the one the shipped block builds; only `invoke` is stubbed. Before #6713 the block passed
+    // --json, which `review-lane plan` refuses: plan-exit:1 and an empty gsd-review-lanes.json.
+    const result = runDispatch(t, { selected: 'codex', parallel: null, realPlan: true });
+    assert.deepEqual(result.trace, ['plan-exit:0', ...serialTrace(['codex'])]);
+    const plan = JSON.parse(readFileNormalized(path.join(result.runDir, 'gsd-review-lanes.json')));
+    assert.ok(Array.isArray(plan), 'the lane plan on disk is a JSON array');
+    assert.deepEqual(plan.map((row) => row.slug), ['codex']);
   });
 });

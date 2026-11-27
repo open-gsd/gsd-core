@@ -29,7 +29,7 @@ fails the same way, only quieter. A refusal is the one failure you can see and f
 ## Find out where the cap came from
 
 ```bash
-gsd-tools review-lane plan --selected claude --json
+gsd-tools review-lane plan --selected claude
 ```
 
 Read two fields on the lane's row:

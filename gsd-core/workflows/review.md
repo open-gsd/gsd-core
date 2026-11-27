@@ -396,7 +396,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 PARALLEL_LANES=$(gsd_run query config-get review.parallel_lanes --raw 2>/dev/null || echo "false")
 
 gsd_run query review-lane plan \
-  --selected "$SELECTED_REVIEWERS" --run-dir "$RUN_DIR" --repo-root "$REPO_ROOT" --json \
+  --selected "$SELECTED_REVIEWERS" --run-dir "$RUN_DIR" --repo-root "$REPO_ROOT" \
   > "$RUN_DIR/gsd-review-lanes.json"
 
 # One lane, start to finish. Hoisted into a function so the sequential and concurrent paths share

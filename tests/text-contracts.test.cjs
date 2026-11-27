@@ -539,7 +539,7 @@ const SHIPPED = [
   'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
   'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
   'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
-  'advisor-prefilter',
+  'advisor-prefilter', 'review-lane-declared-flags',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -664,6 +664,17 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
     });
   }
+
+  // review-lane-declared-flags (#6713), end to end on the real workflow: `--json` back on the plan call is the bug.
+  test('mutation: --json back on the review.md plan call fails review-lane-declared-flags', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'gsd-core', 'workflows', 'review.md');
+    const call = '--repo-root "$REPO_ROOT" \\\n  > "$RUN_DIR/gsd-review-lanes.json"';
+    const before = fs.readFileSync(abs, 'utf8');
+    assert.ok(before.includes(call), 'the plan call is present to start with');
+    fs.writeFileSync(abs, before.replace(call, call.replace(' \\\n', ' --json \\\n')));
+    assert.deepEqual(runShipped(root, ['review-lane-declared-flags']).map((f) => f.file), ['gsd-core/workflows/review.md']);
+  });
 
   // The four autonomous-* contracts: each asserts on the command, the workflow or the smart-discuss reference.
   const SIZE_LIMIT = 40 * 1024;
@@ -1659,5 +1670,82 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     const findings = runShipped(root);
     assert.equal(findings.length, 1);
     assert.match(findings[0].message, /should NOT hand-enumerate reviewer lane flag --codex/);
+  });
+});
+
+// ─── review-lane-declared-flags (#6713) on isolated fixtures ───────────────
+
+describe('review-lane-declared-flags reads each call form the shipped Markdown uses', () => {
+  const ID = 'review-lane-declared-flags';
+  const WHY = 'every review-lane call must pass only flags dispatch accepts for its sub';
+  const PLAN_CALL = '```bash\ngsd_run query review-lane plan --selected "$S" --run-dir "$D" --repo-root "$R" > "$D/plan.json"\n```\n';
+  const FIXTURE = 'gsd-core/references/fixture.md';
+
+  // A root with one file under each scanned root, a clean review.md plan call, and `text` at FIXTURE.
+  function fixture(t, text, reviewMd = PLAN_CALL) {
+    const root = tempDir(t, 'gsd-6713-');
+    write(root, 'gsd-core/workflows/review.md', reviewMd);
+    write(root, 'commands/gsd/review.md', '# review\n');
+    write(root, 'skills/gsd-review/SKILL.md', '# review\n');
+    write(root, 'pi/package-skills/gsd-review/SKILL.md', '# review\n');
+    write(root, FIXTURE, text);
+    return root;
+  }
+  const run = (root) => textContracts.run({ root, only: [ID], minContracts: 1 });
+  const finding = (file, violations) => ({ file, line: 0, message: `${ID}: ${WHY} (${violations.join('; ')})` });
+
+  for (const [title, text, violations] of [
+    ['a fenced call with continuation lines', '```bash\ngsd_run query review-lane plan \\\n  --selected "$S" --json \\\n  > out.json | grep --zz\n```\n', ['review-lane.plan passes undeclared --json']],
+    ['CRLF continuation lines', '```bash\r\ngsd_run query review-lane plan \\\r\n  --json \\\r\n  > out.json\r\n```\r\n', ['review-lane.plan passes undeclared --json']],
+    ['the dotted review-lane.plan spelling', 'Run `gsd_run query review-lane.plan --selected codex --json`.\n', ['review-lane.plan passes undeclared --json']],
+    ['a quoted flag token', '```bash\ngsd_run review-lane plan "--json" \'--zz-quoted\'\n```\n', ['review-lane.plan passes undeclared --json', 'review-lane.plan passes undeclared --zz-quoted']],
+    ['a flag inside a ${VAR:+...} expansion', '```bash\ngsd_run query review-lane invoke --slug s ${A:+--zz-agent} ${A:+"$A"}\n```\n', ['review-lane.invoke passes undeclared --zz-agent']],
+    ['an inline span wrapped across a soft line break', 'call `gsd_run review-lane dispatch-step --cap-id <capId> --point\n<point> --zz-explicit <slugs> ...` to dispatch\n', ['review-lane.dispatch-step passes undeclared --zz-explicit']],
+    ['a flag after a <a|b> placeholder and a $(...) value', '`gsd_run review-lane dispatch-step --depth <quick|standard|deep> --run-dir "$(mktemp -d)" --zz-late`\n', ['review-lane.dispatch-step passes undeclared --zz-late']],
+    ['a declared flag in the --flag=value form', '`gsd_run review-lane plan --selected=codex`\n', ['review-lane.plan passes undeclared --selected=']],
+    ['a flag before the explicit-from-argv passthrough marker', '`gsd_run review-lane explicit-from-argv --zz-own -- --codex`\n', ['review-lane.explicit-from-argv passes undeclared --zz-own']],
+    ['a review-lane sub the registry does not declare', '`gsd_run review-lane zz-sub --selected codex`\n', ['review-lane.zz-sub is not declared in CLI_SURFACE']],
+  ]) {
+    test(`finds: ${title}`, (t) => {
+      assert.deepEqual(run(fixture(t, text)), [finding(FIXTURE, violations)]);
+    });
+  }
+
+  for (const [title, text] of [
+    ['global flags, an eq-only global flag and a help token', '`gsd_run review-lane plan --selected codex --raw --cwd x --exit-contract=v2 --help`\n'],
+    ['a quoted help token', '```bash\ngsd_run review-lane plan "--help" \'--usage\'\n```\n'],
+    ['candidate flags after the passthrough marker, tab-separated', '```bash\ngsd_run review-lane explicit-from-argv\t--\t--codex --zz-candidate\n```\n'],
+    ['the reviewer flags outside a $(gsd_run review-lane flags) substitution', '```bash\nfor F in $(gsd_run review-lane flags) --all --text; do :; done\n```\n'],
+    ['a span that a blank line ends before the flag', '`gsd_run review-lane plan\n\n--zz-next-paragraph`\n'],
+  ]) {
+    test(`passes: ${title}`, (t) => {
+      assert.deepEqual(run(fixture(t, text)), []);
+    });
+  }
+
+  test('review.md without a plan call is a finding, so a scan that matches nothing cannot pass', (t) => {
+    assert.deepEqual(run(fixture(t, '# none\n', '# review\n')),
+      [finding('gsd-core/workflows/review.md', ['no review-lane plan call found in review.md'])]);
+  });
+
+  test('review.md absent from the tree is a finding, not a clean pass', (t) => {
+    const root = fixture(t, '# none\n');
+    fs.unlinkSync(path.join(root, 'gsd-core', 'workflows', 'review.md'));
+    assert.deepEqual(run(root).map((f) => f.file), ['gsd-core/workflows/review.md']);
+  });
+
+  test('a call is clean exactly when every flag it passes is declared, whatever its spacing, quoting and continuations (property)', (t) => {
+    const fc = require('fast-check');
+    const declared = ['selected', 'run-dir', 'repo-root', 'raw', 'cwd'];
+    const flag = fc.oneof(fc.constantFrom(...declared), fc.constantFrom('json', 'zz-a', 'zz-b'));
+    const sep = fc.constantFrom(' ', '\t', '  ', ' \\\n  ', ' \\\r\n\t');
+    const quote = fc.constantFrom('', '"', "'");
+    const arg = fc.record({ flag, quote, sep, value: fc.constantFrom('', ' "$V"', ' C:\\Program\\ Files') });
+    fc.assert(fc.property(fc.array(arg, { maxLength: 5 }), (args) => {
+      const call = args.map(({ flag: f, quote: q, sep: s, value }) => `${s}${q}--${f}${q}${value}`).join('');
+      const findings = run(fixture(t, `\`\`\`bash\ngsd_run query review-lane plan${call}\n\`\`\`\n`));
+      const undeclared = args.filter((a) => !declared.includes(a.flag)).map((a) => `review-lane.plan passes undeclared --${a.flag}`);
+      assert.deepEqual(findings, undeclared.length === 0 ? [] : [finding(FIXTURE, undeclared)]);
+    }), { numRuns: 60, seed: 6713 });
   });
 });
