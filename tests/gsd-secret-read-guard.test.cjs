@@ -7724,6 +7724,12 @@ describe('gsd-secret-read-guard: a long line read once per xargs action or word 
     const r = runHookWithin(bash(cmd), KILL_BOUND_MS);
     assert.equal(r.status, 2, `nested blank fed lines: ${r.stderr}`);
   });
+  test('blocks one long word put into 400 find -exec xargs scripts nested past the limit inside the kill bound', () => {
+    const actions = Array.from({ length: 400 }, (_, i) => `-exec xargs -I{} sh -c 'x${i}${'{}'.repeat(1000)}' \\; `).join('');
+    const cmd = `$($($(echo ${'a'.repeat(50000)} | find . ${actions})))`;
+    const r = runHookWithin(bash(cmd), KILL_BOUND_MS);
+    assert.equal(r.status, 2, `400 nested actions: ${r.stderr}`);
+  });
   test('denies a read after 400 xargs actions with distinct delimiters over one printf text inside the kill bound', () => {
     const actions = Array.from({ length: 400 }, (_, i) => `-exec xargs -d${String.fromCharCode(0x4e00 + i)} cat \\; `).join('');
     const cmd = `printf '${'a '.repeat(2500)}%s' ${'x '.repeat(90)}| find . ${actions}; cat .env`;

@@ -5837,7 +5837,8 @@ function findXargsShellScriptRead(script, replaceStr, upstream, depth) {
   if (!whole && (parts === null || parts.length < 2)) return null;
   // Past the nesting limit a script is not read, only held as too deep
   // (readEachWay): the first one that is not blank does that, and a blank one
-  // nothing, so a blank word put into blank parts is not built at all.
+  // nothing. So there no script is built: a part or word that is not blank is
+  // held in its place, and a blank word put into blank parts is skipped.
   const deep = depth >= MAX_NESTING_DEPTH;
   const blankParts = whole || parts.every((p) => p.trim() === '');
   const seen = new Set();
@@ -5848,7 +5849,8 @@ function findXargsShellScriptRead(script, replaceStr, upstream, depth) {
     seen.add(word);
     if (whole) chargeReader((word.length + 1) * PRINTED_WORD_COST);
     if (deep && blankParts && word.trim() === '') continue;
-    const hit = findSecretRead(whole ? word : parts.join(word), depth + 1);
+    const read = deep && !blankParts ? parts.find((p) => p.trim() !== '') : whole || deep ? word : parts.join(word);
+    const hit = findSecretRead(read, depth + 1);
     if (hit || deep) return hit;
   }
   return null;
