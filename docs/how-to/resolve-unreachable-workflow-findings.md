@@ -69,7 +69,7 @@ git rm gsd-core/workflows/<name>.md
    ```bash
    npm run build:lib && node scripts/gen-inventory-manifest.cjs --write
    ```
-3. **Regenerate the golden install-tree fixtures.** All 19 runtimes list every shipped workflow:
+3. **Regenerate the golden install-tree fixtures.** All 19 fixtures (the 18 runtimes plus the Claude local install) list every shipped workflow:
    ```bash
    npm run gen:install-tree
    ```

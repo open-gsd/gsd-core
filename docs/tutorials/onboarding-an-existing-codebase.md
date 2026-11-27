@@ -29,9 +29,9 @@ npx @opengsd/gsd-core@latest
 Choose **Claude Code** and **local** when prompted. You'll see:
 
 ```text
-✓ Installed 86 skills to .claude/commands/
-✓ Installed agents to .claude/agents/
-✓ GSD Core ready — run /gsd-new-project to start
+✓ Installed 72 commands to commands/ (gsd-<cmd>.md flat form)
+✓ Installed agents
+Done! Open a blank directory in Claude Code and run /gsd-new-project.
 ```
 
 ---
