@@ -1746,7 +1746,7 @@ gsd-tools workstream progress
 - **`list`** prints `{ mode, workstreams }`; each entry has `name`, `path`, `has_roadmap`, `has_state`, `status`, `milestone_shipped_unverified`, `current_phase`, `phase_count` and `completed_phases`.
 - **`get`** prints `{ active, mode }`; `active` is `null` when no workstream is active.
 - **`set <name>`** makes the workstream active and prints `{ active, set: true }`; an unknown name prints `{ active: null, error: "not_found", workstream }`.
-- **`progress`** prints `{ mode, active, workstreams }`; each entry has `name`, `active`, `status`, `milestone_shipped_unverified`, `current_phase`, `phases` and `plans` as `done/total`, and `progress_percent`.
+- **`progress`** prints `{ mode, active, workstreams }`; each entry has `name`, `active`, `status`, `milestone_shipped_unverified`, `current_phase`, `phases` and `plans` as completed-over-total strings such as `0/1`, and `progress_percent`.
 
 ### Environment and codebase-map helpers
 
