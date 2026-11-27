@@ -697,6 +697,8 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   not_git_repo: 'UNAVAILABLE',
   outside_worktree: 'FAIL',
   plans_no_line: 'FAIL',
+  quick_batch_unfinished: 'FAIL',
+  quick_table_unrecognized: 'FAIL',
   security_scan_failed: 'INTERNAL',
   pick_field_absent: 'UNAVAILABLE',
   pick_output_not_json: 'UNAVAILABLE',

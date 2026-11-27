@@ -23,6 +23,7 @@ import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { milestoneVersionOf } from './roadmap-progress.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { pruneQuickTaskRows, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
 const { comparePhaseNum, parsePhaseFromProse } = phaseIdMod;
@@ -1270,8 +1271,14 @@ export type StateTransitionIntent =
   | { kind: 'update'; field: string; value: string }
   | {
       kind: 'prune';
-      /** Phases at or below this number are archived (currentPhase - keepRecent). */
-      cutoff: number;
+      /**
+       * Phases at or below this number are archived (currentPhase - keepRecent). `null` skips the phase part
+       * (#6389: a run given only --keep-recent-quick, or a cutoff <= 0); it is never run at 0, which would
+       * archive `[Phase 0]` entries.
+       */
+      cutoff: number | null;
+      /** #6389: keep the last N Quick Tasks rows and archive the rest; absent or null leaves the table alone. */
+      keepRecentQuick?: number | null;
     }
   | {
       kind: 'sync';
@@ -3231,7 +3238,29 @@ function updateCore(
 // prune — intent implementation (Phase 7)
 // ----------------------------------------------------------------------------
 
-type PrunedSection = { section: string; count: number; lines: string[] };
+/**
+ * One archived section. `head` (#6389, the Quick Tasks section only) is the table's header and delimiter lines,
+ * copied so the moved rows still render as a table; it is never counted and never matched as an entry.
+ */
+type PrunedSection = { section: string; count: number; lines: string[]; head?: string[] };
+
+/** #6389: the archive section name of the moved Quick Tasks rows, whatever suffix the STATE.md heading carries. */
+export const QUICK_TASKS_ARCHIVE_SECTION = 'Quick Tasks Completed';
+
+/**
+ * #6389: `state prune --keep-recent-quick` found a Quick Tasks section it cannot address (not a table, a ragged
+ * row, or a header that is not a known Quick Tasks schema). Thrown by `pruneCore` before it returns, so nothing is
+ * written; the prune adapter turns it into the typed `quick_table_unrecognized` refusal.
+ */
+export class StatePruneQuickTableError extends Error {
+  constructor(public readonly reason: string) {
+    super(
+      `state prune --keep-recent-quick: the Quick Tasks table cannot be pruned (${reason}); nothing was written. ` +
+      'Repair the table (`gsd-tools quick-tasks-migrate` converts a legacy table) or run without --keep-recent-quick.',
+    );
+    this.name = 'StatePruneQuickTableError';
+  }
+}
 
 // Stop predicate for prune section slicing: a level-2 OR level-3 heading ends
 // the section (mirrors state.cts STOP_H2_H3 — Decisions / Recently Completed /
@@ -3253,7 +3282,7 @@ const STOP_H2_H3 = (lv: number): boolean => lv === 2 || lv === 3;
  */
 function pruneCore(
   content: string,
-  intent: { kind: 'prune'; cutoff: number },
+  intent: { kind: 'prune'; cutoff: number | null; keepRecentQuick?: number | null },
 ): StateTransitionResult {
   const cutoff = intent.cutoff;
   const sections: PrunedSection[] = [];
@@ -3288,63 +3317,84 @@ function pruneCore(
     }
   };
 
-  pruneSectionSpan(
-    (lv, text) => (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text),
-    (body) => {
-      const keep: string[] = [], archive: string[] = [];
-      for (const line of body.split('\n')) {
-        const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
-        if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
-      }
-      return { keep, archive };
-    },
-    'Decisions',
-  );
-
-  pruneSectionSpan(
-    (lv, text) => (lv === 2 || lv === 3) && /^recently\s+completed$/i.test(text),
-    (body) => {
-      const keep: string[] = [], archive: string[] = [];
-      for (const line of body.split('\n')) {
-        const phaseMatch = line.match(/Phase\s+(\d+)/i);
-        if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
-      }
-      return { keep, archive };
-    },
-    'Recently Completed',
-  );
-
-  pruneSectionSpan(
-    (lv, text) => (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)$/i.test(text),
-    (body) => {
-      const keep: string[] = [], archive: string[] = [];
-      for (const line of body.split('\n')) {
-        const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
-        const phaseMatch = line.match(/Phase\s+(\d+)/i);
-        if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
-      }
-      return { keep, archive };
-    },
-    'Blockers (resolved)',
-  );
-
-  pruneSectionSpan(
-    (lv, text) => (lv === 2 || lv === 3) && /^performance\s+metrics$/i.test(text),
-    (body) => {
-      const keep: string[] = [], archive: string[] = [];
-      for (const line of body.split('\n')) {
-        const tableRowMatch = line.match(/^\|\s*(\d+)\s*\|/);
-        if (tableRowMatch) {
-          const rowPhase = parseInt(tableRowMatch[1], 10);
-          if (rowPhase <= cutoff) { archive.push(line); } else { keep.push(line); }
-        } else {
-          keep.push(line);
+  if (cutoff !== null) {
+    pruneSectionSpan(
+      (lv, text) => (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
+          if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
         }
+        return { keep, archive };
+      },
+      'Decisions',
+    );
+
+    pruneSectionSpan(
+      (lv, text) => (lv === 2 || lv === 3) && /^recently\s+completed$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const phaseMatch = line.match(/Phase\s+(\d+)/i);
+          if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
+        }
+        return { keep, archive };
+      },
+      'Recently Completed',
+    );
+
+    pruneSectionSpan(
+      (lv, text) => (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
+          const phaseMatch = line.match(/Phase\s+(\d+)/i);
+          if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
+        }
+        return { keep, archive };
+      },
+      'Blockers (resolved)',
+    );
+
+    pruneSectionSpan(
+      (lv, text) => (lv === 2 || lv === 3) && /^performance\s+metrics$/i.test(text),
+      (body) => {
+        const keep: string[] = [], archive: string[] = [];
+        for (const line of body.split('\n')) {
+          const tableRowMatch = line.match(/^\|\s*(\d+)\s*\|/);
+          if (tableRowMatch) {
+            const rowPhase = parseInt(tableRowMatch[1], 10);
+            if (rowPhase <= cutoff) { archive.push(line); } else { keep.push(line); }
+          } else {
+            keep.push(line);
+          }
+        }
+        return { keep, archive };
+      },
+      'Performance Metrics',
+    );
+  }
+
+  // #6389: quick-task retention, through the table seam (ADR-2143). The section is created lazily, so its absence
+  // means nothing to prune; any other failure refuses the whole prune before anything is written.
+  if (typeof intent.keepRecentQuick === 'number') {
+    const quick = pruneQuickTaskRows(c, intent.keepRecentQuick);
+    if (quick.ok) {
+      if (quick.value.archived.length > 0) {
+        sections.push({
+          section: QUICK_TASKS_ARCHIVE_SECTION,
+          count: quick.value.archived.length,
+          lines: quick.value.archived,
+          head: [quick.value.header, quick.value.delimiter],
+        });
+        c = quick.value.content;
       }
-      return { keep, archive };
-    },
-    'Performance Metrics',
-  );
+    } else if (quick.reason !== QUICK_TASKS_SECTION_ABSENT) {
+      throw new StatePruneQuickTableError(quick.reason);
+    }
+  }
 
   const totalPruned = sections.reduce((sum, s) => sum + s.count, 0);
   return {

@@ -151,6 +151,19 @@ Under the hood this calls the narrower `gsd-tools milestone archive-quick <versi
 2. (Re)write that archive directory's `README.md` — a plain list, one entry per archived task directory, linking to its `<dir>-SUMMARY.md` (or legacy bare `SUMMARY.md`) when one exists, listed unlinked when it doesn't. The index is built by scanning the archive directory itself, never from `STATE.md`'s table — the table is known to drift from disk, so the filesystem is the only source of truth here.
 3. Clear the data rows of `STATE.md`'s `### Quick Tasks Completed` table, preserving its header row and whichever column variant (with or without a Status column) was detected.
 
+Step 3 deletes every row, including rows `/gsd-fast` logged without a task directory, whose text is archived nowhere. To keep them, run `gsd-tools state prune --keep-recent-quick 0` first: it moves every row, unchanged, into `.planning/STATE-ARCHIVE.md`.
+
+### Keeping only the newest rows in `STATE.md`
+
+The `### Quick Tasks Completed` table grows by one row per task, and agents read all of `STATE.md`. To cap it without losing history, keep the newest N rows and move the older ones into `.planning/STATE-ARCHIVE.md`:
+
+```bash
+gsd-tools state prune --keep-recent-quick 20 --dry-run   # what would move
+gsd-tools state prune --keep-recent-quick 20
+```
+
+The rows move verbatim, under a copy of the table header, and nothing about the task directories changes. It is opt-in and never runs on its own, and it refuses while a `/gsd-quick-batch` run still has an unfinished item. See [`state prune`](../CLI-TOOLS.md#state-prune) for the options, the archive format and retries.
+
 **Bucket-all, not per-milestone.** Quick tasks carry no on-disk record of which milestone they belong to, so every remaining `.planning/quick/*` directory lands in the ONE milestone you're archiving into — including tasks that predate an earlier, unarchived milestone. There's no way to split them after the fact; this is a known limit, not a bug.
 
 ### Telling "nothing to archive" from "refused to touch it"

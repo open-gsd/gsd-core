@@ -179,6 +179,56 @@ node gsd-tools.cjs state signal-resume
 
 `state record-session` lists the fields it wrote under `updated`, and under `replacedRecord` any Stopped At / Resume File value the write displaced (the `None` placeholder is not a record). In the session section, a line inside a fenced code block is an example: no session writer (`record-session`, `state update`/`patch` of a session field, `phase complete`) changes it, and neither the frontmatter sync nor `state-snapshot` reads it as a field. A field whose current value continues onto the next line is left unchanged, because a single-line write would orphan the rest (a line directly below shaped `words: text` counts as a continuation unless its label is bold or one STATE.md defines, such as `Resume file` or `Status`, since a wrapped sentence can take that shape): it is listed under `skipped` as `{ "field", "reason": "wrapped_value", "continuation" }` with a warning on stderr (the continuation is echoed up to 200 characters, then `…`), and when every field to update was skipped the call reports `"recorded": false`. With no session heading, Last session, Last Date and Resume file are not written in place — `state-snapshot` reads them from a session section only — and the call appends a `## Session` section (reported as `"created": true`, which an insert into an existing section is not) holding the new Last session and Stopped at, and the passed Resume file or else the body's existing one rather than `None` (a Stopped at skipped as wrapped carries its existing value); a carried value holding U+2028/U+2029 is left out and listed as `{ "field", "reason": "line_separator" }`, and when the document ends inside an unclosed code fence nothing is appended (it would land inside the fence) and each field the call writes (Last session, and Stopped at or Resume file when passed) that was not written in place or skipped for another reason is listed with `"reason": "unclosed_fence"`. `state record-session`, `state update` and `state patch` write a session field (Stopped At, Paused At, Resume File, Last session, Last Date) inside the session section — not a fenced example there, and not a copy in another section such as `## Session Continuity Archive` — which is where the frontmatter sync and `state-snapshot` read it. `record-session` inserts a field the section lacks; `state update` and `state patch` report it updated, and a document whose session section lacks the field, or that has no session section, reports it not found and is left unchanged. `state patch`, like `state update`, reports a field that already holds the requested value as updated. `state update` and `state patch` replace a field's first line only and do not check for a wrapped value, so a continuation line below it stays in place: fold a wrapped value onto one line before updating it with them.
 
+### State Prune
+
+Move old entries out of `.planning/STATE.md` into `.planning/STATE-ARCHIVE.md` (next to STATE.md, so a workstream
+prunes into its own archive). Archived text is kept verbatim and stays recoverable; it is just no longer loaded into
+agent context.
+
+```bash
+# Archive phase-tagged entries older than the last K phases (default 3)
+node gsd-tools.cjs state prune [--keep-recent K] [--dry-run]
+
+# Keep the newest N rows of the Quick Tasks table and archive the older ones (#6389)
+node gsd-tools.cjs state prune --keep-recent-quick N [--keep-recent K] [--dry-run]
+```
+
+- **Phase part (`--keep-recent K`).** Decisions, Recently Completed entries, resolved Blockers and Performance
+  Metrics rows tagged with a phase at or below `current phase - K` are archived. Without `--keep-recent-quick` this
+  is the whole command, and a cutoff of 0 or less returns `{ "pruned": false, "reason": ... }`.
+- **Quick part (`--keep-recent-quick N`, opt-in).** Keeps the last N rows of the "Quick Tasks Completed" table, in
+  table order (the order rows are appended), and moves the older rows, unchanged, into the archive under a copy of
+  the table's header and delimiter, so they still render as a table. Rows without a task directory (`/gsd-fast`) are
+  moved like any other. `N` is a whole number written in digits; `0` archives every row. It works on the table
+  `quick-tasks-append` writes to (the first Quick Tasks section with a recognized schema); other suffixed Quick
+  Tasks sections, such as an older `(v1.0)` table, are left alone. It needs no phase position. Given alone, only the
+  quick part runs; given with `--keep-recent`, both run in one archive block and one STATE.md write, and a phase
+  cutoff of 0 or less skips only the phase part. A STATE.md without a Quick Tasks section has nothing to prune
+  there (exit 0). Nothing runs it automatically; `workflow.auto_prune_state` keeps its phase-only meaning.
+- **Archive block.** Each run that archives something appends a `## Pruned <date> (...)` block whose heading records
+  the options it ran with: `(phases 1-N, kept recent K)`, `(quick: kept recent Q)`, or
+  `(phases 1-N, kept recent K; quick: kept recent Q)`, where `phases none` stands for a phase part with no positive
+  cutoff. A row keeps its own bytes, including the `\r` of a CRLF line; the archive separates lines with `\n`.
+- **Crash safety.** The archive is written first, then STATE.md; a failed STATE.md write puts the archive back. A run
+  killed between the two writes leaves the entries in both files, and a retry recognizes the archive's last block by
+  its content: with the same options it archives nothing twice (rows and entries that became due since are added to
+  that same block, so one interrupted run stays one block; the block keeps its date and its heading records the
+  cutoff it now covers). A retry with the same option set that prunes less than the interrupted run, in no part more
+  and in at least one part less (a smaller phase cutoff, that is a larger `--keep-recent`, or a larger N), finishes
+  the interrupted run at its options when the prune at those options equals that block exactly, and reports them;
+  with any other options it appends its whole prune, so rows may then appear twice but none is lost.
+- **Refusals (exit 1, nothing written).** `--keep-recent-quick` refuses while any
+  `.planning/quick-batches/*/BATCH.json` has an item that is not `complete`, or whose manifest cannot be read
+  (`quick_batch_unfinished`), because a resumed batch treats a missing row as "not yet run"; and when the Quick Tasks
+  section is not a table GSD can address (`quick_table_unrecognized`; `gsd-tools quick-tasks-migrate` converts a
+  legacy table). A missing, empty, repeated or non-digit `--keep-recent-quick` value is a usage error.
+- **Output.** `{ pruned, cutoff_phase, keep_recent, sections: [{ section, entries_archived }], total_archived,
+  archive_file }`; `--dry-run` reports `dry_run: true`, `entries_would_archive` and `total_would_archive` and writes
+  nothing. With `--keep-recent-quick` the result also carries `keep_recent_quick` (the N applied, which is an
+  interrupted run's N when the run completed it), `cutoff_phase` is `null` when no phase part ran and `keep_recent`
+  is `null` without `--keep-recent`; the quick rows appear in `sections` as `Quick Tasks Completed`. `--raw` prints
+  `true` or `false` (whether anything was, or would be, archived).
+
 ### State Snapshot
 
 Structured parse of the full STATE.md:

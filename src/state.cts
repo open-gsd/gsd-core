@@ -133,7 +133,7 @@ import { findProjectRoot } from './project-root.cjs';
 // it introduces no cycle on this path.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import milestoneLockMod = require('./milestone-lock.cjs');
-const { transitionCore, StatePlansNoLineError, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
+const { transitionCore, StatePlansNoLineError, StatePruneQuickTableError, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
 
 function replaceStateBodyField(
   content: string,
@@ -232,7 +232,9 @@ import {
 } from './state-document.cjs';
 import { tokenizeHeadings, collectSection, collectSections, replaceSection, stripFencedCode } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { parseMarkdownTable, updateTableCell, deleteTableRow, insertTableRow, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
+import { parseMarkdownTable, updateTableCell, deleteTableRow, insertTableRow, splitTableRow, isDelimiterRow, matchTableSchema } from './markdown-table.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6389 quick-batch.cjs is a CommonJS module
+import quickBatchMod = require('./quick-batch.cjs'); // #6389: the unfinished-batch refusal
 import { textEncodingError } from './validate.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import healthDiagnosticTypesMod = require('./health-diagnostic-types.cjs');
@@ -403,7 +405,9 @@ interface StateSnapshotSession {
 }
 
 interface StatePruneOptions {
-  keepRecent?: number | string;
+  keepRecent?: number | string | null;
+  /** #6389: keep the last N Quick Tasks rows (a whole number >= 0); absent = the phase-only prune. */
+  keepRecentQuick?: number;
   dryRun?: boolean;
   silent?: boolean;
 }
@@ -424,8 +428,12 @@ interface StatePruneResult {
   error?: string;
   reason?: string;
   dry_run?: boolean;
-  cutoff_phase?: number;
-  keep_recent?: number;
+  /** #6389: null when a --keep-recent-quick run ran no phase part. */
+  cutoff_phase?: number | null;
+  /** #6389: null when a --keep-recent-quick run was not given --keep-recent. */
+  keep_recent?: number | null;
+  /** #6389: only on a --keep-recent-quick run. */
+  keep_recent_quick?: number;
   sections?: Array<{ section: string; entries_archived?: number; entries_would_archive?: number }>;
   total_would_archive?: number;
   total_archived?: number;
@@ -437,6 +445,8 @@ interface PrunedSection {
   section: string;
   count: number;
   lines: string[];
+  /** #6389: the Quick Tasks table header and delimiter, copied before the moved rows; never counted or matched. */
+  head?: string[];
 }
 
 const STATE_PROGRESS_RESYNC_FIELDS = new Set([
@@ -7361,13 +7371,56 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 
 const STATE_ARCHIVE_HEADER = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
 
-/** One `### <name>` section of a STATE-ARCHIVE.md block: its entry lines in order. */
-type ArchiveSection = { section: string; lines: string[] };
+/** #6389: the archive section the moved Quick Tasks rows go to (one name, whatever suffix the STATE.md heading has). */
+const QUICK_ARCHIVE_SECTION: string = stateTransitionMod.QUICK_TASKS_ARCHIVE_SECTION;
 
-/** The archive's most recent `## Pruned ` block: its heading cutoff (null when unparsable) and its sections. */
+/**
+ * One `### <name>` section of a STATE-ARCHIVE.md block: its entry lines in order. `head` (#6389, the Quick Tasks
+ * section only) is the copied table header and delimiter: rendered before the entries, never matched as one.
+ */
+type ArchiveSection = { section: string; lines: string[]; head?: string[] };
+
+/**
+ * The archive's most recent `## Pruned ` block: its heading's phase cutoff, the phase retention K it records, the
+ * quick retention N it records (#6389; each null when the heading has none, or an unparsable one) and its sections.
+ */
 interface ParsedArchiveBlock {
   cutoff: number | null;
+  keepRecent: number | null;
+  keepRecentQuick: number | null;
   sections: ArchiveSection[];
+}
+
+/**
+ * #6389: the phase retention K a heading records, as the canonical number its token prints as. The legacy
+ * `--keep-recent` parsing can record any number `parseInt(...) || 3` yields, negative and unsafe ones included
+ * (`-2`, `-9007199254740992`, `-1e+21`), so the token is kept whenever `String(Number(token)) === token`; it is
+ * compared with this run's K through that same representation.
+ */
+function parseHeadingKeepRecent(heading: string): number | null {
+  const m = /\(phases (?:1-\S+?|none), kept recent (\S+?)(?:\)|; )/.exec(heading);
+  if (m === null) return null;
+  const n = Number(m[1]);
+  return String(n) === m[1] ? n : null;
+}
+
+/**
+ * #6389: the quick retention N a heading records. Strict: the heading names `quick: kept recent ` exactly once, as
+ * its last part (`(quick: kept recent N)` or `; quick: kept recent N)` at the very end), with N ASCII digits forming
+ * a safe integer. Anything else records no quick part.
+ */
+function parseHeadingKeepRecentQuick(heading: string): number | null {
+  if (heading.split('quick: kept recent ').length !== 2) return null;
+  const m = /(?:\(|; )quick: kept recent ([0-9]+)\)$/.exec(heading);
+  if (m === null) return null;
+  const n = Number(m[1]);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** #6389: does `line` (its `\r` ignored) read as a Quick Tasks header row? */
+function isQuickTasksHeaderLine(line: string): boolean {
+  const match = matchTableSchema(splitTableRow(line.replace(/\r$/, '')));
+  return match !== null && match.id === 'QuickTasks';
 }
 
 /**
@@ -7378,35 +7431,60 @@ interface ParsedArchiveBlock {
  * the next `## ` heading; a `### <name>` line starts a section and every other
  * non-blank line is an entry of the current section (trailing `\r` stripped).
  * Lines before the first `###` are ignored.
+ *
+ * #6389: also `keepRecent` (the K of the phase part) and `keepRecentQuick` (the N of the quick part). In the
+ * `Quick Tasks Completed` section the lines keep a trailing `\r` (rows are matched byte-exactly), and its first two
+ * lines become `head` when they are a Quick Tasks header and a delimiter row of the same width.
  */
 function parseLastArchiveBlock(archiveText: string): ParsedArchiveBlock | null {
-  const all = archiveText.split(/\r?\n/);
+  const all = archiveText.split(/\n/);
   let start = -1;
   for (let i = all.length - 1; i >= 0; i--) {
     if (all[i].startsWith('## Pruned ')) { start = i; break; }
   }
   if (start === -1) return null;
-  const heading = /\(phases 1-(\d+), /.exec(all[start]);
+  const headingLine = all[start].replace(/\r$/, '');
+  const heading = /\(phases 1-(\d+), /.exec(headingLine);
   const parsed = heading === null ? NaN : Number(heading[1]);
   const sections: ArchiveSection[] = [];
   let current: ArchiveSection | null = null;
   for (let i = start + 1; i < all.length; i++) {
-    const line = all[i].replace(/\r$/, '');
+    const rawLine = all[i];
+    const line = rawLine.replace(/\r$/, '');
     if (line.startsWith('## ')) break;
     if (line.startsWith('### ')) {
       current = { section: line.slice(4).trimEnd(), lines: [] };
       sections.push(current);
     } else if (current !== null && line.trim().length > 0) {
-      current.lines.push(line);
+      current.lines.push(current.section === QUICK_ARCHIVE_SECTION ? rawLine : line);
     }
   }
-  return { cutoff: Number.isSafeInteger(parsed) ? parsed : null, sections };
+  for (const s of sections) {
+    if (s.section !== QUICK_ARCHIVE_SECTION || s.lines.length < 2) continue;
+    const [h, d] = s.lines;
+    const dCells = splitTableRow(d.replace(/\r$/, ''));
+    if (isQuickTasksHeaderLine(h) && isDelimiterRow(dCells) && dCells.length === splitTableRow(h.replace(/\r$/, '')).length) {
+      s.head = [h, d];
+      s.lines = s.lines.slice(2);
+    }
+  }
+  return {
+    cutoff: Number.isSafeInteger(parsed) ? parsed : null,
+    keepRecent: parseHeadingKeepRecent(headingLine),
+    keepRecentQuick: parseHeadingKeepRecentQuick(headingLine),
+    sections,
+  };
 }
 
-function countLines(lines: string[]): Map<string, number> {
+/** The match key of an archived line: quick rows byte-exactly (#6389), every other entry with its `\r` ignored. */
+function lineKey(section: string, line: string): string {
+  return section === QUICK_ARCHIVE_SECTION ? line : line.replace(/\r$/, '');
+}
+
+function countLines(section: string, lines: string[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const l of lines) {
-    const k = l.replace(/\r$/, '');
+    const k = lineKey(section, l);
     counts.set(k, (counts.get(k) ?? 0) + 1);
   }
   return counts;
@@ -7417,9 +7495,10 @@ function countLines(lines: string[]): Map<string, number> {
  * `parseLastArchiveBlock`) already hold part of this prune? It does when the
  * block has at least one entry and, for every section it names, its lines are a
  * sub-multiset of the same-named pruned section's lines (trailing `\r`
- * ignored). `remainder` is then the pruned sections minus the block's lines
+ * ignored, except in the Quick Tasks section, whose rows match byte-exactly, #6389). `remainder` is then the pruned
+ * sections minus the block's lines
  * (one occurrence removed per block occurrence, original strings and order
- * kept, empty sections dropped, `count` recomputed); otherwise it is `sections`.
+ * kept, empty sections dropped, `count` recomputed, a table `head` carried); otherwise it is `sections`.
  */
 function subtractPendingBlock(
   block: ArchiveSection[] | null,
@@ -7429,7 +7508,7 @@ function subtractPendingBlock(
   const prunedBySection = new Map<string, Map<string, number>>();
   for (const s of sections) {
     const into = prunedBySection.get(s.section) ?? new Map<string, number>();
-    for (const [k, n] of countLines(s.lines)) into.set(k, (into.get(k) ?? 0) + n);
+    for (const [k, n] of countLines(s.section, s.lines)) into.set(k, (into.get(k) ?? 0) + n);
     prunedBySection.set(s.section, into);
   }
   const consumedBySection = new Map<string, Map<string, number>>();
@@ -7439,7 +7518,7 @@ function subtractPendingBlock(
       if (b.lines.length === 0) continue;
       return { pending: false, remainder: sections };
     }
-    const blockCounts = countLines(b.lines);
+    const blockCounts = countLines(b.section, b.lines);
     const consumed = consumedBySection.get(b.section) ?? new Map<string, number>();
     for (const [k, n] of blockCounts) {
       if ((prunedCounts.get(k) ?? 0) - (consumed.get(k) ?? 0) < n) return { pending: false, remainder: sections };
@@ -7452,14 +7531,22 @@ function subtractPendingBlock(
     const consumed = consumedBySection.get(s.section);
     const kept: string[] = [];
     for (const l of s.lines) {
-      const k = l.replace(/\r$/, '');
+      const k = lineKey(s.section, l);
       const left = consumed?.get(k) ?? 0;
       if (left > 0) consumed!.set(k, left - 1);
       else kept.push(l);
     }
-    if (kept.length > 0) remainder.push({ section: s.section, count: kept.length, lines: kept });
+    if (kept.length > 0) remainder.push({ section: s.section, count: kept.length, lines: kept, ...(s.head ? { head: s.head } : {}) });
   }
   return { pending: true, remainder };
+}
+
+/** The heading fields of one archive block (#6389: `keepRecentQuick` only on a run given --keep-recent-quick). */
+interface ArchiveBlockMeta {
+  date: string;
+  cutoff: number | null;
+  keepRecent: number | null;
+  keepRecentQuick?: number;
 }
 
 /**
@@ -7475,31 +7562,51 @@ interface StateArchiveAppendPlan {
   base: string;
   /** '' when `base` is empty or ends with a newline; '\n\n' so the heading starts on its own line otherwise. */
   boundary: '' | '\n\n';
-  block: {
-    date: string;
-    cutoff: number;
-    keepRecent: number;
-    sections: ArchiveSection[];
-  };
+  block: ArchiveBlockMeta & { sections: ArchiveSection[] };
 }
 
 /** Pure: plan the archive append for one prune run. `existing` is null when the archive is absent. */
 function planStateArchiveAppend(
   existing: string | null,
   sections: PrunedSection[],
-  meta: { date: string; cutoff: number; keepRecent: number },
+  meta: { date: string; cutoff: number | null; keepRecent: number | null; keepRecentQuick?: number | null },
 ): StateArchiveAppendPlan {
   const base = existing ?? STATE_ARCHIVE_HEADER;
+  const block: ArchiveBlockMeta & { sections: ArchiveSection[] } = {
+    date: meta.date,
+    cutoff: meta.cutoff,
+    keepRecent: meta.keepRecent,
+    sections: sections.map(s => ({ section: s.section, lines: [...s.lines], ...(s.head ? { head: [...s.head] } : {}) })),
+  };
+  if (typeof meta.keepRecentQuick === 'number') block.keepRecentQuick = meta.keepRecentQuick;
   return {
     base,
     boundary: base.length > 0 && !base.endsWith('\n') ? '\n\n' : '',
-    block: {
-      date: meta.date,
-      cutoff: meta.cutoff,
-      keepRecent: meta.keepRecent,
-      sections: sections.map(s => ({ section: s.section, lines: [...s.lines] })),
-    },
+    block,
   };
+}
+
+/**
+ * The heading line of a block (no line break). Without a quick part it is exactly the #5831 heading. #6389: a run
+ * given --keep-recent-quick records the options it was given: `(quick: kept recent Q)`, or with --keep-recent too
+ * `(phases 1-N, kept recent K; quick: kept recent Q)`, where `phases none` stands for a phase part with no positive
+ * cutoff (skipped, never run at 0).
+ */
+function renderArchiveHeading(meta: ArchiveBlockMeta): string {
+  if (meta.keepRecentQuick === undefined) {
+    return `## Pruned ${meta.date} (phases 1-${meta.cutoff}, kept recent ${meta.keepRecent})`;
+  }
+  const parts: string[] = [];
+  if (meta.keepRecent !== null) {
+    parts.push(`phases ${meta.cutoff === null ? 'none' : `1-${meta.cutoff}`}, kept recent ${meta.keepRecent}`);
+  }
+  parts.push(`quick: kept recent ${meta.keepRecentQuick}`);
+  return `## Pruned ${meta.date} (${parts.join('; ')})`;
+}
+
+/** One rendered `### ` section: name, blank line, table head (if any) and entries, blank line. */
+function renderArchiveSection(section: ArchiveSection): string {
+  return `### ${section.section}\n\n${[...(section.head ?? []), ...section.lines].join('\n')}\n\n`;
 }
 
 /**
@@ -7508,12 +7615,107 @@ function planStateArchiveAppend(
  */
 function renderStateArchiveAppend(plan: StateArchiveAppendPlan): string {
   const { block } = plan;
-  let out = plan.base + plan.boundary +
-    `## Pruned ${block.date} (phases 1-${block.cutoff}, kept recent ${block.keepRecent})\n\n`;
-  for (const section of block.sections) {
-    out += `### ${section.section}\n\n${section.lines.join('\n')}\n\n`;
-  }
+  let out = plan.base + plan.boundary + `${renderArchiveHeading(block)}\n\n`;
+  for (const section of block.sections) out += renderArchiveSection(section);
   return out;
+}
+
+/**
+ * #6389: structured form of extending the archive's LAST block in place: one interrupted run is one block, so a
+ * same-options retry that finds rows the pending block lacks adds them to it rather than writing a second block.
+ * `base` is the existing archive text; `heading` is the last block's heading line (offsets of its text, without the
+ * line break) and the heading that replaces it; `insertions` put rows into sections the block already has, each at
+ * the end of that section's last non-blank line (before the line break that ends it, so before the blank separator:
+ * the rows continue the same table), as `\n` + the added lines; `tail` is the rendering of sections the block does
+ * not have yet, placed at the end after a blank line. Every other byte of the archive is kept. `date` is the date the
+ * new heading records: the block's own (the date it was first written on), so a retry on a later day does not restamp
+ * it; the run's date only when the heading has no `## Pruned <date> (` part to read it from. The rest of the heading
+ * is the run's: a phase advance between the kill and the retry widens the cutoff the block covers. The retry matcher
+ * reads the cutoff, K and N, never the date.
+ */
+interface StateArchiveExtendPlan {
+  base: string;
+  date: string;
+  heading: { start: number; end: number; text: string };
+  insertions: Array<{ offset: number; text: string }>;
+  tail: string;
+}
+
+/** Pure (#6389): plan the in-place extension of the archive's last block. `existing` must hold a `## Pruned ` block. */
+function planStateArchiveExtend(
+  existing: string,
+  sections: PrunedSection[],
+  meta: { date: string; cutoff: number | null; keepRecent: number | null; keepRecentQuick?: number | null },
+): StateArchiveExtendPlan {
+  // Lines of the archive with their offsets; a line's text excludes its `\n` (but keeps a `\r`).
+  const lines: Array<{ start: number; text: string }> = [];
+  for (let pos = 0; ;) {
+    const nl = existing.indexOf('\n', pos);
+    lines.push({ start: pos, text: nl === -1 ? existing.slice(pos) : existing.slice(pos, nl) });
+    if (nl === -1) break;
+    pos = nl + 1;
+  }
+  let headingIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].text.startsWith('## Pruned ')) { headingIdx = i; break; }
+  }
+  if (headingIdx === -1) throw new Error('state prune: no archive block to extend');
+  const headingText = lines[headingIdx].text.replace(/\r$/, '');
+  const ownDate = /^## Pruned (\S+) \(/.exec(headingText);
+  const date = ownDate === null ? meta.date : ownDate[1];
+  const blockMeta: ArchiveBlockMeta = { date, cutoff: meta.cutoff, keepRecent: meta.keepRecent };
+  if (typeof meta.keepRecentQuick === 'number') blockMeta.keepRecentQuick = meta.keepRecentQuick;
+
+  // The end offset of each section's last non-blank line, within the last block.
+  const lastLineEnd = new Map<string, number>();
+  let current: string | null = null;
+  for (let i = headingIdx + 1; i < lines.length; i++) {
+    const text = lines[i].text.replace(/\r$/, '');
+    if (text.startsWith('## ')) break;
+    if (text.startsWith('### ')) {
+      current = text.slice(4).trimEnd();
+      if (!lastLineEnd.has(current)) lastLineEnd.set(current, lines[i].start + lines[i].text.length);
+      continue;
+    }
+    if (current !== null && text.trim().length > 0) lastLineEnd.set(current, lines[i].start + lines[i].text.length);
+  }
+
+  const insertions: Array<{ offset: number; text: string }> = [];
+  let tail = '';
+  for (const s of sections) {
+    const end = lastLineEnd.get(s.section);
+    if (end !== undefined) {
+      insertions.push({ offset: end, text: `\n${s.lines.join('\n')}` });
+    } else {
+      tail += renderArchiveSection({ section: s.section, lines: s.lines, ...(s.head ? { head: s.head } : {}) });
+    }
+  }
+  if (tail.length > 0) {
+    const ending = existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
+    tail = ending + tail;
+  }
+  return {
+    base: existing,
+    date,
+    heading: { start: lines[headingIdx].start, end: lines[headingIdx].start + headingText.length, text: renderArchiveHeading(blockMeta) },
+    insertions: insertions.sort((a, b) => a.offset - b.offset),
+    tail,
+  };
+}
+
+/** Pure (#6389): apply an extension plan. */
+function renderStateArchiveExtend(plan: StateArchiveExtendPlan): string {
+  let out = '';
+  let pos = 0;
+  const edits = [
+    { offset: plan.heading.start, end: plan.heading.end, text: plan.heading.text },
+    ...plan.insertions.map(ins => ({ offset: ins.offset, end: ins.offset, text: ins.text })),
+  ].sort((a, b) => a.offset - b.offset);
+  for (const e of edits) {
+    out += plan.base.slice(pos, e.offset) + e.text;
+    pos = e.end;
+  }
+  return out + plan.base.slice(pos) + plan.tail;
 }
 
 /** Undo handle for one archive publication (#5831). */
@@ -7563,6 +7765,89 @@ function chooseCutoffRun(
 }
 
 /**
+ * #6389: a phase-only prune never treats a block that records a quick part as its own interrupted run: that block
+ * was written with a different set of options, so the phase-only run appends its whole prune. Every block written
+ * before #6389 (and every phase-only block) is passed through unchanged, so a run without --keep-recent-quick
+ * takes exactly the #5831 path.
+ */
+function phaseOnlyView(block: ParsedArchiveBlock | null): ParsedArchiveBlock | null {
+  return block !== null && block.keepRecentQuick !== null ? null : block;
+}
+
+/** #6389: the retention a quick-enabled run applies; `keepRecent` is the K it was given (null without --keep-recent). */
+interface QuickPruneParams {
+  cutoff: number | null;
+  keepRecent: number | null;
+  keepRecentQuick: number;
+}
+
+/** #6389: what a quick-enabled run does with the archive. */
+type QuickPublication =
+  | { kind: 'none' }
+  | { kind: 'append'; sections: PrunedSection[] }
+  | { kind: 'extend'; sections: PrunedSection[] };
+
+/**
+ * #6389: the decision for a run given --keep-recent-quick, against the archive's last block B (null: none). Three
+ * outcomes, in order:
+ *  1. Completion (adoption): B was written with the same option set (a phase part and a quick part exactly when this
+ *     run has them), B's recorded parameters are at least as wide as this run's in every dimension (cutoff >= ours
+ *     and <= the current phase; N <= ours) and wider in one, and the prune at B's parameters EQUALS B: the run
+ *     completes B at B's parameters and archives nothing.
+ *  2. Same options (B records the same K and N): the #5831 subtraction. When B is contained in this run's prune it
+ *     is this run's pending publication: nothing is written when B holds everything, otherwise the rows and entries
+ *     B lacks are added to B itself (one interrupted run = one block). When B is not contained, the whole prune is
+ *     appended.
+ *  3. Anything else: the whole prune is appended as a new block. Rows may then appear twice; none is lost.
+ * Nothing is published when the chosen run archives nothing.
+ */
+function chooseQuickRun(
+  block: ParsedArchiveBlock | null,
+  first: PruneRun,
+  params: QuickPruneParams,
+  currentPhase: number,
+  runPrune: (p: { cutoff: number | null; keepRecentQuick: number }) => PruneRun,
+): { run: PruneRun; params: QuickPruneParams; publication: QuickPublication } {
+  const own = (): { run: PruneRun; params: QuickPruneParams; publication: QuickPublication } => ({
+    run: first,
+    params,
+    publication: first.archivedSections.length > 0 ? { kind: 'append', sections: first.archivedSections } : { kind: 'none' },
+  });
+  if (block === null || block.keepRecentQuick === null || (block.keepRecent !== null) !== (params.keepRecent !== null)) return own();
+
+  // 1. completion at B's recorded parameters
+  const quickWider = block.keepRecentQuick < params.keepRecentQuick;
+  const quickOk = block.keepRecentQuick <= params.keepRecentQuick;
+  let phaseOk = true;
+  let phaseWider = false;
+  if (params.keepRecent !== null) {
+    if (block.cutoff === null) {
+      phaseOk = params.cutoff === null;
+    } else {
+      phaseOk = block.cutoff <= currentPhase && (params.cutoff === null || block.cutoff >= params.cutoff);
+      phaseWider = params.cutoff === null || block.cutoff > params.cutoff;
+    }
+  }
+  if (quickOk && phaseOk && (quickWider || phaseWider)) {
+    const at = { cutoff: params.keepRecent !== null ? block.cutoff : null, keepRecentQuick: block.keepRecentQuick };
+    const wider = runPrune(at);
+    const { pending, remainder } = subtractPendingBlock(block.sections, wider.archivedSections);
+    if (pending && remainder.length === 0) {
+      return { run: wider, params: { ...params, cutoff: at.cutoff, keepRecentQuick: at.keepRecentQuick }, publication: { kind: 'none' } };
+    }
+  }
+
+  // 2. same options: this run's own pending publication
+  if (String(block.keepRecent) === String(params.keepRecent) && block.keepRecentQuick === params.keepRecentQuick) {
+    const { pending, remainder } = subtractPendingBlock(block.sections, first.archivedSections);
+    if (pending) {
+      return { run: first, params, publication: remainder.length > 0 ? { kind: 'extend', sections: remainder } : { kind: 'none' } };
+    }
+  }
+  return own();
+}
+
+/**
  * The archive's current bytes for a prune that may append to it (#5831). A
  * symlinked or special archive is refused before it is read or snapshotted:
  * reading through a link would snapshot another file's bytes, and the rollback
@@ -7585,68 +7870,37 @@ function readArchiveSnapshot(archivePath: string): Buffer | null {
   return platformReadBytesSync(archivePath, { noFollow: true });
 }
 
+/** #6389 test seam: observe each archive publication's IR once it is written (like `_setStateLockTestHooks`). */
+interface StatePruneTestHooks {
+  onArchivePublication?: (publication: {
+    archivePath: string;
+    kind: 'append' | 'extend';
+    block: ArchiveBlockMeta & { sections: ArchiveSection[] };
+  }) => void;
+}
+const _statePruneTestHooks: StatePruneTestHooks = {};
+
 /**
- * Append one `## Pruned <date> ...` block to STATE-ARCHIVE.md and return the
- * prune it archived, the cutoff it ran at, and a handle that puts the archive
- * back exactly as it was (#5831).
- *
- * Callers must hold the STATE.md lock (cmdStatePrune calls this from inside
- * its `readModifyWriteStateMd` transform). The write is atomic — temp file +
- * rename with no direct-write fallback (`platformWriteSync` `atomic`) — and
- * throws on failure, so the caller's STATE.md rewrite never happens without
- * it and a failed write leaves the archive's previous bytes in place. Should
- * the archive still differ from its snapshot after a failed write, it is
- * restored before the error propagates.
- *
- * Retry detection is by content, not by a hidden marker: when the archive's
- * most recent block is contained, per section and with multiplicity, in what
- * this run prunes (`subtractPendingBlock`), an earlier run published that block
- * but never rewrote STATE.md (killed between the two writes, or a failed
- * STATE.md write whose archive restore also failed). Only the entries not
- * already in that block are appended, and nothing is written (`rollback` is
- * null) when none are left, so the retry just rewrites STATE.md. A last block
- * that is not contained in this prune is a different run, and the whole prune
- * is appended. Identical text already in the last block is treated as
- * archived: nothing is lost, and it is not archived a second time.
- *
- * The interrupted run is completed, not duplicated, when this run's cutoff is
- * smaller: if the block's heading names a larger cutoff N (no greater than the
- * current phase) and the prune at N equals the block exactly, this invocation
- * prunes at N instead (see `chooseCutoffRun`; the block's entries leave
- * STATE.md and nothing is archived twice). Otherwise this run's own cutoff stays
- * in force and the whole prune is appended (duplicated, never lost), so entries
- * added since the interruption are never pruned early.
+ * Write one archive text atomically and return the handle that puts the archive back exactly as it was (#5831).
+ * Shared by the append (#5831) and the in-place extension (#6389) publications.
  */
-function publishPrunedToArchive(
+function writeArchiveWithRollback(
   statePath: string,
   archivePath: string,
-  first: PruneRun,
-  runPrune: (cutoff: number) => PruneRun,
-  cutoff: number,
-  currentPhase: number,
-  keepRecent: number,
-): { run: PruneRun; cutoff: number; rollback: ArchiveRollback | null } {
+  archiveBytes: Buffer | null,
+  text: string,
+): ArchiveRollback {
   const stateBytes = platformReadBytesSync(statePath);
   if (stateBytes === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
   // STATE.md's permission bits, so a restore from the snapshot puts them back too. Only a regular
   // file has bits worth keeping: a symlink's own mode (0o777) is never applied to the restored file.
   const stateStat = fs.lstatSync(statePath);
   const stateMode = stateStat.isFile() ? stateStat.mode & 0o777 : undefined;
-  const archiveBytes = readArchiveSnapshot(archivePath);
-  const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
-  const lastBlock = existing === null ? null : parseLastArchiveBlock(existing);
-  const chosen = chooseCutoffRun(lastBlock, first, cutoff, currentPhase, runPrune);
-  const run = chosen.run;
-  const effectiveCutoff = chosen.cutoff;
-  const { pending, remainder } = subtractPendingBlock(lastBlock === null ? null : lastBlock.sections, run.archivedSections);
-  if (pending && remainder.length === 0) return { run, cutoff: effectiveCutoff, rollback: null };
-
-  const plan = planStateArchiveAppend(existing, remainder, { date: realClock.localToday(), cutoff: effectiveCutoff, keepRecent });
   // The file this run created, by the identity the write reports once it is published: a
   // rollback to "absent" removes only that file, never one another process put at the path.
   let created: FileIdentity | undefined;
   try {
-    platformWriteSync(archivePath, renderStateArchiveAppend(plan), {
+    platformWriteSync(archivePath, text, {
       atomic: true,
       onCreated: (id) => { created = id; },
     });
@@ -7655,7 +7909,7 @@ function publishPrunedToArchive(
     throw writeErr;
   }
 
-  const rollback: ArchiveRollback = {
+  return {
     restore(stateErr: unknown): void {
       // Roll back only once STATE.md provably holds the entries again (its
       // bytes are exactly the pre-write snapshot). If the failed write changed
@@ -7700,7 +7954,120 @@ function publishPrunedToArchive(
       }
     },
   };
+}
+
+/**
+ * Append one `## Pruned <date> ...` block to STATE-ARCHIVE.md and return the
+ * prune it archived, the cutoff it ran at, and a handle that puts the archive
+ * back exactly as it was (#5831).
+ *
+ * Callers must hold the STATE.md lock (cmdStatePrune calls this from inside
+ * its `readModifyWriteStateMd` transform). The write is atomic — temp file +
+ * rename with no direct-write fallback (`platformWriteSync` `atomic`) — and
+ * throws on failure, so the caller's STATE.md rewrite never happens without
+ * it and a failed write leaves the archive's previous bytes in place. Should
+ * the archive still differ from its snapshot after a failed write, it is
+ * restored before the error propagates.
+ *
+ * Retry detection is by content, not by a hidden marker: when the archive's
+ * most recent block is contained, per section and with multiplicity, in what
+ * this run prunes (`subtractPendingBlock`), an earlier run published that block
+ * but never rewrote STATE.md (killed between the two writes, or a failed
+ * STATE.md write whose archive restore also failed). Only the entries not
+ * already in that block are appended, and nothing is written (`rollback` is
+ * null) when none are left, so the retry just rewrites STATE.md. A last block
+ * that is not contained in this prune is a different run, and the whole prune
+ * is appended. Identical text already in the last block is treated as
+ * archived: nothing is lost, and it is not archived a second time.
+ *
+ * The interrupted run is completed, not duplicated, when this run's cutoff is
+ * smaller: if the block's heading names a larger cutoff N (no greater than the
+ * current phase) and the prune at N equals the block exactly, this invocation
+ * prunes at N instead (see `chooseCutoffRun`; the block's entries leave
+ * STATE.md and nothing is archived twice). Otherwise this run's own cutoff stays
+ * in force and the whole prune is appended (duplicated, never lost), so entries
+ * added since the interruption are never pruned early.
+ *
+ * #6389: this is the phase-only path (no --keep-recent-quick), unchanged except that a last block recording a quick
+ * part is a different run (`phaseOnlyView`). A quick-enabled run goes through `publishQuickPruneToArchive`.
+ */
+function publishPrunedToArchive(
+  statePath: string,
+  archivePath: string,
+  first: PruneRun,
+  runPrune: (cutoff: number) => PruneRun,
+  cutoff: number,
+  currentPhase: number,
+  keepRecent: number,
+): { run: PruneRun; cutoff: number; rollback: ArchiveRollback | null } {
+  if (platformReadBytesSync(statePath) === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
+  const archiveBytes = readArchiveSnapshot(archivePath);
+  const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
+  const lastBlock = phaseOnlyView(existing === null ? null : parseLastArchiveBlock(existing));
+  const chosen = chooseCutoffRun(lastBlock, first, cutoff, currentPhase, runPrune);
+  const run = chosen.run;
+  const effectiveCutoff = chosen.cutoff;
+  const { pending, remainder } = subtractPendingBlock(lastBlock === null ? null : lastBlock.sections, run.archivedSections);
+  if (pending && remainder.length === 0) return { run, cutoff: effectiveCutoff, rollback: null };
+
+  const plan = planStateArchiveAppend(existing, remainder, { date: realClock.localToday(), cutoff: effectiveCutoff, keepRecent });
+  const rollback = writeArchiveWithRollback(statePath, archivePath, archiveBytes, renderStateArchiveAppend(plan));
+  if (_statePruneTestHooks.onArchivePublication) _statePruneTestHooks.onArchivePublication({ archivePath, kind: 'append', block: plan.block });
   return { run, cutoff: effectiveCutoff, rollback };
+}
+
+/**
+ * #6389: the archive step of a run given --keep-recent-quick, inside the same archive-first transaction and under
+ * the same lock as `publishPrunedToArchive`. The archive is read (and the run chosen, `chooseQuickRun`) even when
+ * this run's own prune is empty, so a retry that keeps more rows still completes an interrupted run; it is written
+ * only when the chosen publication adds something: a new block (`append`) or rows and entries added to the pending
+ * last block in place (`extend`).
+ */
+function publishQuickPruneToArchive(
+  statePath: string,
+  archivePath: string,
+  first: PruneRun,
+  runPrune: (p: { cutoff: number | null; keepRecentQuick: number }) => PruneRun,
+  params: QuickPruneParams,
+  currentPhase: number,
+): { run: PruneRun; params: QuickPruneParams; rollback: ArchiveRollback | null } {
+  if (platformReadBytesSync(statePath) === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
+  const archiveBytes = readArchiveSnapshot(archivePath);
+  const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
+  const lastBlock = existing === null ? null : parseLastArchiveBlock(existing);
+  const chosen = chooseQuickRun(lastBlock, first, params, currentPhase, runPrune);
+  if (chosen.publication.kind === 'none') return { run: chosen.run, params: chosen.params, rollback: null };
+
+  const meta = {
+    date: realClock.localToday(),
+    cutoff: chosen.params.cutoff,
+    keepRecent: chosen.params.keepRecent,
+    keepRecentQuick: chosen.params.keepRecentQuick,
+  };
+  let text: string;
+  let block: ArchiveBlockMeta & { sections: ArchiveSection[] };
+  if (chosen.publication.kind === 'append') {
+    const plan = planStateArchiveAppend(existing, chosen.publication.sections, meta);
+    text = renderStateArchiveAppend(plan);
+    block = plan.block;
+  } else {
+    const plan = planStateArchiveExtend(existing as string, chosen.publication.sections, meta);
+    text = renderStateArchiveExtend(plan);
+    const inBlock = new Set((lastBlock as ParsedArchiveBlock).sections.map(s => s.section));
+    block = {
+      date: plan.date, cutoff: meta.cutoff, keepRecent: meta.keepRecent, keepRecentQuick: meta.keepRecentQuick,
+      sections: chosen.publication.sections.map(s => ({
+        section: s.section,
+        lines: [...s.lines],
+        ...(s.head && !inBlock.has(s.section) ? { head: [...s.head] } : {}),
+      })),
+    };
+  }
+  const rollback = writeArchiveWithRollback(statePath, archivePath, archiveBytes, text);
+  if (_statePruneTestHooks.onArchivePublication) {
+    _statePruneTestHooks.onArchivePublication({ archivePath, kind: chosen.publication.kind, block });
+  }
+  return { run: chosen.run, params: chosen.params, rollback };
 }
 
 /**
@@ -7738,18 +8105,59 @@ function restoreArchiveAfterFailedWrite(
 }
 
 /**
+ * #6389: refuse a --keep-recent-quick prune while any quick-task batch has an item that is not complete:
+ * `resumeBatch` reads "the item is not complete but its row exists" as a crash after the row write, so pruning
+ * that row would make it run the item again. A manifest that cannot be read refuses too (it cannot be shown done).
+ */
+function refuseQuickPruneDuringUnfinishedBatch(cwd: string): void {
+  const found = quickBatchMod.findUnfinishedBatchItems(cwd);
+  if (!found.ok) {
+    error(
+      `state prune --keep-recent-quick: a quick-task batch manifest could not be read (${found.reason}), so it cannot be ` +
+      'shown to be finished; nothing was pruned. Repair or remove that batch first.',
+      ERROR_REASON.STATE_PRUNE_QUICK_BATCH_UNFINISHED,
+    );
+    return;
+  }
+  if (found.value.length > 0) {
+    const first = found.value[0];
+    error(
+      `state prune --keep-recent-quick: quick-task batch ${formatDiagnosticToken(first.batchId)} has an unfinished item ` +
+      `(${formatDiagnosticToken(first.quickId)}: ${formatDiagnosticToken(first.status)}${found.value.length > 1 ? `, and ${found.value.length - 1} more` : ''}); ` +
+      'nothing was pruned. Finish or resume the batch (or remove it), then prune again.',
+      ERROR_REASON.STATE_PRUNE_QUICK_BATCH_UNFINISHED,
+    );
+  }
+}
+
+/**
  * Prune old entries from STATE.md sections that grow unboundedly (#1970).
  * Moves decisions, recently-completed summaries, and resolved blockers
  * older than keepRecent phases to STATE-ARCHIVE.md.
  *
  * Options:
  *   keepRecent: number of recent phases to retain (default: 3)
+ *   keepRecentQuick: #6389, keep the last N Quick Tasks rows and archive the rest (opt-in; a whole number >= 0)
  *   dryRun: if true, return what would be pruned without modifying STATE.md
+ *
+ * Without keepRecentQuick: exactly the #1970/#5831 phase prune. With it: `cmdStatePruneQuick`.
  *
  * Returns the result object it emits (also when `silent`), so callers can tell
  * whether anything was actually pruned.
  */
 function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): StatePruneResult {
+  if (options.keepRecentQuick !== undefined) {
+    const n = options.keepRecentQuick;
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) {
+      throw new TypeError(`state prune: keepRecentQuick must be a whole number >= 0 (got ${String(n)})`);
+    }
+    try {
+      return cmdStatePruneQuick(cwd, { ...options, keepRecentQuick: n }, raw);
+    } catch (err) {
+      if (err instanceof StatePruneQuickTableError) error(err.message, ERROR_REASON.STATE_PRUNE_QUICK_TABLE_UNRECOGNIZED);
+      throw err;
+    }
+  }
   const silent = !!options.silent;
   const emit = silent ? () => {} : (result: Record<string, unknown>, r: boolean, v?: string) => output(result, r, v);
   const finish = (result: StatePruneResult, v?: string): StatePruneResult => {
@@ -7773,12 +8181,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): S
     emit({ error: 'STATE.md not found' }, raw);
     return { pruned: false, error: 'STATE.md not found' };
   }
-  const rawState = stateBytesBefore.toString('utf-8');
-  const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-  const body = stripFrontmatter(rawState);
-  // Prune needs an integer cutoff, so it parses the resolved id itself; a
-  // non-numeric or absent id lands on 0 and prune bails, as before.
-  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body, resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd))), 10) || 0;
+  const currentPhase = currentPhaseForPrune(cwd, statePath, stateBytesBefore);
   const cutoff = currentPhase - keepRecent;
 
   if (cutoff <= 0) {
@@ -7815,7 +8218,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): S
       // block is completed at its cutoff. Like the real run, the preview lists every entry the
       // effective prune removes from STATE.md, those already in that block included.
       const archiveBytes = readArchiveSnapshot(archivePath);
-      const block = archiveBytes === null ? null : parseLastArchiveBlock(archiveBytes.toString('utf-8'));
+      const block = phaseOnlyView(archiveBytes === null ? null : parseLastArchiveBlock(archiveBytes.toString('utf-8')));
       const chosen = chooseCutoffRun(block, result, cutoff, currentPhase, (atCutoff) => runPruneCore(dryContent, atCutoff));
       result = chosen.run;
       dryCutoff = chosen.cutoff;
@@ -7893,6 +8296,127 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): S
     total_archived: totalPruned,
     archive_file: totalPruned > 0 ? 'STATE-ARCHIVE.md' : null,
   }, totalPruned > 0 ? 'true' : 'false');
+}
+
+/**
+ * The integer current phase prune works from: `resolveCurrentPhaseId` (the canonical ladder, #1760/#1776/#3187)
+ * parsed as an integer; a non-numeric or absent id is 0.
+ */
+function currentPhaseForPrune(cwd: string, statePath: string, stateBytes: Buffer): number {
+  const rawState = stateBytes.toString('utf-8');
+  const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
+  const body = stripFrontmatter(rawState);
+  // Prune needs an integer cutoff, so it parses the resolved id itself; a
+  // non-numeric or absent id lands on 0 and prune bails, as before.
+  return parseInt(String(resolveCurrentPhaseId(fm, body, resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd))), 10) || 0;
+}
+
+/**
+ * #6389: `state prune` given --keep-recent-quick N. The quick part keeps the last N rows of the Quick Tasks table
+ * and moves the older rows, verbatim, to STATE-ARCHIVE.md; it needs no phase position. With --keep-recent K too,
+ * the phase part runs in the same block and the same STATE.md write when its cutoff (current phase - K, K parsed
+ * as the phase-only prune parses it) is positive, and is skipped otherwise (never run at 0). Refuses while a
+ * quick-task batch has an unfinished item. The archive-first transaction, rollback and lock are the phase prune's.
+ *
+ * Result: the phase prune's keys plus `keep_recent_quick` (the N applied: an interrupted block's when the run
+ * completed it); `cutoff_phase` is null when no phase part ran, `keep_recent` null without --keep-recent.
+ */
+function cmdStatePruneQuick(
+  cwd: string,
+  options: StatePruneOptions & { keepRecentQuick: number },
+  raw: boolean,
+): StatePruneResult {
+  const silent = !!options.silent;
+  const emit = silent ? () => {} : (result: Record<string, unknown>, r: boolean, v?: string) => output(result, r, v);
+  const finish = (result: StatePruneResult, v?: string): StatePruneResult => {
+    emit({ ...result }, raw, v);
+    return result;
+  };
+  const statePath = planningPaths(cwd).state;
+  const dryRun = !!options.dryRun;
+  const keepRecent = options.keepRecent === undefined || options.keepRecent === null
+    ? null
+    : parseInt(String(options.keepRecent), 10) || 3;
+
+  const stateBytesBefore = platformReadBytesSync(statePath);
+  if (stateBytesBefore === null) {
+    emit({ error: 'STATE.md not found' }, raw);
+    return { pruned: false, error: 'STATE.md not found' };
+  }
+  refuseQuickPruneDuringUnfinishedBatch(cwd);
+
+  const currentPhase = keepRecent === null ? 0 : currentPhaseForPrune(cwd, statePath, stateBytesBefore);
+  const cutoff = keepRecent !== null && currentPhase - keepRecent > 0 ? currentPhase - keepRecent : null;
+  const params: QuickPruneParams = { cutoff, keepRecent, keepRecentQuick: options.keepRecentQuick };
+  const archivePath = path.join(path.dirname(statePath), 'STATE-ARCHIVE.md');
+
+  const runPruneCore = (content: string, at: { cutoff: number | null; keepRecentQuick: number }): PruneRun => {
+    const result = transitionCore(content, { kind: 'prune', cutoff: at.cutoff, keepRecentQuick: at.keepRecentQuick }, { clock: realClock });
+    return {
+      newContent: result.content,
+      archivedSections: ((result.data as { archivedSections?: PrunedSection[] } | undefined)?.archivedSections) ?? [],
+    };
+  };
+  const resultOf = (applied: QuickPruneParams, sections: PrunedSection[], key: 'entries_archived' | 'entries_would_archive') => ({
+    cutoff_phase: applied.cutoff,
+    keep_recent: applied.keepRecent,
+    keep_recent_quick: applied.keepRecentQuick,
+    sections: sections.map(s => ({ section: s.section, [key]: s.count })),
+    total: sections.reduce((sum, s) => sum + s.count, 0),
+  });
+
+  if (dryRun) {
+    const dryBytes = platformReadBytesSync(statePath);
+    if (dryBytes === null) {
+      emit({ error: 'STATE.md not found' }, raw);
+      return { pruned: false, error: 'STATE.md not found' };
+    }
+    const dryContent = dryBytes.toString('utf-8');
+    const first = runPruneCore(dryContent, params);
+    // The same decision the real run makes, with the archive read-only.
+    const archiveBytes = readArchiveSnapshot(archivePath);
+    const block = archiveBytes === null ? null : parseLastArchiveBlock(archiveBytes.toString('utf-8'));
+    const chosen = chooseQuickRun(block, first, params, currentPhase, (at) => runPruneCore(dryContent, at));
+    const r = resultOf(chosen.params, chosen.run.archivedSections, 'entries_would_archive');
+    return finish({
+      pruned: false,
+      dry_run: true,
+      cutoff_phase: r.cutoff_phase,
+      keep_recent: r.keep_recent,
+      keep_recent_quick: r.keep_recent_quick,
+      sections: r.sections,
+      total_would_archive: r.total,
+      note: r.total > 0 ? 'Run without --dry-run to actually prune' : 'Nothing to prune',
+    }, r.total > 0 ? 'true' : 'false');
+  }
+
+  let rollback: ArchiveRollback | null = null;
+  let applied = params;
+  const archived: PrunedSection[] = [];
+  readModifyWriteStateMd(statePath, (content) => {
+    const first = runPruneCore(content, params);
+    const published = publishQuickPruneToArchive(statePath, archivePath, first, (at) => runPruneCore(content, at), params, currentPhase);
+    applied = published.params;
+    rollback = published.rollback;
+    archived.push(...published.run.archivedSections);
+    return published.run.newContent;
+  }, cwd, {
+    atomicWrite: true,
+    onWriteFailure: (stateErr) => {
+      if (rollback !== null) rollback.restore(stateErr);
+    },
+  });
+
+  const r = resultOf(applied, archived, 'entries_archived');
+  return finish({
+    pruned: r.total > 0,
+    cutoff_phase: r.cutoff_phase,
+    keep_recent: r.keep_recent,
+    keep_recent_quick: r.keep_recent_quick,
+    sections: r.sections,
+    total_archived: r.total,
+    archive_file: r.total > 0 ? 'STATE-ARCHIVE.md' : null,
+  }, r.total > 0 ? 'true' : 'false');
 }
 
 /**
@@ -8402,6 +8926,9 @@ export = {
   // prune's archive write is built from, exposed so tests assert on it.
   planStateArchiveAppend,
   renderStateArchiveAppend,
+  // #6389: the in-place extension of the pending last block (one interrupted run = one block).
+  planStateArchiveExtend,
+  renderStateArchiveExtend,
   // #5831: retry detection by content — the archive's last block and its
   // subtraction from a prune's sections.
   parseLastArchiveBlock,
@@ -8456,6 +8983,13 @@ export = {
     if ('simulateWriteError' in hooks) _stateLockTestHooks.simulateWriteError = hooks.simulateWriteError;
     if ('onLoopIteration' in hooks) _stateLockTestHooks.onLoopIteration = hooks.onLoopIteration;
     if ('beforeSteal' in hooks) _stateLockTestHooks.beforeSteal = hooks.beforeSteal;
+  },
+  // Test seam (#6389): observe each archive publication's IR (what it adds) once it is written.
+  _setStatePruneTestHooks(hooks: StatePruneTestHooks): void {
+    if ('onArchivePublication' in hooks) _statePruneTestHooks.onArchivePublication = hooks.onArchivePublication;
+  },
+  _resetStatePruneTestHooks(): void {
+    delete _statePruneTestHooks.onArchivePublication;
   },
   _resetStateLockTestHooks(): void {
     delete _stateLockTestHooks.afterAcquire;

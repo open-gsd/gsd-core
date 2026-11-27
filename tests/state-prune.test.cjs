@@ -1293,7 +1293,8 @@ describe('#5831: state prune never loses entries', () => {
       'sections with nothing left are dropped');
   });
 
-  const parsedBlock = (cutoff, sections) => ({ cutoff, sections });
+  // #6389: the block IR also carries the recorded phase retention K and the quick N (null when the heading has none).
+  const parsedBlock = (cutoff, sections, keepRecent = null) => ({ cutoff, keepRecent, keepRecentQuick: null, sections });
 
   test('parseLastArchiveBlock reads only the last block, with its heading cutoff', () => {
     const parse = stateLib.parseLastArchiveBlock;
@@ -1303,7 +1304,7 @@ describe('#5831: state prune never loses entries', () => {
 
     const twoBlocks = '# STATE Archive\n\n## Pruned 1 (phases 1-1, kept recent 3)\n\n### Decisions\n\n- a\n\n' +
       '## Pruned 2 (phases 1-2, kept recent 3)\n\n### Decisions\n\n- b\n\n### Blockers\n\n- c\n- d\n\n';
-    const last = parsedBlock(2, [blk('Decisions', ['- b']), blk('Blockers', ['- c', '- d'])]);
+    const last = parsedBlock(2, [blk('Decisions', ['- b']), blk('Blockers', ['- c', '- d'])], 3);
     assert.deepStrictEqual(parse(twoBlocks), last, 'only the last block');
     assert.deepStrictEqual(parse(twoBlocks.replace(/\n/g, '\r\n')), last, 'CRLF is stripped from the heading, sections and lines');
 
@@ -1339,7 +1340,7 @@ describe('#5831: state prune never loses entries', () => {
       const sections = generated.map(sx => ({ section: sx.section, lines: [...sx.lines] }));
       const input = sections.map(sx => ({ ...sx, count: sx.lines.length }));
       const out = stateLib.renderStateArchiveAppend(stateLib.planStateArchiveAppend(null, input, { date: '2026-11-04', cutoff, keepRecent }));
-      assert.deepStrictEqual(stateLib.parseLastArchiveBlock(out), { cutoff, sections }, 'the round trip returns the same block');
+      assert.deepStrictEqual(stateLib.parseLastArchiveBlock(out), { cutoff, keepRecent, keepRecentQuick: null, sections }, 'the round trip returns the same block');
     }), { seed: 5831 });
   });
 
@@ -1490,5 +1491,1162 @@ describe('#5831: state prune never loses entries', () => {
         assert.strictEqual(bad.pending, false, 'a block line that was not pruned is not pending');
         assert.strictEqual(bad.remainder, sections, 'remainder is the sections unchanged');
       }), { seed: 5831 });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// #6389 — a run without --keep-recent-quick is what it was before #6389.
+// Asserted structurally: the result object and its key order, the archive
+// write captured at the platformWriteSync seam against the production plan
+// for the expected block (no quick part in it), and STATE.md as the input
+// document minus the pruned lines. The Quick Tasks table in the fixture must
+// come through every phase-only run untouched.
+// ────────────────────────────────────────────────────────────────────────
+describe('#6389: a phase-only state prune is unchanged (characterization)', () => {
+  const { mock } = require('node:test');
+  const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
+  const stateLib = require('../gsd-core/bin/lib/state.cjs');
+  const scp = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+
+  const DAY = '2026-11-08';
+  const BODY_HEAD = ['# Session State', '', '**Current Phase:** 8', '', '## Decisions', ''];
+  const QUICK = [
+    '### Quick Tasks Completed', '',
+    '| # | Description | Date | Commit | Directory |', '|---|-------------|------|--------|-----------|',
+    '| 1 | fast one | 2026-01-01 | a1 | — |', '| 2 | fast two | 2026-01-02 | a2 | — |', '',
+  ];
+  const ONE = '- [Phase 1]: one';
+  const FOUR = '- [Phase 4]: four';
+  const SEVEN = '- [Phase 7]: seven';
+  const state = (decisions) => [...BODY_HEAD, ...decisions, '', ...QUICK].join('\n');
+
+  let tmpDir;
+  let archiveWrites;
+  const p = (f) => path.join(tmpDir, '.planning', f);
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    mock.method(realClock, 'localToday', () => DAY);
+    archiveWrites = [];
+    const realPws = scp.platformWriteSync;
+    mock.method(scp, 'platformWriteSync', (target, content, ...rest) => {
+      if (target === p('STATE-ARCHIVE.md')) archiveWrites.push(content);
+      return realPws.call(scp, target, content, ...rest);
+    });
+  });
+  afterEach(() => {
+    mock.restoreAll();
+    cleanup(tmpDir);
+  });
+
+  /** STATE.md from its body heading on: a real run adds frontmatter with a live timestamp. */
+  const body = () => {
+    const text = fs.readFileSync(p('STATE.md'), 'utf-8');
+    return text.slice(text.indexOf('# Session State'));
+  };
+
+  const RESULT_KEYS = ['pruned', 'cutoff_phase', 'keep_recent', 'sections', 'total_archived', 'archive_file'];
+  const DRY_KEYS = ['pruned', 'dry_run', 'cutoff_phase', 'keep_recent', 'sections', 'total_would_archive', 'note'];
+  const archivedResult = (cutoff, keepRecent, n) => ({
+    pruned: true, cutoff_phase: cutoff, keep_recent: keepRecent, sections: [{ section: 'Decisions', entries_archived: n }],
+    total_archived: n, archive_file: 'STATE-ARCHIVE.md',
+  });
+  const CASES = [
+    {
+      name: 'a real run', args: ['--keep-recent', '3'], decisions: [ONE, FOUR, SEVEN], keys: RESULT_KEYS,
+      out: archivedResult(5, 3, 2), raw: 'true', body: state([SEVEN]),
+      block: { cutoff: 5, keepRecent: 3, lines: [ONE, FOUR] },
+    },
+    {
+      name: 'the default --keep-recent', args: [], decisions: [ONE, FOUR, SEVEN], keys: RESULT_KEYS,
+      out: archivedResult(5, 3, 2), raw: 'true', body: state([SEVEN]),
+      block: { cutoff: 5, keepRecent: 3, lines: [ONE, FOUR] },
+    },
+    {
+      name: 'a dry-run', args: ['--keep-recent', '3', '--dry-run'], decisions: [ONE, FOUR, SEVEN], keys: DRY_KEYS,
+      out: { pruned: false, dry_run: true, cutoff_phase: 5, keep_recent: 3, sections: [{ section: 'Decisions', entries_would_archive: 2 }], total_would_archive: 2, note: 'Run without --dry-run to actually prune' },
+      raw: 'true', body: state([ONE, FOUR, SEVEN]), block: null,
+    },
+    {
+      name: 'the cutoff <= 0 early return', args: ['--keep-recent', '8'], decisions: [ONE, FOUR, SEVEN], keys: ['pruned', 'reason'],
+      out: { pruned: false, reason: 'Only 8 phases — nothing to prune with --keep-recent 8' },
+      raw: 'false', body: state([ONE, FOUR, SEVEN]), block: null,
+    },
+    // Today's handling of 0 and of a negative value, which #6542 changes: 0 becomes 3, and -2 moves the cutoff past
+    // the current phase (8 + 2) and archives every phase-tagged entry. Pinned here as the behavior this PR keeps.
+    {
+      name: '--keep-recent 0 (as today: read as 3)', args: ['--keep-recent', '0'], decisions: [ONE, FOUR, SEVEN], keys: RESULT_KEYS,
+      out: archivedResult(5, 3, 2), raw: 'true', body: state([SEVEN]),
+      block: { cutoff: 5, keepRecent: 3, lines: [ONE, FOUR] },
+    },
+    {
+      name: '--keep-recent -2 (as today: cutoff past the current phase)', args: ['--keep-recent', '-2'], decisions: [ONE, FOUR, SEVEN], keys: RESULT_KEYS,
+      out: archivedResult(10, -2, 3), raw: 'true', body: [...BODY_HEAD, ...QUICK].join('\n'),
+      block: { cutoff: 10, keepRecent: -2, lines: [ONE, FOUR, SEVEN] },
+    },
+    {
+      name: 'a run with nothing old enough', args: ['--keep-recent', '3'], decisions: [SEVEN], keys: RESULT_KEYS,
+      out: { pruned: false, cutoff_phase: 5, keep_recent: 3, sections: [], total_archived: 0, archive_file: null },
+      raw: 'false', body: state([SEVEN]), block: null,
+    },
+  ];
+
+  for (const c of CASES) {
+    for (const raw of [false, true]) {
+      test(`${c.name}${raw ? ' (--raw)' : ''}: the same result, STATE.md and archive write as before #6389`, () => {
+        fs.writeFileSync(p('STATE.md'), state(c.decisions));
+        const result = runGsdTools(['state', 'prune', ...c.args, ...(raw ? ['--raw'] : [])], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.error);
+        if (raw) {
+          assert.strictEqual(result.output, c.raw);
+        } else {
+          const out = JSON.parse(result.output);
+          assert.deepStrictEqual(out, c.out);
+          assert.deepStrictEqual(Object.keys(out), c.keys, 'key order');
+        }
+        assert.strictEqual(body(), c.body);
+        if (c.block === null) {
+          assert.deepStrictEqual(archiveWrites, []);
+          assert.strictEqual(fs.existsSync(p('STATE-ARCHIVE.md')), false);
+          return;
+        }
+        const plan = stateLib.planStateArchiveAppend(null, [{ section: 'Decisions', count: c.block.lines.length, lines: c.block.lines }],
+          { date: DAY, cutoff: c.block.cutoff, keepRecent: c.block.keepRecent });
+        assert.deepStrictEqual(plan.block,
+          { date: DAY, cutoff: c.block.cutoff, keepRecent: c.block.keepRecent, sections: [{ section: 'Decisions', lines: c.block.lines }] },
+          'a phase-only block carries no quick part');
+        assert.strictEqual(archiveWrites.length, 1, 'one archive write');
+        assert.strictEqual(Buffer.byteLength(archiveWrites[0]), Buffer.byteLength(stateLib.renderStateArchiveAppend(plan)),
+          'the writer wrote the rendering of that plan (size; content not compared)');
+      });
+    }
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// #6389 — `state prune --keep-recent-quick N` keeps the last N rows of the
+// Quick Tasks table (table order) and moves the older rows, verbatim, into
+// STATE-ARCHIVE.md through the #5831 archive-first transaction.
+// ────────────────────────────────────────────────────────────────────────
+describe('#6389: state prune --keep-recent-quick', () => {
+  const { mock } = require('node:test');
+  const stateLib = require('../gsd-core/bin/lib/state.cjs');
+  const scp = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+  const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
+  const { createBatch, completeQuickItem } = require('../gsd-core/bin/lib/quick-batch.cjs');
+  const { seedWorkstream } = require('./fixtures/index.cjs');
+  const { homeSandboxEnv } = require('./helpers.cjs');
+
+  const DAY = '2026-11-08';
+  const QUICK = 'Quick Tasks Completed';
+  const HEADER = '| # | Description | Date | Commit | Directory |';
+  const DELIM = '|---|-------------|------|--------|-----------|';
+  const ARCHIVE_HEADER = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
+  const D1 = '- [Phase 1]: one';
+  const D4 = '- [Phase 4]: four';
+  const D7 = '- [Phase 7]: seven';
+
+  /** Row i of the table: directory-less ordinal rows, the shape `/gsd-fast` logs. */
+  const row = (i) => `| ${i} | task ${i} | 2026-10-01 | c${i} | — |`;
+  const rows = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => row(from + k));
+
+  /**
+   * A STATE.md with an optional phase position, a Decisions section and the
+   * Quick Tasks table, joined with `eol`.
+   */
+  function stateDoc({ phase = 8, decisions = [D1, D4, D7], table = rows(1, 5), eol = '\n', header = HEADER, delim = DELIM } = {}) {
+    return [
+      '# Session State', '',
+      ...(phase === null ? [] : [`**Current Phase:** ${phase}`, '']),
+      '## Decisions', '', ...decisions, '',
+      `### ${QUICK}`, '', header, delim, ...table, '',
+      '### Blockers/Concerns', '', 'None', '',
+    ].join(eol);
+  }
+
+  let tmpDir;
+  let statePath;
+  let archivePath;
+  /** Every archive write (any STATE-ARCHIVE.md), captured at the platformWriteSync seam: target, prior text, text written. */
+  let archiveWrites;
+  /**
+   * Per-test write interception (fault injection, STATE.md write records), called before every write through the
+   * seam. One mock only: stacking a second `mock.method` on the same function would let `mock.restoreAll()` put the
+   * first mock back instead of the real function.
+   */
+  let beforeWrite = null;
+  function captureAllArchiveWrites() {
+    const realPws = scp.platformWriteSync;
+    mock.method(scp, 'platformWriteSync', (target, content, ...rest) => {
+      if (beforeWrite !== null) beforeWrite(target, content);
+      if (path.basename(target) === 'STATE-ARCHIVE.md') {
+        archiveWrites.push({ target, prior: fs.existsSync(target) ? fs.readFileSync(target, 'utf-8') : null, content });
+      }
+      return realPws.call(scp, target, content, ...rest);
+    });
+  }
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    archivePath = path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md');
+    mock.method(realClock, 'localToday', () => DAY);
+    archiveWrites = [];
+    beforeWrite = null;
+    captureAllArchiveWrites();
+    published = [];
+    seeded = [];
+    stateLib._setStatePruneTestHooks({ onArchivePublication: (p) => published.push(p) });
+  });
+
+  /**
+   * The publication IR handed to the archive writer (V2): `{ archivePath, kind: 'append' | 'extend', block }`,
+   * where `block.sections` are the lines that publication ADDS. With `seeded` (the entry lines of any archive a
+   * test authored itself), this is the whole multiplicity record: no archive text is inspected.
+   */
+  let published;
+  let seeded;
+  /** Write an authored archive and record its entry lines (the IR the test wrote, not a read-back). */
+  function seedArchive(text, entryLines) {
+    fs.writeFileSync(archivePath, text);
+    seeded.push(...entryLines);
+  }
+  /** Forget publications a rollback undid (the archive is back to its snapshot). */
+  function dropRolledBack() { published.length = 0; }
+  const publishedHere = () => published.filter((p) => p.archivePath === archivePath);
+  /** How many times `line` is in the archive: authored lines plus every line a publication added. */
+  const archiveCount = (line) =>
+    seeded.filter((l) => l === line).length +
+    publishedHere().flatMap((p) => p.block.sections.flatMap((s) => s.lines)).filter((l) => l === line).length;
+  /** Blocks this test's archive holds beyond any authored ones: each 'append' publication is one block. */
+  const blockCount = () => publishedHere().filter((p) => p.kind === 'append').length;
+
+  const qs = (lines, head = [HEADER, DELIM]) => ({ section: QUICK, head, lines });
+  const ds = (lines) => ({ section: 'Decisions', lines });
+  /**
+   * The documented writer pattern (CONTRIBUTING, "Rendered file"): the pure builder's IR for the expected block
+   * is asserted field by field, and the last archive write to `target` is checked to be the rendering of that
+   * plan by size, without comparing content. Occurrence counts and STATE.md are asserted by the tests themselves.
+   */
+  function assertLastArchiveWrite(meta, sections, target = archivePath, kind = 'append') {
+    const writes = archiveWrites.filter((w) => w.target === target);
+    assert.ok(writes.length > 0, 'the archive was written');
+    const last = writes[writes.length - 1];
+    // `meta.date` is the date the block's heading records (an extended block keeps its own); the run's date is DAY.
+    const expectedBlock = { date: meta.date ?? DAY, cutoff: meta.cutoff, keepRecent: meta.keepRecent, sections };
+    if (meta.keepRecentQuick !== undefined) expectedBlock.keepRecentQuick = meta.keepRecentQuick;
+    const pubs = published.filter((p) => p.archivePath === target);
+    assert.deepStrictEqual(pubs[pubs.length - 1], { archivePath: target, kind, block: expectedBlock },
+      'the publication IR handed to the writer: heading fields, table head and the verbatim rows it adds');
+    const added = sections.map((s) => ({ ...s, count: s.lines.length }));
+    const runMeta = { ...meta, date: DAY };
+    const plan = kind === 'append'
+      ? stateLib.planStateArchiveAppend(last.prior, added, runMeta)
+      : stateLib.planStateArchiveExtend(last.prior, added, runMeta);
+    const rendered = kind === 'append' ? stateLib.renderStateArchiveAppend(plan) : stateLib.renderStateArchiveExtend(plan);
+    assert.strictEqual(Buffer.byteLength(last.content), Buffer.byteLength(rendered), 'the writer wrote the rendering of that plan');
+    return plan;
+  }
+  const QUICK_ONLY = (q) => ({ cutoff: null, keepRecent: null, keepRecentQuick: q });
+  afterEach(() => {
+    mock.restoreAll();
+    stateLib._resetStateLockTestHooks();
+    stateLib._resetStatePruneTestHooks();
+    cleanup(tmpDir);
+  });
+  function pinDay() { mock.method(realClock, 'localToday', () => DAY); }
+  /** Make writes to `target` fail with `code`. */
+  function failWritesTo(target, code) {
+    beforeWrite = (p) => { if (p === target) { const e = new Error(`${code}: simulated`); e.code = code; throw e; } };
+  }
+  /** End a fault injection: no more interception, any other mock removed, the clock pinned again. */
+  function endFaults() {
+    beforeWrite = null;
+    mock.restoreAll();
+    pinDay();
+    captureAllArchiveWrites();
+  }
+
+  const write = (content) => fs.writeFileSync(statePath, content);
+  const archiveText = () => (fs.existsSync(archivePath) ? fs.readFileSync(archivePath, 'utf-8') : null);
+  /** STATE.md from its body heading on (a real run adds frontmatter with a live timestamp). */
+  const body = () => {
+    const text = fs.readFileSync(statePath, 'utf-8');
+    return text.slice(text.indexOf('# Session State'));
+  };
+  /** The data rows of the Quick Tasks table in STATE.md, by `#`. */
+  const tableIds = () => {
+    const t = findTableBySchema(fs.readFileSync(statePath, 'utf-8'), 'QuickTasks');
+    return t === null ? null : t.rows.map((r) => r['#']);
+  };
+  const ids = (from, to) => rows(from, to).map((_, k) => String(from + k));
+  /** How many lines of the archive are exactly `line`. */
+  const cli = (...args) => runGsdTools(['state', 'prune', ...args], tmpDir);
+  const run = (opts) => stateLib.cmdStatePrune(tmpDir, { dryRun: false, silent: true, ...opts }, true);
+  const quickBlock = (heading, moved) => `## Pruned ${DAY} (${heading})\n\n### ${QUICK}\n\n${[HEADER, DELIM, ...moved].join('\n')}\n`;
+  const { findTableBySchema } = require('../gsd-core/bin/lib/markdown-table.cjs');
+
+  // ── what a run does ────────────────────────────────────────────────────
+
+  test('quick only, with no phase position at all: keeps the last N rows and archives the rest verbatim as a table', () => {
+    write(stateDoc({ phase: null }));
+    const result = cli('--keep-recent-quick', '2');
+    assert.strictEqual(result.exitCode, 0, result.error);
+    assert.deepStrictEqual(JSON.parse(result.output), {
+      pruned: true, cutoff_phase: null, keep_recent: null, keep_recent_quick: 2,
+      sections: [{ section: QUICK, entries_archived: 3 }], total_archived: 3, archive_file: 'STATE-ARCHIVE.md',
+    });
+    assert.strictEqual(body(), stateDoc({ phase: null, table: rows(4, 5) }));
+    assert.strictEqual(archiveWrites.length, 1);
+    assertLastArchiveWrite(QUICK_ONLY(2), [qs(rows(1, 3))]);
+  });
+
+  test('quick only leaves the phase-tagged sections alone even when a phase position exists', () => {
+    write(stateDoc());
+    const out = JSON.parse(cli('--keep-recent-quick', '4').output);
+    assert.deepStrictEqual(out.sections, [{ section: QUICK, entries_archived: 1 }]);
+    assert.strictEqual(body(), stateDoc({ table: rows(2, 5) }), 'Decisions keep every entry');
+  });
+
+  test('both options: one block, one heading recording both, phase sections first, one STATE.md write', () => {
+    write(stateDoc());
+    const stateWrites = [];
+    beforeWrite = (p) => { if (p === statePath) stateWrites.push(p); };
+    const out = run({ keepRecent: '3', keepRecentQuick: 1 });
+    assert.deepStrictEqual(out, {
+      pruned: true, cutoff_phase: 5, keep_recent: 3, keep_recent_quick: 1,
+      sections: [{ section: 'Decisions', entries_archived: 2 }, { section: QUICK, entries_archived: 4 }],
+      total_archived: 6, archive_file: 'STATE-ARCHIVE.md',
+    });
+    assert.strictEqual(archiveWrites.length, 1, 'one archive write');
+    assertLastArchiveWrite({ cutoff: 5, keepRecent: 3, keepRecentQuick: 1 }, [ds([D1, D4]), qs(rows(1, 4))]);
+    assert.ok(stateWrites.length <= 1, 'at most one STATE.md write through the seam');
+    assert.strictEqual(body(), stateDoc({ decisions: [D7], table: rows(5, 5) }));
+  });
+
+  for (const [label, phase, keepRecent] of [['no phase position', null, '3'], ['a cutoff of 0', 8, '8'], ['a negative cutoff', 2, '3']]) {
+    test(`both options with ${label}: the phase part is skipped, the quick part still runs`, () => {
+      write(stateDoc({ phase }));
+      const out = run({ keepRecent, keepRecentQuick: 3 });
+      assert.deepStrictEqual(out, {
+        pruned: true, cutoff_phase: null, keep_recent: Number(keepRecent), keep_recent_quick: 3,
+        sections: [{ section: QUICK, entries_archived: 2 }], total_archived: 2, archive_file: 'STATE-ARCHIVE.md',
+      });
+      // The heading records both options; the phase part is `phases none` (no positive cutoff).
+      assertLastArchiveWrite({ cutoff: null, keepRecent: Number(keepRecent), keepRecentQuick: 3 }, [qs(rows(1, 2))]);
+      assert.strictEqual(body(), stateDoc({ phase, table: rows(3, 5) }), 'Decisions untouched, [Phase 0]-style cutoff never applied');
+    });
+  }
+
+  test('both options with cutoff 0 never archives a [Phase 0] entry (the phase part is skipped, not run at cutoff 0)', () => {
+    write(stateDoc({ phase: 3, decisions: ['- [Phase 0]: zero', D1] }));
+    run({ keepRecent: '3', keepRecentQuick: 5 });
+    assert.strictEqual(body(), stateDoc({ phase: 3, decisions: ['- [Phase 0]: zero', D1] }));
+    assert.strictEqual(archiveText(), null, 'nothing to archive: rows <= N and no phase part');
+  });
+
+  test('N = 0 archives every row and keeps the header', () => {
+    write(stateDoc({ phase: null }));
+    const out = run({ keepRecentQuick: 0 });
+    assert.strictEqual(out.total_archived, 5);
+    assert.deepStrictEqual(tableIds(), []);
+    assertLastArchiveWrite(QUICK_ONLY(0), [qs(rows(1, 5))]);
+  });
+
+  for (const n of [5, 6, 10000]) {
+    test(`N = ${n} with 5 rows archives nothing and writes nothing`, () => {
+      write(stateDoc({ phase: null }));
+      const before = fs.readFileSync(statePath);
+      const result = cli('--keep-recent-quick', String(n));
+      assert.strictEqual(result.exitCode, 0, result.error);
+      assert.deepStrictEqual(JSON.parse(result.output), {
+        pruned: false, cutoff_phase: null, keep_recent: null, keep_recent_quick: n, sections: [], total_archived: 0, archive_file: null,
+      });
+      assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md byte-identical');
+      assert.strictEqual(archiveText(), null);
+    });
+  }
+
+  test('--dry-run reports what the real run then does and writes nothing', () => {
+    write(stateDoc());
+    const before = fs.readFileSync(statePath);
+    const preview = cli('--keep-recent', '3', '--keep-recent-quick', '2', '--dry-run');
+    assert.strictEqual(preview.exitCode, 0, preview.error);
+    assert.deepStrictEqual(JSON.parse(preview.output), {
+      pruned: false, dry_run: true, cutoff_phase: 5, keep_recent: 3, keep_recent_quick: 2,
+      sections: [{ section: 'Decisions', entries_would_archive: 2 }, { section: QUICK, entries_would_archive: 3 }],
+      total_would_archive: 5, note: 'Run without --dry-run to actually prune',
+    });
+    assert.deepStrictEqual(fs.readFileSync(statePath), before);
+    assert.strictEqual(archiveText(), null);
+    const real = JSON.parse(cli('--keep-recent', '3', '--keep-recent-quick', '2').output);
+    assert.strictEqual(real.total_archived, 5);
+  });
+
+  test('--raw prints the pruned verdict', () => {
+    write(stateDoc({ phase: null }));
+    assert.strictEqual(cli('--keep-recent-quick', '9', '--dry-run', '--raw').output, 'false');
+    assert.strictEqual(cli('--keep-recent-quick', '1', '--raw').output, 'true');
+  });
+
+  test('no Quick Tasks section: the quick part archives nothing, the run succeeds, and the phase part still runs', () => {
+    const noQuick = ['# Session State', '', '**Current Phase:** 8', '', '## Decisions', '', D1, D7, ''].join('\n');
+    write(noQuick);
+    const quickOnly = cli('--keep-recent-quick', '0');
+    assert.strictEqual(quickOnly.exitCode, 0, quickOnly.error);
+    assert.deepStrictEqual(JSON.parse(quickOnly.output).sections, []);
+    assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), noQuick, 'quick only: nothing written');
+    const both = JSON.parse(cli('--keep-recent', '3', '--keep-recent-quick', '0').output);
+    assert.deepStrictEqual(both.sections, [{ section: 'Decisions', entries_archived: 1 }]);
+    assertLastArchiveWrite({ cutoff: 5, keepRecent: 3, keepRecentQuick: 0 }, [ds([D1])]);
+  });
+
+  for (const [label, header, delim, table] of [
+    ['an unknown schema', '| # | Thing | When |', '|---|---|---|', ['| 1 | a | b |']],
+    ['a ragged row', HEADER, DELIM, ['| 1 | only | three |']],
+    ['no table under the heading', 'just prose', 'more prose', []],
+  ]) {
+    test(`${label}: refused with quick_table_unrecognized, nothing written (quick only, both, dry-run)`, () => {
+      write(stateDoc({ header, delim, table }));
+      const before = fs.readFileSync(statePath);
+      for (const args of [['--keep-recent-quick', '0'], ['--keep-recent', '3', '--keep-recent-quick', '0'], ['--keep-recent-quick', '0', '--dry-run']]) {
+        const result = runGsdTools(['--json-errors', 'state', 'prune', ...args], tmpDir);
+        assert.strictEqual(result.exitCode, 1, `${args.join(' ')} must fail`);
+        assert.strictEqual(JSON.parse(result.error).reason, 'quick_table_unrecognized');
+        assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md byte-identical');
+        assert.strictEqual(archiveText(), null, 'no archive');
+      }
+    });
+  }
+
+  test('only the first recognized Quick Tasks table is pruned; an older suffixed (v1.0) table is left alone', () => {
+    const doc = [
+      '# Session State', '',
+      '### Quick Tasks Completed (v1.1+)', '', HEADER, DELIM, ...rows(1, 3), '',
+      '### Quick Tasks Completed (v1.0)', '', HEADER, DELIM, ...rows(100, 102), '',
+    ].join('\n');
+    write(doc);
+    run({ keepRecentQuick: 1 });
+    assert.strictEqual(body(), [
+      '# Session State', '',
+      '### Quick Tasks Completed (v1.1+)', '', HEADER, DELIM, row(3), '',
+      '### Quick Tasks Completed (v1.0)', '', HEADER, DELIM, ...rows(100, 102), '',
+    ].join('\n'));
+    assertLastArchiveWrite(QUICK_ONLY(1), [qs(rows(1, 2))]);
+  });
+
+  test('the with-status variant and quick-id rows move verbatim', () => {
+    const h6 = '| # | Description | Date | Commit | Status | Directory |';
+    const d6 = '| --- | --- | --- | --- | --- | --- |';
+    const table = ['| 260101-abc | one | 2026-01-01 | a1 | Pass | [dir](./quick/260101-abc-one/) |', '|  2  | two  | 2026-01-02 | a2 | — | — |', '| 260103-xyz | three | 2026-01-03 | a3 | Pass | — |'];
+    write(stateDoc({ phase: null, header: h6, delim: d6, table }));
+    run({ keepRecentQuick: 1 });
+    assertLastArchiveWrite(QUICK_ONLY(1), [qs([table[0], table[1]], [h6, d6])]);
+    assert.strictEqual(body(), stateDoc({ phase: null, header: h6, delim: d6, table: [table[2]] }));
+  });
+
+  test('CRLF: the moved rows keep their CRLF in the archive; STATE.md keeps the other rows', () => {
+    write(stateDoc({ phase: null, eol: '\r\n' }));
+    const transformed = [];
+    beforeWrite = (p, content) => { if (p === statePath) transformed.push(String(content)); };
+    run({ keepRecentQuick: 3 });
+    // STATE.md's own write seam normalizes line endings as it does for every state command; the rows kept are
+    // asserted through the table, the archived rows through the publication IR.
+    assert.deepStrictEqual(tableIds(), ids(3, 5));
+    const cr = (l) => `${l}\r`;
+    assertLastArchiveWrite(QUICK_ONLY(3), [qs(rows(1, 2).map(cr), [cr(HEADER), cr(DELIM)])]);
+    for (const r of rows(1, 2)) assert.strictEqual(archiveCount(cr(r)), 1, `${r} is published with its CR`);
+    assert.strictEqual(transformed.length, 1, 'one STATE.md write');
+  });
+
+  test('a workstream prunes its own STATE.md and writes its own STATE-ARCHIVE.md', () => {
+    const rootDoc = stateDoc({ phase: null });
+    write(rootDoc);
+    const wsDir = seedWorkstream(tmpDir, { name: 'alpha', state: stateDoc({ phase: null, table: rows(10, 13) }) });
+    const result = runGsdTools(['state', 'prune', '--ws', 'alpha', '--keep-recent-quick', '1'], tmpDir, homeSandboxEnv(tmpDir));
+    assert.strictEqual(result.exitCode, 0, result.error);
+    assert.strictEqual(JSON.parse(result.output).total_archived, 3);
+    const wsState = fs.readFileSync(path.join(wsDir, 'STATE.md'), 'utf-8');
+    assert.deepStrictEqual(findTableBySchema(wsState, 'QuickTasks').rows.map((r) => r['#']), ['13']);
+    assert.ok(fs.statSync(path.join(wsDir, 'STATE-ARCHIVE.md')).isFile(), 'the workstream archive exists');
+    assertLastArchiveWrite(QUICK_ONLY(1), [qs(rows(10, 12))], path.join(wsDir, 'STATE-ARCHIVE.md'));
+    assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), rootDoc, 'the root STATE.md is untouched');
+    assert.strictEqual(archiveText(), null, 'no root archive');
+  });
+
+  test('a directory-less row appended after a prune gets the next free number', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    run({ keepRecentQuick: 20 });
+    const appended = runGsdTools(['quick-tasks-append', '--task', 'after the prune'], tmpDir);
+    assert.strictEqual(appended.exitCode, 0, appended.error);
+    assert.deepStrictEqual(tableIds(), [...ids(11, 30), '31']);
+  });
+
+  // ── fault injection: the archive-first transaction carries the rows ────
+
+  test('a failed archive write leaves STATE.md and the archive untouched', () => {
+    write(stateDoc({ phase: null }));
+    const before = fs.readFileSync(statePath);
+    failWritesTo(archivePath, 'EIO');
+    assert.throws(() => run({ keepRecentQuick: 1 }), (err) => err.code === 'EIO');
+    endFaults();
+    assert.deepStrictEqual(fs.readFileSync(statePath), before);
+    assert.strictEqual(archiveText(), null);
+    assert.ok(!fs.existsSync(statePath + '.lock'), 'the lock is released');
+  });
+
+  for (const seed of [null, '# STATE Archive\n\nSeeded.\n']) {
+    test(`a failed STATE.md write restores the archive byte for byte (archive ${seed === null ? 'absent' : 'present'}), and the retry archives each row once`, () => {
+      write(stateDoc());
+      if (seed !== null) seedArchive(seed, []);
+      const before = fs.readFileSync(statePath);
+      failWritesTo(statePath, 'ENOSPC');
+      assert.throws(() => run({ keepRecent: '3', keepRecentQuick: 2 }), (err) => err.code === 'ENOSPC');
+      endFaults();
+      assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md unchanged');
+      assert.strictEqual(archiveText(), seed, 'archive restored / absent again');
+      dropRolledBack();
+
+      run({ keepRecent: '3', keepRecentQuick: 2 });
+      for (const line of [D1, D4, ...rows(1, 3)]) assert.strictEqual(archiveCount(line), 1, `${line} archived once`);
+      assert.deepStrictEqual(tableIds(), ids(4, 5));
+    });
+  }
+
+  // ── retry after a kill between the archive write and the STATE.md write ─
+
+  /** The on-disk result of a run killed after it published the archive and before it wrote STATE.md. */
+  function killedAfterArchive(opts) {
+    const before = fs.readFileSync(statePath);
+    run(opts);
+    fs.writeFileSync(statePath, before);
+  }
+  /** A view of the archive writes made from now on (the capture itself is installed in beforeEach). */
+  function captureArchiveWrites() {
+    const start = archiveWrites.length;
+    return { get length() { return archiveWrites.length - start; } };
+  }
+
+  test('same options: the retry writes no second block and removes the rows', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    const archived = archiveText();
+    const writes = captureArchiveWrites();
+    const out = run({ keepRecentQuick: 20 });
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(archiveText(), archived);
+    assert.strictEqual(out.total_archived, 10);
+    assert.deepStrictEqual(tableIds(), ids(11, 30));
+  });
+
+  for (const retryN of [25, 30, 31]) {
+    test(`a retry keeping more rows (N=${retryN}) completes the interrupted N=20 run`, () => {
+      write(stateDoc({ phase: null, table: rows(1, 30) }));
+      killedAfterArchive({ keepRecentQuick: 20 });
+      const archived = archiveText();
+      const writes = captureArchiveWrites();
+      const out = run({ keepRecentQuick: retryN });
+      assert.strictEqual(writes.length, 0, 'no second block');
+      assert.strictEqual(archiveText(), archived);
+      assert.strictEqual(out.keep_recent_quick, 20, 'the interrupted run\'s N is reported');
+      assert.deepStrictEqual(tableIds(), ids(11, 30));
+    });
+  }
+
+  test('a dry-run after the kill reports the completion the real run then does', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    const stateBefore = fs.readFileSync(statePath);
+    const archiveBefore = archiveText();
+    const preview = stateLib.cmdStatePrune(tmpDir, { keepRecentQuick: 30, dryRun: true, silent: true }, true);
+    assert.strictEqual(preview.keep_recent_quick, 20);
+    assert.strictEqual(preview.total_would_archive, 10);
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore);
+    assert.strictEqual(archiveText(), archiveBefore);
+  });
+
+  test('a retry with a different N that does not complete the interrupted run appends its whole prune as a table', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    run({ keepRecentQuick: 10 });
+    assert.strictEqual(blockCount(), 2);
+    assertLastArchiveWrite(QUICK_ONLY(10), [qs(rows(1, 20))]);
+    for (const line of rows(1, 10)) assert.strictEqual(archiveCount(line), 2, `${line} twice, never lost`);
+    for (const line of rows(11, 20)) assert.strictEqual(archiveCount(line), 1);
+    assert.deepStrictEqual(tableIds(), ids(21, 30));
+  });
+
+  test('an LF row in the archive never stands in for the same row with CRLF in STATE.md', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30), eol: '\r\n' }));
+    seedArchive(ARCHIVE_HEADER + quickBlock('quick: kept recent 20', rows(1, 10)), rows(1, 10));
+    run({ keepRecentQuick: 20 });
+    for (const r of rows(1, 10)) {
+      assert.strictEqual(archiveCount(`${r}\r`), 1, `${r} is archived with its CRLF`);
+      assert.strictEqual(archiveCount(r), 1, 'the LF copy stays');
+    }
+    assert.deepStrictEqual(tableIds(), ids(11, 30));
+  });
+
+  test('mixed-EOL duplicate rows are counted separately', () => {
+    const doc = ['# Session State', '', `### ${QUICK}`, '', HEADER, DELIM, `${row(1)}\r`, row(1), row(2), row(3), ''].join('\n');
+    write(doc);
+    seedArchive(ARCHIVE_HEADER + quickBlock('quick: kept recent 1', [row(1), row(1)]), [row(1), row(1)]);
+    run({ keepRecentQuick: 1 });
+    assert.strictEqual(archiveCount(`${row(1)}\r`), 1, 'the CRLF copy is archived');
+    assert.deepStrictEqual(tableIds(), ['3']);
+  });
+
+  test('discovery without publication: an N that archives nothing never touches an archive it cannot complete', () => {
+    write(stateDoc({ phase: null, table: rows(1, 5) }));
+    const foreign = ARCHIVE_HEADER + quickBlock('quick: kept recent 0', rows(100, 101));
+    seedArchive(foreign, rows(100, 101));
+    const before = fs.readFileSync(statePath);
+    const out = run({ keepRecentQuick: 5 });
+    assert.strictEqual(out.pruned, false);
+    assert.strictEqual(archiveText(), foreign, 'the archive is byte-identical');
+    assert.deepStrictEqual(fs.readFileSync(statePath), before);
+    fs.unlinkSync(archivePath);
+    run({ keepRecentQuick: 9 });
+    assert.strictEqual(archiveText(), null, 'no archive is created');
+  });
+
+  test('a row appended after the kill: the same N adds only the newly displaced row, to the same block', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    write(stateDoc({ phase: null, table: rows(1, 31) }));
+    run({ keepRecentQuick: 20 });
+    // Added to the block's existing quick section: no second table head.
+    assertLastArchiveWrite(QUICK_ONLY(20), [{ section: QUICK, lines: [row(11)] }], archivePath, 'extend');
+    assert.strictEqual(blockCount(), 1, 'still one block for the one run');
+    for (const line of rows(1, 11)) assert.strictEqual(archiveCount(line), 1);
+    assert.deepStrictEqual(tableIds(), ids(12, 31));
+  });
+
+  for (const [label, opts, decisions] of [
+    ['quick only', { keepRecentQuick: 20 }, [D7]],
+    ['combined', { keepRecent: '3', keepRecentQuick: 20 }, [D1, D4, D7]],
+  ]) {
+    test(`two interruptions with a row appended in between (${label}): the next identical retry archives every row once`, () => {
+      write(stateDoc({ decisions, table: rows(1, 30) }));
+      killedAfterArchive(opts); // publishes rows 1-10 (and phases 1, 4)
+      write(stateDoc({ decisions, table: rows(1, 31) }));
+      killedAfterArchive(opts); // adds row 11 to the same (still pending) block
+      assertLastArchiveWrite(opts.keepRecent ? { cutoff: 5, keepRecent: 3, keepRecentQuick: 20 } : QUICK_ONLY(20),
+        [{ section: QUICK, lines: [row(11)] }], archivePath, 'extend');
+      assert.strictEqual(blockCount(), 1, 'one block holds everything the run published');
+      const writes = captureArchiveWrites();
+      run(opts);
+      assert.strictEqual(writes.length, 0, 'the single pending block holds every row the run moves');
+      for (const line of [...rows(1, 11), ...decisions.filter((d) => d !== D7)]) assert.strictEqual(archiveCount(line), 1, `${line} once`);
+      assert.deepStrictEqual(tableIds(), ids(12, 31));
+    });
+  }
+
+  test('an earlier completed run with the same options is not subtracted from a new prune', () => {
+    write(stateDoc({ phase: null, table: rows(1, 25) }));
+    run({ keepRecentQuick: 20 }); // completed: rows 1-5 archived and gone
+    write(stateDoc({ phase: null, table: [...rows(6, 25), row(1)] })); // the same text as row 1 comes back
+    const writes = captureArchiveWrites();
+    run({ keepRecentQuick: 20 }); // moves row 6, the oldest
+    assert.strictEqual(writes.length, 1, 'the completed block is not mistaken for this run\'s publication');
+    assertLastArchiveWrite(QUICK_ONLY(20), [qs([row(6)])]);
+    assert.strictEqual(archiveCount(row(1)), 1, 'the recurring row stays in STATE.md, archived only by the earlier run');
+    assert.deepStrictEqual(tableIds(), [...ids(7, 25), '1']);
+  });
+
+  test('a phase advance between the kill and an identical combined retry: each entry and row archived once', () => {
+    write(stateDoc({ table: rows(1, 30) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // phase 8: cutoff 5
+    write(stateDoc({ phase: 11, decisions: [D1, D4, D7], table: rows(1, 30) }));
+    const out = run({ keepRecent: '3', keepRecentQuick: 20 }); // phase 11: cutoff 8
+    assert.strictEqual(out.cutoff_phase, 8);
+    for (const line of [D1, D4, D7, ...rows(1, 10)]) assert.strictEqual(archiveCount(line), 1, `${line} once`);
+    assertLastArchiveWrite({ cutoff: 8, keepRecent: 3, keepRecentQuick: 20 }, [ds([D7])], archivePath, 'extend');
+    assert.strictEqual(blockCount(), 1);
+  });
+
+  test('a retry on a later day that extends the pending block keeps the block\'s date and records the wider cutoff', () => {
+    const KILLED_ON = '2026-11-01';
+    write(stateDoc({ table: rows(1, 30) }));
+    mock.method(realClock, 'localToday', () => KILLED_ON);
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // phase 8: cutoff 5, written on KILLED_ON
+    pinDay();
+    write(stateDoc({ phase: 11, decisions: [D1, D4, D7], table: rows(1, 30) }));
+    const out = run({ keepRecent: '3', keepRecentQuick: 20 }); // DAY, phase 11: cutoff 8 adds D7 to the block
+    assert.strictEqual(out.cutoff_phase, 8);
+    const plan = assertLastArchiveWrite({ date: KILLED_ON, cutoff: 8, keepRecent: 3, keepRecentQuick: 20 }, [ds([D7])], archivePath, 'extend');
+    assert.strictEqual(plan.date, KILLED_ON, 'the run\'s own date (DAY) does not replace the block\'s');
+    assert.strictEqual(plan.heading.text, `## Pruned ${KILLED_ON} (phases 1-8, kept recent 3; quick: kept recent 20)`);
+    assert.strictEqual(blockCount(), 1);
+  });
+
+  // The legacy --keep-recent parsing (unchanged here, see #6542) can record a negative or unsafe K; the recorded K
+  // is compared exactly as it was printed, so an identical retry still matches.
+  // '-1000000000000000000000' parses to -1e21, which the heading prints as `-1e+21`.
+  for (const k of ['-2', '-9007199254740992', '-1000000000000000000000']) {
+    test(`a recorded --keep-recent of ${k} still matches an identical combined retry`, () => {
+      write(stateDoc({ phase: 3, table: rows(1, 30) }));
+      killedAfterArchive({ keepRecent: k, keepRecentQuick: 20 });
+      const writes = captureArchiveWrites();
+      run({ keepRecent: k, keepRecentQuick: 20 });
+      assert.strictEqual(writes.length, 0, 'the retry recognizes its own publication');
+      for (const line of [D1, D4, D7, ...rows(1, 10)]) assert.ok(archiveCount(line) <= 1, `${line} at most once`);
+      for (const line of [D1, D4, ...rows(1, 10)]) assert.strictEqual(archiveCount(line), 1, `${line} once`);
+    });
+  }
+
+  test('identical combined arguments across the zero crossing (phase part skipped, then active): rows archived once', () => {
+    write(stateDoc({ phase: 2, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // phase 2: no positive cutoff, `phases none`
+    assertLastArchiveWrite({ cutoff: null, keepRecent: 3, keepRecentQuick: 20 }, [qs(rows(1, 10))]);
+    write(stateDoc({ phase: 4, table: rows(1, 30) }));
+    const out = run({ keepRecent: '3', keepRecentQuick: 20 }); // phase 4: cutoff 1
+    assert.strictEqual(out.cutoff_phase, 1);
+    for (const line of [D1, ...rows(1, 10)]) assert.strictEqual(archiveCount(line), 1, `${line} once`);
+    // The block had no Decisions section yet: it is added at the block's end.
+    assertLastArchiveWrite({ cutoff: 1, keepRecent: 3, keepRecentQuick: 20 }, [ds([D1])], archivePath, 'extend');
+    assert.deepStrictEqual(tableIds(), ids(11, 30));
+  });
+
+  test('identical row text that recurs after a completed run is archived again, as its own occurrence', () => {
+    write(stateDoc({ phase: null, table: rows(1, 21) }));
+    run({ keepRecentQuick: 20 }); // completed: row 1 archived
+    write(stateDoc({ phase: null, table: [...rows(2, 21), row(22), row(23)] }));
+    killedAfterArchive({ keepRecentQuick: 20 }); // publishes rows 2-3, killed
+    write(stateDoc({ phase: null, table: [row(1), ...rows(2, 21), row(22), row(23)] })); // the identical row 1 text comes back, oldest
+    const writes = captureArchiveWrites();
+    run({ keepRecentQuick: 20 }); // prunes rows 1-3: 2-3 are the pending block; the new row 1 is not in it
+    assert.strictEqual(writes.length, 1);
+    assertLastArchiveWrite(QUICK_ONLY(20), [{ section: QUICK, lines: [row(1)] }], archivePath, 'extend');
+    assert.strictEqual(archiveCount(row(1)), 2, 'the completed run\'s copy and the new occurrence');
+    for (const line of rows(2, 3)) assert.strictEqual(archiveCount(line), 1, `${line} once`);
+    assert.deepStrictEqual(tableIds(), ids(4, 23));
+  });
+
+  test('a row appended after the kill: a larger N is not adopted and nothing is lost', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    write(stateDoc({ phase: null, table: rows(1, 31) }));
+    const out = run({ keepRecentQuick: 25 });
+    assert.strictEqual(out.keep_recent_quick, 25);
+    assert.deepStrictEqual(tableIds(), ids(7, 31));
+    for (const line of rows(1, 10)) assert.ok(archiveCount(line) >= 1, `${line} archived`);
+  });
+
+  test('an interrupted combined run is completed in both parts by a narrower combined retry', () => {
+    write(stateDoc({ table: rows(1, 30) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // cutoff 5
+    const archived = archiveText();
+    const writes = captureArchiveWrites();
+    const out = run({ keepRecent: '5', keepRecentQuick: 25 }); // cutoff 3
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(archiveText(), archived);
+    assert.strictEqual(out.cutoff_phase, 5);
+    assert.strictEqual(out.keep_recent_quick, 20);
+    assert.strictEqual(body(), stateDoc({ decisions: [D7], table: rows(11, 30) }));
+  });
+
+  test('an interrupted combined run is completed when only its phase part is wider', () => {
+    write(stateDoc({ table: rows(1, 30) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 });
+    const writes = captureArchiveWrites();
+    const out = run({ keepRecent: '5', keepRecentQuick: 20 });
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(out.cutoff_phase, 5);
+    assert.strictEqual(body(), stateDoc({ decisions: [D7], table: rows(11, 30) }));
+  });
+
+  for (const [label, first, retry] of [
+    ['wider phase part, narrower quick part', { keepRecent: '3', keepRecentQuick: 20 }, { keepRecent: '5', keepRecentQuick: 10 }],
+    ['narrower phase part, wider quick part', { keepRecent: '5', keepRecentQuick: 10 }, { keepRecent: '3', keepRecentQuick: 20 }],
+  ]) {
+    test(`opposite directions (${label}): no completion, the retry's own prune is appended, nothing is lost`, () => {
+      write(stateDoc({ table: rows(1, 30) }));
+      killedAfterArchive(first);
+      const out = run(retry);
+      assert.strictEqual(out.keep_recent_quick, retry.keepRecentQuick);
+      assert.strictEqual(blockCount(), 2, 'a second block');
+      const keptRows = tableIds();
+      assert.deepStrictEqual(keptRows, ids(31 - retry.keepRecentQuick, 30));
+      // Every entry and row that left STATE.md (both runs reach phases 1 and 4) is archived at least once.
+      for (const line of [D1, D4, ...rows(1, 30 - retry.keepRecentQuick)]) assert.ok(archiveCount(line) >= 1, `${line} archived`);
+    });
+  }
+
+  for (const [label, first, retry] of [
+    ['a phase-only run after an interrupted combined run', { keepRecent: '3', keepRecentQuick: 20 }, { keepRecent: '3' }],
+    ['a quick-only run after an interrupted combined run', { keepRecent: '3', keepRecentQuick: 20 }, { keepRecentQuick: 20 }],
+    ['a combined run after an interrupted quick-only run', { keepRecentQuick: 20 }, { keepRecent: '3', keepRecentQuick: 20 }],
+    ['a quick-only run after an interrupted phase-only run', { keepRecent: '3' }, { keepRecentQuick: 20 }],
+  ]) {
+    test(`${label}: a different set of options appends its whole prune, nothing is lost`, () => {
+      write(stateDoc({ table: rows(1, 30) }));
+      killedAfterArchive(first);
+      const writes = captureArchiveWrites();
+      const out = run(retry);
+      assert.strictEqual(writes.length, 1, 'one block for this run');
+      assert.strictEqual(blockCount(), 2);
+      assert.strictEqual(out.total_archived, (retry.keepRecent ? 2 : 0) + (retry.keepRecentQuick !== undefined ? 10 : 0), 'the whole prune');
+    });
+  }
+
+  test('an interrupted combined run whose quick part archived nothing is still a combined run: a phase-only retry appends its whole prune', () => {
+    write(stateDoc({ table: rows(1, 5) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // quick part archives nothing
+    run({ keepRecent: '3' });
+    assert.strictEqual(blockCount(), 2);
+    assert.strictEqual(archiveCount(D1), 2, 'duplicated, not lost');
+    assert.strictEqual(body(), stateDoc({ decisions: [D7], table: rows(1, 5) }));
+  });
+
+  test('an interrupted combined run whose phase part archived nothing: a quick-only retry appends its whole prune', () => {
+    write(stateDoc({ decisions: [D7], table: rows(1, 30) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // phase part archives nothing
+    run({ keepRecentQuick: 20 });
+    assert.strictEqual(blockCount(), 2);
+    assert.strictEqual(archiveCount(row(1)), 2);
+    assert.deepStrictEqual(tableIds(), ids(11, 30));
+  });
+
+  test('the same combined options after a combined block with an empty quick part: no second block', () => {
+    write(stateDoc({ table: rows(1, 5) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 });
+    const writes = captureArchiveWrites();
+    run({ keepRecent: '3', keepRecentQuick: 20 });
+    assert.strictEqual(writes.length, 0);
+    assert.strictEqual(archiveCount(D1), 1);
+  });
+
+  // ── hand-written archives the renderer never produces ──────────────────
+
+  const handBlock = (heading, sectionLines) => `${ARCHIVE_HEADER}## Pruned 2026-01-01 (${heading})\n\n${sectionLines.join('\n')}\n\n`;
+  const ADVERSARIAL = [
+    ['a negative N', 'quick: kept recent -1', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 30)]],
+    ['an exponent N', 'quick: kept recent 1e3', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 10)]],
+    ['an empty N', 'quick: kept recent ', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 10)]],
+    ['an unsafe N', 'quick: kept recent 99999999999999999999', [`### ${QUICK}`, '', HEADER, DELIM]],
+    ['quick named twice', 'quick: kept recent 0; quick: kept recent 0', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 30)]],
+    ['a header-only quick section', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, DELIM]],
+    ['a header without a delimiter', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, ...rows(1, 30)]],
+    ['a mismatched delimiter', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, '|---|---|', ...rows(1, 30)]],
+    // Not something the renderer writes, but every row the prune at its N would move IS in it, verbatim, so it
+    // completes like any interrupted N=0 run (the phase prune adopts a hand-written block on the same terms).
+    ['a duplicated quick section holding the whole table', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 15), '', `### ${QUICK}`, '', HEADER, DELIM, ...rows(16, 30)], []],
+    ['a block cut off mid-row', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 9), '| 10 | task 1']],
+    ['a forged N=0 holding part of the table', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 10)]],
+    ['a quick section under a phase-only heading', 'phases 1-5, kept recent 3', [`### ${QUICK}`, '', HEADER, DELIM, ...rows(1, 30)]],
+    ['a data row shaped like the header', 'quick: kept recent 0', [`### ${QUICK}`, '', HEADER, HEADER, DELIM, ...rows(1, 30)]],
+  ];
+  for (const [label, heading, lines, expectedLeft = ids(11, 30)] of ADVERSARIAL) {
+    test(`a hand-written last block with ${label}: no row leaves STATE.md without being archived, and the rows due are archived`, () => {
+      write(stateDoc({ phase: null, table: rows(1, 30) }));
+      seedArchive(handBlock(heading, lines), lines);
+      run({ keepRecentQuick: 20 });
+      const left = new Set(tableIds());
+      for (let i = 1; i <= 30; i++) {
+        if (!left.has(String(i))) assert.ok(archiveCount(row(i)) >= 1, `row ${i} left STATE.md and must be archived`);
+      }
+      assert.deepStrictEqual(tableIds(), expectedLeft);
+    });
+  }
+
+  // ── the archive block IR ───────────────────────────────────────────────
+
+  test('parseLastArchiveBlock reads the quick N and moves the table head out of the quick section', () => {
+    const parse = stateLib.parseLastArchiveBlock;
+    const text = `${ARCHIVE_HEADER}## Pruned x (phases 1-5, kept recent 3; quick: kept recent 20)\n\n### Decisions\n\n${D1}\n\n### ${QUICK}\n\n${HEADER}\r\n${DELIM}\n${row(1)}\n`;
+    assert.deepStrictEqual(parse(text), {
+      cutoff: 5, keepRecent: 3, keepRecentQuick: 20,
+      sections: [{ section: 'Decisions', lines: [D1] }, { section: QUICK, head: [`${HEADER}\r`, DELIM], lines: [row(1)] }],
+    }, 'a quick line keeps its CR; the head is still recognized');
+    assert.deepStrictEqual(parse(`## Pruned x (quick: kept recent 7)\n`), { cutoff: null, keepRecent: null, keepRecentQuick: 7, sections: [] });
+    assert.deepStrictEqual(parse(`## Pruned x (quick: kept recent 7)\r\n`).keepRecentQuick, 7, 'a CRLF heading');
+    for (const bad of ['-1', '1e3', '', '99999999999999999999', ' 3', '٣', '7; quick: kept recent 7', '7, more']) {
+      assert.strictEqual(parse(`## Pruned x (quick: kept recent ${bad})\n`).keepRecentQuick, null, `"${bad}" is not an N`);
+    }
+    assert.strictEqual(parse('## Pruned x (quick: kept recent 7) trailing\n').keepRecentQuick, null, 'not the end of the heading');
+    assert.strictEqual(parse('## Pruned x (phases 1-5, kept recent -2; quick: kept recent 7)\n').keepRecent, -2, 'K is signed');
+    assert.strictEqual(parse('## Pruned x (phases 1-5, kept recent 99999999999999999999)\n').keepRecent, null, 'an unsafe K');
+    assert.deepStrictEqual(parse(`## Pruned x (quick: kept recent 0)\n\n### ${QUICK}\n\n${HEADER}\n${row(1)}\n`).sections,
+      [{ section: QUICK, lines: [HEADER, row(1)] }], 'no delimiter: no head, every line is an entry');
+    assert.deepStrictEqual(parse(`## Pruned x (phases 1-2, kept recent 3)\n\n### Decisions\n\n${HEADER}\n${DELIM}\n`).sections,
+      [{ section: 'Decisions', lines: [HEADER, DELIM] }], 'only the quick section has a table head');
+  });
+
+  test('property: a rendered quick block parses back to its N, head and rows', () => {
+    const cell = fc.string({ unit: fc.constantFrom('a', 'Z', '0', ' ', '-', '[', ']', 'é'), maxLength: 8 });
+    const dataRow = cell.map((c) => `| ${c.trim() || 'x'} | d | 2026 | c | — |`);
+    fc.assert(fc.property(fc.array(dataRow, { minLength: 1, maxLength: 8 }), fc.nat(1000), fc.option(fc.nat(50), { nil: null }), (moved, q, cutoff) => {
+      const sections = [{ section: QUICK, count: moved.length, lines: moved, head: [HEADER, DELIM] }];
+      const plan = stateLib.planStateArchiveAppend(null, sections, { date: DAY, cutoff, keepRecent: cutoff === null ? null : 3, keepRecentQuick: q });
+      const parsed = stateLib.parseLastArchiveBlock(stateLib.renderStateArchiveAppend(plan));
+      assert.deepStrictEqual(parsed, {
+        cutoff, keepRecent: cutoff === null ? null : 3, keepRecentQuick: q, sections: [{ section: QUICK, head: [HEADER, DELIM], lines: moved }],
+      });
+    }), { seed: 6389 });
+  });
+
+  // ── extending the pending block in place (one interrupted run = one block) ─
+
+  describe('planStateArchiveExtend', () => {
+    const meta = { date: DAY, cutoff: null, keepRecent: null, keepRecentQuick: 20 };
+    // The block keeps the date it was first written on (2026-01-01), not the run's (DAY).
+    const NEW_HEADING = '## Pruned 2026-01-01 (quick: kept recent 20)';
+    const added = (lines) => [{ section: QUICK, count: lines.length, lines }];
+
+    for (const [label, eol, last] of [
+      ['LF', '\n', '\n'],
+      ['CRLF', '\r\n', '\r\n'],
+      ['mixed (CRLF rows, LF last row)', '\r\n', '\n'],
+      ['unterminated last row', '\n', ''],
+    ]) {
+      test(`${label}: the rows go right after the section's last row and the heading line is replaced`, () => {
+        const oldHeading = '## Pruned 2026-01-01 (quick: kept recent 20)';
+        const prefix = `# STATE Archive\n\n## Pruned 2025-12-01 (quick: kept recent 5)\n\n### ${QUICK}\n\n${HEADER}\n${DELIM}\n${row(90)}\n\n`;
+        const block = `${oldHeading}\n\n### ${QUICK}${eol}${eol}${HEADER}${eol}${DELIM}${eol}${row(1)}${eol}${row(2)}${last}`;
+        const text = prefix + block;
+        const plan = stateLib.planStateArchiveExtend(text, added([row(3), `${row(4)}\r`]), meta);
+        const headingStart = prefix.length;
+        const lastRowEnd = text.lastIndexOf(row(2)) + row(2).length + (last === '\r\n' ? 1 : 0); // after the row's own CR
+        assert.deepStrictEqual(plan, {
+          base: text,
+          date: '2026-01-01',
+          heading: { start: headingStart, end: headingStart + oldHeading.length, text: NEW_HEADING },
+          insertions: [{ offset: lastRowEnd, text: `\n${row(3)}\n${row(4)}\r` }],
+          tail: '',
+        });
+        const rendered = stateLib.renderStateArchiveExtend(plan);
+        assert.strictEqual(Buffer.byteLength(rendered),
+          Buffer.byteLength(text) - Buffer.byteLength(oldHeading) + Buffer.byteLength(NEW_HEADING) + Buffer.byteLength(`\n${row(3)}\n${row(4)}\r`));
+        assert.strictEqual(rendered.slice(0, headingStart), prefix, 'earlier blocks are byte-identical');
+      });
+    }
+
+    test('a section the block does not have yet is added at the block\'s end, after a blank line', () => {
+      for (const ending of ['\n\n', '\n', '']) {
+        const text = `# STATE Archive\n\n## Pruned 2026-01-01 (phases none, kept recent 3; quick: kept recent 20)\n\n### ${QUICK}\n\n${HEADER}\n${DELIM}\n${row(1)}${ending}`;
+        const plan = stateLib.planStateArchiveExtend(text, [{ section: 'Decisions', count: 1, lines: [D1] }],
+          { date: DAY, cutoff: 1, keepRecent: 3, keepRecentQuick: 20 });
+        assert.deepStrictEqual(plan.insertions, []);
+        assert.strictEqual(plan.tail, `${'\n\n'.slice(ending.length)}### Decisions\n\n${D1}\n\n`);
+        assert.strictEqual(plan.heading.text, '## Pruned 2026-01-01 (phases 1-1, kept recent 3; quick: kept recent 20)',
+          'the block\'s own date, and the cutoff it now covers');
+      }
+    });
+
+    test('a heading with no date before its options (hand-written) takes the run\'s date', () => {
+      for (const heading of ['## Pruned (quick: kept recent 20)', '## Pruned  (quick: kept recent 20)', '## Pruned 2026-01-01(quick: kept recent 20)']) {
+        const text = `# STATE Archive\n\n${heading}\n\n### ${QUICK}\n\n${HEADER}\n${DELIM}\n${row(1)}\n`;
+        const plan = stateLib.planStateArchiveExtend(text, added([row(2)]), meta);
+        assert.strictEqual(plan.date, DAY, heading);
+        assert.strictEqual(plan.heading.text, `## Pruned ${DAY} (quick: kept recent 20)`, heading);
+      }
+    });
+
+    test('a new quick section carries its table head', () => {
+      const text = `# STATE Archive\n\n## Pruned 2026-01-01 (phases 1-5, kept recent 3; quick: kept recent 20)\n\n### Decisions\n\n${D1}\n`;
+      const plan = stateLib.planStateArchiveExtend(text, [{ section: QUICK, count: 1, lines: [row(1)], head: [HEADER, DELIM] }],
+        { date: DAY, cutoff: 5, keepRecent: 3, keepRecentQuick: 20 });
+      assert.strictEqual(plan.tail, `\n### ${QUICK}\n\n${HEADER}\n${DELIM}\n${row(1)}\n\n`);
+    });
+  });
+
+  // ── the extension path under failure ───────────────────────────────────
+
+  test('a failed archive write while extending the pending block leaves both files byte-identical', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    write(stateDoc({ phase: null, table: rows(1, 31) }));
+    const stateBefore = fs.readFileSync(statePath);
+    const archiveBefore = fs.readFileSync(archivePath);
+    failWritesTo(archivePath, 'EIO');
+    assert.throws(() => run({ keepRecentQuick: 20 }), (err) => err.code === 'EIO');
+    endFaults();
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore);
+    assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore);
+    assert.ok(!fs.existsSync(statePath + '.lock'));
+  });
+
+  test('a failed STATE.md write after an extension restores the original pending block, and the retry extends it once', () => {
+    write(stateDoc({ table: rows(1, 30) }));
+    killedAfterArchive({ keepRecent: '3', keepRecentQuick: 20 }); // phase 8, cutoff 5
+    write(stateDoc({ phase: 11, table: rows(1, 30) })); // the retry adds D7 (cutoff 8): a section the block already has
+    const archiveBefore = fs.readFileSync(archivePath);
+    const stateBefore = fs.readFileSync(statePath);
+    failWritesTo(statePath, 'ENOSPC');
+    assert.throws(() => run({ keepRecent: '3', keepRecentQuick: 20 }), (err) => err.code === 'ENOSPC');
+    endFaults();
+    assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the pending block and its heading are back');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore);
+    published.pop(); // the rolled-back extension
+
+    run({ keepRecent: '3', keepRecentQuick: 20 });
+    assertLastArchiveWrite({ cutoff: 8, keepRecent: 3, keepRecentQuick: 20 }, [ds([D7])], archivePath, 'extend');
+    for (const line of [D1, D4, D7, ...rows(1, 10)]) assert.strictEqual(archiveCount(line), 1, `${line} once`);
+    assert.strictEqual(blockCount(), 1);
+  });
+
+  test('when the archive restore after an extension also fails, both causes surface and the extended archive is kept', () => {
+    write(stateDoc({ phase: null, table: rows(1, 30) }));
+    killedAfterArchive({ keepRecentQuick: 20 });
+    write(stateDoc({ phase: null, table: rows(1, 31) }));
+    failWritesTo(statePath, 'ENOSPC');
+    mock.method(scp, 'platformRestoreFileSync', () => { const e = new Error('EROFS: simulated'); e.code = 'EROFS'; throw e; });
+    let thrown = null;
+    try { run({ keepRecentQuick: 20 }); } catch (err) { thrown = err; }
+    endFaults();
+    assert.ok(thrown instanceof AggregateError);
+    assert.deepStrictEqual(thrown.errors.map((e) => e.code), ['ENOSPC', 'EROFS']);
+    const extended = archiveWrites[archiveWrites.length - 1];
+    assert.strictEqual(fs.readFileSync(archivePath, 'utf-8').length > 0, true);
+    assert.strictEqual(Buffer.byteLength(fs.readFileSync(archivePath, 'utf-8')) >= Buffer.byteLength(extended.prior), true,
+      'the archive keeps the extension (it may hold the only copy of row 11)');
+    const writes = captureArchiveWrites();
+    run({ keepRecentQuick: 20 }); // the retry finds row 11 in the pending block
+    assert.strictEqual(writes.length, 0);
+    assert.deepStrictEqual(tableIds(), ids(12, 31));
+  });
+
+  test('subtractPendingBlock never matches the table head and carries it onto the remainder', () => {
+    const sub = stateLib.subtractPendingBlock;
+    const pruned = [{ section: QUICK, count: 2, lines: [row(1), row(2)], head: [HEADER, DELIM] }];
+    assert.deepStrictEqual(sub([{ section: QUICK, head: [HEADER, DELIM], lines: [row(1)] }], pruned),
+      { pending: true, remainder: [{ section: QUICK, count: 1, lines: [row(2)], head: [HEADER, DELIM] }] });
+    assert.strictEqual(sub([{ section: QUICK, lines: [HEADER] }], pruned).pending, false, 'a header line is not an archived row');
+  });
+
+  // ── argument validation ────────────────────────────────────────────────
+
+  const INVALID = [
+    ['a missing value', ['--keep-recent-quick']],
+    ['a flag-shaped value', ['--keep-recent-quick', '--dry-run']],
+    ['an empty value', ['--keep-recent-quick', '']],
+    ['a whitespace value', ['--keep-recent-quick', ' ']],
+    ['a tab', ['--keep-recent-quick', '\t']],
+    ['a negative value', ['--keep-recent-quick', '-1']],
+    ['a fraction', ['--keep-recent-quick', '1.5']],
+    ['an exponent', ['--keep-recent-quick', '1e2']],
+    ['hex', ['--keep-recent-quick', '0x10']],
+    ['a plus sign', ['--keep-recent-quick', '+3']],
+    ['a leading space', ['--keep-recent-quick', ' 3']],
+    ['a trailing space', ['--keep-recent-quick', '3 ']],
+    ['a trailing LF', ['--keep-recent-quick', '3\n']],
+    ['a trailing CR', ['--keep-recent-quick', '3\r']],
+    ['a trailing CRLF', ['--keep-recent-quick', '3\r\n']],
+    ['a trailing U+2028', ['--keep-recent-quick', '3\u2028']],
+    ['a trailing NBSP', ['--keep-recent-quick', '3\u00a0']],
+    ['Unicode digits', ['--keep-recent-quick', '\u0663']],
+    ['fullwidth digits', ['--keep-recent-quick', '\uff13']],
+    ['an unsafe integer', ['--keep-recent-quick', '99999999999999999999']],
+    ['a very long value', ['--keep-recent-quick', '9'.repeat(5000)]],
+    ['a word', ['--keep-recent-quick', 'all']],
+    ['a repeated flag', ['--keep-recent-quick', '3', '--keep-recent-quick', '4']],
+    ['a repeated flag with the same value', ['--keep-recent-quick', '3', '--keep-recent-quick', '3']],
+    ['the = form', ['--keep-recent-quick=3']],
+    ['command substitution', ['--keep-recent-quick', '$(touch pwned)']],
+    ['backticks', ['--keep-recent-quick', '`touch pwned`']],
+    ['a command separator', ['--keep-recent-quick', '1; touch pwned']],
+    ['an and-list', ['--keep-recent-quick', '1 && touch pwned']],
+    ['quotes', ['--keep-recent-quick', '"1"']],
+  ];
+  for (const [label, args] of INVALID) {
+    test(`--keep-recent-quick with ${label} is refused before anything is read or written`, () => {
+      write(stateDoc({ phase: null }));
+      const before = fs.readFileSync(statePath);
+      const result = runGsdTools(['--json-errors', 'state', 'prune', ...args], tmpDir);
+      assert.strictEqual(result.exitCode, 1);
+      assert.strictEqual(JSON.parse(result.error).reason, 'usage');
+      assert.strictEqual(result.output, '', 'no result on stdout');
+      assert.ok(!/\n\s+at /.test(result.error), 'no stack trace');
+      assert.deepStrictEqual(fs.readFileSync(statePath), before, 'STATE.md byte-identical');
+      assert.strictEqual(archiveText(), null, 'no archive');
+      assert.ok(!fs.existsSync(path.join(tmpDir, 'pwned')), 'nothing was executed');
+    });
+  }
+
+  for (const value of ['0', '00', '007', '9007199254740991']) {
+    test(`--keep-recent-quick ${value} is a whole number and is accepted`, () => {
+      write(stateDoc({ phase: null }));
+      const result = cli('--keep-recent-quick', value, '--dry-run');
+      assert.strictEqual(result.exitCode, 0, result.error);
+      assert.strictEqual(JSON.parse(result.output).keep_recent_quick, Number(value));
+    });
+  }
+
+  for (const bad of [-1, 1.5, NaN, '3', Number.MAX_SAFE_INTEGER + 1]) {
+    test(`cmdStatePrune refuses a programmatic keepRecentQuick of ${String(bad)}`, () => {
+      write(stateDoc({ phase: null }));
+      const before = fs.readFileSync(statePath);
+      assert.throws(() => run({ keepRecentQuick: bad }), TypeError);
+      assert.deepStrictEqual(fs.readFileSync(statePath), before);
+    });
+  }
+
+  // ── an unfinished quick batch blocks the quick prune ───────────────────
+
+  function batchWith(statuses) {
+    const created = createBatch(tmpDir, statuses.map((_, i) => ({ description: `item ${i}` })));
+    assert.strictEqual(created.ok, true, created.reason);
+    const manifestPath = path.join(tmpDir, '.planning', 'quick-batches', created.value.batchId, 'BATCH.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    manifest.items.forEach((it, i) => { it.status = statuses[i]; });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    return { batchId: created.value.batchId, manifestPath };
+  }
+
+  for (const status of ['pending', 'failed', 'blocked']) {
+    test(`a batch with a ${status} item: --keep-recent-quick is refused (real and dry-run), nothing written`, () => {
+      write(stateDoc());
+      batchWith(['complete', status]);
+      const before = fs.readFileSync(statePath);
+      for (const args of [['--keep-recent-quick', '1'], ['--keep-recent-quick', '1', '--dry-run'], ['--keep-recent', '3', '--keep-recent-quick', '1']]) {
+        const result = runGsdTools(['--json-errors', 'state', 'prune', ...args], tmpDir);
+        assert.strictEqual(result.exitCode, 1);
+        assert.strictEqual(JSON.parse(result.error).reason, 'quick_batch_unfinished');
+        assert.deepStrictEqual(fs.readFileSync(statePath), before);
+        assert.strictEqual(archiveText(), null);
+      }
+    });
+  }
+
+  test('an unfinished batch does not block a phase-only prune', () => {
+    write(stateDoc());
+    batchWith(['pending']);
+    const out = JSON.parse(cli('--keep-recent', '3').output);
+    assert.strictEqual(out.total_archived, 2);
+  });
+
+  test('a corrupt BATCH.json blocks the quick prune (it cannot be shown to be finished)', () => {
+    write(stateDoc());
+    const { manifestPath } = batchWith(['complete']);
+    fs.writeFileSync(manifestPath, '{ not json');
+    const result = runGsdTools(['--json-errors', 'state', 'prune', '--keep-recent-quick', '1'], tmpDir);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(JSON.parse(result.error).reason, 'quick_batch_unfinished');
+  });
+
+  test('finished batches, a batch directory without BATCH.json, and no batch directory at all do not block it', () => {
+    write(stateDoc({ phase: null }));
+    assert.strictEqual(cli('--keep-recent-quick', '4').exitCode, 0, 'no quick-batches directory');
+    write(stateDoc({ phase: null }));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'quick-batches', 'not-a-batch'), { recursive: true });
+    batchWith(['complete', 'complete']);
+    const result = cli('--keep-recent-quick', '4');
+    assert.strictEqual(result.exitCode, 0, result.error);
+    assert.strictEqual(JSON.parse(result.output).total_archived, 1);
+  });
+
+  test('a batch item completed again after its row was pruned is not appended a second time', () => {
+    write(stateDoc({ phase: null, table: [] }));
+    const created = createBatch(tmpDir, [{ description: 'a' }, { description: 'b' }]);
+    const [a, b] = created.value.manifest.items;
+    for (const it of [a, b]) {
+      const done = completeQuickItem(tmpDir, created.value.batchId, it.quick_id, { description: it.description, date: '2026-11-08', commit: 'c' });
+      assert.strictEqual(done.ok, true, done.reason);
+    }
+    run({ keepRecentQuick: 0 });
+    assert.deepStrictEqual(tableIds(), []);
+    const again = completeQuickItem(tmpDir, created.value.batchId, a.quick_id, { description: a.description, date: '2026-11-08', commit: 'c' });
+    assert.strictEqual(again.ok, true);
+    assert.strictEqual(again.value.appended, false);
+    assert.deepStrictEqual(tableIds(), [], 'the pruned row is not written back');
   });
 });

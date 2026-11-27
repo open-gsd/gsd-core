@@ -4066,6 +4066,7 @@ A notation the checker cannot parse or evaluate is a status in `baseline_statuse
 - No per-milestone provenance — bucket-all is the only option (see above).
 - A `### Quick Tasks Completed` table whose columns match neither registered variant (with/without a Status column) is left untouched with a warning rather than reset, since clearing it would risk destroying rows under a schema GSD doesn't recognize.
 - A `STATE.md` with no `### Quick Tasks Completed` section at all is a normal, silent no-op for the reset step — the section is created lazily by `/gsd-quick`, not present in the project template.
+- The reset deletes every row, including rows `/gsd-fast` logged without a task directory. `gsd-tools state prune --keep-recent-quick N` (#6389) is the row-level counterpart: it keeps the newest N rows and moves the older ones, unchanged, into `STATE-ARCHIVE.md` (`0` moves them all, so nothing is lost before an `archive-quick`).
 
 See [Archiving quick tasks](how-to/handle-quick-and-fast-tasks.md#archiving-quick-tasks) for the full walkthrough.
 

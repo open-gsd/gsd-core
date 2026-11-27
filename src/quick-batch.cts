@@ -791,6 +791,13 @@ function completeQuickItem(
       const item = manifest.items.find((it) => it.quick_id === quickId);
       if (!item) return { ok: false, reason: `batch ${batchId} has no item ${quickId}` };
 
+      // #6389: an item already marked complete is a no-op, checked BEFORE looking for its row:
+      // `state prune --keep-recent-quick` can have moved that row to STATE-ARCHIVE.md, and
+      // re-appending it would put a pruned row back.
+      if (item.status === 'complete') {
+        return { ok: true, value: { appended: false, manifest, warnings: [] } };
+      }
+
       const statePath = planningPaths(cwd).state;
       const stateContent = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : '';
 
@@ -810,11 +817,9 @@ function completeQuickItem(
         warnings = appendResult.value.warnings;
       }
 
-      if (item.status !== 'complete') {
-        item.status = 'complete';
-        item.commit = fields.commit;
-        platformWriteSync(batchManifestPath(cwd, batchId), JSON.stringify(manifest, null, 2) + '\n');
-      }
+      item.status = 'complete';
+      item.commit = fields.commit;
+      platformWriteSync(batchManifestPath(cwd, batchId), JSON.stringify(manifest, null, 2) + '\n');
 
       return { ok: true, value: { appended, manifest, warnings } };
     }, clock);
@@ -1053,7 +1058,74 @@ function resumeBatch(
   }
 }
 
+// ─── Unfinished items (#6389) ─────────────────────────────────────────────────
+
+/** One batch item that is not `complete`. */
+interface UnfinishedBatchItem {
+  batchId: string;
+  quickId: string;
+  status: string;
+}
+
+/**
+ * Every item of every batch under `<planning dir>/quick-batches/` (the directory `createBatch` writes, workstream-
+ * and project-aware through `planningDir`) whose status is not `complete`, in directory-name order. Used by
+ * `state prune --keep-recent-quick` (#6389), which refuses while any is unfinished: `resumeBatch` reads "the item
+ * is not complete but its row exists" as a crash after the row write, so a pruned row would make it run again.
+ *
+ * Fails closed: a manifest that cannot be read (other than an absent `BATCH.json`, which is not a batch), is not
+ * JSON, has no `items` array, or has an item without a string `status` makes the whole answer `{ok:false}`, since
+ * it cannot be shown to be finished. An absent `quick-batches` directory means no batch. Deliberately lighter than
+ * `loadBatch` (no worktree or DAG checks): only the statuses matter here.
+ */
+function findUnfinishedBatchItems(cwd: string): Result<UnfinishedBatchItem[]> {
+  const batchesDir = path.join(planningDir(cwd), 'quick-batches');
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(batchesDir).sort();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, value: [] };
+    return { ok: false, reason: `unable to read ${batchesDir}: ${(err as Error).message}` };
+  }
+  const unfinished: UnfinishedBatchItem[] = [];
+  for (const name of entries) {
+    const entryPath = path.join(batchesDir, name);
+    let isDir: boolean;
+    try {
+      isDir = fs.statSync(entryPath).isDirectory();
+    } catch (err) {
+      return { ok: false, reason: `unable to read ${entryPath}: ${(err as Error).message}` };
+    }
+    if (!isDir) continue;
+    const manifestPath = path.join(entryPath, 'BATCH.json');
+    let raw: string;
+    try {
+      raw = fs.readFileSync(manifestPath, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return { ok: false, reason: `unable to read ${manifestPath}: ${(err as Error).message}` };
+    }
+    const parsed = safeJsonParse(raw, { maxLength: 1048576, label: 'BATCH.json' });
+    const obj = parsed.ok ? parsed.value : null;
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj) || !Array.isArray((obj as Record<string, unknown>).items)) {
+      return { ok: false, reason: `${manifestPath} is not a readable batch manifest` };
+    }
+    const batchId = typeof (obj as Record<string, unknown>).batch_id === 'string' ? (obj as Record<string, string>).batch_id : name;
+    for (const it of (obj as { items: unknown[] }).items) {
+      const item = it as Record<string, unknown> | null;
+      if (item === null || typeof item !== 'object' || typeof item.status !== 'string') {
+        return { ok: false, reason: `${manifestPath} has an item without a status` };
+      }
+      if (item.status !== 'complete') {
+        unfinished.push({ batchId, quickId: typeof item.quick_id === 'string' ? item.quick_id : '?', status: item.status });
+      }
+    }
+  }
+  return { ok: true, value: unfinished };
+}
+
 export = {
+  findUnfinishedBatchItems,
   parseTaskList,
   parseTaskListFromFile,
   allocateQuickIds,
