@@ -1597,7 +1597,7 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
   test('#5966 row 12: COMMANDS.md states the plain-run behaviour and its exclusions', () => {
     const doc = flat(read(COMMANDS_DOC_PATH));
     assert.match(doc, /\*\*Waves \(#5966\):\*\* without `--wave` or `--interactive`, the run re-reads the plan index after each wave/);
-    assert.match(doc, /On Copilot, which runs plans inline, a run is unchanged/);
+    assert.match(doc, /On Copilot, which runs plans inline, a run does not re-read to dispatch further waves/);
   });
 });
 
