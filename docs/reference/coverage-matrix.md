@@ -103,7 +103,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 
 **Source:** `docs/CLI-SURFACE-MANIFEST.json` (verb, aliases and declared flags).
 
-**Rule:** A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` is headed by its name (dotted verbs also as `a b`, or an alias) or has a usage line that invokes it (`gsd-tools [query] <verb>`, `node gsd-tools.cjs [query] <verb>`, `gsd_run query <verb>`) or a table row keyed by it; a mention in prose does not count. Each declared flag must appear in that section or its subsections.
+**Rule:** A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` is headed by its name (dotted verbs also as `a b`, or an alias) or has a usage line that invokes it (`gsd-tools [query] <verb>`, `node gsd-tools.cjs [query] <verb>`, `gsd_run query <verb>`) or a table row keyed by it; a mention in prose does not count. Each declared flag must appear in that verb's own usage line, and the paragraphs, bullets and tables after it up to the next usage line or bold lead-in (or anywhere in a section headed by the verb).
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|

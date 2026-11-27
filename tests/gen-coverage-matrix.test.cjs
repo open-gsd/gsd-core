@@ -205,6 +205,39 @@ describe('buildModel', () => {
     assert.deepEqual(row.missing, ['--only-beta']);
   });
 
+  test('a verb flag counts only in that verb\'s own usage, its following prose or its table row, not in a sibling verb\'s', () => {
+    const cli = '# T\n## State\n```bash\ngsd-tools zzz\ngsd-tools other --ws\n```\n';
+    const model = buildModel(inputs({ verbs: [{ verb: 'zzz', aliases: [], flags: ['ws'] }], docs: { cli } }));
+    assert.deepEqual(surface(model, 'verbs').rows[0].missing, ['--ws']);
+    const own = '# T\n## State\n```bash\ngsd-tools zzz [--ws]\ngsd-tools other\n```\n';
+    assert.deepEqual(surface(buildModel(inputs({ verbs: [{ verb: 'zzz', aliases: [], flags: ['ws'] }], docs: { cli: own } })), 'verbs').rows[0].missing, []);
+    const prose = '# T\n## State\n```bash\ngsd-tools zzz\ngsd-tools other\n```\n**zzz** takes `--ws`.\n\n**other** takes nothing.';
+    assert.deepEqual(surface(buildModel(inputs({ verbs: [{ verb: 'zzz', aliases: [], flags: ['ws'] }], docs: { cli: prose } })), 'verbs').rows[0].missing, []);
+  });
+
+  test('a flags table that follows a verb\'s usage line belongs to that verb', () => {
+    const cli = '# T\n## Milestone\n```bash\ngsd-tools zzz\n```\n| Flag | Effect |\n|---|---|\n| `--ws` | a workstream |\n';
+    assert.deepEqual(surface(buildModel(inputs({ verbs: [{ verb: 'zzz', aliases: [], flags: ['ws'] }], docs: { cli } })), 'verbs').rows[0].missing, []);
+  });
+
+  test('a four-backtick fence holding a three-backtick line keeps its headings inside the fence', () => {
+    const sections = parseSections('# A\n````md\n```\n## not a heading\n```\n````\n## B');
+    assert.deepEqual(sections.map((s) => s.title), ['A', 'B']);
+  });
+
+  test('a table cell with an escaped pipe stays one cell, so later columns are read from the right cell', () => {
+    const config = '# C\n| Key | Type | Default | Description |\n|---|---|---|---|\n| `a.b` | string \\| null | `null` | Explains it. |\n';
+    const row = surface(buildModel(inputs({ configKeys: ['a.b'], docs: { config } })), 'config').rows[0];
+    assert.deepEqual(row.missing, []);
+    const empty = '# C\n| Key | Type | Default | Description |\n|---|---|---|---|\n| `a.b` | string \\| null | `null` | |\n';
+    assert.deepEqual(surface(buildModel(inputs({ configKeys: ['a.b'], docs: { config: empty } })), 'config').rows[0].missing, ['effect']);
+  });
+
+  test('a key listed in two tables is judged by the table that carries all three columns', () => {
+    const config = '# C\n| Key | Gate | When unset |\n|---|---|---|\n| `a.b` | x | y |\n\n| Key | Type | Default | Description |\n|---|---|---|---|\n| `a.b` | bool | `false` | Does it. |\n';
+    assert.deepEqual(surface(buildModel(inputs({ configKeys: ['a.b'], docs: { config } })), 'config').rows[0].missing, []);
+  });
+
   test('a command without a section of its own counts through a section whose own text names it', () => {
     const model = buildModel(inputs({
       commands: [{ stem: 'workflow', argumentHint: '' }],
@@ -435,11 +468,14 @@ describe('properties', () => {
     );
   });
 
-  test('own text is a prefix of the section text and never contains a heading line outside a fence', () => {
+  test('own text is exactly the lines up to the next heading of ANY level, and a prefix of the section text', () => {
     fc.assert(
       fc.property(fc.array(lineArb, { maxLength: 30 }), (lines) => {
         const sections = parseSections(lines.join('\n'));
-        return sections.every((s) => s.text.startsWith(s.own) && s.own.length <= s.text.length);
+        return sections.every((s, n) => {
+          const stop = n + 1 < sections.length ? sections[n + 1].line - 1 : lines.length;
+          return s.own === lines.slice(s.line, stop).join('\n') && s.text.startsWith(s.own);
+        });
       }),
     );
   });

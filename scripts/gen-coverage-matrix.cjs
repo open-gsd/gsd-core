@@ -36,7 +36,7 @@ const DOC_TYPES = Object.freeze({
 });
 
 const FLAG_RE = /--[a-z][a-z0-9-]*/g;
-const FENCE_RE = /^\s{0,3}(```|~~~)/;
+const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 const SEPARATOR_ROW_RE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
@@ -62,7 +62,7 @@ function parseSections(markdown) {
     const f = FENCE_RE.exec(line);
     if (f) {
       if (fence === null) fence = f[1];
-      else if (f[1] === fence) fence = null;
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
       return;
     }
     if (fence !== null) return;
@@ -107,9 +107,9 @@ function escapeRe(s) {
   return escapeRegexImpl(s);
 }
 
-/** True when `flag` occurs in `text` as a whole token: nothing identifier-like on either side (`--ws` is not in `--wsx`, `--ws_x` or `a---ws`). */
+/** True when `flag` occurs in `text` as a whole token: nothing identifier-like on either side (`--ws` is not in `--wsx`, `--ws_x`, `_--ws` or `a---ws`). */
 function hasFlag(text, flag) {
-  return new RegExp('(?<![A-Za-z0-9-])' + escapeRe(flag) + '(?![A-Za-z0-9_-])').test(text);
+  return new RegExp('(?<![A-Za-z0-9_-])' + escapeRe(flag) + '(?![A-Za-z0-9_-])').test(text);
 }
 
 /** True when `name` occurs in `text` as a whole token: not inside a longer identifier or path, and not as the stem of a file name (`/gsd-x.md`). */
@@ -154,11 +154,34 @@ function locationOf(hit) {
   return { file: hit.file, anchor: githubAnchor(hit.section.title), title: hit.section.title };
 }
 
-/** An option counts as documented when it appears in the full text (own text plus subsections) of a documenting section. */
-function rowFor(item, hits, options) {
+const BOLD_LEAD_RE = /^\s*(?:[-*]\s+)?\*\*([^*]+)\*\*/;
+const ANY_USAGE_RE = /^\s*(?:\$\s+)?(?:node\s+\S*gsd-tools(?:\.cjs)?|gsd-tools(?:\.cjs)?|gsd_run)\s+/;
+
+/**
+ * The text of a documenting section that belongs to ONE verb: the whole section when its heading names the verb,
+ * otherwise the verb's usage lines, and the paragraphs, bullets and tables after them up to the next usage line, bold lead-in or heading.
+ */
+function verbScope(hit, names) {
+  const s = hit.section;
+  if (names.some((n) => mentions(s.title, n))) return s.title + '\n' + s.text;
+  const out = [];
+  let on = false;
+  for (const line of s.text.split('\n')) {
+    if (HEADING_RE.test(line)) on = false;
+    else if (ANY_USAGE_RE.test(line)) on = names.some((n) => invokes(line, n));
+    else if (BOLD_LEAD_RE.test(line)) on = names.some((n) => mentions(BOLD_LEAD_RE.exec(line)[1], n));
+    else if (/^\s*\|/.test(line)) { if (on || names.some((n) => invokes(line, n))) out.push(line); continue; }
+    if (on) out.push(line);
+  }
+  return out.join('\n');
+}
+
+/** An option counts as documented when it appears in the full text (own text plus subsections) of a documenting section, or in `scopeOf(hit)` when given. */
+function rowFor(item, hits, options, scopeOf = (h) => h.section.title + '\n' + h.section.text) {
   const documented = hits.length > 0;
+  const scopes = hits.map(scopeOf);
   const missing = documented
-    ? options.filter((o) => !hits.some((h) => hasFlag(h.section.title + '\n' + h.section.text, o)))
+    ? options.filter((o) => !scopes.some((t) => hasFlag(t, o)))
     : options.slice();
   return {
     item,
@@ -170,7 +193,7 @@ function rowFor(item, hits, options) {
 }
 
 function cellsOf(line) {
-  return line.split('|').slice(1, -1).map((c) => c.trim());
+  return line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim().replace(/\\\|/g, '|'));
 }
 
 /**
@@ -187,7 +210,7 @@ function tableRows(markdown) {
     const f = FENCE_RE.exec(line);
     if (f) {
       if (fence === null) fence = f[1];
-      else if (f[1] === fence) fence = null;
+      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
       header = null;
       return;
     }
@@ -287,11 +310,11 @@ function buildModel(inputs) {
     id: 'verbs',
     title: '`gsd-tools` verbs',
     source: '`docs/CLI-SURFACE-MANIFEST.json` (verb, aliases and declared flags)',
-    rule: 'A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` is headed by its name (dotted verbs also as `a b`, or an alias) or has a usage line that invokes it (`gsd-tools [query] <verb>`, `node gsd-tools.cjs [query] <verb>`, `gsd_run query <verb>`) or a table row keyed by it; a mention in prose does not count. Each declared flag must appear in that section or its subsections.',
+    rule: 'A verb is documented when a section of `CLI-TOOLS.md` or `COMMANDS.md` is headed by its name (dotted verbs also as `a b`, or an alias) or has a usage line that invokes it (`gsd-tools [query] <verb>`, `node gsd-tools.cjs [query] <verb>`, `gsd_run query <verb>`) or a table row keyed by it; a mention in prose does not count. Each declared flag must appear in that verb\'s own usage line, and the paragraphs, bullets and tables after it up to the next usage line or bold lead-in (or anywhere in a section headed by the verb).',
     rows: inputs.verbs
       .map((v) => {
         const names = [...new Set([v.verb, v.verb.replace(/\./g, ' '), ...(v.aliases || [])])];
-        return rowFor(v.verb, sectionsDocumenting(cliDocs, names, 'invoke'), v.flags.map((f) => '--' + f));
+        return rowFor(v.verb, sectionsDocumenting(cliDocs, names, 'invoke'), v.flags.map((f) => '--' + f), (h) => verbScope(h, names));
       })
       .sort((a, b) => byName(a.item, b.item)),
   });
@@ -303,7 +326,9 @@ function buildModel(inputs) {
     rule: 'A key is documented when `CONFIGURATION.md` has a table row whose first cell is the key. The row\'s own table must have a non-empty Type (or Options), Default and Description cell, read by column header; a table without such a column leaves that option missing. A key mentioned only in prose is listed as `prose`.',
     rows: inputs.configKeys
       .map((k) => {
-        const row = configRows.find((r) => r.cells.length > 0 && unquote(r.cells[0]) === k);
+        const keyed = configRows.filter((r) => r.cells.length > 0 && unquote(r.cells[0]) === k);
+        const full = (r) => column(r, ['type', 'options']) !== null && column(r, ['default']) !== null && column(r, ['description', 'effect']) !== null;
+        const row = keyed.find(full) ?? keyed[0];
         if (row) {
           const missing = [];
           if (!filled(column(row, ['type', 'options']))) missing.push('type');
