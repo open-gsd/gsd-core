@@ -7341,6 +7341,9 @@ describe('gsd-secret-read-guard: an xargs replace string inside an option cluste
     ["printf 'env\\n' | xargs -tI{} sh -c 'cat .{}'", '.env'],
     ["printf 'env\\n' | xargs -rI{} sh -c 'cat .{}'", '.env'],
     ["xargs -tI{} sh -c 'cat .{}' <<< env", '.env'],
+    // A later -L or -n cancels the replace string under GNU xargs; it is read with nothing cancelling it as well.
+    ["echo env | xargs -I{} -L1 sh -c 'cat .{}'", '.env'],
+    ["echo env | xargs -I{} -n2 sh -c 'cat .{}'", '.env'],
   ];
   for (const [cmd, expectedPath] of DENIED) {
     test(`denies ${JSON.stringify(cmd)}`, () => {
@@ -7358,6 +7361,22 @@ describe('gsd-secret-read-guard: an xargs replace string inside an option cluste
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+describe("gsd-secret-read-guard: the header's env -S strings behind a reserved word stay allowed (#5779)", () => {
+  // The header lists them as a gap; the further reading reads an env -S string as next did before #5514.
+  for (const cmd of [
+    "if true; then env -S 'cat .env'; fi",
+    "for i in 1; do env -S 'cat .env'; done",
+    "! env -S 'cat .env'",
+    "coproc env -S 'cat .env'",
+    "repeat 1 env -S 'cat .env'",
+    "noglob env -S 'cat .env'",
+  ]) {
+    test(`allows: ${cmd}`, () => {
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
