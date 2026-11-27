@@ -623,8 +623,9 @@ const SHELL_VALUE_FLAGS = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-f
 
 // Value-taking `xargs` flags (long `--flag=value` forms are single words).
 // `-a`/`--arg-file` additionally replaces stdin, so it suppresses the pipeline
-// inference below.
-const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-i', '-L', '-l', '-P', '-s', '-d', '-E', '-a']);
+// inference below. `-i` and `-l` are not here: GNU xargs takes their value only
+// attached (`-iR`, `-l1`), so the word after a bare one is the command.
+const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-L', '-P', '-s', '-d', '-E', '-a']);
 
 // Probe names a Grep glob alternative is matched against. `.env` and
 // `.secrets` are the exact names; the rest stand in for the open-ended
