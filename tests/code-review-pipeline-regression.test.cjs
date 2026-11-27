@@ -4600,8 +4600,8 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
    * Each id runs in its own command substitution, a fork with no exec, so no variable carries to the next id.
    * The derivation sits in a function body because bash 3.2 (macOS /bin/bash) cannot parse a `case` pattern's
    * lone `)` inside `$( )`. Ids travel in the environment, word-split with globbing off, so each must be
-   * digits, uppercase letters and dots; anything else is refused up front. Each id's stderr comes back as a
-   * fourth field (newlines and tabs flattened, 200 characters) so a failure can still say what it wrote.
+   * digits, uppercase letters and dots; anything else is refused up front. Each id's stderr goes to a file in
+   * the test dir (cleaned with it) and returns as a fourth field (flattened, 200 characters) for failures.
    *
    * Returns `[{ id, status, padded, stderr }]` in input order.
    */
@@ -4615,7 +4615,7 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
       '  printf \'%s\' "$PADDED"',
       '}',
       'set -f',
-      'errf=$(mktemp)',
+      'errf="$PHASE_DIR/.padeach.err"',
       'for id in $PHASE_IDS; do',
       '  out=$(one "$id" 2>"$errf"); st=$?',
       '  err=$(tr \'\\n\\t\' \'  \' <"$errf" | cut -c1-200)',
@@ -4627,7 +4627,7 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
     assert.equal(r.status, 0, `the batching shell exited ${r.status}: ${r.stderr}`);
     const rows = r.stdout.split('\n').map((line) => {
       const [id, status, padded, ...rest] = line.split('\t');
-      return { id, status: Number(status), padded, stderr: rest.join('\t').trim() };
+      return { id, status: Number(status), padded: padded ?? '', stderr: rest.join('\t').trim() };
     });
     assert.deepEqual(rows.map((row) => row.id), ids, 'one row per id, in order');
     return rows;
