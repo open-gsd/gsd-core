@@ -843,7 +843,7 @@ Status reporting is scoped to the current milestone's `ROADMAP.md` window and se
 
 ### `/gsd-resume-work`
 
-Restore full context from last session. A role handoff is claimed by atomic rename before it is read, so a second session resuming the same role finds none. `--role <text>` (last argument) resumes that role's pause.
+Restore full context from last session. A role handoff is claimed before it is read, by an exclusive claim marker and then a rename, so a second session resuming the same role finds none. `--role <text>` (last argument) resumes that role's pause.
 
 ```bash
 /gsd-resume-work                    # After context reset or new session

@@ -30,7 +30,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { resolveProjectRoot } from './project-root.cjs';
+import { requirePlanningArtifactPath } from './project-context.cjs';
+import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
@@ -48,7 +49,7 @@ import { splitLines, joinLines } from './text-lines.cjs';
 import { capCodeUnits } from './code-unit-cap.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
-import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
+import { isContainedIn, PathAcceptance } from './security.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { tokenizeHeadings, collectSection } from './markdown-sectionizer.cjs';
 import { parseMarkdownTable } from './markdown-table.cjs';
@@ -971,7 +972,7 @@ function deriveCoveredDigest(
   // Canonicalize the roots ONCE — every candidate's realpath is checked
   // against these, not the possibly-symlinked `projectRoot`/`.planning`
   // arguments themselves. Always via the REAL fs, never fsImpl: `projectRoot`
-  // is a trusted anchor the CALLER derived (resolveProjectRoot), not
+  // is a trusted anchor the CALLER derived (ctx.projectRoot), not
   // attacker-influenced covered-input data — routing it through a
   // caller-scoped containment seam (e.g. #4155's
   // containmentEnforcingVerificationFs, confined to `.planning/`, a proper
@@ -1808,6 +1809,13 @@ interface ReadVerificationStatusOptions {
    * body. Omitted / null: unchanged legacy behavior.
    */
   convention?: string | null;
+  /**
+   * #6820 (ADR-4908): the resolved ProjectContext the covered-input fingerprint
+   * is recomputed against (`ctx.projectRoot`). The dispatcher passes the one it
+   * resolved, so `--project-dir` reaches the staleness check without a module
+   * global. Required: there is no hidden resolver fallback (ADR-4908 section 6).
+   */
+  ctx: ProjectContext;
 }
 
 interface VerificationStatusResult {
@@ -1961,7 +1969,7 @@ function findStaleVerificationSummary(
  */
 function readVerificationStatus(
   phaseDir: string,
-  opts: ReadVerificationStatusOptions = {},
+  opts: ReadVerificationStatusOptions,
 ): VerificationStatusResult {
   const fsImpl: FsLike = opts.fs ?? defaultFsImpl;
   const phaseCleanCommitTimesMs: PhaseCleanCommitTimesFn =
@@ -2055,7 +2063,7 @@ function readVerificationStatus(
     // change keeps its own semantics rather than going stale on upgrade. An
     // unknown version parses to `null`, which `computeCoveredDigest`
     // refuses (returns `null`), so the compare below fails closed.
-    const projectRoot = resolveProjectRoot(phaseDir);
+    const projectRoot = opts.ctx.projectRoot;
     const storedVersion =
       hasWellFormedFingerprint && typeof coveredDigestVal === 'string'
         ? parseFingerprintVersion(coveredDigestVal)
@@ -2131,6 +2139,8 @@ interface IsPhaseCompleteDeps {
    * report exactly like its legacy twin. Omitted / null: unchanged.
    */
   convention?: string | null;
+  /** #6820 (ADR-4908): the resolved ProjectContext, threaded through to readVerificationStatus. */
+  ctx: ProjectContext;
 }
 
 /**
@@ -2199,7 +2209,7 @@ interface PhaseCompletionValue {
  */
 function isPhaseComplete(
   phaseDir: string,
-  deps: IsPhaseCompleteDeps = {},
+  deps: IsPhaseCompleteDeps,
 ): { value: PhaseCompletionValue; scope: Scope } {
   const fsImpl: FsLike = deps.fs ?? defaultFsImpl;
   let readable = true;
@@ -2218,6 +2228,7 @@ function isPhaseComplete(
       runtime: deps.runtime,
       phaseNumber: deps.phaseNumber,
       convention: deps.convention,
+      ctx: deps.ctx,
     });
   } catch (err) {
     if (!(err instanceof VerificationStatusError)) throw err;
@@ -2251,13 +2262,13 @@ function isPhaseComplete(
  * @param phaseDirArg - Phase directory path (absolute or relative to cwd).
  * @param raw         - Whether to emit raw (non-JSON) output.
  */
-function cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw: boolean): void {
+function cmdVerificationStatus(ctx: ProjectContext, phaseDirArg: string | undefined, raw: boolean): void {
   if (!phaseDirArg) {
     error('phase directory required for verification.status');
     return;
   }
-  const phaseDir = path.resolve(cwd, phaseDirArg);
-  const result = readVerificationStatus(phaseDir, { runtime: resolveRuntime(cwd) });
+  const phaseDir = path.resolve(ctx.projectRoot, phaseDirArg);
+  const result = readVerificationStatus(phaseDir, { runtime: resolveRuntime(ctx.projectRoot), ctx });
   output(result, raw);
 }
 
@@ -2377,7 +2388,7 @@ function parseAllSummarizedFacts(tokens: readonly string[]): AllSummarizedFacts 
  * result when the decision needed it, so a caller can `--pick decision` and, for `present-route`, read
  * `next_action` / `next_command` from the same call. The three plan-index exits never read the report.
  */
-function cmdVerificationAllSummarized(cwd: string, phaseDirArg: string | undefined, tokens: string[], raw: boolean): void {
+function cmdVerificationAllSummarized(ctx: ProjectContext, phaseDirArg: string | undefined, tokens: string[], raw: boolean): void {
   if (!phaseDirArg) {
     error('phase directory required for verification.all-summarized');
     return;
@@ -2391,8 +2402,8 @@ function cmdVerificationAllSummarized(cwd: string, phaseDirArg: string | undefin
     output({ decision: decideAllSummarized(facts, null) }, raw);
     return;
   }
-  const phaseDir = path.resolve(cwd, phaseDirArg);
-  const result = readVerificationStatus(phaseDir, { runtime: resolveRuntime(cwd) });
+  const phaseDir = path.resolve(ctx.projectRoot, phaseDirArg);
+  const result = readVerificationStatus(phaseDir, { runtime: resolveRuntime(ctx.projectRoot), ctx });
   output({ decision: decideAllSummarized(facts, result), ...result }, raw);
 }
 
@@ -2416,16 +2427,16 @@ function cmdVerificationAllSummarized(cwd: string, phaseDirArg: string | undefin
  * field (that would declare DEGRADED) — so it is distinguishable from an
  * existing directory with no report, where `""` alone keeps its meaning.
  *
- * @param cwd         - Current working directory (used to resolve phaseDirArg).
- * @param phaseDirArg - Phase directory path (absolute or relative to cwd).
+ * @param ctx         - Resolved ProjectContext (`ctx.projectRoot` resolves phaseDirArg).
+ * @param phaseDirArg - Phase directory path (absolute or relative to the project root).
  * @param raw         - Whether to emit raw (non-JSON) output.
  */
-function cmdVerificationResolveFile(cwd: string, phaseDirArg: string | undefined, raw: boolean): void {
+function cmdVerificationResolveFile(ctx: ProjectContext, phaseDirArg: string | undefined, raw: boolean): void {
   if (!phaseDirArg) {
     error('phase directory required for verification.resolve-file');
     return;
   }
-  const phaseDir = path.resolve(cwd, phaseDirArg);
+  const phaseDir = path.resolve(ctx.projectRoot, phaseDirArg);
   if (isPhaseDirNotFound(defaultFsImpl, phaseDir)) {
     output(
       {
@@ -2550,7 +2561,7 @@ function parseFingerprintFileArgs(tokens: readonly string[]): { files: string[] 
  *                       matches — the checker adds the identical union.
  */
 function cmdVerificationFingerprint(
-  cwd: string,
+  ctx: ProjectContext,
   phaseDirArg: string | undefined,
   fileArgs: readonly string[],
   raw: boolean,
@@ -2559,7 +2570,7 @@ function cmdVerificationFingerprint(
     error('phase directory required for verification.fingerprint');
     return;
   }
-  const phaseDir = path.resolve(cwd, phaseDirArg);
+  const phaseDir = path.resolve(ctx.projectRoot, phaseDirArg);
   let phaseDirIsDir = false;
   try {
     phaseDirIsDir = fs.statSync(phaseDir).isDirectory();
@@ -2582,7 +2593,7 @@ function cmdVerificationFingerprint(
     error('at least one covered file required for verification.fingerprint');
     return;
   }
-  const projectRoot = resolveProjectRoot(phaseDir);
+  const projectRoot = ctx.projectRoot;
   // canonicalizeCoveredFiles here is for `deriveCoveredDigest`'s
   // `coveredFiles` argument — it canonicalizes internally too (it must, for
   // callers like readVerificationStatus that pass raw, un-canonicalized
@@ -2852,7 +2863,7 @@ function isAllowedAuditTargetBasenameCI(basename: string): boolean {
  * mutate.
  */
 function cmdVerificationAppendAudit(
-  cwd: string,
+  ctx: ProjectContext,
   fileArg: string | undefined,
   argTokens: readonly string[],
   raw: boolean,
@@ -2892,7 +2903,7 @@ function cmdVerificationAppendAudit(
     return;
   }
 
-  const resolvedPath = requireSafePath(fileArg, cwd, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot);
+  const resolvedPath = requirePlanningArtifactPath(ctx, fileArg, 'verification.append-audit file', PathAcceptance.AbsoluteInsideRoot).resolved;
   const realBasename = path.basename(resolvedPath);
   if (isVerificationReportBasenameCI(realBasename)) {
     error('verification.append-audit refuses a verification report path');

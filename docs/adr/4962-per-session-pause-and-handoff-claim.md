@@ -44,11 +44,13 @@ The grammar reserves `latest`, `claimed` and `json` as first segments (`json` wa
 
 *Failure prevented:* a handoff nobody can recognize after `/clear` (the session-id-only design, implemented first and rejected), and cross-deletion between sessions that merely share a label.
 
-### 3. Resume claims by atomic rename before reading
+### 3. Resume claims by exclusive marker, then rename, before reading
 
-`resume-project.md` renames `HANDOFF.latest.<role_id>.json` to `HANDOFF.claimed.<role_id>.<session_id>.json` **before** reading it. Rename is atomic on one filesystem, so exactly one of two racing sessions succeeds. The loser finds no `.latest` file and is told so. The consumed files are then removed, and committed when `commit_docs` is on.
+`resume-project.md` first creates the claim marker `.planning/.handoff-claim.<role_id>` with an exclusive create (`set -o noclobber`), and only the session whose create succeeds renames `HANDOFF.latest.<role_id>.json` to `HANDOFF.claimed.<role_id>.<session_id>.json` **before** reading it. It removes the marker in the same block, whether or not the rename succeeded. The loser finds the marker held or no `.latest` file and is told so. The consumed files are then removed, and committed when `commit_docs` is on. The marker holds its creation time; one older than a day is a crash leftover, and the claim block removes it.
 
-*Failure prevented:* two sessions resuming the same role and both acting on one handoff. A lock file would add a second artifact that can itself go stale; the rename needs none.
+*Failure prevented:* two sessions resuming the same role and both acting on one handoff.
+
+*Amendment (#6820, from the Windows conformance lane of #6824).* This decision first read: rename is atomic on one filesystem, so exactly one of two racing sessions succeeds, and a lock file was rejected as a second artifact that can go stale. On Windows two concurrent renames of one source can both succeed: in run 46072480563 (shard 6/6) both sessions' `mv` returned 0 and the first session's `cat` then failed on a file the second had moved. The marker is exclusive on every platform, lives for one block, and its one stale case has the day-old sweep above.
 
 ### 4. Session identity comes from `--session` or a runtime-issued env key — never the terminal
 
@@ -74,7 +76,7 @@ The STATE.md schema, `STATUS_LIFECYCLE_ENUM` and `normalizeStateStatus` are unch
 | `milestone.lock` (`src/milestone-lock.cts`, #3311) | `(phase, session)` with a TTL | two sessions advancing **different phases** of one milestone | pause state; resuming |
 | Session store (`src/session-store.cts`, this ADR) | `role_id`, else session id | **whose handoff** a session may resume; who is paused | phase ownership; workstream selection |
 
-All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
+All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. The Decision 3 claim marker is that decision's own one-block mechanism, not a coordination primitive between sessions: it lives for one block and keys on `role_id`. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
 
 ### 7. `src/session-store.cts` owns the filename grammar; any hook-side copy is named and held to it by a parity guard
 
@@ -118,7 +120,8 @@ The implementation of [#4845](https://github.com/open-gsd/gsd-core/issues/4845) 
 | Session-id-keyed files only | the id changes on every `/clear`, so files were never reclaimed (implemented first, rejected) |
 | One workstream per session | workstreams isolate areas, not sessions on one area; handoffs are not workstream-scoped |
 | Terminal / tmux-derived identity | two panes of one terminal are two sessions; a wrong guess deletes another session's handoff |
-| A lock file for the claim | a second artifact that can itself go stale; atomic rename needs none |
+| Rename alone as the claim | not exclusive on Windows: two renames of one source can both succeed (amendment to Decision 3) |
+| A long-lived lock file for the claim | a lock held across the resume can go stale; the marker lives for one block and is swept after a day |
 | A Capability under ADR-857 | see Decision 8 |
 
 ## Ratification conditions

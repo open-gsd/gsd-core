@@ -56,15 +56,24 @@ const {
   defaultPhaseCleanCommitTimesMs,
   resolveVerificationFile,
   resolveUatFile,
-  readVerificationStatus,
+  readVerificationStatus: readVerificationStatusWithCtx,
   findStaleVerificationSummary,
-  isPhaseComplete,
+  isPhaseComplete: isPhaseCompleteWithCtx,
   computeCoveredDigest,
   sharedPlanningRoots,
   isSharedPlanningDoc,
   parseFingerprintVersion,
   parseFingerprintFileArgs,
 } = require('../gsd-core/bin/lib/verification.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+
+// #6820 (ADR-4908 §6): the readers take a REQUIRED ProjectContext. These two
+// bindings resolve one from the fixture phase dir (the walk-up the readers used
+// to do themselves) and forward every other option unchanged.
+const readVerificationStatus = (phaseDir, opts = {}) =>
+  readVerificationStatusWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...opts });
+const isPhaseComplete = (phaseDir, deps = {}) =>
+  isPhaseCompleteWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...deps });
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -3448,13 +3457,19 @@ describe('#4894 --project-dir reaches verification root resolution', () => {
     assert.equal(status(['--project-dir', proj]), 'passed');
   });
 
-  test('criterion 3: with no --project-dir, the same real-path invocations behave exactly as before', () => {
+  test('criterion 3: with no --project-dir, the root is the dispatched context (cwd), not a walk-up from the phase dir (#6820)', () => {
+    // From inside the project the context root is the project, so the real store path of the phase
+    // directory no longer sends the covered-input hashing to the wrong root.
     const fp = runGsdTools(['verification.fingerprint', realPhaseDir, 'src/a.txt'], proj);
-    assert.equal(fp.success, false, 'no flag: the phase-dir walk-up still lands on the wrong root');
-    assert.match(fp.error, /could not compute fingerprint/);
+    assert.equal(fingerprintDigest(fp), referenceDigest(), 'no flag, cwd in the project: the project is the root');
+
+    // From an unrelated cwd the context root is that cwd, which holds none of the covered files.
+    const elsewhere = runGsdTools(['verification.fingerprint', realPhaseDir, 'src/a.txt'], base);
+    assert.equal(elsewhere.success, false, 'no flag, unrelated cwd: the covered file is not under the context root');
+    assert.match(elsewhere.error, /could not compute fingerprint/);
 
     writeReport(`status: passed\ncovered_files:\n  - src/a.txt\ncovered_digest: "${referenceDigest()}"`);
-    assert.equal(status([]), 'stale', 'no flag: the same well-formed report still reads stale');
+    assert.equal(status([]), 'stale', 'no flag, unrelated cwd: the same well-formed report reads stale');
   });
 
   test('criterion 4a: covered-file containment still rejects a path outside the explicit root', () => {
@@ -3474,7 +3489,7 @@ describe('#4894 --project-dir reaches verification root resolution', () => {
     assert.equal(status(['--project-dir', proj]), 'stale', 'a digest that does not match the files');
   });
 
-  // The MCP server never calls setExplicitProjectRoot itself: `gsd_invoke_command`
+  // The MCP server never resolves a project context itself: `gsd_invoke_command`
   // reaches `dispatchGsdCommand`, which runs each command as a gsd-tools.cjs
   // SUBPROCESS, so the flag is honored by that child's main(). Pin it through
   // the real JSON-RPC surface so a future in-process dispatcher cannot silently
