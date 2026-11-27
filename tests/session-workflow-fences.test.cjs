@@ -28,16 +28,16 @@ const HAS_BASH = (() => {
   }
 })();
 
-/** The body of the bash fence whose first line is `# gsd:<marker>`. */
+/** The body of the bash fence whose first line is `# fence=<marker>`. */
 function fence(workflow, marker) {
   const lines = splitLines(fs.readFileSync(path.join(WORKFLOWS, workflow), 'utf-8'));
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i] !== '```bash' || lines[i + 1] !== `# gsd:${marker}`) continue;
+    if (lines[i] !== '```bash' || lines[i + 1] !== `# fence=${marker}`) continue;
     const body = [];
     for (let j = i + 1; j < lines.length && lines[j] !== '```'; j++) body.push(lines[j]);
     return body.join('\n');
   }
-  throw new Error(`no fence marked gsd:${marker} in ${workflow}`);
+  throw new Error(`no fence marked fence=${marker} in ${workflow}`);
 }
 
 /** What the runtime does with `$ARGUMENTS`: textual substitution before the shell sees the fence. */
@@ -52,7 +52,8 @@ function script(parts, args) {
 }
 
 function bashEnv(sessionId) {
-  return { ...process.env, ...NO_KEYS, ...(sessionId ? { GSD_SESSION_KEY: sessionId } : {}) };
+  const git = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' };
+  return { ...process.env, ...git, ...NO_KEYS, ...(sessionId ? { GSD_SESSION_KEY: sessionId } : {}) };
 }
 
 function runBash(cwd, text, sessionId) {
@@ -175,6 +176,7 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
     tmp = createTempProject();
     planning = path.join(tmp, '.planning');
     fs.writeFileSync(path.join(planning, 'STATE.md'), STATE);
+    assert.equal(runGit(['init', '-q'], { cwd: tmp }).exitCode, 0);
   });
   afterEach(() => cleanup(tmp));
 

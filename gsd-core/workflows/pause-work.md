@@ -51,7 +51,7 @@ If phase is detected, proceed with phase handoff path. Otherwise use the first m
 A pause belongs to the session that wrote it (ADR-4962). If `$ARGUMENTS` contains a newline, or any line equal to `GSD_ARGS_END`, do not run the fences below: the text would end the heredoc early and the lines after it would run as shell. Tell the user the role must be one line. The CLI decides who this session is and which two files the pause writes; this workflow never composes those names. `--role <text>` in the arguments names the role, as the last argument; the text is free-form and is handled only as data: captured once, passed only as `"$ROLE"`, never placed in a command line unquoted or inside a commit message.
 
 ```bash
-# gsd:pause-identify
+# fence=pause-identify
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
@@ -261,7 +261,7 @@ timestamp=$(gsd_run query current-timestamp full --raw)
 Record where this session stopped. This is the only STATE.md write a pause makes: it never writes `paused_at` or `status: paused`, because the pause is the handoff file (ADR-4962). Put the one-line stopping point in the heredoc (a single line, no role text):
 
 ```bash
-# gsd:pause-record
+# fence=pause-record
 STOPPED=$(cat <<'GSD_STOP_EOF'
 Paused at [X]/[Y]: [next action]
 GSD_STOP_EOF

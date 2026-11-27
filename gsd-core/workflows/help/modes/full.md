@@ -324,10 +324,11 @@ Resume work from previous session with full context restoration.
 
 Usage: `/gsd:resume-work`
 
-**`/gsd:pause-work [--report]`**
+**`/gsd:pause-work [--report] [--role <text>]`**
 Create context handoff when pausing work mid-phase.
 
 - `--report` — generate a post-session summary in `.planning/reports/` capturing commits, file changes, and phase progress
+- `--role <text>` — pause under a named role (last argument); `/gsd:resume-work --role <text>` in another session claims it
 - Creates .continue-here file with current state
 - Updates STATE.md session continuity section
 - Captures in-progress work context

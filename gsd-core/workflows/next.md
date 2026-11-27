@@ -47,7 +47,7 @@ Then proceed directly to `determine_next_action`. (Route 0 and `prior_phase_comp
 **Gate 0: Paused (#6431)**
 `/gsd:pause-work` writes a handoff under `.planning/` named for the session that paused (ADR-4962), whichever scope its `.continue-here` file lands in, and `/gsd:resume-work` removes it once resumed. A pause belongs to its session: only this session's own handoff pauses it, and another session's handoff does not. The CLI decides ownership:
 ```bash
-# gsd:next-paused
+# fence=next-paused
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END

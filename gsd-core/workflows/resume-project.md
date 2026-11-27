@@ -73,15 +73,13 @@ cat "${PROJECT_PATH}"
 
 </step>
 
-<step name="check_incomplete_work">
-Look for incomplete work that needs attention.
-
+<step name="claim_handoff">
 If `$ARGUMENTS` contains a newline, or any line equal to `GSD_ARGS_END`, do not run the fences below: the text would end the heredoc early and the lines after it would run as shell. Tell the user the role must be one line.
 
 **Claim this session's handoff first (ADR-4962 Decision 3).** A pause belongs to the session that wrote it. With a role (`--role <text>` as the last argument; free text, handled only as data through `"$ROLE"`), the unclaimed `.planning/HANDOFF.latest.<role_id>.json` is claimed by an atomic rename to `.planning/HANDOFF.claimed.<role_id>.<session_id>.json` BEFORE it is read: of two sessions resuming the same role, one rename succeeds and the other finds no unclaimed file. A session without a role reads its own `.planning/HANDOFF.<session_id>.json`; a legacy `.planning/HANDOFF.json` is read unless its `role_id` names another role. Another session's `HANDOFF.claimed.*` file is never read.
 
 ```bash
-# gsd:claim-handoff
+# fence=claim-handoff
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
@@ -113,6 +111,10 @@ fi
 ```
 
 If the output says `NO_UNCLAIMED_HANDOFF`, tell the user so: no handoff is available for that role, and no other session's handoff is read. Continue with the checkpoint and plan checks below.
+</step>
+
+<step name="check_incomplete_work">
+Look for incomplete work that needs attention:
 
 ```bash
 # #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
@@ -311,7 +313,7 @@ Wait for user selection.
 **Consume the pause handoff (#6431).** `/gsd:pause-work` records a pause as a handoff file plus a `.continue-here` file, and `/gsd:next` and `progress --next` route here for as long as the session's handoff exists. Once the user has chosen how to proceed (resume from the handoff or checkpoint, or discard the handoff to reassess) the pause is over: remove this session's handoff and its continue-here file and commit the removal, on every branch that follows from that choice. Their contents were read in `check_incomplete_work`. Leave them only if the user chose nothing. Only this session's files go: the claimed or own handoff (through `state session-resume`, which also records "Session resumed" and restores the role from `--role-id`), and the continue-here files with this role's name (or the legacy name without a role). Another session's handoff, claimed file, or continue-here file is never removed.
 
 ```bash
-# gsd:consume-handoff
+# fence=consume-handoff
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
