@@ -178,6 +178,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 - [Context engineering](explanation/context-engineering.md) — how context rot forms and how GSD Core prevents it
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
+- [Effort and fast_mode test strategy](explanation/effort-fast-mode-test-strategy.md) — why the effort and fast_mode engine's tests are shaped as they are: layers, invariants, targets and known gaps
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
