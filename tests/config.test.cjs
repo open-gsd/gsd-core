@@ -4758,9 +4758,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   });
 
   // In a project and outside one, config-get and the loader read a stored
-  // parallelization alike: a scalar that is not a boolean is no setting to
-  // either, as with no store at all.
-  test('config-get and loadConfig read a stored parallelization scalar alike, in a project and outside one', (t) => {
+  // parallelization alike: a value that is neither a boolean nor an object is
+  // no setting to either, as with no store at all.
+  test('config-get and loadConfig read a stored parallelization that is neither a boolean nor an object alike, in a project and outside one', (t) => {
     const read = (stored, inProject) => {
       const { gsdHome } = defaultsHome(t, stored);
       const projectDir = tempProject(t);
@@ -4773,16 +4773,19 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
         process.env.GSD_HOME = gsdHome;
         return loadConfig(projectDir).parallelization;
       });
-      return { success: got.success, output: got.success ? got.output.trim() : '', loaded };
+      // The exit status, stdout and stderr, with this run's temp directory named
+      // the same way in each, so two runs compare whole.
+      const named = (text) => String(text ?? '').split(projectDir).join('<project>').trim();
+      return { exitCode: got.exitCode, output: named(got.output), error: named(got.error), loaded };
     };
     for (const inProject of [true, false]) {
       const where = inProject ? 'in a project' : 'outside a project';
       const unset = read(undefined, inProject);
       assert.strictEqual(unset.loaded, true, where);
-      for (const stored of ['"yes"', '0', '"false"']) {
+      for (const stored of ['"yes"', '0', '"false"', 'null', '[]']) {
         assert.deepStrictEqual(read(`{"parallelization":${stored}}`, inProject), unset, `${stored} ${where}`);
       }
-      assert.deepStrictEqual(read('{"parallelization":false}', inProject), { success: true, output: 'false', loaded: false }, where);
+      assert.deepStrictEqual(read('{"parallelization":false}', inProject), { exitCode: 0, output: 'false', error: '', loaded: false }, where);
     }
   });
 

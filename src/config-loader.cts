@@ -639,13 +639,13 @@ const NESTED_TWINS: readonly { key: string; section: string; field: string }[] =
 ]);
 
 /**
- * A value ~/.gsd/defaults.json gives a setting that the global layer reads as no setting: a
- * `parallelization` scalar that is not a boolean, as the global-defaults branch reads it. The
+ * A `parallelization` value in ~/.gsd/defaults.json that is neither a boolean nor an object (a
+ * string, a number, an array or null), which the global-defaults branch reads as no setting. The
  * global layer under a project skips it, and so does the config value resolver's global-defaults
  * layer, so `config-get parallelization` and `loadConfig` read such a store alike (#5681).
  */
 function isUnreadGlobalDefault(key: string, value: unknown): boolean {
-  return key === 'parallelization' && value !== undefined && value !== null
+  return key === 'parallelization' && value !== undefined
     && !isConfigSection(value) && typeof value !== 'boolean';
 }
 
@@ -673,7 +673,7 @@ function _globalDefaultsLayer(globalDefaults: Record<string, unknown>): Record<s
       : _getConfigValue(globalDefaults, key, { section: alias.section, field: alias.field });
     // A null alias value is "not set", as Branch D's `??` reads it.
     if (value === undefined || value === null) continue;
-    // A `parallelization` scalar that is not a boolean is no setting, as Branch D reads it (#5681).
+    // A `parallelization` that is neither a boolean nor an object is no setting, as Branch D reads it (#5681).
     if (isUnreadGlobalDefault(key, value)) continue;
     // `parallelization` is a boolean or an object holding `enabled`; the object is already nested.
     const nested = key === 'parallelization' && isConfigSection(value)
