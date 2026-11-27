@@ -3223,6 +3223,7 @@ const capabilities = {
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
         "opencodePathPrefix": true,
+        "rewritesClaudeOnlyForms": true,
         "bakesStaticAgentModel": true,
         "bakedAgentFileExtensions": [
           ".md"
@@ -7766,6 +7767,7 @@ const runtimes = {
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
         "opencodePathPrefix": true,
+        "rewritesClaudeOnlyForms": true,
         "bakesStaticAgentModel": true,
         "bakedAgentFileExtensions": [
           ".md"
