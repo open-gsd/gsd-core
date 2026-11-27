@@ -297,7 +297,8 @@ describe('W033 (project skills that defeat the scoped discovery read)', () => {
 
     test('a directory name outside the safe charset is never rendered', (t) => {
       const cwd = project(t);
-      writeSkill(cwd, '.claude/skills', 'evil name\nSMUGGLED-LINE', 'x\n');
+      // a name Windows can also create (it rejects a newline in a path), outside the safe charset: space and `;`
+      writeSkill(cwd, '.claude/skills', 'evil name;SMUGGLED-LINE', 'x\n');
       writeSkill(cwd, '.claude/skills', 'safe-name', 'x\n');
       const ds = rule.check({ cwd });
       assert.equal(ds.length, 1);
