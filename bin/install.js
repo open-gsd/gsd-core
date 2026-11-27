@@ -7904,6 +7904,8 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   // Replace ~/.claude and $HOME/.claude with OpenCode's config location
   convertedContent = convertedContent.replace(/~\/\.claude\b/g, '~/.config/opencode');
   convertedContent = convertedContent.replace(/\$HOME\/\.claude\b/g, '$HOME/.config/opencode');
+  // #4779: project-skills locator and launcher reinstall hint (single owner in the conversion module)
+  convertedContent = runtimeArtifactConversion.rewriteOpencodeClaudeOnlyForms(convertedContent);
   // Replace general-purpose subagent type with OpenCode's equivalent "general"
   convertedContent = convertedContent.replace(/subagent_type="general-purpose"/g, 'subagent_type="general"');
   // Runtime-neutral agent name replacement (#766)
@@ -10993,6 +10995,62 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 }
 
 /**
+ * The Claude-only forms the post-install leak scan reports, per runtime. `~/.claude` forms are a leak
+ * for every runtime. #4779: on OpenCode the project-skills locator and the launcher reinstall hint are
+ * too, because the OpenCode converter owns rewriting them (rewriteOpencodeClaudeOnlyForms); on Claude
+ * the same text is correct, so it is never scanned there.
+ */
+function claudeLeakPatternsFor(runtime) {
+  const patterns = [/(?:~|\$HOME)\/\.claude\b/g];
+  if (hostBehaviorsFor(runtime).rewritesClaudeOnlyForms === true) {
+    patterns.push(/(?<![A-Za-z0-9_-])\.claude\/skills\//g, /(?<![A-Za-z0-9_-])--claude --local(?![\w-])/g);
+  }
+  return patterns;
+}
+
+/**
+ * Post-install leak scan over the installed manifest files: `[{ file, count }]` for every host-read
+ * `.md`/`.toml` that still carries a Claude-only form. Pure over (targetDir, manifestFiles, runtime).
+ */
+function collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }) {
+  const leaked = [];
+  const patterns = claudeLeakPatternsFor(runtime);
+  for (const relPath of manifestFiles) {
+    const fileName = path.basename(relPath);
+    if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
+    if (fileName === 'CHANGELOG.md') continue;
+    // #5547: the Runtime Surface corpus is the package's canonical source
+    // bytes, kept byte-identical so a refresh can restore them
+    // (tests/install-runtime-artifacts.test.cjs); the converted artifacts
+    // are what the host reads. Counting the source form as a "leak" made
+    // every skills-runtime install print a warning about files nothing reads.
+    // Windsurf is the exception: its workflow wrappers delegate to the
+    // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
+    // ARE host-read artifacts and stay in the scan.
+    const posixRelPath = relPath.replace(/\\/g, '/');
+    if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
+      && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
+    const fullPath = path.join(targetDir, relPath);
+    let content;
+    try {
+      content = fs.readFileSync(fullPath, 'utf8');
+    } catch (err) {
+      if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ENOENT') {
+        continue; // skip inaccessible or missing files
+      }
+      throw err;
+    }
+    let count = 0;
+    for (const pattern of patterns) {
+      const matches = content.match(pattern);
+      if (matches) count += matches.length;
+    }
+    if (count > 0) leaked.push({ file: relPath, count });
+  }
+  return leaked;
+}
+
+/**
  * The two content rewrites install() runs on manifest-listed files AFTER the first writeManifest
  * (#5954): the Codex `@~/.claude/gsd-core/` include rewrite (#4667) and the Copilot / Antigravity /
  * Kimi include retarget (#5123, global installs only). Applied to `relPaths` under `rootDir` (the
@@ -13524,36 +13582,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       if (_includesRewritten) {
         writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: _installScopeId });
       }
-      for (const relPath of manifestFiles) {
-        const fileName = path.basename(relPath);
-        if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-        if (fileName === 'CHANGELOG.md') continue;
-        // #5547: the Runtime Surface corpus is the package's canonical source
-        // bytes, kept byte-identical so a refresh can restore them
-        // (tests/install-runtime-artifacts.test.cjs); the converted artifacts
-        // are what the host reads. Counting the source form as a "leak" made
-        // every skills-runtime install print a warning about files nothing reads.
-        // Windsurf is the exception: its workflow wrappers delegate to the
-        // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
-        // ARE host-read artifacts and stay in the scan.
-        const posixRelPath = relPath.replace(/\\/g, '/');
-        if (!hostBehaviorsFor(runtime).installsCommandBodiesForWorkflowDelegation
-          && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
-        const fullPath = path.join(targetDir, relPath);
-        let content;
-        try {
-          content = fs.readFileSync(fullPath, 'utf8');
-        } catch (err) {
-          if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ENOENT') {
-            continue; // skip inaccessible or missing files
-          }
-          throw err;
-        }
-        const matches = content.match(/(?:~|\$HOME)\/\.claude\b/g);
-        if (matches) {
-          leakedPaths.push({ file: relPath, count: matches.length });
-        }
-      }
+      leakedPaths.push(...collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }));
     }
     if (leakedPaths.length > 0) {
       const totalLeaks = leakedPaths.reduce((sum, l) => sum + l.count, 0);
@@ -15913,6 +15942,7 @@ module.exports = {
     mapClaudeToolsToKimiTools,
     buildKimiAgentArtifacts,
     convertClaudeToOpencodeFrontmatter,
+    collectInstalledClaudeLeaks,
     convertClaudeToKiloFrontmatter,
     configureOpencodePermissions,
     neutralizeAgentReferences,

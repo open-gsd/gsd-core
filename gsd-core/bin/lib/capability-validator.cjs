@@ -2022,6 +2022,7 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'retargetsGsdCoreProsePath',
   'retiredArtifacts',
   'rewriteClaudeAtIncludes',
+  'rewritesClaudeOnlyForms',
   'settingsFileByScope',
   'sharedHooksDirName',
   'skillFrontmatterVersion',

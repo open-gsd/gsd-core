@@ -2447,6 +2447,28 @@ function filterRuntimeNotesForTarget(content: string, targetRuntime: string): st
   });
 }
 
+/**
+ * #4779: the two Claude-only forms the `~/.claude` path rewrite leaves behind in OpenCode content.
+ *   - `.claude/skills/` (project-skills locator): OpenCode's native project path is `.opencode/skills/`.
+ *   - `--claude --local` (the runtime launcher's reinstall hint): the command an OpenCode user ran
+ *     is `--opencode --global`.
+ * Both are exact literals so the ordered multi-runtime fallback chain (`${_GSD_RUNTIME_ROOT}/.claude/
+ * gsd-core/bin`, `.codex/gsd-core/bin`, `${CLAUDE_CONFIG_DIR:-…}`) is untouched. The locator must not
+ * follow a word character or `-` (`my.claude/skills/` is not the locator). Unlike the sibling
+ * `replaceRelativePathReference` (Kilo), `/` and `.` may precede it: `./.claude/skills/x` and
+ * `${ROOT}/.claude/skills/x` are the project-relative forms the agents actually write. This is the single owner of
+ * the two rules: bin/install.js's mirror converter calls it too, so the copies cannot drift.
+ */
+const OPENCODE_SKILLS_LOCATOR_RE = /(?<![A-Za-z0-9_-])\.claude\/skills\//g;
+const OPENCODE_LAUNCHER_HINT_RE = /(?<![A-Za-z0-9_-])--claude --local(?![\w-])/g;
+
+function rewriteOpencodeClaudeOnlyForms(content) {
+  if (typeof content !== 'string') return content;
+  return content
+    .replace(OPENCODE_SKILLS_LOCATOR_RE, '.opencode/skills/')
+    .replace(OPENCODE_LAUNCHER_HINT_RE, '--opencode --global');
+}
+
 function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOverride = null, variant = null } = {}) {
   // Replace tool name references in content (applies to all files)
   let convertedContent = filterRuntimeNotesForTarget(content, 'opencode');
@@ -2458,6 +2480,8 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   // Replace ~/.claude and $HOME/.claude with OpenCode's config location
   convertedContent = convertedContent.replace(/~\/\.claude\b/g, '~/.config/opencode');
   convertedContent = convertedContent.replace(/\$HOME\/\.claude\b/g, '$HOME/.config/opencode');
+  // #4779: project-skills locator and launcher reinstall hint (single owner, shared with bin/install.js)
+  convertedContent = rewriteOpencodeClaudeOnlyForms(convertedContent);
   // Replace general-purpose subagent type with OpenCode's equivalent "general"
   convertedContent = convertedContent.replace(/subagent_type="general-purpose"/g, 'subagent_type="general"');
   // Runtime-neutral agent name replacement (#766)
@@ -4798,6 +4822,8 @@ export = {
   // opencode/kilo command install through the engine instead of the bespoke path).
   convertClaudeToOpencodeFrontmatter,
   convertClaudeToKiloFrontmatter,
+  // #4779: the single owner of the OpenCode `.claude/skills/` + `--claude --local` rewrites
+  rewriteOpencodeClaudeOnlyForms,
   _decodeToolScalar: decodeToolScalar,
   _buildOpencodeAgentPermissionBlock: buildOpencodeAgentPermissionBlock,
   _splitToolScalars: splitToolScalars,

@@ -166,6 +166,19 @@ describe('#4779: collectInstalledClaudeLeaks', () => {
     assert.deepEqual(scan(dir, 'opencode', ['agents/a.md']), [{ file: 'agents/a.md', count: 2 }]);
   });
 
+  test('applies the same boundaries as the rewrite on opencode', (t) => {
+    const dir = tree({ 'agents/a.md': 'my.claude/skills/ and --claude --local-foo and x--claude --local\n' });
+    t.after(() => cleanup(dir));
+    assert.deepEqual(scan(dir, 'opencode', ['agents/a.md']), []);
+  });
+
+  test('ignores the new patterns on codex and kilo', (t) => {
+    const dir = tree({ 'agents/a.md': `${LOC_OLD} ${HINT_OLD}\n` });
+    t.after(() => cleanup(dir));
+    assert.deepEqual(scan(dir, 'codex', ['agents/a.md']), []);
+    assert.deepEqual(scan(dir, 'kilo', ['agents/a.md']), []);
+  });
+
   test('ignores the new patterns on claude', (t) => {
     const dir = tree({ 'agents/a.md': `${LOC_OLD} ${HINT_OLD}\n` });
     t.after(() => cleanup(dir));
