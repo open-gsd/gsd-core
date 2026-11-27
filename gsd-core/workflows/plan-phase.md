@@ -1266,7 +1266,7 @@ fi
 **Otherwise (revised plans, not `## REVISION_CONFLICT`):** if this re-spawn followed a
 resolved conflict, close its record — nothing persists across fences, so export `REVIEWS_FILE`,
 `CONVERGENCE_ENABLED`, the `CONFLICT_DIMENSION`/`CONFLICT_PLAN` that opened it, and
-`CONFLICT_RESOLUTION` (one line). Then run:
+`CONFLICT_RESOLUTION` (one line). Run:
 
 ```bash
 if [ "${CONVERGENCE_ENABLED}" = "true" ] && [ -n "${REVIEWS_FILE}" ]; then
