@@ -485,5 +485,5 @@ function main() {
   console.log(args.includes('--json') ? JSON.stringify(result) : JSON.stringify(result, null, 2));
   if (!result.ok) throw new ExitError(1, 'Phase convention check failed');
 }
-module.exports = { TARGETS, EXCLUDED_USER_OUTPUT, EXCLUDED_ARTIFACTS, REFERENCE, START, END, readRegion, check, write, checkEvidence };
+module.exports = { TARGETS, EXCLUDED_USER_OUTPUT, EXCLUDED_ARTIFACTS, EXCLUDED_QUICK_FORWARDERS, REFERENCE, START, END, readRegion, check, write, checkEvidence };
 if (require.main === module) runMain(main);

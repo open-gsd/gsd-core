@@ -29,6 +29,11 @@ function fixture() {
       : '';
     fs.writeFileSync(absolute, `prefix.\n${card}${region}`);
   }
+  // Excluded files exist in a real tree; checkEvidence fails closed when one is missing.
+  for (const file of [...gen.EXCLUDED_USER_OUTPUT, ...gen.EXCLUDED_ARTIFACTS, ...gen.EXCLUDED_QUICK_FORWARDERS]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), 'excluded fixture.\n');
+  }
   assert.equal(gen.write(root).ok, true);
   return root;
 }
