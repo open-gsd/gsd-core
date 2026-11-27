@@ -181,6 +181,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
 - [How GSD runs on Pi](explanation/how-gsd-runs-on-pi.md) — how commands, agent roles and guards map onto Pi's skills, tools and events, and the limits that leaves
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
+- [About autonomous decision classification](explanation/autonomous-decision-classification.md) — why /gsd-autonomous decides some discuss questions and asks about others
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts
