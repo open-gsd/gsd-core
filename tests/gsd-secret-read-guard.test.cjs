@@ -7353,6 +7353,14 @@ describe('gsd-secret-read-guard: an xargs replace string inside an option cluste
     ["printf 'env\\n' | xargs -tI{} sh -c 'cat .{}'", '.env'],
     ["printf 'env\\n' | xargs -rI{} sh -c 'cat .{}'", '.env'],
     ["xargs -tI{} sh -c 'cat .{}' <<< env", '.env'],
+    // The replace string as the word after the cluster, as after a bare -I.
+    ["printf 'env\\n' | xargs -0I {} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | xargs -tI {} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | xargs -rI {} sh -c 'cat .{}'", '.env'],
+    ["printf 'env\\n' | xargs -0rI % sh -c 'cat .%'", '.env'],
+    ["xargs -0I {} sh -c 'cat .{}' <<< env", '.env'],
+    ["echo env | xargs -tI {} bash -c 'cat .{}'", '.env'],
+    ["echo x | xargs -0I {} sh -c 'cat .env'", '.env'],
     // A later -L or -n cancels the replace string under GNU xargs; it is read with nothing cancelling it as well.
     ["echo env | xargs -I{} -L1 sh -c 'cat .{}'", '.env'],
     ["echo env | xargs -I{} -n2 sh -c 'cat .{}'", '.env'],
@@ -7370,6 +7378,9 @@ describe('gsd-secret-read-guard: an xargs replace string inside an option cluste
     "printf 'txt\\n' | xargs -0I{} sh -c 'cat notes.{}'",
     "printf 'txt\\n' | xargs -tI{} sh -c 'cat notes.{}'",
     "printf 'txt\\n' | xargs -rI{} sh -c 'cat notes.{}'",
+    "printf 'txt\\n' | xargs -0I {} sh -c 'cat notes.{}'",
+    "printf 'notes\\n' | xargs -tI {} sh -c 'cat {}.txt'",
+    "echo x | xargs -0I {} sh -c 'echo hi'",
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
