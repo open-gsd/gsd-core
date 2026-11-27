@@ -40,6 +40,8 @@ module.exports = {
       ...ctx.list('src', '.cts', 'the sources are scanned for readers of the handoff grammar')];
     for (const rel of files) {
       if (rel === OWNER) continue;
+      // hooks/dist/ holds generated copies of the hooks (a build step, gitignored): the source hook is the reader.
+      if (rel.startsWith('hooks/dist/')) continue;
       ctx.doc(rel).satisfies(
         (text) => !PARSES_GRAMMAR.test(text) || registered.has(rel) || `${rel} parses the handoff filename grammar but is not a registered follower`,
         `a reader of the handoff grammar other than ${OWNER} must be registered in ${REGISTRY} (followers), so the parity guard holds it to the store`,

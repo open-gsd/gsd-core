@@ -90,6 +90,14 @@ describe('handoff-grammar-readers-registered (#6797)', () => {
     }
   });
 
+  test('aGeneratedCopyUnderHooksDistIsNotAReader: the build copy of a registered hook does not need its own row', (t) => {
+    const tree = makeTree(t, {
+      registry: { followers: [{ file: 'hooks/a.js' }] },
+      files: { 'hooks/a.js': PARSER, 'hooks/dist/a.js': PARSER, 'src/x.cts': 'export const x = 1;\n' },
+    });
+    assert.deepEqual(messages(tree), []);
+  });
+
   test('aFileThatOnlyMentionsHandoffIsNotAReader: prose and unrelated names do not trip it', (t) => {
     const tree = makeTree(t, {
       registry: { followers: [{ file: 'hooks/a.js' }] },
