@@ -19,13 +19,15 @@ import { STATE_SUBCOMMANDS } from './command-aliases.cjs';
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
+import { specFor } from './cli-surface.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 // Helper: extract string-only named arg value (value flags never return boolean).
-function strArg(opts: Record<string, string | boolean | null>, key: string): string | null | undefined {
+// A registry spec may declare a repeatable flag (a list), which no state verb uses: undefined, like a switch.
+function strArg(opts: Record<string, string | boolean | string[] | null>, key: string): string | null | undefined {
   const v = opts[key];
-  if (typeof v === 'boolean') return undefined;
+  if (typeof v === 'boolean' || Array.isArray(v)) return undefined;
   return v;
 }
 
@@ -193,7 +195,7 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       // #6796 (ADR-4962): per-session pause. The session id comes from --session or a
       // runtime key, never a terminal token; with neither, both verbs write and delete nothing.
       'session-resume': () => {
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['session', 'role', 'role-id', 'handoff', 'action'], booleanFlags: ['keep-handoff'], positionals: 2 }, error);
+        const a = parseNamedArgsOrExit(args, specFor('state.session-resume'), error);
         state.cmdStateSessionResume(cwd, {
           session: strArg(a, 'session'),
           role: strArg(a, 'role'),
@@ -204,7 +206,7 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
         }, raw);
       },
       sessions: () => {
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['session', 'role', 'role-id'], positionals: 2 }, error);
+        const a = parseNamedArgsOrExit(args, specFor('state.sessions'), error);
         state.cmdStateSessions(cwd, { session: strArg(a, 'session'), role: strArg(a, 'role'), role_id: strArg(a, 'role-id') }, raw);
       },
       'begin-phase': () => {
