@@ -394,7 +394,13 @@ describe('project-context CLI: workspace and verb', () => {
       write(path.join(repo, 'src', 'a.txt'), 'alpha\n');
       const ctx = resolveProjectContext(repo);
       const planning = requirePlanningArtifactPath(ctx, `.planning/phases/${PHASE}/${PHASE}-UAT.md`, 'artifact');
-      assert.equal(planning.resolved, path.join(fs.realpathSync.native(store), 'phases', PHASE, `${PHASE}-UAT.md`));
+      // The caller's spelling is kept: under the `.planning` entry, not the store's realpath, so a caller that
+      // makes it relative to the project (complete-session's commit path) stays inside the project (Windows 8.3 names).
+      assert.equal(planning.resolved, path.join(repo, '.planning', 'phases', PHASE, `${PHASE}-UAT.md`));
+      assert.equal(path.relative(repo, planning.resolved), path.join('.planning', 'phases', PHASE, `${PHASE}-UAT.md`));
+      // A path given through the store's own location resolves to that location.
+      const viaStore = requirePlanningArtifactPath(ctx, path.join(store, 'phases', PHASE, `${PHASE}-UAT.md`), 'artifact');
+      assert.equal(viaStore.resolved, path.join(fs.realpathSync.native(store), 'phases', PHASE, `${PHASE}-UAT.md`));
       assert.equal(planning.display, path.join('.planning', 'phases', PHASE, `${PHASE}-UAT.md`));
       const project = requirePlanningArtifactPath(ctx, 'src/a.txt', 'artifact');
       assert.equal(project.resolved, path.join(fs.realpathSync.native(repo), 'src', 'a.txt'));

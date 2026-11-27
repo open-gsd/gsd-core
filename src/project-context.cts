@@ -964,10 +964,16 @@ export function requirePlanningArtifactPath(
   policy: PathAcceptancePolicy = PathAcceptance.AbsoluteInsideRoot,
 ): { resolved: string; display: string } {
   const lexical = path.resolve(ctx.projectRoot, filePath);
-  const rel = relativeInside(path.join(ctx.projectRoot, '.planning'), lexical) ?? relativeInside(ctx.planningRoot, lexical);
+  const entryDir = path.join(ctx.projectRoot, '.planning');
+  const viaEntry = relativeInside(entryDir, lexical);
+  const rel = viaEntry ?? relativeInside(ctx.planningRoot, lexical);
   if (rel !== null) {
-    const resolved = requireSafePath(rel, ctx.planningRoot, label, PathAcceptance.RelativeOnly);
-    return { resolved, display: path.join('.planning', path.relative(ctx.planningRoot, resolved)) };
+    const contained = requireSafePath(rel, ctx.planningRoot, label, PathAcceptance.RelativeOnly);
+    // The caller keeps its own spelling: a path given through the `.planning` entry stays under that entry,
+    // so a caller that makes it relative to the project root (complete-session's commit path) gets a path
+    // inside the project even where the realpath of `.planning` spells the directory differently (a Windows
+    // 8.3 temp name against its long form, a symlinked store). Containment was checked above on the realpath.
+    return { resolved: viaEntry !== null ? path.join(entryDir, rel) : contained, display: path.join('.planning', rel) };
   }
   const resolved = requireSafePath(filePath, ctx.projectRoot, label, policy);
   return { resolved, display: path.relative(ctx.projectRoot, resolved) };
