@@ -21,7 +21,7 @@ const os = require('os');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { runGsdTools, parseFrontmatter, cleanup } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, parseFrontmatter, cleanup } = require('./helpers.cjs');
 
 // Track temp files for cleanup
 let tempFiles = [];
@@ -662,7 +662,8 @@ describe('Bug #1660: frontmatter set of an object-list field fails closed instea
 // ─── #6278: a dotted --field over an existing map ──────────────────────────────
 
 describe('#6278: frontmatter set/merge refuses a dotted field whose prefix is an existing map', () => {
-  const DOTTED_FIELD_OVER_MAP = 'FRONTMATTER_DOTTED_FIELD_OVER_MAP';
+  const { FRONTMATTER_DOTTED_FIELD_OVER_MAP: DOTTED_FIELD_OVER_MAP } = require('../gsd-core/bin/lib/frontmatter.cjs');
+  const { exitCodeFor } = require('../gsd-core/bin/lib/exit-code-registry.cjs');
   // The reporter's file, verbatim.
   const REPORTED_DOC = [
     '---',
@@ -703,6 +704,27 @@ describe('#6278: frontmatter set/merge refuses a dotted field whose prefix is an
     assert.strictEqual(parsed.field, 'progress.percent');
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), REPORTED_DOC);
   });
+
+  test('set on the reporter\'s file with CRLF line endings is refused and the file stays byte-identical', () => {
+    const crlf = REPORTED_DOC.replace(/\n/g, '\r\n');
+    const file = writeTempFile(crlf);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress.percent', '--value', '100']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).code, DOTTED_FIELD_OVER_MAP, result.output);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), crlf);
+  });
+
+  // The refusal is an output({error}) payload, a DEGRADED outcome: exit 0 under the default v1
+  // exit contract, exitCodeFor('DEGRADED') under v2 (docs/json-errors.md). Nothing is written under either.
+  for (const [contract, exitCode] of [['v1', 0], ['v2', exitCodeFor('DEGRADED')]]) {
+    test(`under --exit-contract=${contract} the refusal exits ${exitCode} and writes nothing`, () => {
+      const file = writeTempFile(REPORTED_DOC);
+      const result = runGsdToolsCaptured([`--exit-contract=${contract}`, 'frontmatter', 'set', file, '--field', 'progress.percent', '--value', '100']);
+      assert.strictEqual(result.exitCode, exitCode, result.stderr);
+      assert.strictEqual(JSON.parse(result.stdout).code, DOTTED_FIELD_OVER_MAP, result.stdout);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), REPORTED_DOC);
+    });
+  }
 
   test('control: setting the whole map still updates the nested value', () => {
     const file = writeTempFile(REPORTED_DOC);
