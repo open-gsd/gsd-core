@@ -372,6 +372,17 @@ function isRegularFile(file: string): boolean {
   }
 }
 
+/**
+ * The files `/gsd:pause-work` writes for the caller (ADR-4962 Decision 2): the role slot when the caller has a
+ * role, its own session file when it has only a session id, the legacy pair when it has no session id (a handoff
+ * keyed to nobody could not be claimed). The workflow reads these names; it never composes them.
+ */
+export function pauseFileNames(identity: Identity): { handoff: string; continue_here: string } {
+  if (identity.session_id === null) return { handoff: LEGACY_HANDOFF, continue_here: continueHereName(null) };
+  if (identity.role_id !== null) return { handoff: latestHandoffName(identity.role_id), continue_here: continueHereName(identity.role_id) };
+  return { handoff: sessionHandoffName(identity.session_id), continue_here: continueHereName(null) };
+}
+
 /** The pause view for the caller: every handoff and record, who owns each, and whether the caller is paused. */
 export function listSessions(planningDir: string, identity: Identity, displayDir = '.planning') {
   const { handoffs, skipped } = listHandoffs(planningDir);
@@ -387,10 +398,16 @@ export function listSessions(planningDir: string, identity: Identity, displayDir
       continue_here_path: companion !== null && isRegularFile(path.join(planningDir, companion)) ? `${displayDir}/${companion}` : null,
     };
   });
+  // The file `/gsd:resume-work` reads for the caller: a claim it already holds, then its own session file, then its
+  // unclaimed role slot (which resume claims by rename), then an owned legacy file. Null when it owns none.
+  const ownRank: Record<HandoffKind, number> = { claimed: 0, session: 1, latest: 2, legacy: 3 };
+  const own = listed.filter((h) => h.is_self).sort((a, b) => ownRank[a.kind] - ownRank[b.kind])[0];
   return {
     session_id: identity.session_id,
     role_id: identity.role_id,
+    own_handoff: own ? own.file : null,
     paused: listed.some((h) => h.is_self),
+    pause_files: pauseFileNames(identity),
     handoffs: listed,
     records: records.records.map((r) => ({
       file: r.file,

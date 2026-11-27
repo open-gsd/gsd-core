@@ -65,7 +65,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `/gsd-new-project` | [COMMANDS.md#gsd-new-project](../COMMANDS.md#gsd-new-project) | Reference | 1/1 | — |
 | `/gsd-next` | [COMMANDS.md#gsd-next](../COMMANDS.md#gsd-next) | Reference | n/a | — |
 | `/gsd-onboard` | [COMMANDS.md#gsd-onboard](../COMMANDS.md#gsd-onboard) | Reference | 2/2 | — |
-| `/gsd-pause-work` | [COMMANDS.md#gsd-pause-work](../COMMANDS.md#gsd-pause-work) | Reference | 1/1 | — |
+| `/gsd-pause-work` | [COMMANDS.md#gsd-pause-work](../COMMANDS.md#gsd-pause-work) | Reference | 2/2 | — |
 | `/gsd-phase` | [COMMANDS.md#gsd-phase](../COMMANDS.md#gsd-phase) | Reference | 3/3 | — |
 | `/gsd-plan-phase` | [COMMANDS.md#gsd-plan-phase](../COMMANDS.md#gsd-plan-phase) | Reference | 21/21 | — |
 | `/gsd-plan-review-convergence` | [COMMANDS.md#gsd-plan-review-convergence](../COMMANDS.md#gsd-plan-review-convergence) | Reference | 17/17 | — |

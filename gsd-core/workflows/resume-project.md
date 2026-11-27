@@ -74,7 +74,40 @@ cat "${PROJECT_PATH}"
 </step>
 
 <step name="check_incomplete_work">
-Look for incomplete work that needs attention:
+Look for incomplete work that needs attention.
+
+**Claim this session's handoff first (ADR-4962 Decision 3).** A pause belongs to the session that wrote it. With a role (`--role <text>` as the last argument; free text, handled only as data through `"$ROLE"`), the unclaimed `.planning/HANDOFF.latest.<role_id>.json` is claimed by an atomic rename to `.planning/HANDOFF.claimed.<role_id>.<session_id>.json` BEFORE it is read: of two sessions resuming the same role, one rename succeeds and the other finds no unclaimed file. A session without a role reads its own `.planning/HANDOFF.<session_id>.json`; a legacy `.planning/HANDOFF.json` is read unless its `role_id` names another role. Another session's `HANDOFF.claimed.*` file is never read.
+
+```bash
+# gsd:claim-handoff
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+ROLE=$(printf '%s\n' "$GSD_ARGS" | sed -nE 's/.*--role +(.*)$/\1/p')
+_gsd_sess() { if [ -n "$ROLE" ]; then gsd_run state sessions --role "$ROLE" --pick "$1"; else gsd_run state sessions --pick "$1"; fi; }
+SESSION_ID=$(_gsd_sess session_id)
+ROLE_ID=$(_gsd_sess role_id)
+OWN=$(_gsd_sess own_handoff)
+HANDOFF=""
+case "$OWN" in
+  HANDOFF.latest.*.json)
+    if mv "./.planning/$OWN" "./.planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json" 2>/dev/null; then
+      HANDOFF=".planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json"
+    fi ;;
+  '')
+    if [ -z "$SESSION_ID" ] && [ -f .planning/HANDOFF.json ]; then HANDOFF=".planning/HANDOFF.json"; fi ;;
+  *) HANDOFF=".planning/$OWN" ;;
+esac
+if [ -n "$HANDOFF" ]; then
+  echo "HANDOFF_FILE=$HANDOFF"
+  cat "$HANDOFF"
+elif [ -n "$ROLE_ID" ]; then
+  echo "NO_UNCLAIMED_HANDOFF role_id=$ROLE_ID: another session holds or has consumed the handoff for this role."
+fi
+```
+
+If the output says `NO_UNCLAIMED_HANDOFF`, tell the user so: no handoff is available for that role, and no other session's handoff is read. Continue with the checkpoint and plan checks below.
 
 ```bash
 # #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
@@ -83,9 +116,6 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 # Scope root: the continue-here files under it are checked in the phase and non-phase layouts
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
 : "${PLANNING_ROOT:?}"
-
-# Check for structured handoff (preferred — machine-readable)
-cat .planning/HANDOFF.json 2>/dev/null || true
 
 # Check for continue-here files (phase + non-phase + legacy fallback), three levels below .planning.
 # Guarded glob loops, not `find` and not a chained `ls` of bare globs (#4805, #3689):
@@ -121,9 +151,10 @@ if [ "$has_interrupted_agent" = "true" ]; then
 fi
 ```
 
-**If HANDOFF.json exists:**
+**If the claim step printed a handoff (`HANDOFF_FILE=...`):**
 
 - This is the primary resumption source — structured data from `/gsd:pause-work`
+- Restore the role from the handoff's `role_id` (a slug) when the user gave no `--role`; its free-text `role` is shown to the user, never passed to a command
 - Parse `status`, `phase`, `plan`, `task`, `total_tasks`, `next_action`
 - Check `blockers` and `human_actions_pending` — surface these immediately
 - Check `completed_tasks` for `in_progress` items — these need attention first
@@ -136,7 +167,7 @@ fi
 **If .continue-here file exists (phase/non-phase/legacy fallback):**
 
 - This is a mid-plan resumption point
-- Read the file for specific resumption context
+- Read the file for specific resumption context. With a role, read `.continue-here.latest.<role_id>.md`; read another role's `.continue-here.latest.*.md` only when the user names it
 - Flag: "Found mid-plan checkpoint"
 
 **If PLAN without SUMMARY exists:**
@@ -205,7 +236,7 @@ Based on project state, determine the most logical next action:
 → Primary: Resume interrupted agent (Task tool with resume parameter)
 → Option: Start fresh (abandon agent work)
 
-**If HANDOFF.json exists:**
+**If the claim step printed a handoff:**
 → Primary: Resume from structured handoff (highest priority — specific task/blocker context)
 → Option: Discard handoff and reassess from files
 
@@ -272,14 +303,35 @@ Wait for user selection.
 </step>
 
 <step name="consume_handoff">
-**Consume the pause handoff (#6431).** `/gsd:pause-work` records a pause as `.planning/HANDOFF.json` plus a `.continue-here.md`, and `/gsd:next` and `progress --next` route here for as long as either exists. Once the user has chosen how to proceed (resume from the handoff or checkpoint, or discard the handoff to reassess) the pause is over: remove both and commit the removal, on every branch that follows from that choice. Their contents were read in `check_incomplete_work`. Leave them only if the user chose nothing.
+**Consume the pause handoff (#6431).** `/gsd:pause-work` records a pause as a handoff file plus a `.continue-here` file, and `/gsd:next` and `progress --next` route here for as long as the session's handoff exists. Once the user has chosen how to proceed (resume from the handoff or checkpoint, or discard the handoff to reassess) the pause is over: remove this session's handoff and its continue-here file and commit the removal, on every branch that follows from that choice. Their contents were read in `check_incomplete_work`. Leave them only if the user chose nothing. Only this session's files go: the claimed or own handoff (through `state session-resume`, which also records "Session resumed" and restores the role from `--role-id`), and the continue-here files with this role's name (or the legacy name without a role). Another session's handoff, claimed file, or continue-here file is never removed.
 
 ```bash
+# gsd:consume-handoff
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+ROLE=$(printf '%s\n' "$GSD_ARGS" | sed -nE 's/.*--role +(.*)$/\1/p')
+_gsd_sess() { if [ -n "$ROLE" ]; then gsd_run state sessions --role "$ROLE" --pick "$1"; else gsd_run state sessions --pick "$1"; fi; }
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
 : "${PLANNING_ROOT:?}"
+SESSION_ID=$(_gsd_sess session_id)
+ROLE_ID=$(_gsd_sess role_id)
+OWN=$(_gsd_sess own_handoff)
+CONTINUE_NAME=$(_gsd_sess pause_files.continue_here)
 CONSUMED=()
-for f in .planning/HANDOFF.json .planning/.continue-here*.md "${PLANNING_ROOT}"/*/.continue-here*.md "${PLANNING_ROOT}"/*/*/.continue-here*.md; do
+if [ -n "$OWN" ]; then
+  if [ -n "$ROLE_ID" ]; then
+    gsd_run state session-resume --handoff "$OWN" --session "$SESSION_ID" --role-id "$ROLE_ID" --action "resume" >/dev/null
+  else
+    gsd_run state session-resume --handoff "$OWN" --session "$SESSION_ID" --action "resume" >/dev/null
+  fi
+  [ -e ".planning/$OWN" ] || CONSUMED+=(".planning/$OWN")
+elif [ -z "$SESSION_ID" ] && [ -f .planning/HANDOFF.json ]; then
+  rm -f .planning/HANDOFF.json && CONSUMED+=(".planning/HANDOFF.json")
+fi
+for f in ".planning/${CONTINUE_NAME}" "${PLANNING_ROOT}"/*/"${CONTINUE_NAME}" "${PLANNING_ROOT}"/*/*/"${CONTINUE_NAME}"; do
   [ -e "$f" ] || continue
   rm -f "$f" && CONSUMED+=("${f#"$PWD"/}")
 done
