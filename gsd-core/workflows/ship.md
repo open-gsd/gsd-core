@@ -129,6 +129,8 @@ Verify the work is ready to ship:
 
    **If `activeHooks` is empty or absent:** skip this check silently and continue to the next preflight step. A capability whose `when` is off contributes no entry, and one that failed to load fails OPEN with its own warning from the resolver — neither is a block.
 
+   **Contribution dispatch:** inject every `kind == "contribution"` fragment from `SHIP_PRE_HOOKS_JSON` per `gsd-core/references/loop-hook-dispatch.md` (skip when none), before the gates and steps below.
+
    **For each active entry where `kind == "gate"`** (process in array order), following `gsd-core/references/loop-hook-dispatch.md`. Every gate is visited exactly once by this loop — the named branches below are specializations *within* it, never a separate pass, so no gate is evaluated twice.
 
    **Step 1 — evaluate the gate's `check`.** Dispatch by check shape; read the hook's `check` object in-context to pick the branch (the registry validates exactly one of `query`/`predicate`/`agentVerdict`). Two capability IDs carry a bespoke evaluation whose fail-closed semantics the declared predicate alone does not reproduce — take their branch, then rejoin at step 2:
