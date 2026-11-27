@@ -38,6 +38,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
 - [Guide external reviewers with a capability](how-to/guide-external-reviewers-with-a-capability.md) — add `review:pre` reviewer guidance so `/gsd-review` and convergence cycles judge plans under your capability's constraints
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
+- [Tune the context monitor's fire-points](how-to/tune-the-context-monitor.md) — move the WARNING and CRITICAL context-remaining thresholds per project in the root `.planning/config.json`
 - [Migrate to bracket phase IDs](how-to/migrate-to-bracket-phase-ids.md) — preview and apply `roadmap upgrade --convention bracket`, read the `STATE.md` and `PROJECT.md` label edits, and resolve each reference the migration skipped
 - [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
 - [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
@@ -183,7 +184,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
-- [Context monitoring](context-monitor.md) — context window monitoring hook architecture
+- [Context monitoring](context-monitor.md) — context window monitoring hook architecture and why the fire-points are defaults
 - [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
 - [Claude orchestration capability (BETA)](explanation/claude-orchestration-capability.md) — why the capability exists and how it fits the loop
 - [Interface versioning and deprecation policy](explanation/interface-versioning-policy.md) — how the Host-Integration Interface (ADR-1239) evolves
