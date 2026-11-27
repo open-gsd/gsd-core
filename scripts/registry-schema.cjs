@@ -13,7 +13,7 @@
  * runtime/ADR closed vocabularies they describe — they are a documentation-
  * registry-scoped mirror, not the runtime source of truth:
  *
- *   - `LOOP_POINTS` mirrors ADR-857 "Loop Extension Points (the 12)"
+ *   - `LOOP_POINTS` mirrors ADR-857 "Loop Extension Points" (12, plus review:pre from #3997)
  *     (docs/adr/857-capability-system.md §"Loop Extension Points (the 12)").
  *     The canonical runtime set lives in `src/loop-resolver.cts`
  *     (`CANONICAL_POINTS` / `CANONICAL_POINTS_FALLBACK`, derived from
@@ -57,7 +57,7 @@
  * CLI wrappers that perform I/O around these functions.
  */
 
-// ─── ADR-857 "Loop Extension Points (the 12)" ────────────────────────────────
+// ─── ADR-857 "Loop Extension Points" (12, plus review:pre from #3997) ────────────────────────────────
 const LOOP_POINTS = Object.freeze([
   'discuss:pre',
   'discuss:post',
@@ -71,6 +71,7 @@ const LOOP_POINTS = Object.freeze([
   'verify:post',
   'ship:pre',
   'ship:post',
+  'review:pre',
 ]);
 
 // ─── ADR-857 Decision 4 — three hook kinds ───────────────────────────────────

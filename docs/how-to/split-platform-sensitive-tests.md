@@ -70,7 +70,7 @@ reworking text, never by adding an exemption.
 | Reason | What it means | Fix |
 |---|---|---|
 | `base-has-signal` | A base file that has a `.platform` sibling still carries the named signal(s). | Move the test that carries the signal into the sibling, or clear the idiom as in step 3 of the split. |
-| `sibling-without-signal` | A `.platform.test.cjs` file carries no platform signal, so the real-OS lane would not select it and its header's reasons cannot be checked. | Move its tests back into the base and delete it, or move the test that actually needs a real OS into it. |
+| `sibling-without-signal` | A `.platform.test.cjs` file carries no platform signal and is not declared in `ALWAYS_REAL_OS`, so the real-OS lane would not select it and its header's reasons cannot be checked. | Move its tests back into the base and delete it, or move the test that actually needs a real OS into it. A sibling whose real-OS need is the sandbox home (and which builds its env with `isolatedEnv()`, leaving no `HOME`/`USERPROFILE` token in its text) is declared in `ALWAYS_REAL_OS` with its reason instead. |
 | `base-always-real-os` | The base is listed in `ALWAYS_REAL_OS`, which says the whole file needs a real OS, yet it was split. | Split only files outside `ALWAYS_REAL_OS`, or remove the entry with its reason if the need moved to the sibling. |
 
 A file named `platform.test.cjs` with nothing before `.platform` is not a sibling, and neither is

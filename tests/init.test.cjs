@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
@@ -72,7 +73,7 @@ describe('init commands', () => {
       model_overrides: { 'gsd-executor': 'openai/o4-mini' },
     }));
 
-    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -89,7 +90,7 @@ describe('init commands', () => {
       model_overrides: { 'gsd-executor': 'openai/o4-mini' },
     }));
 
-    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init execute-phase 1 --raw', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2120,7 +2121,7 @@ describe('cmdInitQuick', () => {
       model_overrides: { 'gsd-phase-researcher': 'openai/o4-mini' },
     }));
 
-    const result = runGsdTools('init quick "Fix login bug" --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init quick "Fix login bug" --raw', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2758,7 +2759,7 @@ describe('withProjectRoot project identity', () => {
       JSON.stringify({ project_code: 'CK' })
     );
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2775,7 +2776,7 @@ describe('withProjectRoot project identity', () => {
       '# CareKit\n\nA care management platform.\n'
     );
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2788,7 +2789,7 @@ describe('withProjectRoot project identity', () => {
       JSON.stringify({})
     );
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2807,7 +2808,7 @@ describe('withProjectRoot project identity', () => {
     const projectMdPath = path.join(tmpDir, '.planning', 'PROJECT.md');
     if (fs.existsSync(projectMdPath)) fs.unlinkSync(projectMdPath);
 
-    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'quick', 'test task'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -5027,6 +5028,57 @@ describe('init section manifest', () => {
       const body = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'research-plan-absent');
       assert.strictEqual(body.research_enabled, true);
       assert.strictEqual(body.nyquist_validation_enabled, true);
+    });
+
+    test('#5096: blocked sections keep init payloads explicit and operationally safe', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-blocked-init-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+        workflow: null,
+        planning: null,
+      }));
+
+      const plan = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'blocked-plan');
+      assert.deepEqual({
+        research_enabled: plan.research_enabled,
+        plan_checker_enabled: plan.plan_checker_enabled,
+        nyquist_validation_enabled: plan.nyquist_validation_enabled,
+        text_mode: plan.text_mode,
+        commit_docs: plan.commit_docs,
+      }, {
+        research_enabled: false,
+        plan_checker_enabled: false,
+        nyquist_validation_enabled: false,
+        text_mode: false,
+        commit_docs: false,
+      });
+
+      const execute = parseOkJson(runSectionManifestCli(['init.execute-phase', '1'], dir), 'blocked-execute');
+      assert.equal(execute.verifier_enabled, false);
+      assert.equal(execute.commit_docs, false);
+
+      const mapResult = runGsdTools('init map-codebase', dir);
+      assert.ok(mapResult.success, `Command failed: ${mapResult.error}`);
+      const map = JSON.parse(mapResult.output);
+      assert.equal(map.commit_docs, false);
+      assert.equal(map.search_gitignored, false);
+      assert.equal(map.subagent_timeout, 300000);
+    });
+
+    test('#5096: a present hand-edited timeout retains its existing init representation', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-present-timeout-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+        workflow: { subagent_timeout: 'hand-edited-value' },
+      }));
+      const result = runGsdTools('init map-codebase', dir);
+      assert.ok(result.success, result.error);
+      assert.equal(JSON.parse(result.output).subagent_timeout, 'hand-edited-value');
+    });
+
+    test('#5096: the pre-existing TDD boolean projection retains its coercion', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-legacy-tdd-projection-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ workflow: { tdd_mode: 1 } }));
+      const body = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'legacy-tdd');
+      assert.equal(body.tdd_mode, true);
     });
   });
 

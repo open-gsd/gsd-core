@@ -25,6 +25,7 @@ const path = require('path');
 const os = require('os');
 const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const CHECK_UPDATE_PATH = path.join(__dirname, '..', 'hooks', 'gsd-check-update.js');
@@ -74,7 +75,7 @@ function buildProbeSource(hookPath) {
  *   below to point at a fixture copy instead.
  */
 function probe({ homeDir, cwd, envOverrides = {}, hookPath = CHECK_UPDATE_PATH }) {
-  const childEnv = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_HOME: homeDir };
+  const childEnv = isolatedEnv({ home: homeDir, override: { GSD_HOME: homeDir } });
   delete childEnv.CLAUDE_CONFIG_DIR;
   Object.assign(childEnv, envOverrides);
 

@@ -180,8 +180,20 @@ function parseDispatchIdentity(...texts) {
   return emptyResult();
 }
 
+// The parse patterns as source strings, so `scripts/lint-dispatch-identity-drift.cjs`
+// (#6027) can compare a consumer's regex `.source` / `.flags` against the
+// canonical one. Frozen, and built from the live regexes, so it cannot drift
+// from them.
+const DISPATCH_PARSE_SOURCES = Object.freeze({
+  marker: MARKER_RE.source,
+  markerFlags: MARKER_RE.flags,
+  prose: PROSE_RE.source,
+  proseFlags: PROSE_RE.flags,
+});
+
 module.exports = {
   DISPATCH_PHASE_TOKEN_SOURCE,
+  DISPATCH_PARSE_SOURCES,
   renderDispatchIdentityMarker,
   parseDispatchIdentity,
 };

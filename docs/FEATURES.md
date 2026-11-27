@@ -177,6 +177,7 @@
   - [UAT-Passed Predicate](#143-uat-passed-predicate)
   - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
   - [Deep Verify Capability](#3858-deep-verify-capability)
+  - [Validate-Only Verify Commands](#4586-validate-only-verify-commands)
 - [v1.43.0 Features](#v1430-features)
   - [MemPalace Memory Capability](#145-mempalace-memory-capability)
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
@@ -217,8 +218,12 @@
   - [Per-Task External-Tracker Content-Resolution Seam](#3970-per-task-external-tracker-content-resolution-seam)
   - [Unreadable-Directory Scope Signal](#4014-unreadable-directory-scope-signal)
   - [Project Exemptions for the Secret-Read Guard](#4432-project-exemptions-for-the-secret-read-guard)
+  - [Unattended Plan-Review Convergence](#4617-unattended-plan-review-convergence)
   - [Graphify CLI Preferred for Planner and Researcher Graph Queries](#4836-graphify-cli-preferred-for-planner-and-researcher-graph-queries)
   - [Gate Evidence and Verdict-Driven Exit Status](#5170-gate-evidence-and-verdict-driven-exit-status)
+- [v1.23.0 Features](#v1230-features)
+  - [Review-Prompt Capability Contributions](#3997-review-prompt-capability-contributions)
+  - [Advisor Pre-filter](#4795-advisor-pre-filter)
 
 ---
 
@@ -674,7 +679,7 @@ not migrated or flagged.
 
 **Behavior:**
 
-- **Two signals count as progress.** A completion marker in the agent's output, or a `*-PLAN.md` file modified within the last check interval. Either one keeps plan-phase waiting. Only when neither appears for `planner.stall_threshold_minutes` (default `10`) does plan-phase treat the agent as stalled.
+- **A receipt ends the wait; a fresh plan keeps it going.** A completion marker on the agent's return receipt ends the wait. The receipt is a file holding the agent's complete return (its marker line first), written as the agent's last action and renamed into place so it is never half-written, under a `<phase>/.gsd-returns/` directory that plan-phase creates and git-ignores. Plan-phase routes on that file without waiting for the host's completion result; the agent's final message carries the same return. When plan-phase cannot make the receipt safely (for example the phase directory is a symlink or resolves outside the project), it prints a `gsd_receipt_path: no receipt:` line naming the reason, and that dispatch has no receipt to wait on. A `*-PLAN.md` modified within the last check interval keeps plan-phase waiting. Plan-phase treats the agent as stalled only once `planner.stall_threshold_minutes` (default `10`) has passed since dispatch and the latest check found neither signal.
 - **It checks on a fixed cadence.** Plan-phase looks every `planner.stall_detect_interval_minutes` (default `5`). Each check is one bounded wait, so a finished agent is noticed at most one interval late. That is the cost of never hanging.
 - **The threshold is the knob for slow models.** A model that is still working but takes longer than the threshold to write anything is flagged as stalled. Raising the threshold removes those false alarms. Lowering the interval notices a finished planner sooner, at the price of more checks.
 - **Both values are whole minutes, `1` or more.** A stored `0`, a negative, a non-number or a value of more than nine digits falls back to the default. An interval of `0` would make every check a zero-length wait, and a threshold of `0` would flag a healthy agent on the first check.
@@ -1032,7 +1037,7 @@ against the mapping point, not HEAD.
 treats a directory as mapped when its path appears in any of the seven
 documents, flags modified and deleted files inside mapped directories as well
 as new structure outside them, and withholds paths that are unsafe to pass to
-the mapper. See [Post-Execute Codebase Drift Detection](post-execute-codebase-drift-detection.md).
+the mapper. See [Post-Execute Codebase Drift Detection](FEATURES.md#27a-post-execute-codebase-drift-detection).
 
 ---
 
@@ -1508,7 +1513,7 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 - Set `review.default_reviewers` in `.planning/config.json` (or via `gsd config-set`) to control no-flag `/gsd-review` fan-out.
 - `review.default_reviewers` may include configured `review.reviewer_instances` names; each instance runs as an independent reviewer identity backed by its configured adapter/model. Instance names are not CLI flags.
 - Use `--all` for a full pre-merge sweep without changing project defaults.
-- Every prompt-fed lane has a prompt cap: an explicit `review.max_prompt_tokens*` value, or else 65% of the lane's context window. `claude`, `codex`, `qwen` and `kimi-code` declare a window; set `review.context_window_tokens.<slug>` for the others or for a larger pinned model. A lane whose prompt is over its cap is **refused** with reason `prompt_exceeds_context`, never trimmed. See [Prompt budgets for reviewer lanes](docs/CONFIGURATION.md#prompt-budgets-for-reviewer-lanes) in CONFIGURATION.md.
+- Every prompt-fed lane has a prompt cap: an explicit `review.max_prompt_tokens*` value, or else 65% of the lane's context window. `claude`, `codex`, `qwen` and `kimi-code` declare a window; set `review.context_window_tokens.<slug>` for the others or for a larger pinned model. A lane whose prompt is over its cap is **refused** with reason `prompt_exceeds_context`, never trimmed. See [Prompt budgets for reviewer lanes](CONFIGURATION.md#prompt-budgets-for-reviewer-lanes) in CONFIGURATION.md.
 
 **Why a lane refuses instead of trimming (#4559):** past a model's context window nothing errors. The model compacts and answers confidently about material it never read, so the lane returns a review that reads exactly like one with no concerns. Trimming to a cap swapped that silent overflow for a silent truncation, and the trim note told the model to treat missing context as out of scope. A refused lane is reported as a lane that did not run, naming its cap and the key to raise, so you can split the review or pick a larger model. Defaults come from a window each lane declares, not from a model catalog: GSD carries no network lookup or per-model table to maintain, and a lane whose model GSD cannot know stays uncapped rather than guessed.
 
@@ -3051,9 +3056,22 @@ With `features.global_learnings: true`, phase completion runs the extraction for
 - REQ-TDD-04: Executor fails fast if tests pass unexpectedly during RED phase (feature already exists or test is wrong)
 - REQ-TDD-05: End-of-phase collaborative review checkpoint verifies gate compliance across all TDD plans (advisory, non-blocking)
 - REQ-TDD-06: Gate violations surfaced in SUMMARY.md under `## TDD Gate Compliance` section
+- REQ-TDD-07: When `model_overrides` names a different model for `<executor>:tdd-red` than for `<executor>:tdd-green-refactor`, `execute-phase` runs a `type: tdd` plan as a RED dispatch followed by a GREEN/REFACTOR dispatch, each on its own model; with neither key set, dispatch is unchanged (#4696)
 
-**Configuration:** `workflow.tdd_mode`
-**Reference files:** `tdd.md`, `checkpoints.md`
+**Configuration:** `workflow.tdd_mode`; optional `model_overrides` keys `<executor>:tdd-red` and `<executor>:tdd-green-refactor`
+**Reference files:** `tdd.md`, `checkpoints.md`, `tdd-gate-dispatch.md`
+
+#### Per-gate models
+
+The RED gate is the step that most benefits from careful reasoning about what behavior to assert, and
+GREEN and REFACTOR are mechanical by comparison. A model is fixed for the length of one executor
+dispatch, so running the gates on different models means two dispatches. When the two gate models
+differ, `execute-phase` (`gsd-core/workflows/execute-phase/steps/tdd-gate-split-dispatch.md`) dispatches the
+executor for the RED gate only, checks that the RED commit exists, then dispatches it again for GREEN
+and REFACTOR. The second dispatch writes `SUMMARY.md`. A split plan runs in the orchestrator's own
+tree rather than a worktree, because a worktree is removed when its executor returns and GREEN must
+start from the RED commit. Effort is not switched per gate; per-gate effort needs an amendment to
+ADR-443 first. See [Configuration](CONFIGURATION.md#tdd-gate-models-executortdd-red-executortdd-green-refactor).
 
 #### RED evidence formats
 
@@ -3092,7 +3110,10 @@ not exist yet. The whole run is refused as `build_failure`, ahead of the generic
 Which paths count as test files is one list, `src/tdd-test-files.cts`, shared by the
 behavior-adding check and the RED-commit pathspec in `execute-phase.md` (a test pins the
 two together): `*.test.*`, `*.spec.*`, `tests/` or `test/` and `__tests__/` directories,
-`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`.
+`*_test.go`, `test_*.py`, `*_test.py`, `*_test.exs`, `*_spec.rb` and `*_test.rb`. Letter case
+is ignored on both sides: the router folds case itself and the gate passes the same list behind
+git's `:(icase)` pathspec magic, so a RED commit made only of `Tests/foo.rs` or `Foo.TEST.js` is
+found (#5766).
 
 The upstream parsers (`tap-parser` and `saxes`) ship as reproducible bundles,
 including license notices, so installed runtimes need no `node_modules`.
@@ -3550,7 +3571,7 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 - REQ-HUMAN-VERIFY-02: Human-needed verification MUST remain pending until the end-of-phase review resolves it.
 - REQ-HUMAN-VERIFY-03: Configs without the key MUST use `"end-of-phase"`.
 
-**Reference:** [Checkpoints Reference](gsd-core/references/checkpoints.md)
+**Reference:** [Checkpoints Reference](../gsd-core/references/checkpoints.md)
 
 ---
 
@@ -3682,7 +3703,7 @@ The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolve
 
 The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation. A `backstop` edge is lifted as a **structured non-inferable marker** (`{ statement, verification: backstop }`, a flat scalar — not a prose note), which the **honest verifier** then consumes (see below) — closing the loop the edge-probe opened.
 
-**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](gsd-core/references/honest-verifier.md).
+**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](../gsd-core/references/honest-verifier.md).
 
 **Requirements:**
 - REQ-EDGE-01: The edge pass MUST run after the ambiguity gate and emit a `## Edge Coverage` SPEC section.
@@ -3695,7 +3716,7 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-08: `plan-phase` MUST lift a `backstop` edge into `must_haves.truths` as a structured flat-scalar marker (`{ statement, verification: backstop }`), never a prose parenthetical.
 - REQ-HONEST-01: At verify time a `backstop` truth that cannot be confirmed with explicit evidence MUST abstain → `human_needed` (reason `insufficient_spec`), never `passed`; an inferable truth MUST never be abstained (over-abstention guard); abstention MUST be exogenous (driven by the `backstop` tag, not self-judgment).
 
-**Reference:** [Edge Probe](gsd-core/references/edge-probe.md)
+**Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
 
 ---
 
@@ -3720,6 +3741,39 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 **Known limits:** the browser-family gate, the phase-directory boundary and the scope gate are instructions the agent follows, not permissions the runtime enforces; the "diff" is the SUMMARY's changed-file list read with `Read`, not a VCS diff; enumeration is best-effort and not a coverage claim; DOM observation only; #1602 coverage metadata does not reach `{phase}-UAT.md`; no sandbox constrains which origins are reached once browser reach is on ([ADR-1244](adr/1244-capability-ecosystem.md) D5).
 
 **Reference:** [Configuration](CONFIGURATION.md) · [Enable deep verification](how-to/enable-deep-verification.md) · [Agents](reference/agents.md)
+
+---
+
+### 4586. Validate-Only Verify Commands
+
+**Command:** `/gsd-plan-phase` (automatic) (#4586)
+
+**Behavior:** A stated `<fails_when>` (#3172) shows the planner understands what a check should detect. It cannot show that the command parses. In the motivating T-SQL phase every plan satisfied the `<fails_when>` contract and three still shipped commands that could not run: an unaliased derived-table column (`Msg 8155`), `CONCAT()` with one argument, and a batched query that never returned. Each executor then had to decide whether the check or the deliverable was wrong, and the wrong answer, adjusting the deliverable until the check passes, silently corrupts the thing being verified.
+
+Where a validate-only mode exists for an `<automated>` command's language or tool, `gsd-planner` now runs it against the authored body and records the result inside the task's `<verify>`, after `<fails_when>`:
+
+```xml
+<verify>
+  <automated>bash scripts/check-release.sh</automated>
+  <fails_when>non-zero exit</fails_when>
+  [VALIDATED: bash -n exit 0]
+</verify>
+```
+
+A body that fails its validator blocks the plan. Where no validate-only mode applies, behavior is unchanged: the planner states the failing direction and writes `[UNVALIDATABLE: <reason>]`, so `gsd-plan-checker` can tell a considered answer from a skipped one. Check 8g raises a command with no record as a WARNING, and a record that does not hold up as a BLOCKER.
+
+**The sanctioned set is closed, and it is smaller than it looks.** Validate-only means the form does not run the body, does not write to the tree, does not need the command's targets to exist, and needs no network or install. `bash -n`, `node --check`, a `python3` `ast.parse` one-liner, `SET PARSEONLY ON` (T-SQL, with a live session) and `cargo metadata --no-deps` (target shape) qualify. Four forms that read like validators do not, and the reference names them so the planner never reaches for them: `python -m py_compile` writes a `.pyc`; `cargo check` runs the crate's build scripts and procedural macros; `npm run <script> --dry-run` is ignored by `npm run` and executes the script; `terraform validate` needs an initialized directory.
+
+**No schema change.** The record is a plain-text line inside `<verify>`. The `<automated>` and `<fails_when>` elements and the #2401 and #3172 probes are unchanged, and a test pins that.
+
+**Known limits:**
+- A command that hangs has no exit code and is not parse-detectable. The #4586 field case (eight correlated subqueries batched into one plan) is not caught by this tier.
+- Enforcement is prompt-level. The checker reads the record and re-runs only the read-only forms; there is no deterministic CLI probe, and `SET PARSEONLY ON` cannot be re-run by the checker.
+- A pass on an outer layer says nothing about an embedded payload in another language, so each layer is validated separately.
+- A project cannot declare its own validate-only command; the sanctioned set is the closed table in the reference.
+- Plans written before this shipped carry no record and draw a WARNING, never a BLOCKER.
+
+See [Validate an automated command](how-to/validate-an-automated-command.md).
 
 
 ---
@@ -3782,7 +3836,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 - REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
 - REQ-PROHIB-07: A `test`-tier prohibition with a **machine-proven-fail-first**, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, un-provable, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes. Fail-first is **machine-proven, not caller-attested** (#1279, ADR-550 D5d): before a clean pass greens, the producer independently runs the wired check against a known violation (the descriptor's `violationFixture`) and confirms it goes RED — a lint rule via the violating fixture, a node test via the violating subject injected through the `GSD_PROHIB_SUBJECT` convention; absent a violation source it fails closed, never falling back to attestation. (Enforcement half shipped #1259; deterministic descriptor auto-locate in #1278.)
 
-**Reference:** [Prohibition Probe](gsd-core/references/prohibition-probe.md)
+**Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)
 
 ---
 
@@ -4559,10 +4613,11 @@ integer follows `process.exit(` in its outer `catch`.
 **What changed (ADR-3889 Phase 7, #3911):**
 
 - `hooks/lib/hook-exit.js` (hand-written) exposes `allow(payload)` → exit 0,
-  `deny(payload, stderrPayload?)` → exit 2, and `crash(onCrash, payload)`,
-  which dispatches to `allow`/`deny` per a `HOOK_ON_CRASH` policy the caller
-  must supply — `crash()` has no default policy, so a hook cannot fail open
-  by omission.
+  `deny(payload, stderrPayload?)` → exit 2, and
+  `crash(onCrash, payload, stderrPayload?)`, which dispatches to `allow`/`deny`
+  per a `HOOK_ON_CRASH` policy the caller must supply (the optional
+  `stderrPayload` reaches `deny` only; #5784) — `crash()` has no default
+  policy, so a hook cannot fail open by omission.
 - Every one of the 19 enforcement hooks under `hooks/*.js` now declares
   `const ON_CRASH = HOOK_ON_CRASH.ALLOW` (or `DENY`) once, with a
   hook-specific comment naming why, and calls `crash(ON_CRASH, payload)` from
@@ -4833,6 +4888,33 @@ phase directory.
 
 ---
 
+### 4617. Unattended Plan-Review Convergence
+
+**Command:** `/gsd-review --cycle-summary`, `/gsd-plan-review-convergence --on-escalation exit`
+
+**Purpose:** A caller with no person attached — a board worker, a CI job — could neither run `/gsd-plan-review-convergence` to its end nor read the convergence counters without it. The wrapper asked "Proceed anyway / Manual review" when cycles ran out, and the `CYCLE_SUMMARY` counters existed only as an instruction the wrapper gave its own review agent, so a caller assembling `/gsd-review` + `/gsd-plan-phase --reviews` itself had to re-implement the counting rules (#4617).
+
+**`CYCLE_SUMMARY` belongs to `/gsd-review`.** With `--cycle-summary`, the review's final response ends with `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` followed by the `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns` sections. The counting rules — the consensus gate with its existence/judgment classification, the evidence-quality markers, fail-open, and the include/exclude lists — live once, in the `cycle_summary` step of `workflows/review.md`. The convergence wrapper passes the flag instead of carrying a copy, so a standalone caller and the wrapper read identical counters. Without the flag nothing changes. When no review ran (every lane failed or was skipped) there is no `CYCLE_SUMMARY` line at all, never `current_high=0`.
+
+**An unattended exit for the wrapper.** `--on-escalation exit` replaces the interactive question with a status. When cycles run out, the run prints the final `CYCLE_SUMMARY` line and both concern sections, then ends with one line:
+
+`CONVERGENCE_STATUS: <status> cycles=<n> current_high=<N> current_actionable=<M> open_conflicts=<K>`
+
+| `<status>` | Meaning |
+|---|---|
+| `converged` | No HIGH, no actionable non-HIGH, no open plan-revision conflict. State was written as usual. |
+| `open_conflicts` | A `## Plan-Revision Conflicts` entry is unresolved. A blocker; outranks the other two. |
+| `stalled` | Cycles ran out and the unresolved count did not decrease in the last cycle. |
+| `max_cycles` | Cycles ran out with concerns still open and neither of the above applies (this includes a run of one cycle, which has no earlier count to compare against). |
+
+The exit path asks nothing, writes no `STATE.md`, and does not replan, so the plans are left as the last cycle left them. The caller decides what a person should do next through its own channel. `--on-escalation` accepts only `ask` (the default, unchanged) and `exit`; any other value is refused before cycle 1, because falling back to the question would hang the very caller that asked for the exit.
+
+**Known limits:** the counting is still performed by an agent following prose — this removes the second copy of the rules, not the judgment. `/gsd-autonomous --converge` does not pass `--on-escalation`, so it keeps asking. There is no config key; the flag is per invocation.
+
+**Reference:** [Commands](COMMANDS.md#gsd-plan-review-convergence) · [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md)
+
+---
+
 ### 4836. Graphify CLI Preferred for Planner and Researcher Graph Queries
 
 **Purpose:** `gsd-planner` gets **one** knowledge-graph query per phase and
@@ -4909,6 +4991,51 @@ default location.
 **Known limits:** `checkUiPresence` is a vocabulary check over prose and reads nothing; it stays outside the evidence type. Gates whose accepted-evidence model is narrower than GSD's producers (#4692, #4867, #4957) are out of scope.
 
 **Reference:** [Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170) · [Exit code reference](reference/exit-codes.md) · [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md)
+
+
+---
+
+## v1.23.0 Features
+
+### 3997. Review-Prompt Capability Contributions
+
+**Purpose:** An enabled capability's constraints reach the external reviewers `/gsd-review` invokes, the way they already reach the planner, checker, executor and verifier. Without it, the plan can obey a capability's guidance while reviewers judge it without that guidance and recommend changes that conflict with it.
+
+**Seam:** A thirteenth loop point, `review:pre`, publishes the `reviewer` role. `/gsd-review` renders the point once while assembling the shared reviewer prompt and appends every active, runtime-compatible `contribution` addressed `into: reviewer` inside one `<capability_reviewer_rules>` block. Every prompt-bearing lane receives the same block exactly once; a lane with `promptChannel: none` is unchanged; `/gsd-plan-review-convergence` inherits it through its existing `/gsd-review` calls.
+
+**Requirements:**
+- REQ-REVIEW-PRE-01: `loop render-hooks review:pre --raw` resolves; the point is part of the generated host contract.
+- REQ-REVIEW-PRE-02: Only `kind: "contribution"` entries with `into: "reviewer"` and an inline fragment are inserted, in registry order; disabled, inactive and incompatible capabilities are excluded.
+- REQ-REVIEW-PRE-03: With no matching contribution the shared prompt is byte-identical and the step is silent.
+- REQ-REVIEW-PRE-04: The block counts toward each lane's prompt cap; an over-cap lane is refused (`prompt_exceeds_context`), never trimmed.
+- REQ-REVIEW-PRE-05: A capability declaring a hook at `review:pre` must declare an `engines.gsd` range that excludes older cores; the registry build enforces it.
+- REQ-REVIEW-PRE-06: The install summary discloses the contribution by point and target as an instruction surface and names the cross-capability egress; the v1 disclosure signature is unchanged.
+
+**Out of scope:** reviewer selection, lane descriptors and consent, the `REVIEWS.md` format, and any first-party capability shipping a reviewer contribution.
+
+See [ADR-3997](adr/3997-review-prompt-capability-contributions.md), the [capability manifest reference](reference/capability-manifest.md#review-pre--reviewer-contributions-3997) and the [trust model](explanation/capability-trust-model.md#reviewer-contributions-cross-the-external-review-boundary).
+
+---
+
+### 4795. Advisor Pre-filter
+
+**Config:** `workflow.advisor_prefilter: true` (default `false`)
+
+**Purpose:** Before the orchestrator opens the next review gate, ask the Claude Code session advisor one narrow question: is the current output final and internally consistent, given everything already reviewed in this session? The gates that exist today (`gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`) spawn cold subagents that only see the repository at spawn time, so an edit made after their pass can move a phase forward on a review of stale content. The advisor already holds the transcript, so it can name that gap for the cost of one consult instead of a second cold spawn.
+
+**Seam:** The optional first-party capability `advisor-prefilter` declares one `kind: "contribution"` hook, `into: "orchestrator"`, at two loop points: `verify:post` and `ship:pre`. Those are the points whose step publishes the `orchestrator` role; `execute:*` does not. `verify-work.md` and `ship.md` each dispatch the contribution, and the fragment tells the orchestrator, which is where the advisor tool is reachable, to consult it once.
+
+**Requirements:**
+- REQ-ADVISOR-01: With `workflow.advisor_prefilter` unset or off, `loop render-hooks` returns no `advisor-prefilter` entry at any point. A string `"false"`, `"0"`, `"no"` or `"off"` counts as off.
+- REQ-ADVISOR-02: With the key on, exactly two points (`verify:post`, `ship:pre`) return one `contribution` entry `into: "orchestrator"`, `onError: "skip"`, with no `produces` or `consumes`.
+- REQ-ADVISOR-03: When the session has no advisor tool, the fragment's instruction is to print nothing and write nothing (silent no-op).
+- REQ-ADVISOR-04: The consult never blocks, never edits files and never spawns a subagent; the next gate runs whatever the advisor answers.
+- REQ-ADVISOR-05: The capability does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor` or the cross-AI lanes of `/gsd-plan-review-convergence`.
+- REQ-ADVISOR-06: Empty, `"false"`, `"0"`, `"no"` and `"off"` strings (any case, trimmed) read as off for every capability activation switch (a hook's `when` key; a step's `pointFrom` gate is unchanged).
+
+**Cost and limits:** Each consult sends the full session transcript to the advisor model, billed at the advisor's rate, so the key is off by default. The advisor is a single session-wide model (per-agent control is tracked upstream in anthropics/claude-code#73072) and may share a family with the executor, so the answer is an early warning rather than decorrelated review. The Claude Code advisor is an experimental host feature; GSD takes no dependency on its interface beyond the tool being present.
+
+See [ADR-4795](adr/4795-advisor-prefilter-in-review-pipeline.md), [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) and the [advisor caveats](gsd-core/references/model-profiles.md).
 
 ---
 

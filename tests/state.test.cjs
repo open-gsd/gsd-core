@@ -4358,6 +4358,7 @@ Progress: [..........] 0%
 ## Current Position
 
 Phase: 1 (Setup) — EXECUTING
+Total Plans in Phase: 0
 Status: Executing Phase 1
 
 ### Notes
@@ -8830,7 +8831,7 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E3: cmdStateBeginPhase — `updated` names only the fields whose persisted value actually changed (happy path)', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', '---', '',
-        '# Project State', '', '## Current Position', '', 'Status: Not started', '', '## Session', '',
+        '# Project State', '', '## Current Position', '', 'Plan: 0 of 0', 'Status: Not started', '', '## Session', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 
@@ -8849,7 +8850,7 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E3 (preservation): cmdStateBeginPhase — a curated field round-tripped to its ORIGINAL value is not reported', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', 'stopped_at: "curated stop must survive"', '---', '',
-        '# Project State', '', '## Current Position', '', 'Status: Not started', '', '## Session', '',
+        '# Project State', '', '## Current Position', '', 'Plan: 0 of 0', 'Status: Not started', '', '## Session', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 
@@ -12087,12 +12088,27 @@ describe('T6 section-splice characterization — begin-phase', () => {
     const d = createTempProject();
     try {
       fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_CURRENT_POS);
-      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup'], d);
       assert.ok(result.success, `Command failed: ${result.error}`);
       const output = JSON.parse(result.output);
-      // Expect phase, phase_name and plan_count in response even if fields weren't updated
+      // Expect phase and phase_name in the response even if fields weren't updated
       assert.strictEqual(output.phase, '1', 'phase must be reported in response');
-      assert.strictEqual(output.plan_count, 3, 'plan_count must be reported in response');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  // #6399: with --plans the count has to land somewhere; a STATE.md with no Current Position section and no
+  // `Total Plans in Phase` field refuses with the typed reason instead of reporting a count it did not record.
+  test('begin-phase --plans on a STATE.md with no Current Position and no total field refuses (#6399)', () => {
+    const d = createTempProject();
+    try {
+      const statePath = path.join(d, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, STATE_NO_CURRENT_POS);
+      const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(JSON.parse(result.error).reason, 'plans_no_line');
+      assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), STATE_NO_CURRENT_POS, 'nothing is written');
     } finally {
       cleanup(d);
     }
@@ -23370,7 +23386,7 @@ Last activity: 2026-10-01 -- done
   });
 
   test('CONTROL: a phase directory that cannot be found starts at plan 1, as before', () => {
-    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n');
+    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n**Total Plans in Phase:** 0\n');
     const r = runGsdTools(['state', 'begin-phase', '--phase', '77', '--name', 'ghost', '--plans', '3'], tmp);
     assert.ok(r.success, r.error);
     assert.match(read(), /^\*\*Current Plan:\*\* 1$/m);

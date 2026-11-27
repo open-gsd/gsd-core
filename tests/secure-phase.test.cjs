@@ -480,7 +480,7 @@ describe('SECURE: per-threat severity gate (#1626)', () => {
   // ── planning-config.md: security_block_on reconciled enum ───────────────
   test('planning-config.md security_block_on row lists critical', () => {
     const content = fs.readFileSync(configDocPath, 'utf-8');
-    const blockOnLineIdx = content.indexOf('security_block_on');
+    const blockOnLineIdx = content.indexOf('| `workflow.security_block_on`');
     assert.ok(blockOnLineIdx > -1, 'planning-config.md must have security_block_on row');
     const lineEnd = content.indexOf('\n', blockOnLineIdx);
     const row = content.slice(blockOnLineIdx, lineEnd);
@@ -492,7 +492,7 @@ describe('SECURE: per-threat severity gate (#1626)', () => {
 
   test('planning-config.md security_block_on row lists none', () => {
     const content = fs.readFileSync(configDocPath, 'utf-8');
-    const blockOnLineIdx = content.indexOf('security_block_on');
+    const blockOnLineIdx = content.indexOf('| `workflow.security_block_on`');
     assert.ok(blockOnLineIdx > -1, 'planning-config.md must have security_block_on row');
     const lineEnd = content.indexOf('\n', blockOnLineIdx);
     const row = content.slice(blockOnLineIdx, lineEnd);

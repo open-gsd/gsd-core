@@ -30,6 +30,7 @@ const fs = require('fs');
 const path = require('path');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { NPM_VIEW_TIMEOUT_MS } = require('../gsd-core/bin/check-latest-version.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 /**
  * NOT a margin above NPM_VIEW_TIMEOUT_MS (imported above for disclosure,
@@ -891,7 +892,7 @@ describe('gsd-update-banner.js end-to-end', () => {
     // generous headroom over its sub-second worst case even on a
     // contended CI runner.
     const r = seamRunHook(HOOK_PATH, [], {
-      env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+      env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       timeoutMs: UPDATE_BANNER_HOOK_TIMEOUT_MS,
     });
     return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
@@ -1045,7 +1046,7 @@ describe('gsd-update-banner.js: #3582 cold tree — degrades to silent, never cr
     );
 
     const r = seamRunHook(path.join(cold.hooksDir, 'gsd-update-banner.js'), [], {
-      env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home },
+      env: isolatedEnv({ home, override: { GSD_HOME: home } }),
       timeoutMs: UPDATE_BANNER_HOOK_TIMEOUT_MS,
     });
 

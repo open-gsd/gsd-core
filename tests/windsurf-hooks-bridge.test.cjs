@@ -48,6 +48,7 @@ const { runHook: runHookSeam, runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -423,7 +424,7 @@ describe('#5978 — symlinked Windsurf hooks.json honors GSD_ALLOW_SYMLINKED_DES
     t.after(() => cleanup(root));
     const cfg = path.join(root, '.codeium', 'windsurf');
     const run = (args, optIn) => {
-      const env = installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root });
+      const env = installerEnv(isolatedEnv({ home: root, override: { GSD_HOME: root } }));
       delete env.GSD_ALLOW_SYMLINKED_DEST;
       if (optIn) env.GSD_ALLOW_SYMLINKED_DEST = '1';
       return runNode([INSTALL_SCRIPT, '--windsurf', '--global', ...args], { env, timeoutMs: INSTALL_TIMEOUT_MS });

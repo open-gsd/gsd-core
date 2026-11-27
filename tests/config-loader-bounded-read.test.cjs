@@ -164,7 +164,7 @@ describe('#5759 parity — migrateOnDisk applies the same size cap as readConfig
       const file = path.join(tmpDir, 'config.json');
       fs.writeFileSync(file, paddedConfig({ branching_strategy: 'phase' }, CONFIG_MAX_BYTES + delta));
 
-      const report = migrateOnDisk(tmpDir, undefined, file);
+      const report = migrateOnDisk(tmpDir, file);
 
       assert.strictEqual(report.migrated, migrates);
     });

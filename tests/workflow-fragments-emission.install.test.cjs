@@ -54,6 +54,7 @@ const crypto = require('node:crypto');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { RUNTIME_META, installRuntimeFixture, installerEnv, foldInstallNonce } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
@@ -103,7 +104,7 @@ function spawnGlobalInstall(installScript, runtime, extraArgs = []) {
   ];
   const seamResult = runNode(args, {
     cwd: root,
-    env: installerEnv({ HOME: root, USERPROFILE: root }),
+    env: installerEnv(isolatedEnv({ home: root })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   const result = { status: seamResult.exitCode, stdout: seamResult.stdout, stderr: seamResult.stderr };

@@ -34,6 +34,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const coreUtils = require('../gsd-core/bin/lib/core-utils.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const {
@@ -1476,7 +1477,7 @@ describe('#3883 one-impl-per-rule: slug re-implementation divergence', () => {
       assert.strictEqual(coreUtils.generateSlugInternal('   '), '');
     });
     test('cmdGenerateSlug rejects empty input with an explicit error (not a silent empty slug)', () => {
-      const result = runGsdTools(['generate-slug', ''], process.cwd(), { HOME: os.tmpdir() });
+      const result = runGsdTools(['generate-slug', ''], process.cwd(), isolatedEnv({ home: os.tmpdir() }));
       assert.ok(!result.success, 'generate-slug must fail on empty text');
       assert.ok(result.error.includes('text required'), `expected "text required" error, got: ${result.error}`);
     });

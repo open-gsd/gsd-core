@@ -41,4 +41,72 @@ function uniqueExecutorTypes(v: unknown): string[] {
   return [...new Set(v.filter(isValidExecutorType))].sort();
 }
 
-export = { isValidExecutorType, normalizeExecutorTypes, uniqueExecutorTypes, MAX_EXECUTOR_TYPES };
+/**
+ * #4904 (option (c), ADR-4630): a plain `dispatch-isolation` query that HOLDS a caller's `none` writes no
+ * decision record, so it writes the executor identity it derived to a record of its own under
+ * `.gsd/<EXECUTOR_IDENTITY_DIR>/`, one file per query scope. The guards' classification reads these records
+ * beside the decision records (`isExecutorDispatch`), and nothing reads them for enforcement. A sibling of
+ * `.gsd/dispatch-isolation/`, never inside it: the keyed scan there treats a file that does not match its own
+ * phase/plan key as unusable and fails classification closed. `hooks/lib/isolation-sentinel.js` mirrors this
+ * name, `MAX_EXECUTOR_TYPES` and `EXECUTOR_IDENTITY_MAX_BYTES` as literals, and
+ * `tests/held-query-executor-identity.test.cjs` asserts the two sides agree.
+ */
+const EXECUTOR_IDENTITY_DIR = 'dispatch-isolation-identity';
+
+/** Byte budget of one serialized identity record: the decision record's `SENTINEL_MAX_BYTES`, the reader's read bound. */
+const EXECUTOR_IDENTITY_MAX_BYTES = 4096;
+
+/** The identity record's `schema` value; the reader accepts no other. */
+const EXECUTOR_IDENTITY_SCHEMA = 1;
+
+interface ExecutorIdentityRecord {
+  schema: number;
+  phase: string | null;
+  plan: string | null;
+  executor_type: string | null;
+  executor_types: string[];
+  executor_types_truncated: boolean;
+  written_at: number;
+}
+
+/**
+ * The identity record a held query writes for its scope, as a full snapshot: `executor_type` is the scope's
+ * routed executor (a plan scope) or null, `executor_types` the valid, de-duplicated, sorted names (a phase or
+ * unscoped scope), at most `MAX_EXECUTOR_TYPES`, and then only as many as keep the serialized record within
+ * `EXECUTOR_IDENTITY_MAX_BYTES`, dropped from the end. `executor_types_truncated` is true exactly when a name
+ * was dropped, and `dropped` lists them for the caller's warning. An empty list is a valid snapshot: it
+ * replaces whatever the scope's record named before.
+ */
+function buildExecutorIdentityRecord(
+  scope: { phase: string | null; plan: string | null },
+  executorType: unknown,
+  executorTypes: unknown,
+  writtenAt: number,
+): { record: ExecutorIdentityRecord; dropped: string[] } {
+  const types = uniqueExecutorTypes(executorTypes);
+  const record: ExecutorIdentityRecord = {
+    schema: EXECUTOR_IDENTITY_SCHEMA,
+    phase: scope.phase,
+    plan: scope.plan,
+    executor_type: isValidExecutorType(executorType) ? executorType : null,
+    executor_types: types.slice(0, MAX_EXECUTOR_TYPES),
+    executor_types_truncated: types.length > MAX_EXECUTOR_TYPES,
+    written_at: writtenAt,
+  };
+  while (record.executor_types.length > 0 && Buffer.byteLength(JSON.stringify(record)) > EXECUTOR_IDENTITY_MAX_BYTES) {
+    record.executor_types = record.executor_types.slice(0, -1);
+    record.executor_types_truncated = true;
+  }
+  return { record, dropped: types.slice(record.executor_types.length) };
+}
+
+export = {
+  isValidExecutorType,
+  normalizeExecutorTypes,
+  uniqueExecutorTypes,
+  MAX_EXECUTOR_TYPES,
+  EXECUTOR_IDENTITY_DIR,
+  EXECUTOR_IDENTITY_MAX_BYTES,
+  EXECUTOR_IDENTITY_SCHEMA,
+  buildExecutorIdentityRecord,
+};

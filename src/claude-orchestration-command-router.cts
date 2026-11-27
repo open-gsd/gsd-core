@@ -211,20 +211,19 @@ function readWorkflowSettingsSources(opts: {
   };
   const managedDir = opts.managedDir ?? managedSettingsDir(opts.platform ?? process.platform);
   const configDir = opts.env ? shellProjection.envGet(opts.env, 'CLAUDE_CONFIG_DIR') : undefined;
-  let user: SettingsSource;
+  let userDir: string | null = null;
   if (typeof configDir === 'string' && configDir.length > 0) {
-    user = fileSource('user', path.join(configDir, 'settings.json'));
+    userDir = configDir;
   } else if (typeof opts.homedir === 'string' && opts.homedir.length > 0) {
-    user = fileSource('user', path.join(opts.homedir, '.claude', 'settings.json'));
-  } else {
-    user = { scope: 'user', status: 'unreadable' };
+    userDir = path.join(opts.homedir, '.claude');
   }
-  return [
-    readManagedSource(managedDir),
-    fileSource('projectLocal', path.join(opts.cwd, '.claude', 'settings.local.json')),
-    fileSource('project', path.join(opts.cwd, '.claude', 'settings.json')),
-    user,
-  ];
+  // The loader names the layers and their order (#6032); this reads each one and reports its status.
+  const files = new Map(configLoader.claudeSettingsLayers(opts.cwd, userDir).map((layer) => [layer.scope, layer.file]));
+  const sourceFor = (scope: 'projectLocal' | 'project' | 'user'): SettingsSource => {
+    const file = files.get(scope);
+    return file === undefined ? { scope, status: 'unreadable' } : fileSource(scope, file);
+  };
+  return [readManagedSource(managedDir), sourceFor('projectLocal'), sourceFor('project'), sourceFor('user')];
 }
 
 /**

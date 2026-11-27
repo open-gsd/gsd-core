@@ -27,9 +27,9 @@ This project's `tests/` directory uses **filename suffix markers** to group test
 
 Examples:
 - `tests/agent-frontmatter.test.cjs` — `unit`
-- `tests/prompt-injection-guards.security.test.cjs` — `security`
-- `tests/installer-end-to-end.install.test.cjs` — `install`
-- `tests/sdk-mutation-stress.slow.test.cjs` — `slow`
+- `tests/injection-patterns-parity.security.test.cjs` — `security`
+- `tests/agent-tools.install.test.cjs` — `install`
+- `tests/graphify-auto-update.slow.test.cjs` — `slow`
 - `tests/loop-walk.qa.test.cjs` — `qa`
 - `tests/cli-parity.process.test.cjs` — `unit`, marked as starting real processes
 
@@ -142,7 +142,7 @@ margin went unnoticed.
 DEFAULT-tier and already bounded by the DEFAULT cap — no separate new-agent cap
 is needed. (This tier-cap machinery is distinct from the separate 45 KB-*char*
 extraction-evidence threshold on `gsd-planner` enforced by
-`tests/planner-decomposition.test.cjs` — that one proves mode sections were
+the `planner-decomposition` text contract — that one proves mode sections were
 extracted; this one bounds total agent bytes.)
 
 ### How-to: a workflow or agent grew and CI is red
@@ -685,7 +685,7 @@ platform signal sits in a few tests can be split: those tests move to
 `tests/<name>.platform.test.cjs`, which the tier selects, and `tests/<name>.test.cjs` runs on
 Linux only. A sibling is a unit-suite file (`suiteOf` returns `null`), so Linux shards run both
 halves. `gen-platform-conformance-tier.cjs` fails with `platform split invariant violated` when a
-split base regains a platform signal (`base-has-signal`), a sibling carries none
+split base regains a platform signal (`base-has-signal`), a sibling carries none and is not declared in `ALWAYS_REAL_OS`
 (`sibling-without-signal`), or a split base is listed in `ALWAYS_REAL_OS`
 (`base-always-real-os`). Split so far: `state`, `commands`, `phase`, `config` (`init` needed no
 sibling — its residual matches were fixture idioms and comments). See

@@ -73,11 +73,10 @@ if (require.main === module && !process.env.NODE_V8_COVERAGE) {
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, remedyFor, composeRemedyText, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
-const { readConfigFileBounded } = require('./lib/config-read.js');
+const { readConfigFileBounded, projectConfigPath, globalDefaultsPath } = require('./lib/config-read.js');
 
 // Required at module top, alongside the other ./lib requires — NOT behind
 // ensureRuntimeBuild() below. Terminating on a parse/timeout failure must
@@ -230,7 +229,7 @@ function resolveRuntimeIdentity(cwd, configPath, resolveRuntimeNameFromCandidate
   try {
     // #5017: the store root is GSD_HOME when set and non-blank, else the home
     // directory — the config loader's rule (src/runtime-homes.cts resolveGsdHome).
-    const defaultsPath = path.join(process.env.GSD_HOME || os.homedir(), '.gsd', 'defaults.json');
+    const defaultsPath = globalDefaultsPath();
     const defaultsRaw = fs.readFileSync(defaultsPath, 'utf-8');
     const defaultsParsed = JSON.parse(defaultsRaw);
     if (defaultsParsed && typeof defaultsParsed === 'object' && 'runtime' in defaultsParsed) {
@@ -411,7 +410,7 @@ function resolveRegistryIsolation(cwd, configPath) {
  * "a mismatch is 'no applicable sentinel', not an allow" (#3045 review).
  */
 function resolveIsolationState(cwd, { clock = Date, dispatchIds = null, sentinel: preRead = null, subagentType = null } = {}) {
-  const configPath = path.join(cwd, '.planning', 'config.json');
+  const configPath = projectConfigPath(cwd);
   let projectExists;
   try {
     fs.accessSync(configPath, fs.constants.F_OK);

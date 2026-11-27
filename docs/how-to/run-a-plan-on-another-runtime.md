@@ -47,6 +47,8 @@ gsd-tools query dispatch-isolation --json --phase <phase> --plan <plan-id> --cwd
 | `isolation` | `orchestrator-worktree` when the foreign dispatch is in effect |
 | `exec` | The target command, arguments and working directory |
 | `fallback` | `null`, or the one reason the plan runs on the host instead |
+| `held` | `true` when the query held a caller's recorded `none` and wrote no decision record |
+| `decidedAt` | When that held decision was made (epoch ms), or `null` |
 
 ## Fallback reasons
 
@@ -64,4 +66,4 @@ When a precondition fails the plan runs on the host as if the field were absent,
 
 ## What the worker records
 
-The dispatch writes the plan's isolation decision once, naming `producer: "dispatch-isolation"` and `executor_runtime`. The worker gets a lifecycle record (`<worktree>.worker.json`) carrying `executorRuntime`. The plan is complete when its SUMMARY, plan-scoped commits and branch state reconcile, not when the process exits.
+The dispatch writes the plan's isolation decision once, naming `producer: "dispatch-isolation"` and `executor_runtime`. A query that holds a caller's recorded `none` for the plan writes no decision record and still reports the foreign dispatch, with `held: true`; execute-phase re-records the plan before the launch, so the launch writes the decision. The worker gets a lifecycle record (`<worktree>.worker.json`) carrying `executorRuntime`. The plan is complete when its SUMMARY, plan-scoped commits and branch state reconcile, not when the process exits.

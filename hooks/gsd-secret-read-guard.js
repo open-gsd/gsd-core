@@ -59,7 +59,8 @@
 //   input redirect targets (`<`, `N<`) are always checked; the command word is
 //   located past wrapper prefixes AND their own options (`sudo -u U`,
 //   `env -i VAR=x`, `timeout -s KILL 5`, `nice -n 5`, `stdbuf -oL`, `exec`;
-//   see WRAPPERS, #5627); a closed set of
+//   see WRAPPERS, #5627) and inside an `env -S '…'` string, split by env's own
+//   rules (#5514); a closed set of
 //   NON-READING commands (test/[/ls/stat/rm/touch/echo/…) exempts that
 //   segment's operands — `[ -f .env ]` and `ls .env*` are existence checks
 //   GSD's own agents run — while `cp`/`mv`/`ln`/`git` are deliberately NOT
@@ -113,18 +114,50 @@
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
-//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`), shell globs
+//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`, and a `${VAR}`
+//   inside an `env -S` string that is set, `Z=claude env -S '${Z} …'`,
+//   `P=.env env -S 'cat ${P}'`: the string is read with each `${VAR}` kept as
+//   written and with it empty, as env expands an unset name), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
-//   the option's value). Reached through the same gaps and allowed under
+//   NON-gitignored `.env`, a wrapper (or wrapper option taking a
+//   separate value) the WRAPPERS table does not list, and a plain command in
+//   an `env -S` string in the sub-command of `xargs`, a `find -exec` action or
+//   `watch -x` (`xargs env -S 'cat .env'`, `find . -exec env -S 'cat .env' \;`,
+//   `watch -x env -S 'cat .env'`), though the secret-read scan does read a
+//   shell script there (#6114; the debugger-spawn check reads none of these
+//   sub-commands, #6147); the sub-command's own words are still checked as
+//   operands. A shell reserved word before a command (`if`,
+//   `then`, `elif`, `else`,
+//   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
+//   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
+//   wrapper walk, a shell script, an `env -S` string and the debugger-spawn
+//   check behind it are not reached (`if true; then env -S 'cat .env'; fi`,
+//   `for i in 1; do env -S 'cat .env'; done`, `! env -S 'cat .env'`, which
+//   bash 5.2 and dash 0.5.12 run; `coproc env -S 'cat .env'`, which bash 5.2
+//   runs; `repeat 1 env -S 'cat .env'` and `noglob env -S 'cat .env'`, which
+//   zsh 5.9 runs; `if true; then sh -c 'cat .env'; fi`;
+//   `if true; then claude --agent gsd-debugger -p x; fi`); the command's own
+//   operands are still checked. `env -S`
+//   strings are
+//   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
+//   backslash before a blank is that blank) and uutils env's (a
+//   backslash-newline removed, a comment ended by a newline), and read as
+//   before #5514, skipped as the option's value; any reading's hit denies.
+//   Each reading applies one env's rules at every level, so a string that one
+//   env splits into a command running a different env (BSD env invoking a
+//   uutils env by path) is not read by the mix of the two.
+//   Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
-//   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
-//   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
-//   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
-//   `$VAR` gap; a heredoc tag whose `${…}` holds a quoted `}`, which only
+//   a `${…}` form that is not a default (`${x/y/.env}`, `${x:0:1}.env`,
+//   `${x:-${y}.env}`, whose inner expansion is unknown), or a default another
+//   command produces (`${x:-$(echo .env)}`); a quoted default whose bare name is
+//   its own word (`"${x:-update .env docs}"`, also with text around the
+//   expansion) is denied as the unquoted one; a word with no whitespace of its
+//   own and more than 12 optional defaults (or past 2 MB of variants) is denied
+//   outright, one with whitespace (a script, a sentence) gets each default on
+//   its own, all and none past that; a heredoc tag whose `${…}` holds a quoted `}`, which only
 //   the bash and zsh readings read and only with a trigger
 //   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); some arithmetic the
 //   scan reads differently from the shell, given here by example with the
@@ -148,7 +181,9 @@
 //   gated). Commands over 1 MiB are denied outright (`command-too-large`)
 //   rather than scanned partially or waved through, and so is a command
 //   whose scan overflows the stack or needs more than eight times that much
-//   work (`command-too-complex`). (#4639 adds one more, by design: the
+//   work (`command-too-complex`), and one with an `env -S` string nested
+//   more than MAX_NESTING_DEPTH deep (`split-string-too-deep`), whose command
+//   is not read. (#4639 adds one more, by design: the
 //   value of `--env-file` under a container runtime is exempt, so the
 //   container's own command can print the interpolated environment
 //   (`alpine printenv`, `docker compose config`) — the same exposure class
@@ -185,7 +220,9 @@
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
 //         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
-//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
+//         split-string-too-deep | ansi-c-unterminated | ansi-c-undecodable |
+//         debugger-cli-spawn, and guard-error when the host opted in to
+//         deny-on-crash (#5784)
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
@@ -193,6 +230,11 @@
 //        overflow the parser's stack, or one that needs more than the scan's
 //        work budget, is denied as `command-too-complex` (#5255), because
 //        failing open there allows a read the scan had not yet reached.
+//        A host may opt in to failing closed instead with
+//        GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): a hook error, a shell
+//        reading that fails on a command no scan blocked (its
+//        DIAGNOSTIC.READING_FAILED line is written in both modes), or a stdin
+//        that does not close within 3 s then blocks with code guard-error.
 
 'use strict';
 
@@ -200,18 +242,50 @@ const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 const { finalExtension, normalizeWindowsBasename, lastSegment } = require('./lib/filename-classification.js');
 
 // Fail open on a hook-internal error (see header). Declared ONCE so the
-// outer catch states its policy explicitly (#3911).
-const ON_CRASH = HOOK_ON_CRASH.ALLOW;
+// outer catch states its policy explicitly (#3911). A host that registers this
+// guard with Claude Code's `onFailure: "block"` can opt in to DENY with
+// GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): `onFailure` cannot see a failure
+// the hook catches itself and exits 0 on, so without this a crash, a shell
+// reading that fails on a command no scan blocked, or a stalled stdin still
+// allows. Any other value, or none, keeps ALLOW. Read once, before stdin, so
+// the policy is settled before any failure it governs.
+const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
+  ? HOOK_ON_CRASH.DENY
+  : HOOK_ON_CRASH.ALLOW;
+
+// Which failure a guard-error block is for, as its payload's `cause` field
+// (#5784): a host or a test reads this, never the reason's prose.
+const GUARD_ERROR_CAUSE = Object.freeze({
+  HOOK_ERROR: 'hook-error',
+  READING_FAILED: 'reading-failed',
+  STDIN_STALL: 'stdin-stall',
+});
+
+// Ends the hook through the declared crash policy. On DENY the payload names
+// the cause and stderr carries its plain reason, as emitBlock's denials do:
+// Kimi's hook bus reads stderr back to the model verbatim. On ALLOW both stay
+// undefined, so the default path is crash(ALLOW, undefined) and emits nothing,
+// exactly as before.
+function crashFor(cause, why) {
+  if (ON_CRASH !== HOOK_ON_CRASH.DENY) {
+    crash(ON_CRASH, undefined);
+    return;
+  }
+  const reason = `gsd-secret-read-guard: ${why}; denied because GSD_SECRET_READ_GUARD_ON_CRASH=deny`;
+  crash(ON_CRASH, { decision: 'block', code: 'guard-error', cause, reason }, reason);
+}
 
 // Commands longer than this are denied rather than scanned (see header).
 const MAX_COMMAND_LENGTH = 1024 * 1024;
 
-// Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans. A body nested deeper is denied as
-// `nesting-too-deep` (#6136), the way an over-length command is denied, never allowed unscanned.
+// Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans, and
+// for `env -S` strings split inside a split string (#5514). A body nested deeper is denied as
+// `nesting-too-deep` (#6136), the way an over-length command is denied, never allowed unscanned;
+// an `env -S` string nested deeper is denied as `split-string-too-deep`.
 const MAX_NESTING_DEPTH = 3;
 
 // Work budget for one Bash command, in characters tokenized, across every
-// pass the scan makes over it (#5255): scanBashCommand sets it once, and every
+// pass the scan makes over it (#5255): setCommandBudget sets it once, and every
 // reading, nested rescan, second look and heredoc pass spends from it. A
 // command holding a reading trigger (`$'`, `$"`, `$${`, `$$(`, or a quote with
 // `((` or `$[`; readsEachWay) is scanned under four readings and then, when
@@ -221,7 +295,9 @@ const MAX_NESTING_DEPTH = 3;
 // own length on top, at each level; and a command holding `<<` is scanned
 // again under #5513's other heredoc readings (findSecretReadUnderOtherReadings),
 // up to three passes, or five when a heredoc tag holds a brace. A heredoc file
-// write holding a trigger therefore costs about 24 times its length. The
+// write holding a trigger therefore costs about 24 times its length. A command
+// holding an `env -S` option is scanned again under each of ENV_S_READINGS
+// (#5514), up to seven passes, all on this one budget. The
 // separators every tokenize finds are bounded separately (MAX_SCAN_SEPARATORS),
 // the debugger-spawn check's included. The most any of 1,384,856 distinct real
 // agent commands needed was 3,040,992 (a 126,708-character heredoc write). The
@@ -347,6 +423,8 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 //   long     long options that take a SEPARATE value word (`--adjustment 5`);
 //            `--opt=value` is one word and needs no entry
 //   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   split    the option whose value is itself a command line: `env -S STRING`
+//            splits STRING into words that are read in its place (#5514)
 //   operands positional words after the options (timeout's DURATION)
 // Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
 // stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
@@ -357,7 +435,7 @@ const WRAPPERS = new Map([
     // valued one (`--login` vs `--login-class`).
     flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'] }],
   ['doas', { short: 'aCu' }],
-  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
+  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true, split: { short: 'S', long: '--split-string' } }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
   ['command', {}],
@@ -834,9 +912,11 @@ function backtickEnd(str, from) {
   return -1;
 }
 
-// The body a backtick span holds as the shell runs it: `\\`, `\`` and `\$` lose their backslash.
-function backtickBody(text) {
-  return text.indexOf('\\') === -1 ? text : text.replace(/\\([\\`$])/g, '$1');
+// The body a backtick span holds as the shell runs it: `\\`, `\`` and `\$` lose their backslash, and so does `\"` when the
+// span is inside a double-quoted string (#6433: ``echo "`cat \".env\"`"`` runs `cat ".env"`, which reads `.env`).
+function backtickBody(text, inDq) {
+  if (text.indexOf('\\') === -1) return text;
+  return inDq ? text.replace(/\\([\\`$"])/g, '$1') : text.replace(/\\([\\`$])/g, '$1');
 }
 
 function ansiCBraceClose(str, i, shell, nested, inDq) {
@@ -855,7 +935,7 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
     } else if (ch === '`') {
       const j = backtickEnd(str, i + 1);
       if (j === -1) return unclosed(str, read);
-      if (nested) nested.push(backtickBody(str.slice(i + 1, j)));
+      if (nested) nested.push(backtickBody(str.slice(i + 1, j), inDq));
       i = j + 1;
     } else if (ch === "'" && quotes) {
       const j = str.indexOf(ch, i + 1);
@@ -1160,6 +1240,69 @@ let heredocTagsAsWords = true;
 let heredocBraceTags = true;
 let braceTagRead = false;
 let inHeredocPass = false;
+// #5515: heredocs opened inside a `$( )` / `<( )` that closed before any newline are still waiting for their bodies,
+// which bash reads at the next newline of the enclosing input (`echo $(cat <<EOF) x`, then the body lines). The span
+// reader hands them over here and tokenize takes them into its own pending list, so that newline consumes them.
+// One queue for the whole parse, in textual order, as bash keeps one: a newline inside any span consumes all of it.
+// Only the first reading uses it (orphanBodies); every other reading keeps the span-local list the guard had before #5515,
+// and one more pass runs under that earlier reading, so nothing it denied is allowed now (the queue only adds denials).
+let orphanHeredocs = [];
+let orphanBodies = true;
+// Set when tokenize took a heredoc a span left waiting (a real orphan), so the no-queue reading runs for exactly the commands
+// whose verdict the queue can change, whether or not they hold a literal `<<` (a nested body can spell it `<''<`:
+// `eval '$(cat <''<B)` then `cat .env'`). A heredoc consumed inside its own span (`$(cat <<EOF` … `EOF` … `)`) is no orphan,
+// so a commit message heredoc costs one scan, as before.
+let orphanQueued = false;
+
+// findParenClose for a `$( )` inside a heredoc delimiter word: the word is taken literally (and under the earlier reading the
+// span is no one's orphan either), so a heredoc opened inside it waits for nothing and must not join the queue
+// (`cat <<A$(:<<B)` then `A` ends the one heredoc; B's body is not read).
+function findTagSpanClose(str, i, reading) {
+  const queue = orphanHeredocs;
+  orphanHeredocs = [];
+  try {
+    return findParenClose(str, i, reading);
+  } finally {
+    orphanHeredocs = queue;
+  }
+}
+
+// #5514: the readings of an `env -S` string, declared once. The Bash path scans
+// the command once per reading, in this order, and any reading's hit denies, so a
+// reading can add a denial but never remove one.
+//  - split: false skips the string as the option's value, so resolveCommand reads every command
+//    exactly as before #5514. It runs first, on every command. A read or a launch it finds is
+//    emitted at once, and so is any other denial until a split option is met; after one, the
+//    other denials are held, and a later reading's read or launch outranks them (scanBashReadings).
+//  - vars: 'keep' keeps `${NAME}` as written; 'drop' reads it as unset, which every env expands to nothing.
+//  - escapes: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and macOS: a backslash before a blank is that
+//    blank) or 'uutils' (uutils coreutils, Ubuntu's env since 25.10: a backslash before a newline
+//    is removed, in quotes too, and a comment ends at a newline, not the string). See splitEnvString.
+//  - runs: 'always'; 'split-or-throw' once an earlier reading met a split option or a scan threw
+//    before it could tell; 'split' once one was met. Every splitting reading then runs: an escape can
+//    build a `${` or a backslash-blank inside a nested string, so which strings a reading reaches, and
+//    what they hold, can differ from what the first saw, and no screen over them tells which to run.
+const ENV_S_READINGS = Object.freeze([
+  { name: 'unsplit', split: false, runs: 'always' },
+  { name: 'gnu', split: true, vars: 'keep', escapes: 'gnu', runs: 'split-or-throw' },
+  { name: 'bsd', split: true, vars: 'keep', escapes: 'bsd', runs: 'split' },
+  { name: 'uutils', split: true, vars: 'keep', escapes: 'uutils', runs: 'split' },
+  { name: 'gnu, unset ${NAME}', split: true, vars: 'drop', escapes: 'gnu', runs: 'split' },
+  { name: 'bsd, unset ${NAME}', split: true, vars: 'drop', escapes: 'bsd', runs: 'split' },
+  { name: 'uutils, unset ${NAME}', split: true, vars: 'drop', escapes: 'uutils', runs: 'split' },
+].map((r) => Object.freeze(r)));
+
+// The `env -S` reading the scans apply (named apart from the `reading`
+// parameter the #5255 scanners take, which is a shell's): set only by the Bash
+// path's loop over ENV_S_READINGS, and the GNU split until then. What the scans
+// report back:
+//  - splitSeen: a scan met a split option, so the readings that run on 'split' run.
+//  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
+//    command is not read. The Bash path denies it as `split-string-too-deep` rather
+//    than allow what it could not see.
+let envSReading = ENV_S_READINGS[1];
+let splitSeen = false;
+let splitTooDeep = false;
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
@@ -1170,7 +1313,8 @@ function findParenClose(str, i, reading) {
     if (math !== -1) return math;
   }
   let depth = 1;
-  let heredocTags = [];
+  let localTags = [];
+  let ownPending = 0; // this span's own tags in the queue
   let read = i;
   while (i < str.length) {
     if (reading) {
@@ -1214,13 +1358,22 @@ function findParenClose(str, i, reading) {
     }
     if (heredocBodiesSkippedInSpans && ch === '<' && str[i + 1] === '<' && str[i + 2] !== '<') {
       const tag = readHeredocTag(str, i + 2, reading);
-      heredocTags.push(tag);
+      if (orphanBodies) ownPending++;
+      (orphanBodies ? orphanHeredocs : localTags).push(tag);
       i = tag.end;
       continue;
     }
-    if (ch === '\n' && heredocTags.length) {
-      i = consumeHeredocBodies(str, i + 1, heredocTags).end;
-      heredocTags = [];
+    if (ch === '\n' && orphanBodies && orphanHeredocs.length) {
+      // Entries beyond this span's own are an earlier span's orphans, which base's span-local list dropped: the verdict can
+      // differ from the earlier reading here, so the no-queue pass must run.
+      if (orphanHeredocs.length > ownPending) orphanQueued = true;
+      ownPending = 0;
+      i = consumeHeredocBodies(str, i + 1, orphanHeredocs.splice(0)).end;
+      continue;
+    }
+    if (ch === '\n' && localTags.length) {
+      i = consumeHeredocBodies(str, i + 1, localTags).end;
+      localTags = [];
       continue;
     }
     if (ch === '(') {
@@ -1305,13 +1458,18 @@ function dqElement(str, i, reading, inTag, nested, keepOnClose) {
   }
   if (str[i] === '$' && str[i + 1] === '(') {
     const e = findParenClose(str, i + 2, reading);
-    if (nested) nested.push(str.slice(i + 2, e));
+    if (nested) {
+      const inner = str.slice(i + 2, e);
+      nested.push(inner);
+      // `"$(( `cat \".env\"` ))"`: dash and zsh read the backtick as inside the double quotes, so `\"` loses its backslash (#6433)
+      if (inner.startsWith('(') && inner.includes('`') && inner.includes('\\"')) nested.push(inner.replace(/\\"/g, '"'));
+    }
     return { next: e + 1, text };
   }
   if (str[i] === '`') {
     const j = backtickEnd(str, i + 1);
     const e = j === -1 ? str.length : j;
-    if (nested) nested.push(backtickBody(str.slice(i + 1, e)));
+    if (nested) nested.push(backtickBody(str.slice(i + 1, e), true));
     return { next: e + 1, text };
   }
   return { next: i + 1, text: text + str[i] };
@@ -1414,7 +1572,7 @@ function readHeredocTag(str, i, reading) {
     while (i < str.length && !(heredocTagsAsWords ? /[ \t\n;&|<>()]/ : /[\s;&|<>()]/).test(str[i])) {
       if (!heredocTagsAsWords) { tag += str[i++]; continue; }
       if (str[i] === '$' && str[i + 1] === '(') {
-        const e = findParenClose(str, i + 2, reading);
+        const e = findTagSpanClose(str, i + 2, reading);
         tag += str.slice(i, e + 1);
         i = e + 1;
         continue;
@@ -1488,7 +1646,12 @@ function collectSubstitutions(body, nested, reading) {
     if (body[i] === '`') {
       const j = backtickEnd(body, i + 1);
       const e = j === -1 ? body.length : j;
-      nested.push(backtickBody(body.slice(i + 1, e)));
+      const plain = backtickBody(body.slice(i + 1, e));
+      nested.push(plain);
+      // dash reads the span as inside double quotes (`\"` loses its backslash), bash and zsh do not: both texts are scanned,
+      // so a read hidden behind `\"` is seen under any shell (#6433)
+      const quoted = backtickBody(body.slice(i + 1, e), true);
+      if (quoted !== plain) nested.push(quoted);
       i = e + 1;
       continue;
     }
@@ -1509,8 +1672,10 @@ function tokenize(str, reading) {
   let hasWord = false;
   let seg = 0;
   let heredocs = [];
+  let orphanQueue = [];
   let expectTag = null;
   let unreadable = null;
+  orphanHeredocs = [];
 
   const flush = () => {
     if (!hasWord) return;
@@ -1529,6 +1694,60 @@ function tokenize(str, reading) {
     quoted = 'none';
     hasWord = false;
   };
+  // #6438: `{` and `}` are reserved words, which open or close a group only where a command may start. Anywhere else they
+  // are ordinary words (`printf '%s|' cat { x }` prints `cat|{|x|}|`; `cat { .env` runs cat on `{` and `.env`), so the word
+  // after one is an operand, not a new command. A command may start at the start of a segment and past what can stand
+  // before a command: the reserved words that precede one (`then { cat .env; }`, `! {`), a redirection with its target
+  // (zsh runs `>out { cat .env; }`), an assignment (zsh runs `A=1 { cat .env; }`), and the heads that take a compound
+  // body after their own words (`function f {`, `coproc P {`, `time -p {`). Whatever is unclear is a group: the cost of a
+  // wrong group is a false positive, the cost of a wrong word is a secret read the guard no longer sees.
+  // The segment's first command word is found once, incrementally, so a run of lone braces is read in linear time.
+  let headSeg = -1;
+  let headScanned = 0;
+  let headWord = null;
+  let headSkipTarget = false;
+  let headCondition = false;
+  // Groups opened and not yet closed: a `}` inside one closes it wherever it stands (zsh: `{ echo x } always { … }`), so it
+  // is a word only at depth 0 (`cat } .env`, `echo } done`).
+  let groupDepth = 0;
+  const braceStartsGroup = () => {
+    if (headSeg !== seg) {
+      headSeg = seg;
+      headWord = null;
+      headCondition = false;
+      headScanned = tokens.length;
+      while (headScanned > 0 && tokens[headScanned - 1].seg === seg) headScanned--;
+      // `>&out`: the `&` after a redirection ends a segment here, and the word after it is that redirection's target.
+      headSkipTarget = headScanned >= 2 && tokens[headScanned - 1].kind === 'sep' && tokens[headScanned - 1].text === '&' &&
+        tokens[headScanned - 2].kind === 'op' && !tokens[headScanned - 2].dup;
+    }
+    while (headWord === null && headScanned < tokens.length) {
+      const token = tokens[headScanned++];
+      if (token.kind === 'op') {
+        headSkipTarget = !token.dup;
+      } else if (token.kind === 'word') {
+        if (headSkipTarget) headSkipTarget = false;
+        else if (token.quoted === 'none' && RESERVED_BEFORE_COMMAND.has(token.text)) {
+          if (CONDITION_WORDS.has(token.text)) headCondition = true;
+        } else if (ASSIGNMENT_PREFIX_RE.test(token.text)) continue;
+        else headWord = token;
+      }
+    }
+    // zsh also takes a `{` body after a condition (`if true { … }`) or after a compound head's own words.
+    return headWord === null || headCondition || (headWord.quoted === 'none' && COMPOUND_BODY_HEADS.has(headWord.text));
+  };
+  // Emit a heredoc token per consumed body (quoted included): the body is the stdin script only a shell interpreter
+  // runs, kept out of `words`. Returns the index just past the last terminator line.
+  const emitHeredocBodies = (r) => {
+    for (const b of r.bodies) {
+      tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
+      if (!b.quoted) {
+        collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
+        orphanHeredocs = [];
+      }
+    }
+    return r.end;
+  };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
   const sep = (text) => {
@@ -1542,6 +1761,16 @@ function tokenize(str, reading) {
 
   let i = 0;
   while (i < str.length) {
+    // #5515: heredocs a span just closed on this line wait for the next newline, ahead of any opened later.
+    if (orphanHeredocs.length) {
+      orphanQueued = true;
+      for (const tag of orphanHeredocs) {
+        const entry = { tag: tag.tag, quoted: tag.quoted, stripTabs: tag.stripTabs, seg, done: false };
+        heredocs.push(entry);
+        orphanQueue.push(entry);
+      }
+      orphanHeredocs = [];
+    }
     const ch = str[i];
 
     // A run of `$` under any reading but the plain one: dollar-quoting (none
@@ -1638,7 +1867,19 @@ function tokenize(str, reading) {
     }
 
     if (ch === '\\') {
-      if (str[i + 1] === '\n') { i += 2; continue; } // line continuation
+      if (str[i + 1] === '\n') {
+        i += 2; // line continuation
+        // #5515: bash reads the body of a heredoc a closed `$( )` left waiting from the next input line, even when the
+        // newline before it is a continuation (`echo $(cat <<A) x; cat <<B\`, `A`, `C`, `body`, `BC`): the word goes on
+        // after the body.
+        if (orphanQueue.length) {
+          const orphans = orphanQueue;
+          orphanQueue = [];
+          for (const h of orphans) h.done = true;
+          i = emitHeredocBodies(consumeHeredocBodies(str, i, orphans));
+        }
+        continue;
+      }
       hasWord = true;
       if (i + 1 < str.length) buf += str[i + 1];
       i += 2;
@@ -1647,7 +1888,7 @@ function tokenize(str, reading) {
 
     if (ch === '$' && str[i + 1] === '(') {
       hasWord = true;
-      const e = findParenClose(str, i + 2, reading);
+      const e = expectTag ? findTagSpanClose(str, i + 2, reading) : findParenClose(str, i + 2, reading);
       nested.push(str.slice(i + 2, e));
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
@@ -1678,7 +1919,12 @@ function tokenize(str, reading) {
       hasWord = true;
       const j = backtickEnd(str, i + 1);
       const e = j === -1 ? str.length : j;
-      nested.push(backtickBody(str.slice(i + 1, e)));
+      const plain = backtickBody(str.slice(i + 1, e));
+      nested.push(plain);
+      // The plain reading ends a double-quoted word at a quote nested in a `${…}`, so a backtick the shell reads inside
+      // double quotes lands here: its `\"` loses the backslash there, so both texts are scanned (#6433).
+      const quoted = backtickBody(str.slice(i + 1, e), true);
+      if (quoted !== plain) nested.push(quoted);
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
@@ -1701,15 +1947,10 @@ function tokenize(str, reading) {
       sep('\n');
       i++;
       if (heredocs.length) {
-        const r = consumeHeredocBodies(str, i, heredocs);
-        for (const b of r.bodies) {
-          // Emit a heredoc token per body (quoted included) — the body is the
-          // stdin script only a shell interpreter runs. Kept out of `words`.
-          tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
-          if (!b.quoted) collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
-        }
+        const pending = heredocs.filter((h) => !h.done);
         heredocs = [];
-        i = r.end;
+        orphanQueue = [];
+        i = emitHeredocBodies(consumeHeredocBodies(str, i, pending));
       }
       continue;
     }
@@ -1814,11 +2055,15 @@ function tokenize(str, reading) {
     if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
       if (expectTag && heredocTagsAsWords && heredocBraceTags) {
         braceTagRead = true;
-      } else {
+      } else if (expectTag || (ch === '}' && groupDepth > 0) || braceStartsGroup()) {
+        if (ch === '{') groupDepth++;
+        else if (groupDepth > 0) groupDepth--;
+        // Where a heredoc tag is due the earlier reading keeps the brace a group (`: <<} E` read as `}` closing), so nothing denied before is allowed.
         sep(ch);
         i++;
         continue;
       }
+      // else: a brace among a command's arguments is an ordinary word (#6438), read below like any other.
     }
 
     hasWord = true;
@@ -1847,6 +2092,319 @@ const CLUSTER_FLAG_CHAR_RE = /[A-Za-z0-9]/;
 // letters and digits, so `-fapp.env` is denied although `cat app.env` is not:
 // a fail-safe false positive, pinned in tests.
 function operandNamesSecret(text) {
+  return operandSecretMatch(text) !== null;
+}
+
+// The text that names the secret: the word itself, or the variant or field of it that does (#6132), so the denial names
+// `.env` and not the whole word. null when nothing does.
+function namesSecretVariant(text) {
+  return namesSecretOperand(text) || paramVariantsMatch(text, namesSecretOperand) !== null;
+}
+
+function operandSecretMatch(text) {
+  if (operandWordNamesSecret(text)) return text;
+  return paramVariantsMatch(text, operandWordNamesSecret);
+}
+
+// A script text a shell runs (`eval`, `-c`, a process substitution, a heredoc or here-string fed to a shell) scanned as
+// written and with each `${…}` default expanded, so `eval ${x:-cat .env}` reads what `eval cat .env` does. Fails closed past
+// the bounds, like the operand check.
+function findSecretReadWithDefaults(text, depth) {
+  const direct = findSecretRead(text, depth);
+  if (direct || !text.includes('${')) return direct;
+  return findSecretReadInVariants(text, depth);
+}
+
+// The scan of each variant of `text` (paramVariants), expanded again until none holds a default; null when none reads.
+function findSecretReadInVariants(text, depth) {
+  if (!text.includes('${')) return null;
+  if (text.length > MAX_PARAM_TEXT) return secretRead(text);
+  let layer = [text];
+  for (let level = 0; level < MAX_PARAM_LEVELS; level++) {
+    const next = [];
+    for (const word of layer) {
+      const expanded = paramVariants(word, MAX_SCRIPT_VARIANTS, true);
+      if (expanded.overflow) return secretRead(text);
+      for (const variant of expanded.variants) {
+        const hit = findSecretRead(variant, depth);
+        if (hit) return hit;
+        if (variant.includes('${')) next.push(variant);
+      }
+    }
+    if (next.length === 0) return null;
+    if (next.length > MAX_SCRIPT_VARIANTS) return secretRead(text);
+    layer = next;
+  }
+  return secretRead(text);
+}
+
+// `text` with every balanced `${…}` removed: whitespace left in it means the word is a script or a quoted sentence, whose
+// own spaces are not field separators.
+// `text` split on whitespace that is not inside a `${…}` (a subscript or default may hold spaces).
+function splitOutsideParams(text) {
+  const fields = [];
+  let current = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '$' && text[i + 1] === '{') {
+      const close = paramCloseIndex(text, i + 2);
+      const end = close === -1 ? text.length - 1 : close;
+      current += text.slice(i, end + 1);
+      i = end + 1;
+    } else if (/\s/.test(text[i])) {
+      if (current !== '') fields.push(current);
+      current = '';
+      i++;
+    } else current += text[i++];
+  }
+  if (current !== '') fields.push(current);
+  return fields;
+}
+
+function textOutsideParams(text) {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const open = text.indexOf('${', pos);
+    if (open === -1) return out + text.slice(pos);
+    out += text.slice(pos, open);
+    const close = paramCloseIndex(text, open + 2);
+    if (close === -1) return out;
+    pos = close + 1;
+  }
+}
+
+// The first variant of a word holding `${…}` (paramVariants) that names a secret by `check`, or one of its fields.
+// A default can hold another expansion (`${x:-${y:-.env}}`): the variants are expanded again until none holds one. Past
+// a bound, or for an expansion that never balances, the word cannot be read exhaustively and fails closed: the name can be
+// assembled from decoded or split defaults, so what the raw word spells proves nothing.
+function paramVariantsMatch(text, check) {
+  if (!text.includes('${')) return null;
+  if (text.length > MAX_PARAM_TEXT) return text;
+  // An unquoted expansion's value is split into fields (bash, dash), each its own operand, but only in a word that has no
+  // whitespace of its own: `cat ${x:-a .env}` splits, `bash -c 'echo ${P:-3}; [ -f .env ]'` is a script.
+  const splitFields = !/\s/.test(textOutsideParams(text));
+  let layer = [text];
+  for (let level = 0; level < MAX_PARAM_LEVELS; level++) {
+    const next = [];
+    for (const word of layer) {
+      const expanded = paramVariants(word, MAX_PARAM_VARIANTS, !splitFields);
+      if (expanded.overflow) return text;
+      for (const variant of expanded.variants) {
+        if (check(variant)) return variant;
+        if (splitFields && /\s/.test(variant)) {
+          const piece = variant.split(/\s+/).find((field) => field !== '' && check(field));
+          if (piece !== undefined) return piece;
+        }
+        if (variant.includes('${')) next.push(variant);
+      }
+    }
+    if (next.length === 0) return null;
+    if (next.length > MAX_PARAM_VARIANTS) return text;
+    layer = next;
+  }
+  return text;
+}
+
+// #6132: the words a word holding `${name<op>WORD}` or an empty `${}` can expand to. The shell takes WORD when the
+// variable is unset (`-`, `:-`, `=`, `:=`, `?`, `:?`) or set (`+`, `:+`), and nothing in the other case, so each such
+// expansion is replaced by its quote-removed WORD, and by nothing; an empty `${}` by nothing (zsh reads it so). The guard
+// cannot know the variable, so every combination is a candidate (at most MAX_PARAM_VARIANTS): `cat ${x:-$'.env'}`,
+// `cat ${x-$'.e\x6ev'}`, `cat ${x:+a}.env` and `cat .env${}` all name `.env`. Any other `${…}` form is left as it is.
+const MAX_PARAM_VARIANTS = 4096;
+const MAX_SCRIPT_VARIANTS = 256; // a script text is scanned in full once per variant
+const MAX_PARAM_LEVELS = 32;
+// Bounds on the work a word can cost: its length, and the characters its variants add up to (the product of many nested
+// groups grows fast); past either the word fails closed.
+const MAX_PARAM_TEXT = 262144;
+const MAX_PARAM_VARIANT_CHARS = 2000000;
+// The name before the operator: a variable (also indirect `!name`, subscripted), a positional or special parameter, and in
+// zsh an empty name, `(flags)name` or a nested `${…}`.
+// Where the operator of a `${…}`'s inner text ends (the index after `-`, `:-`, `+`, `:+`, `=` or `:=`), or -1 when it has
+// none: after optional zsh prefix flags (`=`, `~`, `^`, `+`), a `(flags)` group, a name that is any number of nested `${…}`
+// then a variable (also `!name`), a positional or special parameter, or nothing (zsh), and an optional quote-aware
+// `[subscript]`.
+function paramOperatorEnd(inner) {
+  let i = 0;
+  while (i < inner.length && '=~^+'.includes(inner[i])) i++;
+  if (inner[i] === '(') {
+    let depth = 0;
+    let j = i;
+    for (; j < inner.length; j++) {
+      if (inner[j] === '\\') { j++; continue; }
+      if (inner[j] === '(') depth++;
+      else if (inner[j] === ')' && --depth === 0) break;
+    }
+    if (j >= inner.length) return -1;
+    i = j + 1;
+  }
+  for (;;) {
+    if (inner.startsWith('${', i)) {
+      const close = paramCloseIndex(inner, i + 2);
+      if (close === -1) return -1;
+      i = close + 1;
+    } else break;
+  }
+  if (inner[i] === '!') i++;
+  const name = /[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*!?#$-]/y;
+  name.lastIndex = i;
+  const m = name.exec(inner);
+  if (m) i += m[0].length;
+  if (inner[i] === '[') {
+    let depth = 0;
+    let j = i;
+    for (; j < inner.length; j++) {
+      const ch = inner[j];
+      if (ch === '\\') { j++; continue; }
+      if (ch === "'" || ch === '"') {
+        const k = inner.indexOf(ch, j + 1);
+        if (k === -1) return -1;
+        j = k;
+        continue;
+      }
+      if (ch === '[') depth++;
+      else if (ch === ']' && --depth === 0) break;
+    }
+    if (j >= inner.length) return -1;
+    i = j + 1;
+  }
+  if (inner[i] === ':') i++;
+  return '-+='.includes(inner[i]) && i < inner.length ? i + 1 : -1;
+}
+
+// The index of the `}` closing the `${` whose text starts at `i`, or -1: quotes, `$'…'` spans and nested `${` are read.
+function paramCloseIndex(str, i) {
+  let depth = 1;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (ch === "'") {
+      const j = str.indexOf("'", i + 1);
+      if (j === -1) return -1;
+      i = j + 1;
+      continue;
+    }
+    if (ch === '"') {
+      i++;
+      while (i < str.length && str[i] !== '"') i += str[i] === '\\' ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (ch === '$' && str[i + 1] === "'") {
+      const end = ansiCQuoteEnd(str, i + 1);
+      if (end === -1) return -1;
+      i = end + 1;
+      continue;
+    }
+    if (ch === '$' && str[i + 1] === '{') { depth++; i += 2; continue; }
+    if (ch === '}' && --depth === 0) return i;
+    i++;
+  }
+  return -1;
+}
+
+// WORD with its quotes and backslashes removed as the shell removes them, or null for a `$'…'` span with no value.
+function unquoteParamWord(word) {
+  let out = '';
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (ch === '\\') {
+      if (word[i + 1] === '\n') { i++; continue; } // a line continuation: the shell removes both
+      if (i + 1 < word.length) out += word[++i];
+      continue;
+    }
+    if (ch === "'") {
+      const j = word.indexOf("'", i + 1);
+      out += word.slice(i + 1, j === -1 ? word.length : j);
+      i = j === -1 ? word.length : j;
+      continue;
+    }
+    if (ch === '"' || (ch === '$' && word[i + 1] === '"')) {
+      let j = ch === '"' ? i + 1 : i + 2;
+      while (j < word.length && word[j] !== '"') {
+        if (word[j] === '\\' && j + 1 < word.length) {
+          const next = word[j + 1];
+          if (next === '\n') { j += 2; continue; } // a line continuation
+          if ('"\\$`'.includes(next)) { out += next; j += 2; continue; }
+        }
+        out += word[j++];
+      }
+      i = j;
+      continue;
+    }
+    if (ch === '$' && word[i + 1] === "'") {
+      const end = ansiCQuoteEnd(word, i + 1);
+      const decoded = decodeAnsiC(word.slice(i + 2, end === -1 ? word.length : end), 'bash');
+      if (decoded === null) return null;
+      out += decoded;
+      i = end === -1 ? word.length : end;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function paramVariants(text, cap = MAX_PARAM_VARIANTS, linear = false) {
+  const parts = []; // a literal string, or the choices an expansion can take
+  let pos = 0;
+  let changed = false;
+  for (;;) {
+    const open = text.indexOf('${', pos);
+    parts.push(text.slice(pos, open === -1 ? text.length : open));
+    if (open === -1) break;
+    const close = paramCloseIndex(text, open + 2);
+    if (close === -1) {
+      // `${x:-"${y:-.env}}`: the quote skipper ran out of text; whatever follows an operator may still be read.
+      if (paramOperatorEnd(text.slice(open + 2)) !== -1) return { variants: [], overflow: true };
+      parts.push(text.slice(open));
+      break;
+    }
+    const inner = text.slice(open + 2, close);
+    const operatorEnd = paramOperatorEnd(inner);
+    let choices;
+    if (inner === '') choices = [''];
+    else if (operatorEnd !== -1) {
+      const value = unquoteParamWord(inner.slice(operatorEnd));
+      choices = value === null || value === '' ? [''] : [value, ''];
+    } else choices = [text.slice(open, close + 1)];
+    if (choices.length !== 1 || choices[0] !== text.slice(open, close + 1)) changed = true;
+    parts.push(choices);
+    pos = close + 1;
+  }
+  if (!changed) return { variants: [], overflow: false };
+  const groups = parts.filter((part) => Array.isArray(part) && part.length > 1).length;
+  let tooBig = 2 ** Math.min(groups, 30) > cap;
+  if (!tooBig) {
+    let variants = [''];
+    let chars = 0;
+    for (const part of parts) {
+      const choices = Array.isArray(part) ? part : [part];
+      const next = [];
+      for (const v of variants) {
+        for (const c of choices) {
+          next.push(v + c);
+          chars += v.length + c.length;
+        }
+      }
+      if (chars > MAX_PARAM_VARIANT_CHARS) { tooBig = true; break; }
+      variants = next;
+    }
+    if (!tooBig) return { variants, overflow: false };
+  }
+  if (!linear) return { variants: [], overflow: true };
+  // A script with many defaults: each expansion on its own with the others empty, all of them, and none. A name assembled
+  // from several of them is then not seen (a gap; the operand check keeps the full product).
+  const build = (take) => parts.map((part, index) => {
+    if (!Array.isArray(part)) return part;
+    return part.length > 1 && take(index) ? part[0] : (part.length > 1 ? '' : part[0]);
+  }).join('');
+  const indexes = parts.map((part, index) => (Array.isArray(part) && part.length > 1 ? index : -1)).filter((index) => index !== -1);
+  const variants = [build(() => true), build(() => false), ...indexes.map((chosen) => build((index) => index === chosen))];
+  return { variants, overflow: false };
+}
+
+function operandWordNamesSecret(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
   if (v.startsWith('--')) {
@@ -1862,12 +2420,98 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
+// #5825: request tools that open a file named after an `@` in a field or request item and send its contents.
+//   gh api -F/--field key=@path   (`-f`/`--raw-field` never reads a file; `@-` is stdin)
+//   http / https (httpie) items   key=@path  key:=@path  key==@path  Header:@path  key@path[;type=…]
+// An httpie item splits at its first separator, so only an `@` form that comes first reads a file, and a key may
+// escape a separator with a backslash. Linear in the word: the key run stops at the first separator character.
+const HTTPIE_FILE_ITEM_RE = /^(?:[^=:@\\]|\\.)*(?:==@|:=@|=@|:@|@)([\s\S]+)$/;
+// gh api short options that take a value: in a cluster the rest of the word is that option's value, not more flags.
+const GH_VALUE_SHORT_FLAGS = 'HXqtpf';
+const SHELL_KEYWORDS = new Set(['do', 'then', 'else', 'elif', '!', 'while', 'until', 'if']);
+
+// `do gh api …`, `then http …`, `! gh api …`: the command word follows the shell keyword, so it is resolved again.
+function skipShellKeywords(cmd) {
+  let current = cmd;
+  while (SHELL_KEYWORDS.has(current.base) && current.operands.length > 0) {
+    const next = resolveCommand(current.operands);
+    if (!next) break;
+    current = next;
+  }
+  return current;
+}
+
+// How `-F` reaches a gh word: `{ value }` attached (`-Fk=v`, `-F=k=v`, a cluster `-iFk=v`), `{ value: null }` when the
+// value is the next word (`-F`, `-iF`), or null when the word carries no `-F`. A manual scan, not a regex: the first
+// `F` of a letter run decides, whatever follows it (a lazy pattern backtracked quadratically on a long run).
+function ghFieldOption(text) {
+  if (!text.startsWith('-') || text.startsWith('--')) return null;
+  for (let i = 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === 'F') {
+      const rest = text.slice(i + 1);
+      if (rest === '') return { value: null };
+      return { value: rest.startsWith('=') ? rest.slice(1) : rest };
+    }
+    if (!CLUSTER_FLAG_CHAR_RE.test(ch) || GH_VALUE_SHORT_FLAGS.includes(ch)) return null;
+  }
+  return null;
+}
+
+// The text of the operand whose `@path` names a secret for `gh api` / httpie, or null. `base` is the resolved command word.
+function requestItemSecretRead(base, operands) {
+  const command = base.replace(/\.exe$/i, '');
+  if (command === 'gh' && operands.length > 0 && operands[0].text === 'api') {
+    for (let k = 1; k < operands.length; k++) {
+      const text = operands[k].text;
+      let field = null;
+      if (text === '--field') field = operands[k + 1] ? operands[k + 1].text : null;
+      else if (text.startsWith('--field=')) field = text.slice('--field='.length);
+      else {
+        const option = ghFieldOption(text);
+        if (option) field = option.value !== null ? option.value : (operands[k + 1] ? operands[k + 1].text : null);
+      }
+      if (field === null) continue;
+      const eq = field.indexOf('=');
+      if (eq === -1) continue;
+      const value = field.slice(eq + 1);
+      if (value.startsWith('@') && value !== '@-' && namesSecretVariant(value.slice(1))) return text;
+    }
+    return null;
+  }
+  if (command === 'http' || command === 'https') {
+    // `http [METHOD] URL [ITEM…]`: the URL is not an item (`http example.com/a@.env` reads nothing).
+    const positionals = operands.filter((operand) => !operand.text.startsWith('-'));
+    const urlIndex = positionals.length > 0 && /^[A-Za-z]+$/.test(positionals[0].text) ? 1 : 0;
+    positionals.forEach((operand, index) => {
+      if (index === urlIndex) operand.isUrl = true;
+    });
+    for (const operand of positionals) {
+      if (operand.isUrl) continue;
+      const item = HTTPIE_FILE_ITEM_RE.exec(operand.text);
+      // `file@path;type=mime` and `;filename=` follow the path after a `;`: both readings are judged.
+      if (item && (namesSecretVariant(item[1]) || namesSecretVariant(item[1].split(';')[0]))) return operand.text;
+    }
+  }
+  return null;
+}
+
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
 const DASH_C_RE = /^-[A-Za-z]*c$/;
 
 const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
+
+// Reserved words that may stand before a command (and so before a `{` group) in the same segment.
+const RESERVED_BEFORE_COMMAND = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!']);
+// Command words that take a compound body after words of their own, so a `{` after them may still open a group.
+// A compound command's closer (`esac`, `fi`, `done`, `end`) at the head of a segment ends a zsh `while` condition, so a `{` after it is the body.
+const COMPOUND_BODY_HEADS = new Set(['function', 'coproc', 'time', 'for', 'foreach', 'select', 'repeat', 'case', 'always', '[[', 'esac', 'fi', 'done', 'end']);
+// Reserved words that introduce a condition, after which zsh takes a `{` body instead of `then`/`do`.
+const CONDITION_WORDS = new Set(['if', 'elif', 'while', 'until']);
+// A word that sets a variable before a command (`A=1`, `a[0]+=x`).
+const ASSIGNMENT_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 
 // How many words the option `word` occupies for wrapper `spec`: 2 when it
 // takes a separate value word, else 1.
@@ -1886,43 +2530,179 @@ function wrapperOptionWidth(word, spec) {
   return 1;
 }
 
-// Index of the first word after a wrapper's own options, assignments and
-// positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
-function skipWrapperArgs(words, start, spec) {
-  let idx = start;
+// #5514: when `word` is the wrapper's split option (env's `-S` /
+// `--split-string`), the string it carries, or null when the string is the
+// next word; undefined for any other word.
+function splitOptionValue(word, spec) {
+  if (!spec.split) return undefined;
+  if (word.startsWith('--')) {
+    const eq = word.indexOf('=');
+    const name = eq === -1 ? word : word.slice(0, eq);
+    if (name.length <= 2 || !spec.split.long.startsWith(name)) return undefined;
+    return eq === -1 ? null : word.slice(eq + 1);
+  }
+  const valued = spec.short || '';
+  for (let i = 1; i < word.length; i++) {
+    if (!valued.includes(word[i])) continue;
+    if (word[i] !== spec.split.short) return undefined; // the value of another option
+    return i === word.length - 1 ? null : word.slice(i + 1);
+  }
+  return undefined;
+}
+
+const ENV_S_ESCAPES = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+const ENV_S_BLANKS = ' \t\n\v\f\r';
+const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
+
+// The words `env -S STRING` splits STRING into, by GNU env's rules rather than
+// the shell's: blanks separate outside quotes; single quotes keep everything but
+// `\\` and `\'`; outside them `\_` separates (a space inside double quotes),
+// `\c` ends the string, `\f \n \r \t \v` are those characters and
+// `\" \# \$ \' \\` the character itself; `#` starting a word starts a comment;
+// `${VAR}` outside single quotes is env's own expansion, of a value not known
+// here: kept as written, or under `vars: 'drop'` deleted, as an unset name
+// expands (no word of its own, and a `#` after it still starts a comment).
+// Under `escapes: 'bsd'` a backslash before a blank is that blank; under
+// 'uutils' a backslash before a newline is removed, inside quotes too, and a
+// comment runs to the next newline, after which splitting goes on. Where env
+// would reject the string, the words read up to that point are returned.
+function splitEnvString(value, dialect = envSReading) {
+  const words = [];
+  let word = '';
+  let inWord = false;
+  let quote = '';
+  const end = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (dialect.escapes === 'uutils' && ch === '\\' && value[i + 1] === '\n') {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else if (ch === '\\' && (value[i + 1] === '\\' || value[i + 1] === "'")) word += value[++i];
+      else word += ch;
+      continue;
+    }
+    if (ch === '"' || (ch === "'" && quote === '')) {
+      quote = quote === ch ? '' : ch;
+      inWord = true;
+      continue;
+    }
+    if (quote === '' && ENV_S_BLANKS.includes(ch)) {
+      end();
+      continue;
+    }
+    if (quote === '' && ch === '#' && !inWord) {
+      if (dialect.escapes !== 'uutils') break;
+      const eol = value.indexOf('\n', i);
+      if (eol === -1) break;
+      i = eol;
+      continue;
+    }
+    if (ch === '$' && value[i + 1] !== '{') break;
+    if (ch === '$' && dialect.vars === 'drop') {
+      ENV_S_VAR_RE.lastIndex = i;
+      if (ENV_S_VAR_RE.test(value)) {
+        i = ENV_S_VAR_RE.lastIndex - 1;
+        continue;
+      }
+    }
+    if (ch === '\\') {
+      const next = value[++i];
+      if (next === '_' && quote === '') {
+        end();
+        continue;
+      }
+      if (next === '_') word += ' ';
+      else if (next !== undefined && ENV_S_ESCAPES[next]) word += ENV_S_ESCAPES[next];
+      else if (next !== undefined && '"#$\'\\'.includes(next)) word += next;
+      else if (dialect.escapes === 'bsd' && next !== undefined && ENV_S_BLANKS.includes(next)) word += next;
+      else break; // `\c`, or an escape env rejects
+      inWord = true;
+      continue;
+    }
+    word += ch;
+    inWord = true;
+  }
+  end();
+  return words;
+}
+
+// Pushes the words `value` splits into onto `pending`, to be read next. A
+// string split out of a split string is one level deeper; past
+// MAX_NESTING_DEPTH it is not read, and splitTooDeep makes the command deny.
+function pushSplitWords(pending, value, source) {
+  const depth = (source.splitDepth || 0) + 1;
+  if (depth > MAX_NESTING_DEPTH) {
+    splitTooDeep = true;
+    return;
+  }
+  const words = splitEnvString(value);
+  for (let k = words.length - 1; k >= 0; k--) {
+    pending.push({ kind: 'word', text: words[k], quoted: 'none', seg: source.seg, splitDepth: depth });
+  }
+}
+
+// Pops a wrapper's own options, assignments and positional operands
+// (`-n 5`, `-i A=1`, `-s KILL 5`, `--`) off `pending`, the words still to
+// read with the next one last. The walk is the one before #5514, with one
+// addition: `env -S STRING` puts the words STRING splits into where the option
+// stood, and env goes on reading options (#5514).
+function skipWrapperArgs(pending, spec) {
+  const top = () => pending[pending.length - 1].text;
   let optionsEnded = false;
-  while (idx < words.length) {
-    const text = words[idx].text;
+  while (pending.length) {
+    const text = top();
     if (spec.assigns && ASSIGNMENT_RE.test(text)) {
-      idx++;
+      pending.pop();
     } else if (!optionsEnded && text === '--') {
       optionsEnded = true;
-      idx++;
+      pending.pop();
     } else if (!optionsEnded && text.length > 1 && text.startsWith('-')) {
-      idx += wrapperOptionWidth(text, spec);
+      const word = pending.pop();
+      const split = splitOptionValue(text, spec);
+      if (split !== undefined) splitSeen = true;
+      if (split === undefined || !envSReading.split) {
+        if (wrapperOptionWidth(text, spec) === 2) pending.pop();
+      } else if (split === null) {
+        const value = pending.pop();
+        if (value) pushSplitWords(pending, value.text, value);
+      } else {
+        pushSplitWords(pending, split, word);
+      }
     } else {
       break;
     }
   }
-  if (!spec.operands) return idx;
-  idx = Math.min(idx + spec.operands, words.length);
+  for (let n = 0; n < (spec.operands || 0) && pending.length; n++) pending.pop();
   // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
-  return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
+  if (spec.operands && pending.length && top() === '--') pending.pop();
 }
 
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
-// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
+// `timeout -s KILL 5`, `nice -n 5`, `env -S 'cmd …'`, …), or null when nothing
+// but prefixes remain. Linear in the words read: a split string is pushed onto
+// the pending stack rather than spliced into a copy of the list. `word` is the
+// command word as written: after a split string it can be one of that string's
+// words, which `words` does not hold.
 function resolveCommand(words) {
-  let idx = 0;
-  while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
-  while (idx < words.length) {
-    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+  const pending = words.slice().reverse();
+  while (pending.length && ASSIGNMENT_RE.test(pending[pending.length - 1].text)) pending.pop();
+  while (pending.length) {
+    const spec = WRAPPERS.get(lastSegment(pending[pending.length - 1].text).toLowerCase());
     if (!spec) break;
-    idx = skipWrapperArgs(words, idx + 1, spec);
+    pending.pop();
+    skipWrapperArgs(pending, spec);
   }
-  if (idx >= words.length) return null;
-  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+  if (!pending.length) return null;
+  const head = pending.pop();
+  return { base: lastSegment(head.text).toLowerCase(), operands: pending.reverse(), word: head.text };
 }
 
 /**
@@ -2346,6 +3126,7 @@ function findSecretReadUnderOtherReadings(command) {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
     heredocBraceTags = braceTags;
+    orphanBodies = false;
     inHeredocPass = true;
     try {
       return findSecretRead(command, 0);
@@ -2353,23 +3134,38 @@ function findSecretReadUnderOtherReadings(command) {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
       heredocBraceTags = true;
+      orphanBodies = true;
       inHeredocPass = false;
     }
   };
-  const hit = command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null;
-  if (hit || !braceTagRead) return hit;
-  return scanUnder(true, true, false) || scanUnder(false, true, false);
+  // The first reading with no queue is the guard as it was before #5515 (a queued orphan can take lines another shell runs);
+  // it differs from the queue reading only when an orphan was queued.
+  // Its nesting-too-deep result is kept for last, as scanBashCommand keeps the first reading's: a read an other reading finds
+  // outranks it (#6136).
+  const compat = orphanQueued ? scanUnder(true, true, true) : null;
+  const hit = (compat !== null && compat.code !== 'nesting-too-deep' ? compat : null) ||
+    (command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null);
+  if (hit) return hit;
+  if (!braceTagRead) return compat;
+  return scanUnder(true, true, false) || scanUnder(false, true, false) || compat;
 }
 
 // The debugger-spawn scan, under the earlier reading of a brace tag as well.
+// It reads spans as it did before #5515 (no heredoc queue): a queued orphan takes lines a real shell runs
+// (`echo $(cat <<EOF) x` then `claude --agent gsd-debugger` spawns it).
 function findDebuggerCliSpawnEitherWay(command) {
-  const spawn = findDebuggerCliSpawn(command, 0);
-  if (spawn !== null || !braceTagRead) return spawn;
-  heredocBraceTags = false;
+  orphanBodies = false;
   try {
-    return findDebuggerCliSpawn(command, 0);
+    const spawn = findDebuggerCliSpawn(command, 0);
+    if (spawn !== null || !braceTagRead) return spawn;
+    heredocBraceTags = false;
+    try {
+      return findDebuggerCliSpawn(command, 0);
+    } finally {
+      heredocBraceTags = true;
+    }
   } finally {
-    heredocBraceTags = true;
+    orphanBodies = true;
   }
 }
 
@@ -2387,7 +3183,10 @@ function findDebuggerCliSpawnEitherWay(command) {
 // `$${` or `$$(`, so a substring test finds it in linear time.
 function findSecretRead(command, depth) {
   if (depth > 0) return readEachWay(command, depth);
-  if (!inHeredocPass) braceTagRead = false;
+  if (!inHeredocPass) {
+    braceTagRead = false;
+    orphanQueued = false;
+  }
   heldNested = null;
   scanUnfinished = false;
   readingsRan = false;
@@ -2440,6 +3239,12 @@ let budgetSize = MAX_SCAN_CHARACTERS;
 // the whole command. `budget` is for tests, which pin the boundary on a small
 // one; the hook passes none.
 function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+  setCommandBudget(budget, separatorBudget);
+  return scanBashReading(command);
+}
+
+// Sets the budgets one Bash command's scans share (scanBashCommand).
+function setCommandBudget(budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
   scanBudget = budget;
   readerSteps = budget;
   budgetSize = budget;
@@ -2447,6 +3252,12 @@ function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget 
   separatorSize = separatorBudget;
   readerSpent = false;
   scanSpent = false;
+}
+
+// scanBashCommand's scan of `command`, on what is left of the budgets: the hook
+// runs it once per `env -S` reading (ENV_S_READINGS) after setting them once, so
+// every reading of a command spends from the one budget (#5514).
+function scanBashReading(command) {
   budgetHeld = true;
   try {
     const first = findSecretRead(command, 0);
@@ -2631,7 +3442,9 @@ function chargeSeparators(n) {
 // the command is bounded as a whole. The others — the debugger-spawn check, the
 // exemption's read-only check and a process substitution's first segment —
 // charge separators only: their cost is per segment, a tokenize alone is cheap
-// per character, and they read text the scan has already charged.
+// per character, and they read text the scan has already charged. Under a
+// splitting `env -S` reading the debugger-spawn check charges characters as well
+// (#5514): it recurses into `eval` and shell bodies once per reading.
 function tokenizeCharged(str, reading, chargeCharacters = false) {
   if (chargeCharacters) chargeScan(str.length);
   const result = tokenize(str, reading);
@@ -2775,7 +3588,7 @@ function scanCommand(command, depth, reading) {
           k++;
           if (t.text.endsWith('<<<')) hereStrings.push(target.text); // stdin data for a shell
           // Input redirects are reads regardless of the command's exemption.
-          else if (t.read && namesSecretOperand(target.text)) return secretRead(target.text);
+          else if (t.read && (namesSecretOperand(target.text) || paramVariantsMatch(target.text, namesSecretOperand) !== null)) return secretRead(target.text);
         }
         continue;
       }
@@ -2788,9 +3601,32 @@ function scanCommand(command, depth, reading) {
     const { base, operands } = cmd;
     const heredocs = heredocsBySeg.get(s) || [];
 
+    // The command word holds a default (`${x:-cat} .env`, `time ${x:-cat .env}`): the segment is read as the script it
+    // becomes when each default is expanded (#6132).
+    const rawBase = cmd.word;
+    if (rawBase.includes('${')) {
+      const named = paramVariants(rawBase);
+      if (named.overflow) return secretRead(rawBase);
+      // Each variant is scanned with the operands re-quoted as one word each, as the shell hands them over.
+      const quotedOperands = operands.map((w) => `'${w.text.replace(/'/g, "'\\''")}'`).join(' ');
+      for (const variant of named.variants) {
+        if (variant.trim() === '') continue;
+        const hit = findSecretRead(`${variant} ${quotedOperands}`, depth + 1);
+        if (hit) return hit;
+      }
+      // A shell or xargs named by the default takes the segment's heredocs, here-strings and piped text as its input.
+      for (const variant of named.variants) {
+        const inner = resolveCommand([...variant.split(/\s+/).filter(Boolean).map((text) => ({ text })), ...operands]);
+        let found = null;
+        if (inner && SHELL_INTERPRETERS.has(inner.base)) found = scanShellInterpreter(inner.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
+        else if (inner && inner.base === 'xargs') found = scanXargsPipe(inner.operands, s, bySeg, sepAfter, depth, reading);
+        if (found) return found;
+      }
+    }
+
     // eval concatenates ALL its operands and runs the result.
     if (base === 'eval') {
-      const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1);
+      const hit = findSecretReadWithDefaults(operands.map((w) => w.text).join(' '), depth + 1);
       if (hit) return hit;
       continue;
     }
@@ -2801,7 +3637,7 @@ function scanCommand(command, depth, reading) {
         if (w.procsub !== undefined) {
           const src = reconstructedProcsub(w.procsub, reading);
           if (src !== null) {
-            const hit = findSecretRead(src, depth + 1);
+            const hit = findSecretReadWithDefaults(src, depth + 1);
             if (hit) return hit;
           }
         } else if (operandNamesSecret(w.text)) return secretRead(w.text);
@@ -2841,12 +3677,18 @@ function scanCommand(command, depth, reading) {
       if (hit) return hit;
     }
 
+    // `gh api -F key=@.env` and httpie request items read the file named after `@` (#5825).
+    const requestCommand = skipShellKeywords({ base, operands });
+    const requestItem = requestItemSecretRead(requestCommand.base, requestCommand.operands);
+    if (requestItem !== null) return secretRead(requestItem);
+
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      const named = operandSecretMatch(operands[k].text);
+      if (named !== null) return secretRead(named);
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
@@ -2905,10 +3747,57 @@ function findDebuggerCliSpawn(command, depth) {
   return spawn;
 }
 
+// #6439: bash expands `{a,b}` and `{a..z}` before `claude` reads its argv, so `claude --agent {gsd-debugger,x}` hands
+// the CLI `gsd-debugger` and `claude {--agent,gsd-debugger}` hands it `--agent gsd-debugger`. Every operand is expanded
+// (expandBraces, the expander the Grep glob arm uses, plus letter ranges) into the words bash would produce before the
+// `--agent` scan. A quoted word is expanded too: the tokenizer drops the quote marks, so `{"gsd-debugger",x}` (which
+// bash does expand) cannot be told from `"{gsd-debugger,x}"` (which it does not), and no real agent name holds a brace.
+// A list too long to expand cannot be ruled out, so it counts as a launch. Returns the words, or null when too long.
+const BRACE_LETTER_RANGE_RE = /\{([A-Za-z])\.\.([A-Za-z])(?:\.\.-?\d+)?\}/;
+
+function expandOperandWord(text) {
+  const range = BRACE_LETTER_RANGE_RE.exec(text);
+  if (range === null) return expandBraces(text);
+  // Every letter between the ends, whatever the step: a superset only ever over-denies.
+  const from = range[1].charCodeAt(0);
+  const to = range[2].charCodeAt(0);
+  const out = [];
+  for (let c = Math.min(from, to); c <= Math.max(from, to); c++) {
+    const expanded = expandOperandWord(text.slice(0, range.index) + String.fromCharCode(c) + text.slice(range.index + range[0].length));
+    if (expanded === null) return null;
+    out.push(...expanded);
+    if (out.length > MAX_GLOB_ALTERNATIVES) return null;
+  }
+  return out;
+}
+
+// The `--agent` value text of a debugger launch among the expanded operands, or null. The value is the next word of the
+// same operand's expansion when there is one (`{--agent,x}`), otherwise any word of the next operand's expansion (the
+// superset the issue asks for: `--agent {x,gsd-debugger}` is denied although bash passes only `x` as the value).
+function debuggerAgentInOperands(expandedOperands) {
+  for (let i = 0; i < expandedOperands.length; i++) {
+    const words = expandedOperands[i];
+    for (let j = 0; j < words.length; j++) {
+      const text = words[j];
+      if (text === '--agent') {
+        const candidates = j + 1 < words.length ? [words[j + 1]] : (expandedOperands[i + 1] || []);
+        const hit = candidates.find(isDebuggerAgent);
+        if (hit !== undefined) return hit;
+      } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
+        return text.slice('--agent='.length);
+      }
+    }
+  }
+  return null;
+}
+
 // One reading of findDebuggerCliSpawn: `reading` is false for the plain
-// reading, or the shell whose reading it is (scanCommand).
+// reading, or the shell whose reading it is (scanCommand). Under a splitting
+// `env -S` reading the check charges its characters too: it runs once per
+// reading, and uncharged it is work the readings repeat outside the command's
+// budget (#5514). The first reading charges as before #5514.
 function findDebuggerCliSpawnUnder(command, depth, reading) {
-  const { tokens, nested } = tokenizeCharged(command, reading);
+  const { tokens, nested } = tokenizeCharged(command, reading, envSReading.split);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -2959,15 +3848,14 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     }
 
     if (!CLAUDE_BINARY_RE.test(base)) continue;
-    for (let k = 0; k < operands.length; k++) {
-      const text = operands[k].text;
-      if (text === '--agent') {
-        const value = operands[k + 1];
-        if (value && isDebuggerAgent(value.text)) return value.text;
-      } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
-        return text.slice('--agent='.length);
-      }
+    const expandedOperands = [];
+    for (const operand of operands) {
+      const expanded = expandOperandWord(operand.text);
+      if (expanded === null) return operand.text;
+      expandedOperands.push(expanded);
     }
+    const spawnedAgent = debuggerAgentInOperands(expandedOperands);
+    if (spawnedAgent !== null) return spawnedAgent;
   }
   return null;
 }
@@ -2978,7 +3866,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   if (cIdx !== -1) {
     // Mode c: the next operand is the script; stdin is DATA (not scanned).
     const script = operands[cIdx + 1];
-    if (script) return findSecretRead(script.text, depth + 1);
+    if (script) return findSecretReadWithDefaults(script.text, depth + 1);
     return null;
   }
   let fileTok;
@@ -2993,21 +3881,21 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (fileTok.procsub !== undefined) {
       const src = reconstructedProcsub(fileTok.procsub, reading);
-      if (src !== null) return findSecretRead(src, depth + 1);
+      if (src !== null) return findSecretReadWithDefaults(src, depth + 1);
     }
     return null;
   }
   // Mode stdin: heredoc bodies, here-strings, and a piped echo/printf source.
   for (const h of heredocs) {
-    const hit = findSecretRead(h.text, depth + 1);
+    const hit = findSecretReadWithDefaults(h.text, depth + 1);
     if (hit) return hit;
   }
   for (const hs of hereStrings) {
-    const hit = findSecretRead(hs, depth + 1);
+    const hit = findSecretReadWithDefaults(hs, depth + 1);
     if (hit) return hit;
   }
   const src = pipeSourceText(s, bySeg, sepAfter);
-  if (src !== null) return findSecretRead(src, depth + 1);
+  if (src !== null) return findSecretReadWithDefaults(src, depth + 1);
   return null;
 }
 
@@ -3058,29 +3946,46 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
   if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
+  // The words xargs reads on stdin: every one is a candidate file name — the NON_READING exemption is bypassed for it,
+  // but the `.env.example|…` suffix exemption in isSecretBasename still holds.
+  const judgeStdinWords = (words) => {
+    if (subIsShell) {
+      // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+      // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+      const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), words, depth);
+      if (hit) return hit;
+    }
+    for (const w of words) {
+      if (operandNamesSecret(w.text)) return secretRead(w.text);
+      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+      const received = xargsUnquoted(w.text);
+      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+    }
+    return null;
+  };
+
+  // A here-string feeds xargs its text as stdin (`xargs cat <<< .env`, #6433): each word of it is a candidate.
+  const hereWords = hereStringTargets(bySeg.get(s) || []).flatMap((text) => splitOutsideParams(text)).map((text) => ({ text }));
+  if (hereWords.length) {
+    const hit = judgeStdinWords(hereWords);
+    if (hit) return hit;
+  }
+  // A heredoc is stdin the same way: its body's words are the names xargs reads.
+  const bodyWords = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || [])
+    .flatMap((h) => splitOutsideParams(h.text)).map((text) => ({ text }));
+  if (bodyWords.length) {
+    const hit = judgeStdinWords(bodyWords);
+    if (hit) return hit;
+  }
+
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
   if (prevSeg < 0) return null;
 
-  // Every upstream operand is a candidate file name — the NON_READING
-  // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
-  // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
-  if (subIsShell) {
-    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
-    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
-    if (hit) return hit;
-  }
-  for (const w of prevCmd.operands) {
-    if (operandNamesSecret(w.text)) return secretRead(w.text);
-    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-    const received = xargsUnquoted(w.text);
-    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
-  }
-  return null;
+  return judgeStdinWords(prevCmd.operands);
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -3145,7 +4050,7 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
   if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
-  if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1);
+  if (cmd.base === 'eval') return findSecretReadWithDefaults(cmd.operands.map((w) => w.text).join(' '), depth + 1);
   if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
   if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading);
   return null;
@@ -3155,7 +4060,19 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
 // `sh -c`, so the joined string is a shell script (quotes inside an operand are removed a second time:
 // `watch cat '".env"'` runs `cat .env`, and `watch 'cat .env'` is a whole script). With -x/--exec the command
 // runs without a shell and its operands are plain words, which the ordinary check judges as before.
-const WATCH_INTERVAL_SHORT = 'n';
+// The options that take a value in a separate word (procps `watch`): -n/--interval <secs>, -q/--equexit <cycles> (#6433).
+// Every other option is a flag, or carries its value in the same word (`--differences=permanent`).
+const WATCH_VALUE_SHORT = 'nq';
+// procps-ng watch's long options; getopt_long takes any unambiguous prefix (`--int 1`, `--equ 2`, `--ex`).
+const WATCH_LONG_OPTIONS = ['beep', 'color', 'no-color', 'differences', 'errexit', 'chgexit', 'equexit', 'exec', 'help', 'interval',
+  'no-linewrap', 'precise', 'no-rerun', 'no-title', 'version'];
+function watchLongOption(text) {
+  const name = text.slice(2).split('=')[0];
+  if (name === '') return null;
+  if (WATCH_LONG_OPTIONS.includes(name)) return name;
+  const matches = WATCH_LONG_OPTIONS.filter((option) => option.startsWith(name));
+  return matches.length === 1 ? matches[0] : null; // none or ambiguous: getopt rejects it, nothing to locate
+}
 function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
   let exec = false;
   let k = 0;
@@ -3163,12 +4080,16 @@ function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, r
     const text = operands[k].text;
     if (text === '--') { k++; break; }
     if (!text.startsWith('-') || text === '-') break;
-    if (text === '--exec') { exec = true; continue; }
-    if (text === '--interval') { k++; continue; }
-    if (text.startsWith('--')) continue;
+    if (text.startsWith('--')) {
+      const option = watchLongOption(text);
+      if (option === 'exec') exec = true;
+      else if ((option === 'interval' || option === 'equexit') && !text.includes('=')) k++;
+      continue;
+    }
     for (let c = 1; c < text.length; c++) {
+      if (text[c] === 'd') break; // `-d[VALUE]`: an optional value is attached, so the rest of the word is not options
       if (text[c] === 'x') exec = true;
-      if (text[c] === WATCH_INTERVAL_SHORT) {
+      if (WATCH_VALUE_SHORT.includes(text[c])) {
         if (c === text.length - 1) k++; // `-n 5`: the value is the next word; `-n5` carries it
         break;
       }
@@ -3205,6 +4126,10 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'alternatives, or holds too many brace groups to expand, and cannot be checked for ' +
       'secret-file matches. Use a narrower glob.';
+  }
+  if (code === 'split-string-too-deep') {
+    return `Secret read guard: this Bash command nests env -S strings more than ${MAX_NESTING_DEPTH} deep, ` +
+      'so the command they run cannot be checked. Run that command without the nested env -S strings.';
   }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
@@ -3327,11 +4252,74 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
+// The Bash path's scans of `command`: one pass per reading of ENV_S_READINGS, in
+// its order (#5514), all on the one budget set here for the command, so the
+// readings together do no more work than one scan may. Returns the block the
+// hook emits (null when none) and whether a scan threw. A read or a launch a pass
+// finds is returned before the next reading runs, so nothing a later reading does
+// can lose it. Any other block (`command-too-complex`, an undecodable `$'…'` word)
+// is returned at once too while no split option has been met, as `next` emits it;
+// once one has, it is held and returned after the last reading, unless a later one
+// names a read or a launch, as findSecretRead ranks its own readings. Each of the
+// two scans (the secret scan with its heredoc readings, then the spawn check) runs
+// under its own catch. A stack overflow there is held as `command-too-complex`, the
+// deny main's catch gives one; any other error finds nothing. Either way the scans
+// after it still run, and the command gets the crash verdict only when nothing
+// denies it (main). Tests call it in process with a small budget, and can pass the
+// spawn check (`spawnCheck`): no command is known that overflows it alone.
+function scanBashReadings(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS, spawnCheck = scanDebuggerSpawn) {
+  setCommandBudget(budget, separatorBudget);
+  splitSeen = false;
+  splitTooDeep = false;
+  let threw = false;
+  let held = null;
+  const attempt = (scan) => {
+    try {
+      return scan();
+    } catch (e) {
+      threw = true;
+      return e instanceof RangeError ? { code: 'command-too-complex', text: '' } : null;
+    }
+  };
+  try {
+    for (const r of ENV_S_READINGS) {
+      if (r.runs === 'split' && !splitSeen) continue;
+      if (r.runs === 'split-or-throw' && !splitSeen && !threw) continue;
+      envSReading = r;
+      // The #4432 exemption's read-only line (F3) is judged under this reading,
+      // never under the reading that ran first: a split string can hold a
+      // command that writes or runs a program where the unsplit reading saw `cat`.
+      exemption.bashReadOnly = null;
+      for (const scan of [scanBashReading, spawnCheck]) {
+        const block = attempt(() => scan(command));
+        if (block === null) continue;
+        if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn' || !splitSeen) return { block, threw };
+        if (held === null) held = block;
+      }
+      if (splitTooDeep) return { block: { code: 'split-string-too-deep', text: '' }, threw };
+    }
+    return { block: held, threw };
+  } finally {
+    envSReading = ENV_S_READINGS[1];
+  }
+}
+
+// How long the hook waits for its stdin to close (#5784). Exported so the
+// stdin-timer tests build their cells from it rather than repeat it.
+const STDIN_TIMEOUT_MS = 3000;
+
 // The PreToolUse entry. Tests load the scanners in-process (module.exports
 // below); the hook body runs only when the file is executed as the hook.
 function main() {
   let input = '';
-  const stdinTimeout = setTimeout(() => allow(undefined), 3000);
+  // A stdin that has not closed within STDIN_TIMEOUT_MS is a hook failure, not
+  // a verdict on the payload, so it takes the declared crash policy (#5784)
+  // rather than an unconditional allow. The timer is not reset by `data`: a
+  // payload written in full whose stdin stays open is caught here too.
+  const stdinTimeout = setTimeout(
+    () => crashFor(GUARD_ERROR_CAUSE.STDIN_STALL, `stdin did not close within ${STDIN_TIMEOUT_MS / 1000} s`),
+    STDIN_TIMEOUT_MS,
+  );
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => input += chunk);
   process.stdin.on('end', () => {
@@ -3385,31 +4373,37 @@ function main() {
       if (command === '') allow(undefined);
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       exemption.bashLine = command;
-      const hit = scanBashCommand(command);
-      if (hit !== null) emitBlock(hit.code, tool, hit.text);
-      const spawn = scanDebuggerSpawn(command);
-      if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
+      const { block, threw } = scanBashReadings(command);
+      if (block !== null) emitBlock(block.code, tool, block.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
+        // A reading that failed is a hook error the catch below never sees, so
+        // it takes the host's crash policy too (#5784): the allow above by
+        // default, a guard-error block when the host opted in.
+        crashFor(GUARD_ERROR_CAUSE.READING_FAILED, 'a shell reading failed');
       }
+      // An error in a scan that is not an overflow is a hook error that
+      // scanBashReadings caught before the catch below could see it, so it takes
+      // the host's crash policy as that catch does (#5784).
+      if (threw) crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
       allow(undefined);
     } catch (e) {
       // A stack overflow is a limit, not a bug: failing open on it allows a
       // read the check had not reached. findSecretRead turns its own into
-      // `command-too-complex`; the debugger-spawn scan unwraps `timeout`,
-      // which the secret scan does not, so its tokenizer can overflow on a
-      // body the secret scan never read. Any other error fails open — never
-      // block valid tool calls due to hook errors.
+      // `command-too-complex`, and scanBashReadings holds one the debugger-spawn
+      // check throws as the same block. Any RangeError that still reaches this
+      // catch is denied the same way. Any other error fails open — never block
+      // valid tool calls due to hook errors — unless the host opted in to DENY;
+      // ON_CRASH is declared at module top (#3911, #5784).
       if (e instanceof RangeError && tool === 'Bash') emitBlock('command-too-complex', tool, '');
-      // ON_CRASH is declared ALLOW at module top (#3911).
-      crash(ON_CRASH, undefined);
+      crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
     }
   });
 }
 
 module.exports = {
-  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  MAX_SCAN_CHARACTERS,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanBashReadings, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
+  GUARD_ERROR_CAUSE, MAX_SCAN_CHARACTERS, STDIN_TIMEOUT_MS,
 };
 
 if (require.main === module) main();

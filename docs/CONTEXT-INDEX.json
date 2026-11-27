@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 325,
+  "count": 327,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 52,
+    "SEAM": 54,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -124,7 +124,7 @@
     {
       "id": "GSD-RESEARCH.MODULE.research-provider",
       "klass": "GSD-RESEARCH",
-      "value": "single source of truth PROVIDER_WATERFALL (docs Context7->Ref->Jina->websearch; web Exa->Tavily->Perplexity->Brave->websearch; scrape Firecrawl->Jina); planResearch returns cache-hits+fetch-plan; classifyConfidence stamps HIGH|MEDIUM|LOW by provider AUTHORITY + verification EVIDENCE (HIGH requires code-computed ground-truth corroboration e.g. legitimacyVerdict OK; provider authority alone caps at MEDIUM; SLOP caps at LOW); Firecrawl is scrape-only (not in the docs or web legs)"
+      "value": "single source of truth PROVIDER_WATERFALL (docs Context7->Ref->Jina->websearch; web Exa->Tavily->Perplexity->Brave->Serply->websearch; scrape Firecrawl->Jina); planResearch returns cache-hits+fetch-plan; classifyConfidence stamps HIGH|MEDIUM|LOW by provider AUTHORITY + verification EVIDENCE (HIGH requires code-computed ground-truth corroboration e.g. legitimacyVerdict OK; provider authority alone caps at MEDIUM; SLOP caps at LOW); Firecrawl is scrape-only (not in the docs or web legs)"
     },
     {
       "id": "GSD-RESEARCH.MODULE.research-store",
@@ -134,7 +134,7 @@
     {
       "id": "GSD-RESEARCH.PROVIDER.availability",
       "klass": "GSD-RESEARCH",
-      "value": "config flags brave_search/exa_search/firecrawl/tavily_search/ref_search/perplexity/jina (env <X>_API_KEY or ~/.gsd/<x>_api_key); context7/jina/websearch always available; planResearch falls through waterfall to websearch terminal"
+      "value": "config flags brave_search/exa_search/firecrawl/tavily_search/ref_search/perplexity/jina/serply_search (env <X>_API_KEY or ~/.gsd/<x>_api_key); context7/jina/websearch always available; planResearch falls through waterfall to websearch terminal"
     },
     {
       "id": "LEARNING.prompt-budget.boundary-gap",
@@ -1169,7 +1169,7 @@
     {
       "id": "RULESET.TESTS.no-duplicate-fold-marker",
       "klass": "RULESET",
-      "value": "local/no-duplicate-fold-marker ESLint AST rule (eslint-rules/no-duplicate-fold-marker.cjs, #3271) reports the 2nd and every later __foldDescribe(\"folded:<marker> ...\") call carrying a marker already seen in the SAME file, naming the first occurrence's line; error in tests/**/*.cjs. The key is the WHITESPACE-delimited token after folded:, NOT a [a-z0-9-]* slice — a slice truncates at \".\" and collides feat-443-effort-fast-mode.integration with feat-443-effort-fast-mode (two distinct suites coexisting in tests/model-resolver.test.cjs), and NOT the whole title, so a re-fold under a different batch label (\"B1 #1970\" vs \"B5 #1975\") is still caught. Deliberately silent on: a __foldDescribe title with no folded: prefix (the alias is reused for one ordinary describe in tests/review-default-reviewers-workflow.test.cjs), a plain describe(), a non-literal title, and the same marker in two DIFFERENT files (the defect class is intra-file)."
+      "value": "local/no-duplicate-fold-marker ESLint AST rule (eslint-rules/no-duplicate-fold-marker.cjs, #3271) reports the 2nd and every later __foldDescribe(\"folded:<marker> ...\") call carrying a marker already seen in the SAME file, naming the first occurrence's line; error in tests/**/*.cjs. The key is the WHITESPACE-delimited token after folded:, NOT a [a-z0-9-]* slice — a slice truncates at \".\" and collides feat-443-effort-fast-mode.integration with feat-443-effort-fast-mode (two distinct suites coexisting in tests/model-resolver.test.cjs), and NOT the whole title, so a re-fold under a different batch label (\"B1 #1970\" vs \"B5 #1975\") is still caught. Deliberately silent on: a __foldDescribe title with no folded: prefix (the alias may be reused for an ordinary describe; those carry no uniqueness obligation), a plain describe(), a non-literal title, and the same marker in two DIFFERENT files (the defect class is intra-file)."
     },
     {
       "id": "RULESET.TESTS.no-duplicate-fold-marker.why",
@@ -1285,6 +1285,16 @@
       "id": "SEAM.criterion-replay.owns",
       "klass": "SEAM",
       "value": "opt-in replay of criterion baseline commands under the no-shell argv quarantine, and its observed-value derivation (#4310, ADR-4310)"
+    },
+    {
+      "id": "SEAM.dispatch-isolation-vocabulary.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/host-integration-validator-parity.test.cjs"
+    },
+    {
+      "id": "SEAM.dispatch-isolation-vocabulary.owns",
+      "klass": "SEAM",
+      "value": "DISPATCH_ISOLATION_MODES / BASE_CHECK_ISOLATION_MODES in src/dispatch-isolation.cts are the single declaration of the dispatch-isolation vocabulary and its worktree-creating subset (#4561)"
     },
     {
       "id": "SEAM.evaluation-scope.enforced-by",

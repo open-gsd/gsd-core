@@ -269,6 +269,7 @@ These govern the system as it stands. Cite these.
 | [ADR-3660](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted | [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) |
 | [ADR-3711](3711-cross-runtime-plan-execution.md) | Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend | Accepted | — |
 | [ADR-3806](3806-review-dispositions-ledger.md) | Review Dispositions Ledger canonizes where and how reviews-mode records incorporate/defer decisions in PLAN.md | Accepted | — |
+| [ADR-3997](3997-review-prompt-capability-contributions.md) | Review-prompt capability contributions — `review:pre` and the `reviewer` role | Accepted | — |
 | [ADR-4139](4139-compact-content-seam.md) | The compact-content seam — shrink the eager window, never the guarantee | Accepted | — |
 | [ADR-4309](4309-criterion-baseline-notation.md) | Criterion baseline notation for quantitative acceptance criteria | Accepted | — |
 | [ADR-4310](4310-criterion-replay.md) | Opt-in replay of recorded criterion baselines | Accepted | — |
@@ -301,8 +302,10 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
 | [ADR-4650](4650-path-containment-and-filename-classification-seam.md) | One path-containment predicate and one filename-classification helper | Proposed | — |
+| [ADR-4795](4795-advisor-prefilter-in-review-pipeline.md) | Advisor pre-filter in the review pipeline — a same-context consult before the cold-subagent gates | Proposed | — |
 | [ADR-4908](4908-project-context.md) | One resolved ProjectContext — which checkout a process acts in is decided once | Proposed | — |
 | [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
+| [ADR-5182](5182-stall-watch-return-receipt.md) | A plan-phase return receipt holds the agent's complete return | Proposed | — |
 | [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) | OpenCode 2.x support as a version-gated target of the `opencode` runtime, and sunset of OpenCode 1.x support | Proposed | — |
 | [ADR-6315](6315-ci-redesign.md) | CI redesign — a fast static tier, a sharded critical path, one full matrix per merge, and feedback loops that keep it fast | Proposed | — |
 

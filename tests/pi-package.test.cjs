@@ -19,6 +19,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
 const { createTempDir, cleanup, installSpawnEnv } = require('./helpers.cjs');
+const { homePair } = require('./helpers/isolated-env.cjs');
 const { INSTALL_TIMEOUT_MS, GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO = path.resolve(__dirname, '..');
@@ -369,7 +370,7 @@ describe('Pi package: extension modes (#5558)', () => {
     const root = makePackage({ 'gsd-alpha': `@${PI_ENGINE_ROOT_TOKEN}/x\n`, 'gsd-beta': 'b\n' });
     const home = tmp('gsd-pi-home-');
     made.push(root, home);
-    return { root, home, env: { PATH: '/usr/bin', HOME: home } };
+    return { root, home, env: { PATH: '/usr/bin', ...homePair(home) } };
   }
 
   it('registers resources_discover with the rendered skills and activates PATH in the package layout', () => {

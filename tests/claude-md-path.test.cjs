@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, homeSandboxEnv } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('claude_md_path config key', () => {
   let tmpDir;
@@ -35,7 +36,7 @@ describe('claude_md_path config key', () => {
     const configPath = path.join(tmpDir, '.planning', 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ mode: 'interactive' }), 'utf-8');
 
-    const result = runGsdTools('config-get claude_md_path --default ./CLAUDE.md', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('config-get claude_md_path --default ./CLAUDE.md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
     assert.strictEqual(JSON.parse(result.output), './CLAUDE.md');
   });
@@ -44,10 +45,10 @@ describe('claude_md_path config key', () => {
     const configPath = path.join(tmpDir, '.planning', 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ mode: 'interactive' }), 'utf-8');
 
-    const setResult = runGsdTools('config-set claude_md_path .claude/CLAUDE.md', tmpDir, { HOME: tmpDir });
+    const setResult = runGsdTools('config-set claude_md_path .claude/CLAUDE.md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(setResult.success, `Expected success but got error: ${setResult.error}`);
 
-    const getResult = runGsdTools('config-get claude_md_path', tmpDir, { HOME: tmpDir });
+    const getResult = runGsdTools('config-get claude_md_path', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(getResult.success, `Expected success but got error: ${getResult.error}`);
     assert.strictEqual(JSON.parse(getResult.output), '.claude/CLAUDE.md');
   });
@@ -96,7 +97,7 @@ describe('cmdGenerateClaudeProfile reads claude_md_path from config', () => {
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
 
@@ -126,7 +127,7 @@ describe('cmdGenerateClaudeProfile reads claude_md_path from config', () => {
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath, '--output', outputFile],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
 
@@ -162,7 +163,7 @@ describe('cmdGenerateClaudeMd reads claude_md_path from config', () => {
     // Create the target directory
     fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
 
-    const result = runGsdTools('generate-claude-md', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('generate-claude-md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -178,7 +179,7 @@ describe('cmdGenerateClaudeMd reads claude_md_path from config', () => {
     fs.writeFileSync(configPath, JSON.stringify({ claude_md_path: '.claude/CLAUDE.md' }), 'utf-8');
 
     const outputFile = 'my-custom.md';
-    const result = runGsdTools(['generate-claude-md', '--output', outputFile], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['generate-claude-md', '--output', outputFile], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -191,7 +192,7 @@ describe('cmdGenerateClaudeMd reads claude_md_path from config', () => {
     const configPath = path.join(tmpDir, '.planning', 'config.json');
     fs.writeFileSync(configPath, JSON.stringify({ mode: 'interactive' }), 'utf-8');
 
-    const result = runGsdTools('generate-claude-md', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('generate-claude-md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Expected success but got error: ${result.error}`);
 
     const parsed = JSON.parse(result.output);

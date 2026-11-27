@@ -17,6 +17,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
@@ -77,7 +78,7 @@ function addWorktree(main, wtDir, branch) {
 }
 
 function run(args, cwd, tmp) {
-  return runGsdTools([...args, '--json-errors'], cwd, { ...GIT_ENV, HOME: tmp, USERPROFILE: tmp });
+  return runGsdTools([...args, '--json-errors'], cwd, isolatedEnv({ home: tmp, override: GIT_ENV }));
 }
 
 /** The typed result object a verb printed, from stdout or (json-errors) stderr. */

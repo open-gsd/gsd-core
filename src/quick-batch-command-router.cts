@@ -159,6 +159,14 @@ function routeQuickBatchCommand({ args, cwd, raw, error, _quickBatch, _quickBatc
         if (optionsRaw !== undefined) {
           const optResult = parseJsonArg<Record<string, unknown>>(optionsRaw, '--options');
           if (!optResult.ok) return makeInvalidArgs('--options', optResult.reason, ERROR_REASON.USAGE);
+          // #6655: the loader accepts only an object `options`, so refuse any
+          // other JSON value before createBatch allocates ids or writes BATCH.json.
+          // `null` still means "no options" and is stored as `{}`.
+          const optValue: unknown = optResult.value;
+          if (optValue !== null && (typeof optValue !== 'object' || Array.isArray(optValue))) {
+            const got = Array.isArray(optValue) ? 'an array' : `a ${typeof optValue}`;
+            return makeInvalidArgs('--options', `--options must be a JSON object, got ${got}`, ERROR_REASON.USAGE);
+          }
           batchOptions = optResult.value;
         }
         const items = (parsed.value ?? []).map((it) => ({ description: it.description }));

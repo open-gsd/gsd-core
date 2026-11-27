@@ -43,6 +43,7 @@ interface RoadmapModule {
   cmdRoadmapMilestoneScope(cwd: string, raw: boolean): void;
   cmdRoadmapUpdatePlanProgress(cwd: string, phase: string | undefined, raw: boolean): void;
   cmdRoadmapAnnotateDependencies(cwd: string, phase: string | undefined, raw: boolean): void;
+  checkPlanRowsAgainstDisk(cwd: string, roadmapContent: string): Array<{ code: string; message: string }>;
 }
 
 interface RouteRoadmapCommandOptions {
@@ -262,6 +263,13 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
         // 'milestone-prefixed' — the same hoisted resolution above (#3641).
         if (convention === 'milestone-prefixed') {
           warnings.push(...checkW021(roadmapContent));
+        }
+
+        // #6270: a plan row with no PLAN file, or a live PLAN file with no row, in a phase that lists its plans.
+        try {
+          warnings.push(...roadmap.checkPlanRowsAgainstDisk(cwd, roadmapContent));
+        } catch {
+          // Best-effort like the scope probe above: a disk read failure must not mask the structural warnings.
         }
 
         const result = { warnings };

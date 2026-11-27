@@ -684,7 +684,6 @@
     "directive": 2
   },
   "src/capability-activation.cts": {
-    "directive": 3,
     "block": 2
   },
   "src/capability-consent.cts": {
@@ -720,7 +719,7 @@
   },
   "src/capability-writer.cts": {
     "block": 2,
-    "directive": 14
+    "directive": 13
   },
   "src/check-command-router.cts": {
     "directive": 1
@@ -792,7 +791,7 @@
   },
   "src/config.cts": {
     "directive": 7,
-    "block": 6
+    "block": 5
   },
   "src/configuration.cts": {
     "block": 1
@@ -1165,7 +1164,7 @@
   },
   "src/model-resolver.cts": {
     "block": 7,
-    "directive": 6
+    "directive": 5
   },
   "src/normalize-test-command.cts": {
     "block": 1
@@ -1384,7 +1383,7 @@
   },
   "src/runtime-slash.cts": {
     "block": 2,
-    "directive": 2
+    "directive": 1
   },
   "src/section-manifest.cts": {
     "block": 2,
@@ -1563,9 +1562,6 @@
   "tests/adapter-imperative.test.cjs": {
     "block": 1
   },
-  "tests/adr-218-release-version-validation.test.cjs": {
-    "block": 1
-  },
   "tests/adr-612-bracket-coherence.test.cjs": {
     "block": 1
   },
@@ -1606,10 +1602,6 @@
   "tests/adr857-predicate-boundary.test.cjs": {
     "block": 1
   },
-  "tests/agent-classification-parity.test.cjs": {
-    "directive": 2,
-    "block": 2
-  },
   "tests/agent-descriptor-parity.install.test.cjs": {
     "block": 2
   },
@@ -1626,22 +1618,13 @@
   "tests/agent-install-check.test.cjs": {
     "block": 1
   },
-  "tests/agent-required-reading-consistency.test.cjs": {
-    "directive": 3
-  },
   "tests/agent-size-budget.test.cjs": {
     "block": 2
   },
   "tests/agent-skills-compact-variant.test.cjs": {
     "block": 1
   },
-  "tests/agent-tracked-source-rule.test.cjs": {
-    "block": 1
-  },
   "tests/ai-evals.test.cjs": {
-    "directive": 1
-  },
-  "tests/anti-pattern-enforcement.test.cjs": {
     "directive": 1
   },
   "tests/antigravity-reviewer.test.cjs": {
@@ -1650,19 +1633,8 @@
   "tests/antigravity-upgrades.test.cjs": {
     "block": 1
   },
-  "tests/ask-user-questions-fallback.test.cjs": {
-    "directive": 1,
-    "block": 1
-  },
-  "tests/atomic-write-coverage.test.cjs": {
-    "block": 1,
-    "directive": 1
-  },
   "tests/audit-command-cutover.test.cjs": {
     "block": 3
-  },
-  "tests/audit-fix-command.test.cjs": {
-    "directive": 1
   },
   "tests/backwards-compat-phase-id.test.cjs": {
     "block": 1
@@ -1779,9 +1751,6 @@
     "directive": 1,
     "block": 3
   },
-  "tests/cleanup-branch-pruning.test.cjs": {
-    "directive": 1
-  },
   "tests/cli-exit.test.cjs": {
     "block": 3,
     "directive": 1
@@ -1800,9 +1769,6 @@
   },
   "tests/cline-model-override-upgrade.test.cjs": {
     "block": 1
-  },
-  "tests/cline-support.test.cjs": {
-    "directive": 1
   },
   "tests/clock-seam.test.cjs": {
     "block": 2
@@ -1941,12 +1907,6 @@
   "tests/context-composer.property.test.cjs": {
     "block": 1
   },
-  "tests/context-enrichment.test.cjs": {
-    "directive": 1
-  },
-  "tests/context-index-sync.test.cjs": {
-    "block": 1
-  },
   "tests/context-predicates-query.test.cjs": {
     "block": 1
   },
@@ -1959,14 +1919,8 @@
   "tests/context-utilization.property.test.cjs": {
     "block": 1
   },
-  "tests/context7-tool-name-parity.test.cjs": {
-    "block": 1
-  },
   "tests/continuation-grammar-parity.test.cjs": {
     "block": 2
-  },
-  "tests/contributor-standards.test.cjs": {
-    "directive": 1
   },
   "tests/copilot-install.test.cjs": {
     "directive": 2
@@ -1983,9 +1937,6 @@
   },
   "tests/cursor-hooks.test.cjs": {
     "block": 1,
-    "directive": 1
-  },
-  "tests/cursor-reviewer.test.cjs": {
     "directive": 1
   },
   "tests/cursor-subagent-isolation.test.cjs": {
@@ -2029,9 +1980,6 @@
   "tests/discuss-mode.test.cjs": {
     "directive": 1
   },
-  "tests/discuss-phase-power.test.cjs": {
-    "directive": 1
-  },
   "tests/dispatch-identity.test.cjs": {
     "block": 1
   },
@@ -2041,9 +1989,6 @@
   "tests/dispatcher.test.cjs": {
     "block": 1
   },
-  "tests/do-routing-specificity.test.cjs": {
-    "block": 1
-  },
   "tests/docs-hooks-table-parity.test.cjs": {
     "block": 1
   },
@@ -2051,26 +1996,11 @@
     "directive": 1,
     "block": 5
   },
-  "tests/docs-state-md-locale-parity.test.cjs": {
-    "block": 1
-  },
   "tests/drift-detection.test.cjs": {
-    "directive": 1
-  },
-  "tests/edge-probe-docs-fixtures.test.cjs": {
-    "directive": 1
-  },
-  "tests/edge-probe-planner-contract.test.cjs": {
-    "directive": 1
-  },
-  "tests/edge-probe-spec-phase-contract.test.cjs": {
     "directive": 1
   },
   "tests/edit-phase-milestone-scope-guard.test.cjs": {
     "block": 1
-  },
-  "tests/edit-phase.test.cjs": {
-    "directive": 5
   },
   "tests/effort-surface-axis.test.cjs": {
     "block": 1
@@ -2126,14 +2056,8 @@
   "tests/execute-phase-decimal-arithmetic.test.cjs": {
     "block": 1
   },
-  "tests/execute-phase-step-5-5-deviation-doc.test.cjs": {
-    "directive": 1
-  },
   "tests/execute-phase-wave.test.cjs": {
     "directive": 11
-  },
-  "tests/execute-phase-worktree-artifacts.test.cjs": {
-    "directive": 6
   },
   "tests/execute-plan-update-codebase-map-diff-base.test.cjs": {
     "block": 1
@@ -2145,9 +2069,6 @@
     "block": 2,
     "directive": 2
   },
-  "tests/executor-isolation-prompt-contract.test.cjs": {
-    "block": 1
-  },
   "tests/executor-mvp-tdd-section.test.cjs": {
     "directive": 1,
     "block": 2
@@ -2157,12 +2078,6 @@
   },
   "tests/exit-code-registry.test.cjs": {
     "block": 2
-  },
-  "tests/explore-command.test.cjs": {
-    "directive": 1
-  },
-  "tests/extract-learnings.test.cjs": {
-    "directive": 1
   },
   "tests/failing-direction.test.cjs": {
     "block": 1
@@ -2263,9 +2178,6 @@
   "tests/gates-confirmation-toggle-config.test.cjs": {
     "block": 1
   },
-  "tests/gates-taxonomy.test.cjs": {
-    "directive": 3
-  },
   "tests/gemini-runtime-removed.test.cjs": {
     "block": 4
   },
@@ -2326,12 +2238,6 @@
   },
   "tests/gsd-quick-batch-workflow.test.cjs": {
     "block": 1
-  },
-  "tests/gsd-researcher-app-aware.test.cjs": {
-    "directive": 2
-  },
-  "tests/gsd-researcher-flow-diagram.test.cjs": {
-    "directive": 1
   },
   "tests/gsd-secret-read-guard.test.cjs": {
     "block": 1
@@ -2493,6 +2399,9 @@
   "tests/helpers/overlay-repo.cjs": {
     "block": 3
   },
+  "tests/helpers/pack-file-list.cjs": {
+    "block": 1
+  },
   "tests/helpers/planning-add-guard.cjs": {
     "block": 2
   },
@@ -2542,9 +2451,6 @@
     "block": 4,
     "directive": 2
   },
-  "tests/import-command.test.cjs": {
-    "directive": 1
-  },
   "tests/in-tier-msys-fork-stress.test.cjs": {
     "block": 1
   },
@@ -2554,9 +2460,6 @@
   },
   "tests/ingest-docs.test.cjs": {
     "directive": 2
-  },
-  "tests/init-debug-workflow-contract.test.cjs": {
-    "directive": 1
   },
   "tests/init-debug.test.cjs": {
     "block": 1
@@ -2655,14 +2558,8 @@
     "directive": 2,
     "block": 4
   },
-  "tests/inventory-headings-countfree.test.cjs": {
-    "directive": 1
-  },
   "tests/inventory-manifest-sync.test.cjs": {
     "block": 1
-  },
-  "tests/ios-scaffold-safety.test.cjs": {
-    "directive": 1
   },
   "tests/isolation-sentinel.test.cjs": {
     "block": 1
@@ -2674,9 +2571,6 @@
     "block": 1
   },
   "tests/kimi-guard-normalization-parity.test.cjs": {
-    "block": 1
-  },
-  "tests/kimi-guard-typed-payload-reads.test.cjs": {
     "block": 1
   },
   "tests/kimi-imperative-reference.test.cjs": {
@@ -2779,10 +2673,6 @@
   "tests/mcp-server-catalog.test.cjs": {
     "block": 1
   },
-  "tests/mcp-tool-inheritance.test.cjs": {
-    "directive": 1,
-    "block": 1
-  },
   "tests/milestone-archive.test.cjs": {
     "directive": 3,
     "block": 1
@@ -2842,20 +2732,11 @@
   "tests/next-decimal-roadmap-scan.test.cjs": {
     "directive": 1
   },
-  "tests/next-safety-gates.test.cjs": {
-    "directive": 1
-  },
-  "tests/next-up-clear-order.test.cjs": {
-    "directive": 1
-  },
   "tests/no-bare-gsd-tools-command-position.test.cjs": {
     "block": 3
   },
   "tests/no-dead-sdk-refs.test.cjs": {
     "block": 2
-  },
-  "tests/no-hardcoded-home-gsd-tools.test.cjs": {
-    "directive": 1
   },
   "tests/no-path-literal-in-assert.rule.test.cjs": {
     "block": 1
@@ -2914,12 +2795,6 @@
     "directive": 1
   },
   "tests/package-name-single-source.test.cjs": {
-    "block": 1
-  },
-  "tests/parallel-dependent-plans.test.cjs": {
-    "directive": 3
-  },
-  "tests/partial-init-routing.test.cjs": {
     "block": 1
   },
   "tests/path-replacement.test.cjs": {
@@ -2982,9 +2857,6 @@
     "directive": 9,
     "block": 12
   },
-  "tests/phase6-capability-docs.test.cjs": {
-    "directive": 1
-  },
   "tests/phase6-capstone-conformance.test.cjs": {
     "block": 1
   },
@@ -3015,9 +2887,6 @@
   "tests/plan-bounce.test.cjs": {
     "directive": 1
   },
-  "tests/plan-checker-coupling.test.cjs": {
-    "block": 1
-  },
   "tests/plan-count-single-owner.test.cjs": {
     "block": 4
   },
@@ -3031,18 +2900,12 @@
   "tests/plan-phase-stall-detection.test.cjs": {
     "block": 6
   },
-  "tests/plan-phase-ui-redirect.test.cjs": {
-    "directive": 1
-  },
   "tests/plan-pre-hook-e2e.test.cjs": {
     "block": 1
   },
   "tests/plan-review-convergence.test.cjs": {
     "block": 3,
     "directive": 3
-  },
-  "tests/planner-decomposition.test.cjs": {
-    "directive": 2
   },
   "tests/planner-language-regression.test.cjs": {
     "directive": 1,
@@ -3078,17 +2941,11 @@
   "tests/platform-conformance-tier.test.cjs": {
     "block": 1
   },
-  "tests/playwright-ui-verify.test.cjs": {
-    "directive": 1
-  },
   "tests/plugin-manifest.test.cjs": {
     "block": 5,
     "directive": 3
   },
   "tests/policy-160-route0-resume.test.cjs": {
-    "directive": 1
-  },
-  "tests/policy-release-no-npm-self-upgrade.test.cjs": {
     "directive": 1
   },
   "tests/post-planning-gaps-2493.test.cjs": {
@@ -3112,12 +2969,6 @@
   "tests/profile-pipeline.test.cjs": {
     "block": 1
   },
-  "tests/progress-forensic.test.cjs": {
-    "directive": 1
-  },
-  "tests/progress-mvp-display.test.cjs": {
-    "directive": 1
-  },
   "tests/project-instruction-file-parity.test.cjs": {
     "block": 1
   },
@@ -3126,9 +2977,6 @@
   },
   "tests/prompt-injection-scan.security.test.cjs": {
     "block": 2
-  },
-  "tests/prompt-thinning.test.cjs": {
-    "directive": 1
   },
   "tests/prune-orphaned-worktrees.test.cjs": {
     "directive": 1
@@ -3172,9 +3020,6 @@
   "tests/quick-batch.property.test.cjs": {
     "block": 1
   },
-  "tests/quick-commit-boundary-context-research.test.cjs": {
-    "block": 2
-  },
   "tests/qwen-imperative-reference.test.cjs": {
     "block": 1
   },
@@ -3214,15 +3059,6 @@
   "tests/registry-reviewer-parity.test.cjs": {
     "block": 1
   },
-  "tests/release-coverage-scope.test.cjs": {
-    "directive": 1
-  },
-  "tests/release-shard-lane-sharding.test.cjs": {
-    "block": 1
-  },
-  "tests/release-tarball-smoke-workflow.test.cjs": {
-    "directive": 1
-  },
   "tests/release-tarball-smoke.install.test.cjs": {
     "directive": 1,
     "block": 2
@@ -3241,9 +3077,6 @@
     "block": 1
   },
   "tests/resolve-execution-dynamic-routing.test.cjs": {
-    "block": 1
-  },
-  "tests/resolver-hoist-guard.test.cjs": {
     "block": 1
   },
   "tests/response-language-coverage.test.cjs": {
@@ -3271,9 +3104,6 @@
     "block": 2
   },
   "tests/review-plan-coverage-manifest.test.cjs": {
-    "block": 1
-  },
-  "tests/review-timeout-guidance.test.cjs": {
     "block": 1
   },
   "tests/reviewer-config-federation.test.cjs": {
@@ -3383,9 +3213,6 @@
   "tests/section-manifest.property.test.cjs": {
     "block": 1
   },
-  "tests/section-marker-inversion-guard.test.cjs": {
-    "block": 1
-  },
   "tests/secure-phase.test.cjs": {
     "directive": 1
   },
@@ -3399,10 +3226,6 @@
   "tests/security-scan.security.test.cjs": {
     "block": 2,
     "directive": 2
-  },
-  "tests/seed-scan-new-milestone.test.cjs": {
-    "directive": 1,
-    "block": 1
   },
   "tests/settings-integrations.test.cjs": {
     "directive": 3,
@@ -3447,16 +3270,6 @@
     "block": 1
   },
   "tests/smart-entry.unit.test.cjs": {
-    "block": 1
-  },
-  "tests/spawn-liveness-banner.test.cjs": {
-    "directive": 1,
-    "block": 1
-  },
-  "tests/spec-phase-probe-reachability.test.cjs": {
-    "block": 1
-  },
-  "tests/spike-manifest-scoping.test.cjs": {
     "block": 1
   },
   "tests/stale-bake-guard.test.cjs": {
@@ -3509,20 +3322,11 @@
   "tests/table-schema-drift-lint.test.cjs": {
     "block": 1
   },
-  "tests/tdd-backend-wiring.test.cjs": {
-    "block": 1
-  },
   "tests/tdd-mode.platform.test.cjs": {
     "block": 1
   },
   "tests/tdd-red-evidence.test.cjs": {
     "block": 1
-  },
-  "tests/tdd-reference-correctness.test.cjs": {
-    "block": 1
-  },
-  "tests/tdd-single-statement.test.cjs": {
-    "block": 2
   },
   "tests/temp-subdir.test.cjs": {
     "directive": 1
@@ -3558,14 +3362,8 @@
   "tests/ui-interaction-capture.test.cjs": {
     "block": 1
   },
-  "tests/ui-researcher-inventory-self-check.test.cjs": {
-    "block": 1
-  },
   "tests/ui-spec-inventory-provenance.test.cjs": {
     "block": 2
-  },
-  "tests/ultraplan-phase.test.cjs": {
-    "directive": 1
   },
   "tests/undo-commit-selection-4465.test.cjs": {
     "block": 1
@@ -3583,18 +3381,11 @@
     "block": 2,
     "directive": 1
   },
-  "tests/update-workflow.test.cjs": {
-    "block": 2,
-    "directive": 1
-  },
   "tests/user-artifact-staging.test.cjs": {
     "block": 1
   },
   "tests/verification-status.test.cjs": {
     "block": 7
-  },
-  "tests/verifier-coincidental-reliance.test.cjs": {
-    "block": 1
   },
   "tests/verifier-contribution.test.cjs": {
     "block": 1
@@ -3656,12 +3447,6 @@
     "block": 1
   },
   "tests/workflow-guard-registration.test.cjs": {
-    "directive": 1
-  },
-  "tests/workflow-jq-dependency.test.cjs": {
-    "block": 1
-  },
-  "tests/workflow-maintainer-skip.test.cjs": {
     "directive": 1
   },
   "tests/workflow-shell-pinning.test.cjs": {

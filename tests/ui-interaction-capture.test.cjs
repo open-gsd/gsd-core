@@ -42,6 +42,7 @@ const { spawnSync } = require('node:child_process');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // The stub driver never blocks, so one fence run is a handful of sh spawns; distinct
 // from PROBE (a single probe) and BUILD (a compiler) — its own class, bounded generously.
@@ -326,13 +327,16 @@ function runInteractionFence(t, opts = {}) {
   ].join('\n');
   const scriptPath = path.join(tmp, 'fence.sh');
   fs.writeFileSync(scriptPath, script);
-  const env = {
-    STUB_LOG: log,
-    STUB_SLEEP: cu.sleep,
-    HOME: tmp,
-    TMPDIR: tmp,
-    ...(opts.env || {}),
-  };
+  const env = isolatedEnv({
+    home: tmp,
+    base: {},
+    override: {
+      STUB_LOG: log,
+      STUB_SLEEP: cu.sleep,
+      TMPDIR: tmp,
+      ...(opts.env || {}),
+    },
+  });
   const r = spawnSync('bash', [scriptPath], { encoding: 'utf8', timeout: FENCE_RUN_TIMEOUT_MS, env, cwd: tmp });
   const calls = fs.readFileSync(log, 'utf8').split(/\r?\n/).filter(Boolean);
   const status = (r.stdout.match(/^FINAL_STATUS=(.*)$/m) || [])[1];

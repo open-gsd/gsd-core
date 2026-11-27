@@ -60,7 +60,7 @@ regression, because it never inspects the prose.
 ## Use `'*'` when the path cannot be resolved statically
 
 Some tests walk `docs/` recursively, or build the path they read from a runtime-computed
-variable rather than a fixed literal — `tests/context7-tool-name-parity.test.cjs` and
+variable rather than a fixed literal — `tests/intel.test.cjs` and
 `tests/docs-parity-live-registry.test.cjs` are examples already in the registry, both mapped to
 `'*'`. When a test's read cannot be pinned to a specific file or directory prefix, register it with
 `'*'` rather than guessing a narrower pattern. A guessed-narrow pattern that misses the actual path

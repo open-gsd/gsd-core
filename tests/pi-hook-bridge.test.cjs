@@ -17,6 +17,7 @@ const http = require('node:http');
 const { spawn, spawnSync } = require('node:child_process');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { MANAGED_HOOKS } = require('../hooks/managed-hooks-registry.cjs');
 
@@ -430,7 +431,7 @@ describe('#5560 live Pi', { skip: piAvailable ? false : 'pi is not installed' },
     fs.writeFileSync(path.join(agent, 'models.json'), JSON.stringify({ providers: { fake: { baseUrl: `http://127.0.0.1:${server.address().port}/v1`, api: 'openai-completions', apiKey: 'x', models: [{ id: 'fake-1' }] } } }));
     const code = await new Promise((resolve) => {
       const child = spawn('pi', ['--offline', '-p', '--no-session', '--no-extensions', '--no-approve', '-e', path.join(REPO, 'pi', 'gsd.cjs'), '--model', 'fake/fake-1', 'go'], {
-        cwd: work, env: { ...process.env, PI_CODING_AGENT_DIR: agent, HOME: agent }, stdio: 'ignore', timeout: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL',
+        cwd: work, env: isolatedEnv({ home: agent, override: { PI_CODING_AGENT_DIR: agent } }), stdio: 'ignore', timeout: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL',
       });
       child.on('close', (c) => resolve(c));
     });

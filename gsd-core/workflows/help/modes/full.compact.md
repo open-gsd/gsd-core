@@ -202,7 +202,7 @@ Usage: `/gsd:ship 4` or `/gsd:ship 4 --draft`
 
 ---
 
-**`/gsd:review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--all]`** — Detects available external AI CLIs, each independently reviews the phase's plans with the same structured prompt (CodeRabbit reviews the live diff, up to ~5 min), produces REVIEWS.md with consensus. Feed back via `/gsd:plan-phase N --reviews`.
+**`/gsd:review --phase N [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy] [--all] [--cycle-summary]`** — Detects available external AI CLIs, each independently reviews the phase's plans with the same structured prompt (CodeRabbit reviews the live diff, up to ~5 min), produces REVIEWS.md with consensus. Feed back via `/gsd:plan-phase N --reviews`.
 
 Usage: `/gsd:review --phase 3 --all`
 
@@ -217,6 +217,10 @@ Usage: `/gsd:pr-branch` or `/gsd:pr-branch main`
 **`/gsd:capture --seed [idea]`** — Captures a forward-looking idea with WHY/WHEN-to-surface trigger conditions; auto-surfaces during `/gsd:new-milestone` when triggers match.
 
 Usage: `/gsd:capture --seed "add real-time notifications when we build the events system"`
+
+**`/gsd:capture --seed --close SEED-ID (--promoted REQ-ID | --built PHASE | --dropped "why")`** — Closes a seed whose idea was acted on (sets `status: closed`, records `outcome_kind`, `outcome_ref`, `outcome`); it stops surfacing in `/gsd:new-milestone` and the milestone-close audit.
+
+Usage: `/gsd:capture --seed --close SEED-260315-k3x --promoted PLAT-17`
 
 **`/gsd:capture --backlog [description]`** — Adds an idea to the 999.x backlog without committing to the current milestone; promote later via `/gsd:review-backlog`.
 
@@ -280,7 +284,7 @@ Every command below is also a live `/gsd-*` slash command, grouped by purpose.
 
 - **`/gsd:mvp-phase <phase-number>`** — Plans a phase as a vertical MVP slice (user story + SPIDR splitting) before handoff to plan-phase; same end-state as `/gsd:plan-phase --mvp` with a guided intro.
 - **`/gsd:ultraplan-phase [phase]`** — [BETA] Offload plan phase to Claude Code's ultraplan cloud; review in browser, import back.
-- **`/gsd:plan-review-convergence <phase> [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy/--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all] [--text] [--ws <name>] [--max-cycles N]`** — Cross-AI convergence loop: replan with review feedback until no HIGH concerns remain (cloud and local-model reviewers).
+- **`/gsd:plan-review-convergence <phase> [--claude] [--codex] [--coderabbit] [--opencode] [--qwen] [--cursor] [--agy/--antigravity] [--ollama] [--lm-studio] [--llama-cpp] [--kimi-code] [--all] [--text] [--ws <name>] [--max-cycles N] [--on-escalation ask|exit]`** — Cross-AI convergence loop: replan with review feedback until no HIGH concerns remain (cloud and local-model reviewers).
 - **`/gsd:autonomous [--from N] [--to N] [--only N] [--interactive] [--converge]`** — Runs all remaining phases unattended: discuss → plan → execute per phase; `--converge`/`--cross-ai` routes planning through convergence.
 
 ### Quality, Review & Verification

@@ -38,6 +38,7 @@ const {
   CATEGORIES,
   MACOS_CATEGORIES,
   walkTestFiles,
+  readTestFile,
   ALWAYS_REAL_OS,
   PLATFORM_SIBLING_SUFFIX,
   findPlatformSplitViolations,
@@ -48,20 +49,51 @@ const SCRIPT = path.join(ROOT, 'scripts', 'gen-platform-conformance-tier.cjs');
 const GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'platform-conformance-tier.generated.cjs');
 const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformance-tier.generated.cjs');
 
-// Policy ceilings, not derived facts — a bound like this has to be a number
-// somewhere, so it is hoisted here once (module scope, shared by every case
-// below that needs it) rather than left as a bare literal inside an
-// assertion. Measured at authoring time (2026-09-11): the Windows tier sat at
-// 264/931 eligible unit-suite files (~28.4%), the macOS tier at 197/931
-// (~21.2%). Each ceiling below leaves headroom over that measurement — enough
-// to absorb ordinary suite growth (new test files that happen to touch a real
-// platform signal) without going so loose that a regression toward
-// re-matching a removed house idiom (process-seam calls, path-call-plus-
-// slash-literal) would slip back under the ceiling undetected. If the
-// measured ratio moves, update the ratio in this comment and re-justify the
-// ceiling — do not just raise the number to make a red test green.
-const WINDOWS_TIER_RATIO_CEILING = 0.33;
-const MACOS_TIER_RATIO_CEILING = 0.25;
+// Size baselines, not derived facts: each tier is bounded by its own file count (ADR-4641, amended by #6551;
+// they replace the ratios of that ADR's section 3, which moved whenever unrelated tests were deleted). A file
+// joining a tier is a deliberate edit of the constant, with the reason in review; a tier that shrank lowers the
+// constant in the same change, so the bound only tightens. Do not raise a number to make a red test green.
+// The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
+// swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
+const WINDOWS_TIER_SIZE_BASELINE = 357; // +1 (#6719): tests/project-skills-manifest.test.cjs joins the tier: it lists a skill directory that is a symlink or junction, a behavior only a real Windows lane can prove; +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1 (#4647): tests/seed-close.test.cjs runs the shipped plant-seed parse-idea block under a real `bash` (runHook interpreter), the signal the tier exists for; +1: tests/6451-tdd-deviation-acceptance.test.cjs joins the tier (#6451); -2 (#6039): wave 4 moved 2 files off the lane (env literal only); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip; +1 (#5249): tests/health-diagnostic-rules/project-skills-budget.test.cjs joins the tier: its symlinked-skill-directory case is real Windows signal (symlink creation needs privilege there and the case skips itself when it fails)
+const MACOS_TIER_SIZE_BASELINE = 303; // +1 (#6719): tests/project-skills-manifest.test.cjs joins the tier: it lists a symlinked skill directory on the macOS lane; +1 (#4696): tests/tdd-gate-split-dispatch.test.cjs runs the shipped execute-phase split-decision block under a real `bash` (runHook interpreter); +1: tests/6420-plan-document-linear.test.cjs joins the tier (#6420); -2: contributor-standards and verification-overrides became text contracts (#6577); -1 earlier: debugger-semantic-recall (#6566); +1: tests/6503-api-coverage-probe-install-lookup.test.cjs joins the tier (#6503): spawns POSIX sh through the process seam, carries the win32 skip; +1 (#5249): tests/health-diagnostic-rules/project-skills-budget.test.cjs joins the tier: its symlinked-skill-directory case is real Windows signal (symlink creation needs privilege there and the case skips itself when it fails)
+
+// A tier of `count` files against its committed baseline: nonzero, not above, not below.
+function assertTierAtBaseline(count, baseline, label, constantName) {
+  assert.ok(count > 0, `expected a nonzero ${label} conformance tier`);
+  assert.ok(
+    count <= baseline,
+    `the ${label} conformance tier grew to ${count} files, above its baseline of ${baseline} (ADR-4641 amended by #6551). ` +
+      `A file joining the tier is a deliberate change: raise ${constantName} to ${count} in this PR and say why.`,
+  );
+  assert.ok(
+    count >= baseline,
+    `the ${label} conformance tier shrank to ${count} files, below its baseline of ${baseline}. ` +
+      `Lower ${constantName} to ${count} in this PR so the bound keeps tightening.`,
+  );
+}
+
+// Classify each listed test file and count the ones that need a real OS. The
+// tree is walked once and each file read afterwards, so a sibling test that
+// writes and unlinks a probe file in tests/ (run-tests-temp-root.test.cjs,
+// #4020) can remove a listed file before its read (#6544). A file that is gone
+// is not a test file and is not counted; any other read error is a real fault.
+function countTierFiles(absPaths, classify, forced = () => false) {
+  let tierCount = 0;
+  let readCount = 0;
+  for (const absPath of absPaths) {
+    let content;
+    try {
+      content = fs.readFileSync(absPath, 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    readCount++;
+    if (classify(content).needsRealOs || forced(absPath)) tierCount++;
+  }
+  return { tierCount, readCount };
+}
 
 // ─── Rows 1-15: classifyContent, pure fixtures ────────────────────────────────
 
@@ -336,20 +368,10 @@ describe('gen-platform-conformance-tier.cjs — real repo tree (regression)', ()
       fresh = classifyTree(realTestsDir);
     }, 'a full sweep of the real tests/ tree must complete without throwing');
 
-    // Post-#4641 the tier is a ratio-bounded MINORITY of eligible unit-suite
-    // files (WINDOWS_TIER_RATIO_CEILING, same policy ceiling the #4641 block
-    // below enforces), not a brittle absolute-count range against a literal
-    // that goes stale every time the category set or the suite's file count
-    // changes (a hardcoded exact-count sanity range already broke once in
-    // this PR). Derived from the live tree, not a hardcoded number.
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-    const eligibleCount = walkTestFiles(realTestsDir).filter((absPath) => suiteOf(absPath) === null).length;
-    const ratio = fresh.files.length / eligibleCount;
-    assert.ok(
-      ratio > 0 && ratio <= WINDOWS_TIER_RATIO_CEILING,
-      `expected a nonzero conformance tier within the #4641 ratio ceiling (<=${WINDOWS_TIER_RATIO_CEILING * 100}%), ` +
-        `got ${fresh.files.length}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+    // The tier is bounded by its own size (WINDOWS_TIER_SIZE_BASELINE, the same
+    // ratchet the #4641 block below enforces), not by a ratio against the live
+    // count of unit-suite files, which moves whenever tests are added or removed.
+    assertTierAtBaseline(fresh.files.length, WINDOWS_TIER_SIZE_BASELINE, 'Windows', 'WINDOWS_TIER_SIZE_BASELINE');
 
     delete require.cache[require.resolve(GENERATED_PATH)];
     const committed = require(GENERATED_PATH);
@@ -581,20 +603,8 @@ describe('gen-platform-conformance-tier.cjs — real repo tree, macOS target (re
       fresh = classifyMacosTree(realTestsDir);
     }, 'a full sweep of the real tests/ tree must complete without throwing');
 
-    // Post-#4641 the tier is a ratio-bounded MINORITY of eligible unit-suite
-    // files (MACOS_TIER_RATIO_CEILING, same policy ceiling the #4641 block
-    // below enforces), not a brittle absolute-count range against a literal
-    // that goes stale every time the category set or the suite's file count
-    // changes (a hardcoded exact-count sanity range already broke once in
-    // this PR). Derived from the live tree, not a hardcoded number.
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-    const eligibleCount = walkTestFiles(realTestsDir).filter((absPath) => suiteOf(absPath) === null).length;
-    const ratio = fresh.files.length / eligibleCount;
-    assert.ok(
-      ratio > 0 && ratio <= MACOS_TIER_RATIO_CEILING,
-      `expected a nonzero macOS conformance tier within the #4641 ratio ceiling (<=${MACOS_TIER_RATIO_CEILING * 100}%), ` +
-        `got ${fresh.files.length}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+    // Bounded by its own size (MACOS_TIER_SIZE_BASELINE), as the Windows tier is above.
+    assertTierAtBaseline(fresh.files.length, MACOS_TIER_SIZE_BASELINE, 'macOS', 'MACOS_TIER_SIZE_BASELINE');
 
     delete require.cache[require.resolve(MACOS_GENERATED_PATH)];
     const committed = require(MACOS_GENERATED_PATH);
@@ -630,55 +640,78 @@ describe('gen-platform-conformance-tier.cjs — real repo tree, macOS target (re
 // ─── #4641: narrow the Windows conformance tier away from house-idiom noise ───
 
 describe('conformance tier narrowing (#4641)', () => {
-  // WINDOWS_TIER_RATIO_CEILING / MACOS_TIER_RATIO_CEILING are hoisted to
+  // WINDOWS_TIER_SIZE_BASELINE / MACOS_TIER_SIZE_BASELINE are hoisted to
   // module scope above (shared with the real-repo-tree regression case
-  // further down, which needs the same ceiling rather than a second
+  // further down, which needs the same baseline rather than a second
   // independently-drifting copy of it).
 
-  test('conformance tier stays a tier, not the suite (#4641)', () => {
-    const realTestsDir = path.join(ROOT, 'tests');
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+  test('a test file that vanishes between the walk and its read is not counted and does not throw (#6544)', (t) => {
+    // tests/run-tests-temp-root.test.cjs writes tests/helpers-4020-probe.test.cjs
+    // into the real tests tree and unlinks it afterwards. A sibling that walked
+    // the tree in between lists a file whose read then fails with ENOENT.
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    const present = path.join(dir, 'present.test.cjs');
+    const vanished = path.join(dir, 'vanished.test.cjs');
+    fs.writeFileSync(present, "const os = require('node:os');\nos.platform();\n");
 
-    const absoluteFiles = walkTestFiles(realTestsDir);
-    const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    const eligibleCount = eligibleFiles.length;
+    const { tierCount, readCount } = countTierFiles([present, vanished], classifyContent);
 
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      const content = fs.readFileSync(absPath, 'utf8');
-      const { needsRealOs } = classifyContent(content);
-      if (needsRealOs) tierCount++;
-    }
-
-    const ratio = tierCount / eligibleCount;
-    assert.ok(
-      ratio <= WINDOWS_TIER_RATIO_CEILING,
-      `expected the conformance tier to be at most ${WINDOWS_TIER_RATIO_CEILING * 100}% of eligible unit-suite files, ` +
-        `got ${tierCount}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+    assert.equal(readCount, 1, 'only the file that exists is counted');
+    assert.equal(tierCount, 1, 'the surviving file is classified');
   });
 
-  test('macos conformance tier stays within its evidence-backed ceiling (#4641)', () => {
+  test('a read failure other than ENOENT still throws (#6544)', (t) => {
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    // A directory path reads as EISDIR: a real fault, not a vanished file.
+    assert.throws(() => countTierFiles([dir], classifyContent), { code: 'EISDIR' });
+  });
+
+  test('a file forced into the tier counts without a content signal; a forced file that vanished does not (#6551)', (t) => {
+    const dir = createTempDir('gsd-6551-');
+    t.after(() => cleanup(dir));
+    const plain = path.join(dir, 'plain.test.cjs');
+    const vanished = path.join(dir, 'vanished.test.cjs');
+    fs.writeFileSync(plain, "const x = 1;\n");
+
+    assert.equal(countTierFiles([plain], classifyContent).tierCount, 0, 'no signal, not forced');
+    assert.equal(countTierFiles([plain], classifyContent, () => true).tierCount, 1, 'forced in');
+    assert.equal(countTierFiles([plain, vanished], classifyContent, () => true).tierCount, 1, 'a vanished file is not counted even when forced');
+  });
+
+  // The tier is the files a fresh sweep of the live tree puts in the list: the classifier's hits plus the
+  // always-real-OS map entries (Windows only), the same count the committed generated files carry. Each file is read
+  // through countTierFiles, so one that vanishes after the walk is skipped (#6544).
+  const tierSize = (classify, forced) => {
     const realTestsDir = path.join(ROOT, 'tests');
     const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+    const eligibleFiles = walkTestFiles(realTestsDir).filter((absPath) => suiteOf(absPath) === null);
+    return countTierFiles(eligibleFiles, classify, (absPath) => forced(`tests/${path.relative(realTestsDir, absPath).replace(/\\/g, '/')}`)).tierCount;
+  };
 
-    const absoluteFiles = walkTestFiles(realTestsDir);
-    const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    const eligibleCount = eligibleFiles.length;
+  test('conformance tier stays a tier, not the suite (#4641)', () => {
+    assertTierAtBaseline(tierSize(classifyContent, (rel) => ALWAYS_REAL_OS.has(rel)), WINDOWS_TIER_SIZE_BASELINE, 'Windows', 'WINDOWS_TIER_SIZE_BASELINE');
+  });
 
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      const content = fs.readFileSync(absPath, 'utf8');
-      const { needsRealOs } = classifyMacosContent(content);
-      if (needsRealOs) tierCount++;
-    }
+  test('macos conformance tier stays within its size baseline (#4641)', () => {
+    assertTierAtBaseline(tierSize(classifyMacosContent, () => false), MACOS_TIER_SIZE_BASELINE, 'macOS', 'MACOS_TIER_SIZE_BASELINE');
+  });
 
-    const ratio = tierCount / eligibleCount;
-    assert.ok(
-      ratio <= MACOS_TIER_RATIO_CEILING,
-      `expected the macOS conformance tier to be at most ${MACOS_TIER_RATIO_CEILING * 100}% of eligible unit-suite files, ` +
-        `got ${tierCount}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+  // The ratchet itself: a tier above its baseline, below it, or empty fails, and the message names the constant to edit.
+  describe('assertTierAtBaseline', () => {
+    test('a tier at its baseline passes', () => {
+      assert.doesNotThrow(() => assertTierAtBaseline(301, 301, 'macOS', 'X'));
+    });
+    test('a tier one file above its baseline fails and says to raise the baseline', () => {
+      assert.throws(() => assertTierAtBaseline(302, 301, 'macOS', 'MACOS_TIER_SIZE_BASELINE'), /grew to 302 files, above its baseline of 301[\s\S]*raise MACOS_TIER_SIZE_BASELINE to 302/);
+    });
+    test('a tier one file below its baseline fails and says to lower the baseline', () => {
+      assert.throws(() => assertTierAtBaseline(300, 301, 'macOS', 'MACOS_TIER_SIZE_BASELINE'), /shrank to 300 files, below its baseline of 301[\s\S]*Lower MACOS_TIER_SIZE_BASELINE to 300/);
+    });
+    test('an empty tier fails', () => {
+      assert.throws(() => assertTierAtBaseline(0, 0, 'macOS', 'X'), /nonzero macOS conformance tier/);
+    });
   });
 
   test('seam-helper calls are not a platform signal (#4641)', () => {
@@ -1030,6 +1063,33 @@ describe('#5074 platform split — .platform sibling rule', () => {
     }
   });
 
+  // ─── #6638: a .platform sibling declared in ALWAYS_REAL_OS needs no signal of its own.
+  // Pure-function row with an injected map, like row 7.
+  test('a .platform sibling declared in ALWAYS_REAL_OS satisfies the signal requirement (#6638)', () => {
+    const entries = [
+      { rel: 'tests/fake-declared.test.cjs', content: 'assert.equal(1 + 1, 2);\n' },
+      { rel: 'tests/fake-declared.platform.test.cjs', content: 'assert.equal(2 + 2, 4);\n' },
+    ];
+    const siblingRel = 'tests/fake-declared.platform.test.cjs';
+    const baseRel = 'tests/fake-declared.test.cjs';
+
+    assert.deepEqual(findPlatformSplitViolations(entries, new Map()), [
+      { file: siblingRel, kind: 'sibling-without-signal', signals: [] },
+    ]);
+    assert.deepEqual(findPlatformSplitViolations(entries, new Map([[siblingRel, 'fixture reason']])), []);
+    assert.deepEqual(
+      findPlatformSplitViolations(entries, new Map([[baseRel, 'fixture reason']])),
+      [
+        { file: siblingRel, kind: 'sibling-without-signal', signals: [] },
+        { file: baseRel, kind: 'base-always-real-os', signals: [] },
+      ],
+    );
+    assert.deepEqual(
+      findPlatformSplitViolations(entries, new Map([[siblingRel, 'a'], [baseRel, 'b']])),
+      [{ file: baseRel, kind: 'base-always-real-os', signals: [] }],
+    );
+  });
+
   // ─── Row 6: an orphan .platform file (no base) with a genuine signal ─────
   test('an orphan .platform file is classified on its own content', () => {
     const tmpDir = createTempDir('gen-platform-split-orphan-');
@@ -1345,5 +1405,137 @@ describe('#6002: detectors match platform behavior, not text', () => {
         for (const sig of before) assert.ok(after.includes(sig), `lost ${sig}`);
       }),
     );
+  });
+});
+
+// ─── #6166: a test file that vanishes between the walk and the read ─────────
+
+describe('#6166 tree classifiers skip a test file deleted after enumeration', () => {
+  // Make reading `gone.test.cjs` (or each of `goneNames`) throw an error with
+  // `code` (none when `code` is null), as a file deleted between walkTestFiles
+  // and the read does; every other read goes through.
+  function withFailingRead(t, testsDir, code, { goneNames = ['gone.test.cjs'], message } = {}) {
+    const gone = new Set(goneNames.map((name) => path.join(testsDir, name)));
+    const readFileSync = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (file, ...rest) => {
+      if (gone.has(file)) {
+        const err = new Error(message ?? `${code}: ${file}`);
+        throw code === null ? err : Object.assign(err, { code });
+      }
+      return readFileSync(file, ...rest);
+    });
+  }
+
+  function withTestsDir(prefix, files, body) {
+    const tmpDir = createTempDir(prefix);
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(testsDir, name), content);
+      body(testsDir);
+    } finally {
+      cleanup(tmpDir);
+    }
+  }
+
+  const DARWIN = "if (process.platform === 'darwin') {}\n";
+  const PLAIN = 'assert.equal(1 + 1, 2);\n';
+
+  test('readTestFile answers null for ENOENT and rethrows every other error', (t) => {
+    withTestsDir('gen-platform-read-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+      const gone = path.join(testsDir, 'gone.test.cjs');
+      assert.equal(readTestFile(gone), PLAIN);
+      assert.equal(readTestFile(path.join(testsDir, 'never-there.test.cjs')), null);
+      assert.throws(() => readTestFile(testsDir), { code: 'EISDIR' });
+
+      withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
+      assert.throws(() => readTestFile(gone), { code: 'EIO' });
+      assert.equal(readTestFile(path.join(testsDir, 'never-there.test.cjs')), null);
+    });
+  });
+
+  for (const [name, classify] of [
+    ['classifyTree', classifyTree],
+    ['classifyMacosTree', classifyMacosTree],
+  ]) {
+    test(`${name}: an ENOENT file is left out of files and total`, (t) => {
+      withTestsDir('gen-platform-vanished-', { 'gone.test.cjs': DARWIN, 'kept.test.cjs': DARWIN }, (testsDir) => {
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/gone.test.cjs', 'tests/kept.test.cjs'] });
+
+        withFailingRead(t, testsDir, 'ENOENT');
+        assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/kept.test.cjs'] });
+      });
+    });
+
+    test(`${name}: the files left after a skip are the same, in the same order, as with the file deleted`, (t) => {
+      const files = { 'c.test.cjs': DARWIN, 'gone.test.cjs': DARWIN, 'a.test.cjs': DARWIN, 'b.test.cjs': PLAIN };
+      withTestsDir('gen-platform-order-', files, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT');
+        const skipped = classify(testsDir);
+        t.mock.restoreAll();
+
+        fs.unlinkSync(path.join(testsDir, 'gone.test.cjs'));
+        assert.deepEqual(skipped, classify(testsDir));
+        assert.deepEqual(skipped, { total: 3, files: ['tests/a.test.cjs', 'tests/c.test.cjs'] });
+      });
+    });
+
+    for (const code of ['EACCES', 'EISDIR', 'EIO', 'EMFILE', 'ENOTDIR', 'EBUSY']) {
+      test(`${name}: a ${code} read error still throws`, (t) => {
+        withTestsDir('gen-platform-unreadable-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+          withFailingRead(t, testsDir, code);
+          assert.throws(() => classify(testsDir), { code });
+        });
+      });
+    }
+
+    test(`${name}: two files that vanish in one run are both left out of total`, (t) => {
+      const files = { 'a.test.cjs': DARWIN, 'gone.test.cjs': DARWIN, 'gone-too.test.cjs': PLAIN };
+      withTestsDir('gen-platform-two-vanished-', files, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['gone.test.cjs', 'gone-too.test.cjs'] });
+        assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an empty file is read, counted in total and not flagged`, () => {
+      withTestsDir('gen-platform-empty-', { 'empty.test.cjs': '', 'a.test.cjs': DARWIN }, (testsDir) => {
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an error with no code still throws`, (t) => {
+      withTestsDir('gen-platform-codeless-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+        withFailingRead(t, testsDir, null, { message: 'read failed' });
+        assert.throws(() => classify(testsDir), { message: 'read failed' });
+      });
+    });
+
+    test(`${name}: a suite-tagged file is counted in total but never read or flagged`, (t) => {
+      // Suite files are filtered out before the read, so a vanished one stays in
+      // total, as on next; only unit-suite files are read and can be skipped.
+      withTestsDir('gen-platform-suite-', { 'x.install.test.cjs': DARWIN, 'a.test.cjs': DARWIN }, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['x.install.test.cjs'] });
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an error whose message says ENOENT but whose code does not still throws`, (t) => {
+      withTestsDir('gen-platform-message-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+        withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
+        assert.throws(() => classify(testsDir), { code: 'EIO' });
+      });
+    });
+  }
+
+  test('classifyTree: a .platform sibling that vanished never reaches the #5074 split check', (t) => {
+    // Base without signal + sibling with one is a valid split. With the sibling
+    // gone, only the base is left: no split to check, nothing flagged.
+    const files = { 'a.test.cjs': PLAIN, 'a.platform.test.cjs': DARWIN };
+    withTestsDir('gen-platform-split-', files, (testsDir) => {
+      assert.deepEqual(classifyTree(testsDir), { total: 2, files: ['tests/a.platform.test.cjs'] });
+
+      withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['a.platform.test.cjs'] });
+      assert.deepEqual(classifyTree(testsDir), { total: 1, files: [] });
+    });
   });
 });

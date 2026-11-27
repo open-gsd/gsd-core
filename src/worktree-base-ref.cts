@@ -17,82 +17,29 @@ import path from 'node:path';
 import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
 import { execGit as execGitSeam, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
-
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/**
- * Strip JSONC comments (line and block forms) from a string to produce valid JSON.
- * Handles comments inside strings correctly (does not strip them).
- * Mirrors the same logic in bin/install.js:stripJsonComments.
- */
-function stripJsonComments(text: string): string {
-  let result = '';
-  let i = 0;
-  let inString = false;
-  let stringChar = '';
-  while (i < text.length) {
-    // Handle string literals — don't strip comments inside strings
-    if (inString) {
-      if (text[i] === '\\') {
-        result += text[i] + (text[i + 1] || '');
-        i += 2;
-        continue;
-      }
-      if (text[i] === stringChar) {
-        inString = false;
-      }
-      result += text[i];
-      i++;
-      continue;
-    }
-    // Start of string
-    if (text[i] === '"' || text[i] === "'") {
-      inString = true;
-      stringChar = text[i];
-      result += text[i];
-      i++;
-      continue;
-    }
-    // Line comment
-    if (text[i] === '/' && text[i + 1] === '/') {
-      // Skip to end of line
-      while (i < text.length && text[i] !== '\n') i++;
-      continue;
-    }
-    // Block comment
-    if (text[i] === '/' && text[i + 1] === '*') {
-      i += 2;
-      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
-      i += 2; // skip closing */
-      continue;
-    }
-    result += text[i];
-    i++;
-  }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
-}
+import { parseJsonc } from './settings-jsonc.cjs';
+import { BASE_CHECK_ISOLATION_MODES, isBaseCheckIsolationMode } from './dispatch-isolation.cjs';
+import type { BaseCheckIsolationMode } from './dispatch-isolation.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6031 CJS interop import, as in the sibling config modules
+import valueResolver = require('./config-value-resolver.cjs');
+const { resolveConfigValue } = valueResolver;
 
 /**
- * Parse a string as JSONC (JSON with comments). Returns the parsed value or
- * throws a SyntaxError if the content is genuinely malformed.
+ * What the family-B ladder reports for `worktree.baseRef`: the value and the settings layer
+ * (`runtime-local`, `runtime-shared`, `runtime-user`) that produced it, or an unfound marker.
  */
-function parseJsonc(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return JSON.parse(stripJsonComments(text));
-  }
-}
+export type BaseRefResolution = ReturnType<typeof resolveConfigValue>;
+export type BaseRefLayer = BaseRefResolution['layer'];
 
 // ─── Internal types ───────────────────────────────────────────────────────────
 
 type ExecGitFn = typeof execGitSeam;
 
-// Who creates the isolated worktree — the two worktree-creating members of
-// host-integration.cts's DispatchIsolation vocabulary ('none' creates none and
-// never reaches this check).
-type BaseCheckIsolationMode = 'harness-worktree' | 'orchestrator-worktree';
+// Who creates the isolated worktree — the worktree-creating members of the
+// DispatchIsolation vocabulary ('none' creates none and never reaches this
+// check). `BaseCheckIsolationMode` is imported from src/dispatch-isolation.cts
+// (#4561), where it is derived from the one vocabulary tuple by excluding
+// 'none' — not restated here.
 
 /**
  * A settings layer that defeats the `worktree.baseRef:"head"` trust (#4588): either it
@@ -243,60 +190,24 @@ export function applyWorktreeBaseRef(settings: Record<string, unknown>): {
 }
 
 /**
- * Reads settings files in a 3-layer cascade and extracts worktree.baseRef from
- * the first layer that provides a non-null string value. Layers (highest to lowest
- * precedence):
- *   1. project local  — <claudeDir>/settings.local.json
- *   2. project shared — <claudeDir>/settings.json
- *   3. user/global    — <userClaudeDir>/settings.json  (only when userClaudeDir is
- *                       provided AND resolves to a different path than claudeDir)
- *
- * deps.readFile(path) must return the file contents or null on any error.
- * userClaudeDir is optional; when absent/null the user/global layer is skipped.
+ * Resolves `worktree.baseRef` through the family-B ladder of the Config Value Resolution
+ * Module (ADR-1411 Decisions 1 and 2) and returns the resolution, so a consumer keeps the
+ * layer that produced the value (#4090, #6031). Highest to lowest precedence: runtime-local
+ * (<cwd>/.claude/settings.local.json), runtime-shared (<cwd>/.claude/settings.json), runtime-user
+ * (<user config dir>/settings.json, skipped when it is the same directory as <cwd>/.claude).
+ * A layer whose baseRef is not a string is skipped, as the bare-string cascade did: that is
+ * `valueType: 'string'`. deps.readFile(path) returns the file contents or null on any error;
+ * deps.userClaudeDir names the user config directory (default getGlobalConfigDir('claude'),
+ * which honours CLAUDE_CONFIG_DIR) and null drops the user layer.
  */
 export function resolveEffectiveBaseRef(
-  claudeDir: string,
-  deps?: { readFile?: (p: string) => string | null },
-  userClaudeDir?: string | null
-): string | null {
-  const readFile: (p: string) => string | null = deps?.readFile ?? ((p: string) => {
-    try {
-      return fs.readFileSync(p, 'utf8');
-    } catch {
-      return null;
-    }
-  });
-
-  const localPath = path.join(claudeDir, 'settings.local.json');
-  const sharedPath = path.join(claudeDir, 'settings.json');
-
-  function parseBaseRef(filePath: string): string | null {
-    const contents = readFile(filePath);
-    if (contents == null) return null;
-    try {
-      const parsed: unknown = parseJsonc(contents);
-      return readBaseRefFromSettings(parsed);
-    } catch {
-      return null;
-    }
-  }
-
-  // Layer 1: project local
-  const localRef = parseBaseRef(localPath);
-  if (localRef !== null) return localRef;
-
-  // Layer 2: project shared
-  const sharedRef = parseBaseRef(sharedPath);
-  if (sharedRef !== null) return sharedRef;
-
-  // Layer 3: user/global (only when provided and not the same directory as claudeDir)
-  if (userClaudeDir && path.resolve(userClaudeDir) !== path.resolve(claudeDir)) {
-    const userSharedPath = path.join(userClaudeDir, 'settings.json');
-    const userRef = parseBaseRef(userSharedPath);
-    if (userRef !== null) return userRef;
-  }
-
-  return null;
+  cwd: string,
+  deps?: { readFile?: (p: string) => string | null; userClaudeDir?: string | null }
+): BaseRefResolution {
+  const io: { readFile?: (p: string) => string | null; userDir?: string | null } = {};
+  if (deps?.readFile) io.readFile = deps.readFile;
+  if (deps && Object.hasOwn(deps, 'userClaudeDir')) io.userDir = deps.userClaudeDir;
+  return resolveConfigValue('worktree.baseRef', { cwd, family: 'B', valueType: 'string', io });
 }
 
 /**
@@ -364,6 +275,47 @@ export function findWorktreeCreateHook(
 }
 
 /**
+ * The base-check evaluation for a project directory: exactly what
+ * `cmdWorktreeBaseCheck` computes, minus the stdout emit and the `--mode` /
+ * `--observed-fork-base` argv parse (#4222). Resolves the effective baseRef from
+ * `<cwd>/.claude` settings (project local, project shared, user/global), runs the
+ * `WorktreeCreate`-hook interlock where it applies (#4588/#4881) and evaluates the
+ * #683 divergence against both. The interlock lives here, not in the CLI wrapper,
+ * so on the same inputs the CLI and the resolver (`routeDispatchIsolation` in
+ * gsd-tools.cjs, which re-derives this degrade before recording a decision) cannot
+ * disagree about the fork base. `observedForkBase`, a measurement taken inside a created worktree, is
+ * the one input the resolver cannot supply; it passes none, as the CLI does without
+ * the flag. deps.userClaudeDir overrides the user/global config directory
+ * (default: getGlobalConfigDir('claude'), which honours CLAUDE_CONFIG_DIR).
+ */
+export function evaluateWorktreeBaseDegradeForCwd(
+  cwd: string,
+  isolationMode: BaseCheckIsolationMode = 'harness-worktree',
+  deps?: { execGit?: ExecGitFn; readFile?: (p: string) => string | null; userClaudeDir?: string | null; observedForkBase?: string | null }
+): ReturnType<typeof evaluateWorktreeBaseDegrade> {
+  const observedForkBase = deps?.observedForkBase ?? null;
+  const claudeDir = path.join(cwd, '.claude');
+  const userClaudeDir = Object.prototype.hasOwnProperty.call(deps ?? {}, 'userClaudeDir')
+    ? (deps as { userClaudeDir?: string | null }).userClaudeDir
+    : getGlobalConfigDir('claude');
+  const effectiveBaseRef = resolveEffectiveBaseRef(cwd, { ...(deps?.readFile ? { readFile: deps.readFile } : {}), userClaudeDir });
+  // The WorktreeCreate-hook interlock (#4588) only matters where the evaluation would
+  // otherwise trust "head" without comparing: harness-created worktrees and no
+  // observation. Skip the settings reads everywhere else.
+  const worktreeCreateHook = effectiveBaseRef.found && effectiveBaseRef.value === 'head' && isolationMode === 'harness-worktree' && observedForkBase === null
+    ? findWorktreeCreateHook(claudeDir, deps?.readFile ? { readFile: deps.readFile } : undefined, userClaudeDir)
+    : null;
+  return evaluateWorktreeBaseDegrade({
+    cwd,
+    effectiveBaseRef,
+    execGit: deps?.execGit,
+    isolationMode,
+    observedForkBase,
+    worktreeCreateHook,
+  });
+}
+
+/**
  * CLI command: check current worktree base-ref degradation status.
  *
  * Reads effective baseRef from <cwd>/.claude settings (3-layer cascade:
@@ -386,8 +338,8 @@ export function cmdWorktreeBaseCheck(
   const modeIdx = args.indexOf('--mode');
   if (modeIdx !== -1) {
     const value = args[modeIdx + 1];
-    if (value !== 'harness-worktree' && value !== 'orchestrator-worktree') {
-      throw new Error(`worktree base-check: --mode must be harness-worktree or orchestrator-worktree, got ${JSON.stringify(value ?? null)}`);
+    if (!isBaseCheckIsolationMode(value)) {
+      throw new Error(`worktree base-check: --mode must be ${BASE_CHECK_ISOLATION_MODES.join(' or ')}, got ${JSON.stringify(value ?? null)}`);
     }
     isolationMode = value;
   }
@@ -405,29 +357,7 @@ export function cmdWorktreeBaseCheck(
     }
     observedForkBase = value.trim().toLowerCase();
   }
-  const claudeDir = path.join(cwd, '.claude');
-  const userClaudeDir = Object.prototype.hasOwnProperty.call(deps ?? {}, 'userClaudeDir')
-    ? (deps as { userClaudeDir?: string | null }).userClaudeDir
-    : getGlobalConfigDir('claude');
-  const effectiveBaseRef = resolveEffectiveBaseRef(
-    claudeDir,
-    deps?.readFile ? { readFile: deps.readFile } : undefined,
-    userClaudeDir
-  );
-  // The WorktreeCreate-hook interlock (#4588) only matters where the evaluation would
-  // otherwise trust "head" without comparing: harness-created worktrees and no
-  // observation. Skip the settings reads everywhere else.
-  const worktreeCreateHook = effectiveBaseRef === 'head' && isolationMode === 'harness-worktree' && observedForkBase === null
-    ? findWorktreeCreateHook(claudeDir, deps?.readFile ? { readFile: deps.readFile } : undefined, userClaudeDir)
-    : null;
-  const result = evaluateWorktreeBaseDegrade({
-    cwd,
-    effectiveBaseRef,
-    execGit: deps?.execGit,
-    isolationMode,
-    observedForkBase,
-    worktreeCreateHook,
-  });
+  const result = evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode, { ...(deps ?? {}), observedForkBase });
   // Default emit goes through fs.writeSync(1, …), NOT process.stdout.write:
   // the CLI's --pick capture intercepts writeSync, and command substitution
   // is a pipe — via process.stdout.write a `$(gsd-tools … --pick x)` capture
@@ -741,7 +671,7 @@ export function observeHarnessForkFromHead(deps: {
  * Returns a structured result with shouldDegrade, reason, and a user-visible
  * message when degradation is warranted.
  */
-export function evaluateWorktreeBaseDegrade(deps?: {
+function evaluateBaseDegradeVerdict(deps?: {
   execGit?: ExecGitFn;
   effectiveBaseRef?: string | null;
   cwd?: string;
@@ -1020,4 +950,25 @@ export function evaluateWorktreeBaseDegrade(deps?: {
   }
   const message = buildMsgDiverged(headSha, forkRef, forkSha);
   return { shouldDegrade: true, reason: 'head-diverged-from-fork', message, headSha, forkRef, forkSha, headAbsenceVerified: null };
+}
+
+/**
+ * The base-check verdict. `effectiveBaseRef` is the `worktree.baseRef` value as a string (or
+ * null), or the `ConfigValueResolution` that `resolveEffectiveBaseRef` returns. A resolution is
+ * read for its value — a value that is not a string counts as absent — and its producing layer is
+ * carried into the result as `baseRefLayer` (#4090, #6031), so the origin of a `head` is the
+ * evaluator's to read, never to infer. The verdict itself depends on the value alone: #4588
+ * measured that the harness honours `head` from every layer, so no layer changes it.
+ */
+export function evaluateWorktreeBaseDegrade(
+  deps?: Omit<NonNullable<Parameters<typeof evaluateBaseDegradeVerdict>[0]>, 'effectiveBaseRef'> & {
+    effectiveBaseRef?: string | null | BaseRefResolution;
+  }
+): ReturnType<typeof evaluateBaseDegradeVerdict> & { baseRefLayer?: BaseRefLayer } {
+  const given = deps?.effectiveBaseRef;
+  if (given === null || given === undefined || typeof given === 'string') {
+    return evaluateBaseDegradeVerdict({ ...deps, effectiveBaseRef: given });
+  }
+  const value = given.found && typeof given.value === 'string' ? given.value : null;
+  return { ...evaluateBaseDegradeVerdict({ ...deps, effectiveBaseRef: value }), baseRefLayer: given.layer };
 }

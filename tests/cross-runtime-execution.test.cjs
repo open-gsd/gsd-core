@@ -18,6 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { resolveOrchestratorExec } = require('../gsd-core/bin/lib/host-integration.cjs');
 
 const HOST_MODEL = 'HOSTMODEL-6301-XYZ';
@@ -43,7 +44,7 @@ function writePlan(fields) {
 function dispatch(runtime, extraEnv = {}) {
   // GSD_OPENCODE_GENERATION is always set: unset, the child probes a real `opencode --version`, so the
   // opencode argv would depend on the machine. Generation 1 keeps the descriptor's own argv.
-  const env = { HOME: project, USERPROFILE: project, GSD_HOME: project, GSD_RUNTIME: runtime, GSD_OPENCODE_GENERATION: '1', ...extraEnv };
+  const env = isolatedEnv({ home: project, base: {}, override: { GSD_HOME: project, GSD_RUNTIME: runtime, GSD_OPENCODE_GENERATION: '1', ...extraEnv } });
   // The record write is best-effort; remove the previous one so a silent write failure cannot leave a stale file to read.
   const recordPath = path.join(project, '.gsd', 'dispatch-isolation', `${PHASE}--${PLAN}.json`);
   cleanup(recordPath);
@@ -54,7 +55,11 @@ function dispatch(runtime, extraEnv = {}) {
   );
   assert.equal(result.success, true, result.error);
   const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+  // A fresh decision is decided as it is written (#4904), so both are the write's own clock reading:
+  // pin that, then drop both so two runs compare equal.
+  assert.equal(record.decided_at, record.written_at, 'a fresh decision is decided when it is written');
   delete record.written_at;
+  delete record.decided_at;
   return { output: JSON.parse(result.output), raw: result.output, record };
 }
 
@@ -83,7 +88,8 @@ describe('#6301 a plan that declares executor_runtime dispatches identically whi
       // #6303: the route now names the plan's declaration and the one reason it was not honored; the
       // dispatch decision itself (every other field) and the recorded decision stay identical.
       const { executorRuntime, fallback, ...declaredDecision } = declared.output;
-      assert.deepEqual(declaredDecision, { runtime: plain.output.runtime, isolation: plain.output.isolation, exec: plain.output.exec, harnessFlag: plain.output.harnessFlag }, 'the dispatch decision is identical');
+      // `held` / `decidedAt` (#4904) are part of the decision too.
+      assert.deepEqual(declaredDecision, { runtime: plain.output.runtime, isolation: plain.output.isolation, exec: plain.output.exec, harnessFlag: plain.output.harnessFlag, held: plain.output.held, decidedAt: plain.output.decidedAt }, 'the dispatch decision is identical');
       assert.equal(executorRuntime, 'codex');
       assert.equal(fallback, 'gate_off');
       assert.equal(plain.output.executorRuntime, null);
@@ -102,10 +108,14 @@ describe('#6301 a plan that declares executor_runtime dispatches identically whi
     assert.equal(declared.output.exec, null);
   });
 
-  test('the --json output carries exactly runtime, executorRuntime, isolation, exec, harnessFlag and fallback', () => {
+  test('the --json output carries exactly runtime, executorRuntime, isolation, exec, harnessFlag, fallback, held and decidedAt', () => {
     writeConfig({ runtime: 'claude' });
     writePlan({ executor_runtime: 'codex' });
-    assert.deepEqual(Object.keys(dispatch('claude').output).sort(), ['exec', 'executorRuntime', 'fallback', 'harnessFlag', 'isolation', 'runtime']);
+    // `held` / `decidedAt` report a held caller degrade (#4904); a fresh dispatch is never held.
+    const { output } = dispatch('claude');
+    assert.deepEqual(Object.keys(output).sort(), ['decidedAt', 'exec', 'executorRuntime', 'fallback', 'harnessFlag', 'held', 'isolation', 'runtime']);
+    assert.equal(output.held, false);
+    assert.equal(output.decidedAt, null);
   });
 });
 

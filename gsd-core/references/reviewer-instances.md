@@ -112,7 +112,7 @@ with an argv array and `shell: false`.
 ## Interaction with the convergence loop (#2398)
 
 Running 2+ instances changes how `/gsd:plan-review-convergence` counts HIGHs. Its **consensus gate**
-(`plan-review-convergence.md`, step 5a, immediately before the counting rules) engages only when two
+(`review.md`, step `cycle_summary`, immediately before the counting rules; the convergence loop reaches it by passing `--cycle-summary` to `/gsd:review`) engages only when two
 or more reviewers actually ran in a cycle — which is precisely the configuration this file enables.
 
 Under that gate, a HIGH raised by exactly one instance is treated by what the claim asserts:

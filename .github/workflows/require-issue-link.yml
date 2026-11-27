@@ -50,7 +50,7 @@ on:
   # the queue's temporary merge commit (base plus the queued PRs), so a queued
   # PR that edits this file runs its own version. Safety does not come from the
   # file's origin: every job or step below is skipped on that event, so nothing
-  # in this file executes there (tests/ci-merge-group-wiring.test.cjs pins it).
+  # in this file executes there (the ci-merge-group-wiring text contract pins it).
   merge_group:
     types: [checks_requested]
 
@@ -172,7 +172,7 @@ jobs:
       - name: Comment and fail if no issue link
         # Step-level (not job-level) so the required "Issue link required" check
         # still reports SUCCESS rather than "skipped" when a PR is exempt. See
-        # #1389 — that placement is kept, and tests/ci-merge-group-wiring.test.cjs
+        # #1389 — that placement is kept, and the ci-merge-group-wiring text contract
         # pins it, so every exemption added since must preserve it. Also
         # excludes merge_group directly: `steps.policy` never ran on that
         # event (see its own if: above), so its output is empty/undefined —

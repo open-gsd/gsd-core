@@ -1,0 +1,10 @@
+{
+  "resolverInternal": [
+    "hooks/gsd-statusline.js",
+    "hooks/lib/config-read.js",
+    "src/config-loader.cts",
+    "src/config-value-resolver.cts",
+    "src/planning-workspace.cts"
+  ],
+  "temporary": []
+}

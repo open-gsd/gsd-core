@@ -29,6 +29,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 // #3145: class-norm timeouts, not per-suite values — see helpers/timeouts.cjs.
 const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -457,7 +458,7 @@ describe('#787 Cline local install — directory form + PreToolUse hook', () => 
 describe('#787 Cline global install — ~/.agents/AGENTS.md', () => {
   function runGlobalClineInstall() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-787-cline-global-'));
-    const env = { ...process.env, HOME: root, USERPROFILE: root, GSD_HOME: root };
+    const env = isolatedEnv({ home: root, override: { GSD_HOME: root } });
     delete env.GSD_TEST_MODE;
     const res = runNode(
       [INSTALL_SCRIPT, '--cline', '--global', '--config-dir', path.join(root, '.cline')],

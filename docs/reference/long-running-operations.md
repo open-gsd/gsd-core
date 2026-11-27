@@ -131,5 +131,5 @@ to the registry default rather than producing `NaN` (no guessing).
 - **How-To:** [`../how-to/async-external-jobs.md`](../how-to/async-external-jobs.md) — using the SLURM adapter.
 - **Contract:** [`planning-artifacts.md`](./planning-artifacts.md) — the manifest stability contract.
 - **Capability manifest:** [`../../capabilities/external-job/capability.json`](../../capabilities/external-job/capability.json).
-- **Pure module:** `gsd-core/src/external-job.cts` → `gsd-core/bin/lib/external-job.cjs`.
+- **Pure module:** `src/external-job.cts` → `gsd-core/bin/lib/external-job.cjs`.
 - **Operator CLI:** `scripts/slurm-adapter.cjs`.

@@ -1376,6 +1376,22 @@ function transitionCoreUnmasked(
 // ----------------------------------------------------------------------------
 
 /**
+ * #6399: `state begin-phase --plans N` found nowhere in STATE.md to record the count: no `Total Plans in Phase` field
+ * and no `Plan:` line in `## Current Position`. Thrown by `beginPhaseCore` before it returns, so nothing is written;
+ * the begin-phase adapter turns it into the typed `plans_no_line` refusal.
+ */
+export class StatePlansNoLineError extends Error {
+  constructor(public readonly planCount: number) {
+    super(
+      `state begin-phase --plans ${planCount}: STATE.md has no "Total Plans in Phase:" field and no "Plan:" line in ` +
+      `"## Current Position" to record the plan count; nothing was written. Add a "Total Plans in Phase:" line, or ` +
+      `run without --plans.`,
+    );
+    this.name = 'StatePlansNoLineError';
+  }
+}
+
+/**
  * Apply a `beginPhase` transition to STATE.md content.
  *
  * Phase 1 scope (this file): the Status field update only. Subsequent
@@ -1467,8 +1483,13 @@ function beginPhaseCore(
       tryField('Current Phase Name', intent.phaseName);
     }
     tryField('Current Plan', String(startPlan));
+    // #6399: the count must land somewhere. `tryField` is a silent no-op when the field is absent, so the outcome is
+    // read back; the `Plan: N of M` line of `## Current Position` below is the other place a count is recorded.
+    let totalPlansLanded = false;
     if (intent.planCount != null) {
+      const before = updated.length;
       tryField('Total Plans in Phase', String(intent.planCount));
+      totalPlansLanded = updated.length > before;
     }
 
     // **Current focus:** body text line (#1104).
@@ -1501,7 +1522,11 @@ function beginPhaseCore(
     // ## Current Position section mutation (#1104, #1365).
     // `locateCurrentPosition` (fence-aware, tokenizeHeadings-based) locates
     // the section; mirrors state.cts:2261-2324 byte-for-behaviour.
-    body = mutateCurrentPositionFirstTime(body, { ...intent, startPlan }, today, updated);
+    const planLine = { written: false };
+    body = mutateCurrentPositionFirstTime(body, { ...intent, startPlan }, today, updated, planLine);
+    if (intent.planCount != null && !totalPlansLanded && !planLine.written) {
+      throw new StatePlansNoLineError(intent.planCount);
+    }
   } else {
     // Resume path: only update Last activity timestamp in Current Position
     // (do not touch Plan:, Phase:, Status:, stopped_at, progress.percent).
@@ -1600,6 +1625,7 @@ function mutateCurrentPositionFirstTime(
   intent: { phaseNumber: string | number; phaseName: string | null; planCount: number | null; startPlan: number },
   today: string,
   updated: string[],
+  planLine: { written: boolean },
 ): string {
   const span = locateCurrentPosition(body);
   if (span === null) return body;
@@ -1620,9 +1646,13 @@ function mutateCurrentPositionFirstTime(
   const planValue = `${intent.startPlan} of ${intent.planCount ?? '?'}`;
   if (/^Plan:/m.test(sectionBody)) {
     sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${planValue}`);
+    planLine.written = true;
   } else {
     const replaced = stateReplaceField(sectionBody, 'Plan', planValue);
-    if (replaced !== null) sectionBody = replaced;
+    if (replaced !== null) {
+      sectionBody = replaced;
+      planLine.written = true;
+    }
   }
 
   // Status line.

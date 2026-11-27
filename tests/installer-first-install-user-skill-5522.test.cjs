@@ -25,6 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -36,11 +37,13 @@ function stripAnsi(value) {
 }
 
 function runFirstInstall(targetDir) {
-  const env = { ...process.env };
-  delete env.GSD_TEST_MODE;
-  env.HOME = path.join(path.dirname(targetDir), 'home');
-  env.USERPROFILE = env.HOME;
-  env.GSD_HOME = env.HOME;
+  const home = path.join(path.dirname(targetDir), 'home');
+  // isolatedEnv strips NODE_TEST_CONTEXT; this child must keep it, because src/real-home-guard.cts
+  // arms the real-home guard from it and the installer is the process that could write to a real home.
+  const testContext = process.env.NODE_TEST_CONTEXT === undefined
+    ? {}
+    : { NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT };
+  const env = isolatedEnv({ home, override: { GSD_HOME: home, ...testContext } });
   return runNode(
     [installScript, '--claude', '--global', '--config-dir', targetDir, '--no-sdk'],
     { env, timeoutMs: INSTALL_TIMEOUT_MS }

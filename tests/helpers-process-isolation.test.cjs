@@ -60,7 +60,10 @@ describe('#2665: the built-lib require is deferred', () => {
 describe('homeSandboxEnv', () => {
   test('redirects both HOME and USERPROFILE', () => {
     const dir = '/tmp/gsd-5074-home-sandbox-fixture';
-    assert.deepEqual(homeSandboxEnv(dir), { HOME: dir, USERPROFILE: dir });
+    const env = homeSandboxEnv(dir);
+    assert.deepEqual(Object.keys(env).sort(), ['HOME', 'USERPROFILE']);
+    assert.equal(env.HOME, dir);
+    assert.equal(env.USERPROFILE, dir);
   });
 
   test('returns a fresh object on every call', () => {

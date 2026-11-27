@@ -360,7 +360,8 @@ describe('state contract — call-site wiring (integration, real CLI)', () => {
       '(no recognized labels here)',
       '',
     ].join('\n'));
-    const result = runGsdTools(['state', 'begin-phase', '--phase', '3', '--name', 'Polish', '--plans', '1'], tmpDir);
+    // No `--plans`: with it, a STATE.md that has nowhere to record the count is refused (#6399) rather than no-op'd.
+    const result = runGsdTools(['state', 'begin-phase', '--phase', '3', '--name', 'Polish'], tmpDir);
     assert.ok(result.success, `begin-phase fixture must genuinely succeed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.deepStrictEqual(output.updated, [], 'expected a genuine no-op (zero recognized body fields)');

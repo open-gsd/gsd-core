@@ -44,7 +44,7 @@ The `global:plugin:skill` gap on Cursor is **out of scope** for this ADR — it 
 
 ## Drift guard
 
-Three surfaces share the consumer-agent set: the `CONSUMER_AGENTS` list in `tests/agent-skills.test.cjs`, the agents carrying the bootstrap, and the `query agent-skills <type>` calls in workflows. `tests/agent-skills-bootstrap.test.cjs` asserts the bijection between `CONSUMER_AGENTS` and agents-with-bootstrap (Generative-Fix-Divergence, `CLAUDE.md`), with a `fast-check` property test over the agent file set. Any new consumer agent added without the bootstrap (or vice versa) fails CI.
+Three surfaces share the consumer-agent set: the `CONSUMER_AGENTS` list in `tests/agent-skills.test.cjs`, the agents carrying the bootstrap, and the `query agent-skills <type>` calls in workflows. The `agent-skills-bootstrap` text contract (`scripts/static-checks/text-contracts/agent-skills-bootstrap.cjs`) asserts the bijection between `CONSUMER_AGENTS` and agents-with-bootstrap (Generative-Fix-Divergence, `CLAUDE.md`), checking each agent file one by one. Any new consumer agent added without the bootstrap (or vice versa) fails CI.
 
 ## Consequences
 

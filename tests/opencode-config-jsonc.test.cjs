@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -38,7 +39,7 @@ function stripJsonc(text) {
 
 function run(args, home) {
   const result = runNode([INSTALL_SCRIPT, ...args], {
-    env: installerEnv({ HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config') }),
+    env: installerEnv(isolatedEnv({ home, override: { XDG_CONFIG_HOME: path.join(home, '.config') } })),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `installer failed: ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);

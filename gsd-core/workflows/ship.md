@@ -78,7 +78,7 @@ Verify the work is ready to ship:
    ANALYZE=$(gsd_run query roadmap.analyze ${GSD_WS:+--ws=${GSD_WS##* }}) || { echo "roadmap.analyze failed — see the error above" >&2; exit 1; }
    if [[ "$ANALYZE" == @file:* ]]; then ANALYZE=$(cat "${ANALYZE#@file:}"); fi
    # roadmap_record: phase -> every ROADMAP record of it reads complete. Fail closed: only true ships.
-   VERDICT=$(jq -er --arg p "$PHASE_NUMBER" 'def n:split(".")|map(sub("^0+(?=[0-9])";""))|join(".");if .error=="ROADMAP.md not found" then "skip" elif has("roadmap_record")|not then error("no roadmap_record") else .roadmap_record as $r|($p|n) as $k|if $r==null then "unreadable" elif ($r|type)!="object" then error("bad roadmap_record") elif ($r|has($k)|not) then "unrecorded" elif $r[$k] then "complete" else "incomplete" end end' <<<"$ANALYZE") || { echo "roadmap.analyze output unparseable" >&2; exit 1; }
+   VERDICT=$(jq -er --arg p "$PHASE_NUMBER" 'def n:split(".")|map(sub("^0+(?=[0-9])";""))|join(".");if .error=="ROADMAP.md not found" then "skip" elif has("roadmap_record")|not then error("no roadmap_record") else .roadmap_record as $r|($p|n) as $k|if $r==null then "unreadable" elif ($r|type)!="object" then error("bad roadmap_record") elif ($r|has($k)|not) then "unrecorded" elif $r[$k] then "complete" else "incomplete" end end' <<<"$ANALYZE") && [ -n "$VERDICT" ] || { echo "roadmap.analyze output unparseable" >&2; exit 1; }
    [ "$VERDICT" != unreadable ] || { echo "ROADMAP_TABLE_UNREADABLE: the ROADMAP.md progress table does not parse (e.g. a row with the wrong cell count); fix it, then re-run /gsd:ship" >&2; exit 1; }
    [ "$VERDICT" != unrecorded ] || { echo "PHASE_NOT_RECORDED: ROADMAP.md has no checklist entry or progress-table row for phase ${PHASE_NUMBER}; add one, run /gsd:verify-work ${PHASE_NUMBER}, then re-run /gsd:ship" >&2; exit 1; }
    [ "$VERDICT" != incomplete ] || { echo "PHASE_NOT_COMPLETE: Run /gsd:verify-work ${PHASE_NUMBER} (completes the phase), then re-run /gsd:ship" >&2; [[ $PHASE_NUMBER =~ ^[A-Za-z]?[0-9] ]] || echo "Custom-id phase: the phase tools cannot find its directory yet, so after verifying, tick its ROADMAP.md checklist entry by hand" >&2; exit 1; }
@@ -128,6 +128,8 @@ Verify the work is ready to ship:
    Read the `activeHooks` array from `SHIP_PRE_HOOKS_JSON` in-context (do NOT pipe it through a shell parser).
 
    **If `activeHooks` is empty or absent:** skip this check silently and continue to the next preflight step. A capability whose `when` is off contributes no entry, and one that failed to load fails OPEN with its own warning from the resolver — neither is a block.
+
+   **Contribution dispatch:** inject every `kind == "contribution"` fragment from `SHIP_PRE_HOOKS_JSON` per `gsd-core/references/loop-hook-dispatch.md` (skip when none), before the gates and steps below.
 
    **For each active entry where `kind == "gate"`** (process in array order), following `gsd-core/references/loop-hook-dispatch.md`. Every gate is visited exactly once by this loop — the named branches below are specializations *within* it, never a separate pass, so no gate is evaluated twice.
 

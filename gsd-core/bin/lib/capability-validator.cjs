@@ -38,6 +38,7 @@ const POINT_ORDER = [
   'verify:post',
   'ship:pre',
   'ship:post',
+  'review:pre', // #3997 — pinned to the generated contract by tests/review-capability-contributions.test.cjs
 ];
 
 // C1: Artifact availability — host-produced artifacts become available at their step's :post
@@ -74,6 +75,21 @@ for (const entry of LOOP_HOST_CONTRACT) {
   for (const point of entry.points) {
     POINT_TO_CONTRACT.set(point, entry);
   }
+}
+
+// #3997 — the release that introduced a loop point added after the original twelve. A capability
+// that declares a hook at such a point installs on an older core that rejects the point, so its
+// `engines.gsd` must EXCLUDE every older core (checked in validateAgainstContract). Additive-only:
+// a point never leaves this table, and a point from the original twelve never enters it.
+const POINT_MIN_ENGINE = Object.freeze({ 'review:pre': '1.23.0' });
+
+// Every released core line below the lowest introducing release, probed against `engines.gsd`.
+// A finite probe set, not a range-intersection proof (documented known limit, ADR-3997).
+function olderCoreProbes(minVersion) {
+  const [major, minor] = minVersion.split('.').map(Number);
+  const probes = ['0.0.0'];
+  for (let m = 0; m < minor; m += 1) probes.push(major + '.' + m + '.0', major + '.' + m + '.99');
+  return probes;
 }
 
 // ─── Config-slice validation ──────────────────────────────────────────────────
@@ -942,7 +958,29 @@ const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only', 'built-in-only']);
 const VALID_EFFORT_SURFACES   = new Set(['argv', 'none']);
 // ADR-1239 Codex-binding amendment (#2584): how a host isolates concurrent
 // same-wave executors — a dispatch sub-field, not a top-level axis.
-const VALID_DISPATCH_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
+// #4561: consumed from the single owner (src/dispatch-isolation.cts, compiled to
+// the ./dispatch-isolation.cjs sibling) instead of restated. This file is
+// hand-written and tracked while the owner is a build artifact. Every consumer
+// already runs post-build — gsd-tools.cjs after its ensureRuntimeBuild(), CI's
+// lint lane after its explicit `build:lib` step, the tests after `pretest` —
+// and gen-capability-registry.cjs (the one direct script consumer) already
+// requires the compiled text-lines.cjs before this module loads. The remaining
+// exposure is a tree whose lib was built BEFORE this module existed: the build
+// seam keys on a single sentinel file, so it reads that tree as built and a
+// bare `Cannot find module` would surface with no remedy attached. Name it.
+const VALID_DISPATCH_ISOLATION = (() => {
+  try {
+    return require('./dispatch-isolation.cjs').DISPATCH_ISOLATION_VOCABULARY;
+  } catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND' && /dispatch-isolation\.cjs/.test(String(err.message))) {
+      throw new Error(
+        'capability-validator: the compiled runtime lib ./dispatch-isolation.cjs is missing — this tree was built '
+        + 'before src/dispatch-isolation.cts existed. Run `npm run build:lib` (#4561).',
+      );
+    }
+    throw err;
+  }
+})();
 
 // ─── Reviewer lane body (ADR-2782 D1/D2/D3/D7/D8) ────────────────────────────
 //
@@ -3206,7 +3244,34 @@ function validateAgainstContract(cap, capId) {
     }
   }
 
+  errors.push(...validateEngineForNewerPoints(cap, prefix));
+
   return errors;
+}
+
+/**
+ * #3997: a capability with a hook at a point introduced after the original twelve must declare an
+ * `engines.gsd` range that no older core satisfies, otherwise it installs on a core that rejects
+ * the point. Scoped: a capability with no such hook is never asked for a range.
+ *
+ * @param {object} cap
+ * @param {string} prefix  Error prefix (`capability "<id>"`).
+ * @returns {string[]}
+ */
+function validateEngineForNewerPoints(cap, prefix) {
+  const hooks = [].concat(cap.steps || [], cap.contributions || [], cap.gates || []);
+  const gated = [...new Set(hooks.map((h) => h && h.point).filter((p) => typeof p === 'string' && Object.prototype.hasOwnProperty.call(POINT_MIN_ENGINE, p)))];
+  if (gated.length === 0) return [];
+  const { semverSatisfies, compareSemverCore } = require('./semver-compare.cjs');
+  const minVersion = gated.map((p) => POINT_MIN_ENGINE[p]).sort(compareSemverCore).pop();
+  const range = cap.engines && cap.engines.gsd;
+  const message = prefix + ' declares a hook at ' + gated.join(', ') + ' (introduced in GSD ' + minVersion + ') so engines.gsd must exclude older cores, e.g. ">=' + minVersion + '"';
+  if (typeof range !== 'string' || range.trim() === '') return [message + '; engines.gsd is absent'];
+  const admitted = olderCoreProbes(minVersion).find((v) => semverSatisfies(v, range));
+  if (admitted !== undefined) {
+    return [message + '; engines.gsd ' + JSON.stringify(range) + ' still admits ' + admitted];
+  }
+  return [];
 }
 
 /**
@@ -3965,6 +4030,7 @@ module.exports = {
   POINT_ORDER,
   HOST_ARTIFACT_EARLIEST_POINT_IDX,
   VALID_LOOP_POINTS,
+  POINT_MIN_ENGINE,
   POINT_TO_CONTRACT,
   VALID_CONFIG_SLICE_TYPES,
   KEBAB_RE,

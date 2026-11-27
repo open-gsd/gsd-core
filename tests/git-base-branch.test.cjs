@@ -30,6 +30,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { runGsdTools, cleanup, readFileNormalized } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
@@ -781,7 +782,7 @@ describe('#3552: configured protected branches', () => {
     // anything relying on it) consults USERPROFILE first on Windows, where
     // setting HOME alone leaves the real home directory in effect and makes
     // this isolation silently vacuous on that platform.
-    const workstreamEnv = { GSD_WORKSTREAM: 'alpha', HOME: dir, USERPROFILE: dir };
+    const workstreamEnv = isolatedEnv({ home: dir, base: {}, override: { GSD_WORKSTREAM: 'alpha' } });
 
     const setResult = runGsdTools(
       ['config-set', 'git.protected_branches', '["develop","next"]'],

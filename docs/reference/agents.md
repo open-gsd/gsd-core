@@ -8,7 +8,7 @@
 
 GSD uses a multi-agent architecture where thin orchestrators (workflow files) spawn specialized agents with fresh context windows. Each agent has a focused role, limited tool access, and produces specific artifacts.
 
-**Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by `tests/agent-required-reading-consistency.test.cjs`, because a mismatched pair silently disarms the enforcement clause.
+**Required reading (#3423):** the canonical spawn-block tag is `<required_reading>` on BOTH sides — orchestrators emit it, and gating agents enforce it ("you MUST use the Read tool to load every file listed there before performing any other actions"). The legacy `<files_to_read>` emit-tag is retired and banned repo-wide by the `agent-required-reading-consistency` text contract (`scripts/static-checks/text-contracts/agent-required-reading-consistency.cjs`), because a mismatched pair silently disarms the enforcement clause.
 
 ### Agent Categories
 
@@ -42,7 +42,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-new-project`, `/gsd-new-milestone` |
 | **Parallelism** | 4 instances (stack, features, architecture, pitfalls) |
-| **Tools** | Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__* |
+| **Tools** | Read, Write, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*, mcp__serply__* |
 | **Model (balanced)** | Sonnet |
 | **Color** | Cyan |
 | **Produces** | `.planning/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md`, `PITFALLS.md` |
@@ -62,7 +62,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-plan-phase` |
 | **Parallelism** | 4 instances (same focus areas as project researcher) |
-| **Tools** | Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__* |
+| **Tools** | Read, Write, Edit, Bash, Grep, Glob, Skill, WebSearch, WebFetch, mcp__context7__*, mcp__plugin_context7_context7__*, mcp__firecrawl__*, mcp__exa__*, mcp__tavily__*, mcp__ref__*, mcp__jina__*, mcp__perplexity__*, mcp__serply__* |
 | **Model (balanced)** | Sonnet |
 | **Color** | Cyan |
 | **Produces** | `{phase}-RESEARCH.md` |
@@ -178,6 +178,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Creates 2-3 atomic task plans sized for single context windows
 - Uses XML structure with `<task>` elements
 - Emits a `<fails_when>` sibling for every runnable `<automated>` verify command, naming what output constitutes failure (#3172)
+- Runs a validate-only mode (`bash -n`, `node --check`, `ast.parse`, `SET PARSEONLY ON`, `cargo metadata --no-deps`) against each authored `<automated>` body where one exists and records `[VALIDATED: …]` or `[UNVALIDATABLE: <reason>]` in the task's `<verify>` (#4586)
 - Includes `read_first` and `acceptance_criteria` sections
 - Groups plans into dependency waves
 - Applies an ordered minimum-solution check after preserving locked decisions and requirement coverage, preferring existing project behavior, standard-library or native-platform capability, and already-installed dependencies before new implementation (#4089)
@@ -195,7 +196,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 |----------|-------|
 | **Spawned by** | `/gsd-new-project` |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Write, Bash, Glob, Grep, Skill |
+| **Tools** | Read, Edit, Write, Bash, Glob, Grep, Skill |
 | **Model (balanced)** | Sonnet |
 | **Color** | Purple |
 | **Produces** | `ROADMAP.md` |
@@ -260,7 +261,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | 7 | Context compliance (when CONTEXT.md exists) |
 | 7b | Scope reduction detection |
 | 7c | Architectural tier compliance (when RESEARCH.md defines a responsibility map) |
-| 8 | Nyquist compliance (when enabled) — checks 8a-8e cover automated-verify presence, feedback latency, sampling continuity and Wave 0 completeness; check 8f blocks a runnable `<automated>` command with no stated `<fails_when>` failing direction (#3172) |
+| 8 | Nyquist compliance (when enabled) — checks 8a-8e cover automated-verify presence, feedback latency, sampling continuity and Wave 0 completeness; check 8f blocks a runnable `<automated>` command with no stated `<fails_when>` failing direction (#3172); check 8g warns on a runnable `<automated>` command with no validate-only record and blocks a record that does not hold up (#4586) |
 | 9 | Cross-plan data contracts |
 | 10 | CLAUDE.md compliance |
 | 11 | Research resolution |
@@ -876,7 +877,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 |----------|-------|
 | **Spawned by** | MemPalace capability at `ship:post` (when `mempalace.enabled = true`); diary/tunnels/KG-mirror are then refined by their own toggles |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Bash, Grep, Glob |
+| **Tools** | Read, Bash, Grep, Glob, mcp__mempalace__* |
 | **Model (balanced)** | Sonnet |
 | **Produces** | Diary entry in MemPalace, wing tunnel proposals, KG provenance records |
 
@@ -896,14 +897,14 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 | Agent | Read | Write | Edit | Bash | Grep | Glob | WebSearch | WebFetch | MCP |
 |-------|------|-------|------|------|------|------|-----------|----------|-----|
 | project-researcher | ✓ | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| phase-researcher | ✓ | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| ui-researcher | ✓ | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| phase-researcher | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ui-researcher | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | assumptions-analyzer | ✓ | | | ✓ | ✓ | ✓ | | | |
 | advisor-researcher | ✓ | | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | research-synthesizer | ✓ | ✓ | | ✓ | | | | | |
-| planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
-| roadmapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
-| executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
+| planner | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ | ✓ |
+| roadmapper | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
+| executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | ✓ |
 | plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
@@ -913,10 +914,11 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 | codebase-mapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | debugger | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | |
 | user-profiler | ✓ | | | | | | | | |
-| doc-writer | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
+| doc-writer | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
 | doc-verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
-| security-auditor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
+| security-auditor | ✓ | | | ✓ | ✓ | ✓ | | | |
 | behavior-verifier | ✓ | ✓ | | | ✓ | ✓ | | | ✓ |
+| dom-verifier | ✓ | ✓ | | | ✓ | ✓ | | | ✓ |
 
 **Principle of Least Privilege:**
 - Checkers are read-only (no Write/Edit) — they evaluate, never modify

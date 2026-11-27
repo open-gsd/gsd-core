@@ -191,7 +191,7 @@ Return one of:
 
 (The "stop working, wait for the subagent" orchestrator rule, and the on-return handling for
 VERIFICATION PASSED / ISSUES FOUND, are stated in the spine — the ISSUES FOUND handler's exact
-wording is pinned by `tests/plan-checker-coupling.test.cjs`.)
+wording is pinned by the `plan-checker-coupling` text contract.)
 
 ### revision_loop
 

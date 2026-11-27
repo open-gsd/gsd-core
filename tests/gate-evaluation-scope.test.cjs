@@ -265,6 +265,125 @@ function divergedRepo() {
   return { repo, task };
 }
 
+// ─── #6272: a signed commit must be read whatever the user's `log.showSignature` ──
+// With `log.showSignature=true` git prints the signature check (`gpg:` lines) before a signed commit's record, so a
+// log parser that expects a sha first dropped the commit. A fake `gpg.program` stands in for a real key: git runs it
+// for any commit carrying a `gpgsig` header and prints what it writes, exactly as it would for a real signature.
+describe('resolveEvaluationScope — signed commits with log.showSignature=true (#6272)', () => {
+  const skipWindows = process.platform === 'win32' && 'the fake gpg.program is a POSIX shell script';
+
+  /** A repo whose git config shows signatures and verifies them with a fake gpg that prints `gpg:` lines. */
+  function signingRepo() {
+    const repo = makeRepo();
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fake-gpg-'));
+    dirs.push(bin);
+    const gpg = path.join(bin, 'fakegpg');
+    fs.writeFileSync(gpg, '#!/bin/sh\necho "gpg: Signature made Mon Nov 20 2023" >&2\necho "gpg: Good signature from \\"Test\\"" >&2\necho "[GNUPG:] GOODSIG 1234 Test"\nexit 0\n', { mode: 0o755 });
+    repo.git('config', 'gpg.program', gpg);
+    repo.git('config', 'log.showSignature', 'true');
+    repo.bin = bin;
+    return repo;
+  }
+
+  /** Commit `rel` with a `gpgsig` header (written as a raw commit object); returns the full sha. */
+  function signedCommit(repo, rel, message) {
+    write(repo.dir, rel, `${rel}\n`);
+    repo.git('add', rel);
+    const tree = repo.git('write-tree');
+    const parent = repo.git('rev-parse', 'HEAD');
+    const body = `tree ${tree}\nparent ${parent}\nauthor Test <test@test.io> 1700000000 +0000\ncommitter Test <test@test.io> 1700000000 +0000\n`
+      + `gpgsig -----BEGIN PGP SIGNATURE-----\n \n fakesignature\n -----END PGP SIGNATURE-----\n\n${message}\n`;
+    const file = path.join(repo.bin, `commit-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    fs.writeFileSync(file, body);
+    const sha = repo.git('hash-object', '-t', 'commit', '-w', file);
+    repo.git('update-ref', 'HEAD', sha);
+    repo.git('reset', '--hard', 'HEAD');
+    return sha;
+  }
+
+  test('[control] the fixture really makes git print the signature check before a record', { skip: skipWindows }, () => {
+    const repo = signingRepo();
+    signedCommit(repo, 'src/a.js', 'feat(03-01): signed');
+    const shown = repo.git('log', '-n1', '--format=%H%x1f%s');
+    assert.match(shown, /^gpg: /m, 'with the setting on, gpg lines come before the record');
+    assert.equal(repo.git('log', '-n1', '--no-show-signature', '--format=%H%x1f%s').split('\x1f')[1], 'feat(03-01): signed');
+  });
+
+  test('[regression] the task commits a SUMMARY names are read when one is signed', { skip: skipWindows }, () => {
+    const repo = signingRepo();
+    const a = signedCommit(repo, 'src/a.js', 'feat(03-01): signed task');
+    const b = commit(repo, 'src/b.js', 'feat(03-01): plain task');
+    summarize(repo, [a, b]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.commits.map((c) => c.sha), [a, b]);
+    assert.deepEqual(scope.changedFiles, ['src/a.js', 'src/b.js']);
+  });
+
+  test('[regression] the phase-range commits are read when one is signed', { skip: skipWindows }, () => {
+    const repo = signingRepo();
+    const a = signedCommit(repo, 'src/a.js', 'feat(03-01): signed work');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.source, 'phase-range');
+    assert.ok(scope.commits.some((c) => c.sha === a), `the signed commit must be listed: ${JSON.stringify(scope.commits)}`);
+    assert.deepEqual(scope.changedFiles, ['src/a.js']);
+  });
+
+  test('[regression] a plan-subject lookup lists a signed commit', { skip: skipWindows }, () => {
+    const repo = signingRepo();
+    const a = signedCommit(repo, 'src/a.js', 'feat(03-01): signed work');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { includeFiles: true });
+    assert.deepEqual(scope.commits.map((c) => c.sha), [a]);
+    assert.deepEqual(scope.changedFiles, ['src/a.js']);
+  });
+
+  test('[contract] every git log and git show the resolver runs states --no-show-signature, on every path', { skip: skipWindows }, () => {
+    const logs = [];
+    const runner = (args, opts) => {
+      if (args.includes('log') || args.includes('show')) logs.push(args);
+      return realExecGit(args, opts);
+    };
+    const repo = signingRepo();
+    const a = signedCommit(repo, 'src/a.js', 'feat(03-01): signed work');
+    summarize(repo, [a]);
+    resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { execGit: runner, includeFiles: true });
+    const diverged = divergedRepo();
+    diverged.repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(diverged.repo, [diverged.task, diverged.repo.git('rev-parse', 'HEAD')]);
+    resolveEvaluationScope(diverged.repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.ok(logs.some((argv) => argv.includes('show')), 'the merge scenario runs git show');
+    assert.ok(logs.some((argv) => argv.includes('log')), 'the resolver runs git log');
+    for (const argv of logs) {
+      const flag = argv.indexOf('--no-show-signature');
+      assert.ok(flag !== -1, `git ${argv.join(' ')} must state --no-show-signature`);
+      const dashes = argv.indexOf('--');
+      assert.ok(dashes === -1 || flag < dashes, `git ${argv.join(' ')}: the flag must come before the pathspec separator`);
+      if (argv.includes('--name-only')) {
+        assert.ok(argv.includes('diff.relative=false'), `git ${argv.join(' ')} lists names, so it must not honor diff.relative`);
+      }
+    }
+  });
+
+  test('[regression] the all-branches and commits-only reads list a signed commit', { skip: skipWindows }, () => {
+    const repo = signingRepo();
+    const a = signedCommit(repo, 'src/a.js', 'feat(03-01): signed work');
+    const allBranches = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { allBranches: true, includeFiles: true });
+    assert.deepEqual(allBranches.commits.map((c) => c.sha), [a]);
+    assert.deepEqual(allBranches.changedFiles, ['src/a.js']);
+    const commitsOnly = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { commitsOnly: true });
+    assert.deepEqual(commitsOnly.commits.map((c) => c.sha), [a]);
+  });
+
+  test('[control] an unsigned history resolves the same with the setting on', { skip: skipWindows }, () => {
+    const repo = signingRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): plain');
+    summarize(repo, [a]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.changedFiles, ['src/a.js']);
+  });
+});
+
 describe('resolveEvaluationScope — merge commits contribute only their own changes (#5751)', () => {
   test('[regression] a clean catch-up merge (base merged INTO the phase) adds none of the base files', () => {
     const { repo, task } = divergedRepo();
@@ -1726,7 +1845,8 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
 });
 
 describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
-  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', () => {
+  // A file name with a newline cannot exist on Windows (the write below is ENOENT there), so the case is POSIX-only.
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', { skip: process.platform === 'win32' && 'a file name with a newline cannot exist on Windows' }, () => {
     const repo = makeRepo();
     const a = commit(repo, 'src/a.js', 'feat(03-01): a');
     summarize(repo, [a], '03-01-SUMMARY.md');

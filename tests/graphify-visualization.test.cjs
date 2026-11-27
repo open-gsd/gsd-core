@@ -12,6 +12,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { BUILD_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   graphifyStatus,
@@ -729,11 +730,7 @@ function runBlock(block) {
   const r = runHook('-c', [block], {
     interpreter: 'bash',
     cwd: sandbox,
-    env: {
-      ...process.env,
-      PATH: fakeBin + ':' + process.env.PATH,
-      HOME: fakeHome,
-    },
+    env: isolatedEnv({ home: fakeHome, path: fakeBin + ':' + process.env.PATH }),
     timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
   });
   return toLegacyResult(r);

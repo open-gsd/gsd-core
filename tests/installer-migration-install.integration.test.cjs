@@ -24,6 +24,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const installScript = path.join(__dirname, '..', 'bin', 'install.js');
 const SUPPORTED_RUNTIMES = installModule.allRuntimes;
@@ -200,11 +201,8 @@ function stripAnsi(value) {
 
 function runInstallerCli(runtime, targetDir, options = {}) {
   const { minimal = true } = options;
-  const env = { ...process.env };
-  delete env.GSD_TEST_MODE;
-  env.HOME = path.join(path.dirname(targetDir), 'home');
-  env.USERPROFILE = env.HOME;
-  env.GSD_HOME = env.HOME; // #5017: the defaults store root follows HOME
+  const home = path.join(path.dirname(targetDir), 'home');
+  const env = isolatedEnv({ home, override: { GSD_HOME: home } }); // #5017: the defaults store root follows HOME
 
   return runNode(
     [

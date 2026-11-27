@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const {
   VALID_CONFIG_KEYS,
 } = require('../gsd-core/bin/lib/config-schema.cjs');
@@ -14,7 +15,7 @@ describe('review.default_reviewers config key (#3079)', () => {
 
   beforeEach(() => {
     tmpDir = createTempProject();
-    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
   });
 
   afterEach(() => {
@@ -32,14 +33,14 @@ describe('review.default_reviewers config key (#3079)', () => {
     const setResult = runGsdTools(
       ['config-set', 'review.default_reviewers', '["Gemini","CODEX","codex"]'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     const getResult = runGsdTools(
       ['config-get', 'review.default_reviewers'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(getResult.success, `config-get failed: ${getResult.error}`);
     assert.deepStrictEqual(JSON.parse(getResult.output), ['gemini', 'codex']);
@@ -49,7 +50,7 @@ describe('review.default_reviewers config key (#3079)', () => {
     const result = runGsdTools(
       ['config-set', 'review.default_reviewers', '[]'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'config-set should reject empty arrays');
     assert.ok(
@@ -62,7 +63,7 @@ describe('review.default_reviewers config key (#3079)', () => {
     const result = runGsdTools(
       ['config-set', 'review.default_reviewers', 'gemini'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'config-set should reject non-array values');
     assert.ok(
@@ -75,7 +76,7 @@ describe('review.default_reviewers config key (#3079)', () => {
     const result = runGsdTools(
       ['config-set', 'review.default_reviewers', '["gemini","bad/slug"]'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'config-set should reject invalid slugs');
     assert.ok(
@@ -88,7 +89,7 @@ describe('review.default_reviewers config key (#3079)', () => {
     const setResult = runGsdTools(
       ['config-set', 'review.default_reviewers', '["gemini","codex"]'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 

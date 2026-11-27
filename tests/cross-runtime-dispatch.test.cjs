@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const HOST_MODEL = 'HOSTMODEL-6303-XYZ';
 const TARGET_MODEL = 'target-model-6303';
@@ -41,11 +42,14 @@ function recordPath() {
 
 /** Run `query dispatch-isolation --json` for the fixture plan; `present` says whether the foreign binaries are on PATH. */
 function dispatch(host, { present = true, argv = null } = {}) {
-  const env = {
-    HOME: project, USERPROFILE: project, GSD_HOME: project, GSD_RUNTIME: host, GSD_OPENCODE_GENERATION: '1',
-    PATH: present ? `${binWithRuntimes}${path.delimiter}${process.env.PATH}` : binEmpty,
-  };
+  const env = isolatedEnv({
+    home: project, base: {}, path: present ? `${binWithRuntimes}${path.delimiter}${process.env.PATH}` : binEmpty,
+    override: { GSD_HOME: project, GSD_RUNTIME: host, GSD_OPENCODE_GENERATION: '1' },
+  });
   cleanup(recordPath());
+  // #4904: a plain query holds a caller's fresh `none`, so a `--force-isolation none` an earlier row
+  // recorded (in the legacy slot too) would hold this row's query; each row starts with no record.
+  cleanup(path.join(project, '.gsd', 'dispatch-isolation-sentinel.json'));
   const result = runGsdTools(
     argv || ['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, '--cwd-target', worktreeTarget, '--prompt', 'go', '--json'],
     project,
@@ -75,6 +79,75 @@ before(() => {
   try { fs.symlinkSync(process.execPath, path.join(binEmpty, 'node')); } catch { /* not required */ }
 });
 after(() => { cleanup(project); });
+
+describe('#4904 a query that holds a caller `none` still answers a foreign dispatch and records nothing', () => {
+  const gateOn = { runtime: 'claude', workflow: { cross_runtime_execution: true } };
+  const legacyPath = () => path.join(project, '.gsd', 'dispatch-isolation-sentinel.json');
+  const env = () => isolatedEnv({
+    home: project, base: {}, path: `${binWithRuntimes}${path.delimiter}${process.env.PATH}`,
+    override: { GSD_HOME: project, GSD_RUNTIME: 'claude', GSD_OPENCODE_GENERATION: '1' },
+  });
+  const run = (extra) => {
+    const result = runGsdTools(['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, ...extra], project, env());
+    assert.equal(result.success, true, result.error);
+    return result.output;
+  };
+  // The caller's forced `none` for the plan, then the bytes of both decision records it wrote.
+  const forceNone = () => {
+    cleanup(recordPath());
+    cleanup(legacyPath());
+    run(['--force-isolation', 'none', '--json']);
+    return { keyed: fs.readFileSync(recordPath(), 'utf8'), legacy: fs.readFileSync(legacyPath(), 'utf8') };
+  };
+  const held = ['--cwd-target', 'WT', '--prompt', 'go'];
+  const heldArgs = (extra) => held.map((a) => (a === 'WT' ? worktreeTarget : a)).concat(extra);
+
+  test('a plan that goes to another runtime: --json carries the target exec with held, and no record moves', () => {
+    writeConfig(gateOn);
+    writePlan({ executor_runtime: 'codex' });
+    const before = forceNone();
+    const output = JSON.parse(run(heldArgs(['--json'])));
+    assert.equal(output.held, true, 'the query held the caller none');
+    assert.equal(typeof output.decidedAt, 'number');
+    assert.equal(output.executorRuntime, 'codex');
+    assert.equal(output.fallback, null);
+    assert.equal(output.isolation, 'orchestrator-worktree');
+    assert.equal(output.harnessFlag, null);
+    assert.equal(output.exec.command, 'codex');
+    assert.equal(fs.readFileSync(recordPath(), 'utf8'), before.keyed, 'the keyed decision record is unchanged');
+    assert.equal(fs.readFileSync(legacyPath(), 'utf8'), before.legacy, 'the legacy slot is unchanged');
+  });
+
+  test('a plan that goes to another runtime: --raw prints the foreign isolation', () => {
+    writeConfig(gateOn);
+    writePlan({ executor_runtime: 'codex' });
+    forceNone();
+    assert.equal(run(heldArgs(['--raw'])), 'orchestrator-worktree');
+  });
+
+  test('a plan that stays on the host: the held query answers none (control)', () => {
+    writeConfig(gateOn);
+    writePlan({});
+    forceNone();
+    const output = JSON.parse(run(heldArgs(['--json'])));
+    assert.equal(output.held, true);
+    assert.equal(output.executorRuntime, null);
+    assert.equal(output.isolation, 'none');
+    assert.equal(output.exec, null);
+  });
+
+  test('a plan that falls back: the held query names the reason and answers none', () => {
+    writeConfig({ runtime: 'claude' });
+    writePlan({ executor_runtime: 'codex' });
+    forceNone();
+    const output = JSON.parse(run(heldArgs(['--json'])));
+    assert.equal(output.held, true);
+    assert.equal(output.executorRuntime, 'codex');
+    assert.equal(output.fallback, 'gate_off');
+    assert.equal(output.isolation, 'none');
+    assert.equal(output.exec, null);
+  });
+});
 
 describe('#6303 a declared executor_runtime dispatches to the target runtime when the gate is on', () => {
   test('claude host, codex target: the exec is the target descriptor bound to the worktree', () => {

@@ -33,6 +33,7 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─── modules under test ───────────────────────────────────────────────────────
 
@@ -1790,7 +1791,7 @@ describe('#443 integration (c): resolve-execution JSON contract', () => {
   }
 
   test('gsd-planner (default claude runtime): full contract + known-agent shape', () => {
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assertFullContract(output, 'gsd-planner/claude');
@@ -1803,7 +1804,7 @@ describe('#443 integration (c): resolve-execution JSON contract', () => {
 
   test('codex runtime: full contract + effort_param=model_reasoning_effort', () => {
     writeConfig(tmpDir, { runtime: 'codex' });
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assertFullContract(output, 'gsd-planner/codex');
@@ -1813,7 +1814,7 @@ describe('#443 integration (c): resolve-execution JSON contract', () => {
 
   test('gemini runtime: full contract + effort_param===null (no effort wire)', () => {
     writeConfig(tmpDir, { runtime: 'gemini' });
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assertFullContract(output, 'gsd-planner/gemini');
@@ -1823,7 +1824,7 @@ describe('#443 integration (c): resolve-execution JSON contract', () => {
   });
 
   test('unknown agent: full contract + unknown_agent===true', () => {
-    const result = runGsdTools(['resolve-execution', 'unknown-agent-xyz'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'unknown-agent-xyz'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assertFullContract(output, 'unknown-agent-xyz');
@@ -1906,7 +1907,7 @@ describe('#443 integration (e): fast-mode honesty invariant', () => {
     for (const config of configs) {
       writeConfig(tmpDir, config);
       for (const agent of testAgents) {
-        const result = runGsdTools(['resolve-execution', agent], tmpDir, { HOME: tmpDir });
+        const result = runGsdTools(['resolve-execution', agent], tmpDir, isolatedEnv({ home: tmpDir }));
         assert.ok(result.success, `Command failed for ${agent}: ${result.error}`);
         const output = JSON.parse(result.output);
         assert.strictEqual(output.fast_mode_supported, false,
@@ -2237,10 +2238,10 @@ describe('#443 integration (h): config-tooling round-trip', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('config-set effort.default then resolve-execution reflects new value', () => {
-    const setResult = runGsdTools(['config-set', 'effort.default', 'low'], tmpDir, { HOME: tmpDir });
+    const setResult = runGsdTools(['config-set', 'effort.default', 'low'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(setResult.success, `config-set effort.default failed: ${setResult.error}`);
 
-    const execResult = runGsdTools(['resolve-execution', 'unknown-agent-xyz'], tmpDir, { HOME: tmpDir });
+    const execResult = runGsdTools(['resolve-execution', 'unknown-agent-xyz'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(execResult.success, `resolve-execution failed: ${execResult.error}`);
     const output = JSON.parse(execResult.output);
     // unknown agent falls through to effort.default
@@ -2251,11 +2252,11 @@ describe('#443 integration (h): config-tooling round-trip', () => {
   test('config-set effort.routing_tier_defaults.heavy then resolve-execution uses it', () => {
     const setResult = runGsdTools(
       ['config-set', 'effort.routing_tier_defaults.heavy', 'medium'],
-      tmpDir, { HOME: tmpDir }
+      tmpDir, isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
-    const execResult = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const execResult = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(execResult.success, `resolve-execution failed: ${execResult.error}`);
     const output = JSON.parse(execResult.output);
     // gsd-planner is heavy; tier default now overridden to medium
@@ -2265,14 +2266,14 @@ describe('#443 integration (h): config-tooling round-trip', () => {
 
   test('config-set effort.agent_overrides.<agent> wins over tier default', () => {
     // Set tier default first, then per-agent override
-    runGsdTools(['config-set', 'effort.routing_tier_defaults.heavy', 'medium'], tmpDir, { HOME: tmpDir });
+    runGsdTools(['config-set', 'effort.routing_tier_defaults.heavy', 'medium'], tmpDir, isolatedEnv({ home: tmpDir }));
     const setResult = runGsdTools(
       ['config-set', 'effort.agent_overrides.gsd-planner', 'xhigh'],
-      tmpDir, { HOME: tmpDir }
+      tmpDir, isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set agent_overrides failed: ${setResult.error}`);
 
-    const execResult = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const execResult = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(execResult.success, `resolve-execution failed: ${execResult.error}`);
     const output = JSON.parse(execResult.output);
     assert.strictEqual(output.effort, 'xhigh',
@@ -2280,10 +2281,10 @@ describe('#443 integration (h): config-tooling round-trip', () => {
   });
 
   test('config-set fast_mode.enabled true then resolve-execution reflects fast_mode=true', () => {
-    const setResult = runGsdTools(['config-set', 'fast_mode.enabled', 'true'], tmpDir, { HOME: tmpDir });
+    const setResult = runGsdTools(['config-set', 'fast_mode.enabled', 'true'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(setResult.success, `config-set fast_mode.enabled failed: ${setResult.error}`);
 
-    const execResult = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const execResult = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(execResult.success, `resolve-execution failed: ${execResult.error}`);
     const output = JSON.parse(execResult.output);
     assert.strictEqual(output.fast_mode, true,
@@ -2295,11 +2296,11 @@ describe('#443 integration (h): config-tooling round-trip', () => {
   test('config-set fast_mode.agent_overrides.<agent> true reflects in output', () => {
     const setResult = runGsdTools(
       ['config-set', 'fast_mode.agent_overrides.gsd-codebase-mapper', 'true'],
-      tmpDir, { HOME: tmpDir }
+      tmpDir, isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
-    const execResult = runGsdTools(['resolve-execution', 'gsd-codebase-mapper'], tmpDir, { HOME: tmpDir });
+    const execResult = runGsdTools(['resolve-execution', 'gsd-codebase-mapper'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(execResult.success, `resolve-execution failed: ${execResult.error}`);
     const output = JSON.parse(execResult.output);
     assert.strictEqual(output.fast_mode, true,
@@ -2321,7 +2322,7 @@ describe('#443 integration (h): config-tooling round-trip', () => {
       ['fast_mode.agent_overrides.gsd-verifier', 'false'],
     ];
     for (const [key, val] of keysToTest) {
-      const r = runGsdTools(['config-set', key, val], tmpDir, { HOME: tmpDir });
+      const r = runGsdTools(['config-set', key, val], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(r.success, `config-set '${key}' '${val}' should succeed, got: ${r.error}`);
     }
   });
@@ -2739,7 +2740,7 @@ describe('#443 resolve-execution CLI command', () => {
   });
 
   test('default (claude) runtime -> effort present, effort_param=output_config.effort, fast_mode_supported=false', () => {
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.ok(output.effort, 'should have effort field');
@@ -2761,7 +2762,7 @@ describe('#443 resolve-execution CLI command', () => {
       runtime: 'codex',
       effort: { default: 'max' },
     });
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.effort_param, 'model_reasoning_effort');
@@ -2781,7 +2782,7 @@ describe('#443 resolve-execution CLI command', () => {
       runtime: 'codex',
       effort: { default: 'max', agent_overrides: { 'gsd-planner': 'max' } },
     });
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.effort_param, 'model_reasoning_effort');
@@ -2797,7 +2798,7 @@ describe('#443 resolve-execution CLI command', () => {
     const result = runGsdTools(
       ['resolve-execution', 'gsd-planner', '--effort', 'low'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
@@ -2808,7 +2809,7 @@ describe('#443 resolve-execution CLI command', () => {
     const result = runGsdTools(
       ['resolve-execution', 'gsd-planner', '--fast-mode', 'true'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
@@ -2828,12 +2829,12 @@ describe('#443 resolve-execution CLI command', () => {
     const result0 = runGsdTools(
       ['resolve-execution', 'gsd-codebase-mapper', '--attempt', '0'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     const result1 = runGsdTools(
       ['resolve-execution', 'gsd-codebase-mapper', '--attempt', '1'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result0.success && result1.success);
     const out0 = JSON.parse(result0.output);
@@ -2846,7 +2847,7 @@ describe('#443 resolve-execution CLI command', () => {
     const result = runGsdTools(
       ['resolve-execution', 'gsd-planner', '--raw'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
     // Raw output should be the effort string
@@ -2856,13 +2857,13 @@ describe('#443 resolve-execution CLI command', () => {
   });
 
   test('fails when no agent-type provided', () => {
-    const result = runGsdTools(['resolve-execution'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(!result.success, 'should fail without agent-type');
     assert.ok(result.error.includes('agent-type required'), `error: ${result.error}`);
   });
 
   test('unknown agent -> unknown_agent=true still emits effort', () => {
-    const result = runGsdTools(['resolve-execution', 'unknown-agent-xyz'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'unknown-agent-xyz'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.unknown_agent, true);
@@ -2870,7 +2871,7 @@ describe('#443 resolve-execution CLI command', () => {
   });
 
   test('emits effort_propagation (channel) field', () => {
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.ok('effort_propagation' in output, 'should have effort_propagation field');
@@ -2885,7 +2886,7 @@ describe('#443 resolve-model emits effort (unified)', () => {
   afterEach(() => { cleanup(tmpDir); });
 
   test('resolve-model on claude runtime emits effort (not null)', () => {
-    const result = runGsdTools(['resolve-model', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-model', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     // effort must be present and valid
@@ -2902,7 +2903,7 @@ describe('#443 resolve-model emits effort (unified)', () => {
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ runtime: 'codex', model_profile: 'balanced' })
     );
-    const result = runGsdTools(['resolve-model', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-model', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
     const VALID_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -2989,7 +2990,7 @@ describe('#443 QA matrix — malformed effort/fast_mode configs', () => {
       effort: { default: null, routing_tier_defaults: null },
       fast_mode: { enabled: null, agent_overrides: null },
     });
-    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['resolve-execution', 'gsd-planner'], tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Should not crash with null config values: ${result.error}`);
   });
 });
@@ -3057,7 +3058,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', '--effort', 'low', 'gsd-planner'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
@@ -3070,7 +3071,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', '--attempt', '1', 'gsd-codebase-mapper'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
     const output = JSON.parse(result.output);
@@ -3081,12 +3082,12 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const flagsFirst = runGsdTools(
       ['resolve-execution', '--effort', 'low', 'gsd-planner'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     const agentFirst = runGsdTools(
       ['resolve-execution', 'gsd-planner', '--effort', 'low'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(flagsFirst.success && agentFirst.success,
       `Both orderings must succeed. flags-first err: ${flagsFirst.error} agent-first err: ${agentFirst.error}`);
@@ -3100,7 +3101,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', '--effort', 'low'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'must exit non-zero when agent is missing');
     assert.ok(!result.error.includes('at '), `error must not contain stack trace, got: ${result.error}`);
@@ -3111,7 +3112,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', 'gsd-planner', 'gsd-executor'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'must exit non-zero when two agents are given');
   });
@@ -3120,7 +3121,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', '--attempt', 'notanumber', 'gsd-planner'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'must exit non-zero for non-integer --attempt');
     assert.ok(result.error.length > 0, 'must emit an error message');
@@ -3130,7 +3131,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', 'gsd-planner', '--effort'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'must exit non-zero for trailing --effort with no value');
     assert.ok(result.error.length > 0, 'must emit an error message');
@@ -3140,7 +3141,7 @@ describe('#443 resolve-execution: deterministic arg parsing (flags-first orderin
     const result = runGsdTools(
       ['resolve-execution', 'totally-not-an-agent'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Should succeed (unknown agent is valid input): ${result.error}`);
     const output = JSON.parse(result.output);
@@ -6774,19 +6775,19 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
   // nowhere" — inheriting it from the parent shell would make these rows depend
   // on who ran them.
   function resolveModel(dir, agent, runtime = '') {
-    const r = runGsdTools(`query resolve-model ${agent} --raw`, dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: runtime });
+    const r = runGsdTools(`query resolve-model ${agent} --raw`, dir, isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: runtime } }));
     assert.ok(r.success, `resolve-model ${agent} failed: ${r.error}`);
     return r.output.trim();
   }
 
   function initQuick(dir, runtime = '') {
-    const r = runGsdTools('init quick --raw', dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: runtime });
+    const r = runGsdTools('init quick --raw', dir, isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: runtime } }));
     assert.ok(r.success, `init quick failed: ${r.error}`);
     return JSON.parse(r.output);
   }
 
   function resolveExecutionModel(dir, agent, attempt, runtime = '') {
-    const r = runGsdTools(`query resolve-execution ${agent} --attempt ${attempt}`, dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: runtime });
+    const r = runGsdTools(`query resolve-execution ${agent} --attempt ${attempt}`, dir, isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: runtime } }));
     assert.ok(r.success, `resolve-execution ${agent} failed: ${r.error}`);
     return JSON.parse(r.output).model;
   }
@@ -6906,7 +6907,7 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     // the combination is a deliberate, visible property rather than a surprise.
     test('`tier` keeps reporting the profile tier when the tier table supplies the model', () => {
       dir = project({ model_profile: 'quality', dynamic_routing: DR });
-      const r = runGsdTools('query resolve-model gsd-executor', dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: '' });
+      const r = runGsdTools('query resolve-model gsd-executor', dir, isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: '' } }));
       assert.ok(r.success, r.error);
       const parsed = JSON.parse(r.output);
       assert.strictEqual(parsed.model, 'DR-STANDARD');
@@ -6917,7 +6918,7 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     // #2068 gate change touches; it must agree with resolve-model.
     test('resolve-execution with no --attempt agrees with resolve-model', () => {
       dir = project({ model_profile: 'quality', dynamic_routing: DR });
-      const r = runGsdTools('query resolve-execution gsd-executor', dir, { HOME: dir, GSD_HOME: dir, GSD_RUNTIME: '' });
+      const r = runGsdTools('query resolve-execution gsd-executor', dir, isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: '' } }));
       assert.ok(r.success, r.error);
       assert.strictEqual(JSON.parse(r.output).model, resolveModel(dir, 'gsd-executor'));
     });

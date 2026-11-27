@@ -37,6 +37,7 @@ Phase number: extracted from the `<arguments>` block (required)
 - `--cursor` — Include Cursor agent review
 - `--agy` / `--antigravity` — Include Antigravity CLI review
 - `--all` — Include all available CLIs
+- `--cycle-summary` — Not a reviewer. End the run with the machine-readable counters `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` followed by the `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns` sections (#4617). Callers that drive review and replanning themselves read the same counts the convergence loop uses. Absent when no review ran.
 
 **No flags** — if `review.default_reviewers` is set, review with only those configured
 reviewers that are detected; otherwise review with all available CLIs. Configured

@@ -24,6 +24,7 @@ const os = require('node:os');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   resolveModelInternal,
@@ -94,7 +95,7 @@ function resolveForTierIn(dir, agent, runtime, attempt) {
 }
 
 function cli(dir, args, env = {}) {
-  const r = runGsdTools(args, dir, { HOME: dir, USERPROFILE: dir, GSD_HOME: dir, GSD_RUNTIME: 'claude', CLAUDE_CODE_SUBAGENT_MODEL: '', ...env });
+  const r = runGsdTools(args, dir, isolatedEnv({ home: dir, override: { GSD_HOME: dir, GSD_RUNTIME: 'claude', CLAUDE_CODE_SUBAGENT_MODEL: '', ...env } }));
   assert.ok(r.success, `${args} failed: ${r.error}`);
   return r.output;
 }

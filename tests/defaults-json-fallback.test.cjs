@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 
@@ -79,7 +80,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     assert.strictEqual(config.context_window, 200000);
   });
 
-  test('project config exists → project config wins', (t) => {
+  test('project config exists → project keys win, a key it does not set comes from defaults.json (#4071)', (t) => {
     const tmpDir = createBareTmpDir();
     fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
     fs.writeFileSync(
@@ -100,7 +101,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
 
     const config = loadConfig(tmpDir);
     assert.strictEqual(config.model_profile, 'budget');
-    assert.strictEqual(config.context_window, 200000);
+    assert.strictEqual(config.context_window, 1000000);
   });
 
   test('defaults.json with unknown keys → unknown keys NOT passed through', (t) => {
@@ -313,7 +314,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
 
   /** Run bin/install.js for Codex against a throwaway config dir, with the given home / GSD_HOME. */
   function runInstaller(args, { userHome, gsdHome, configDir }) {
-    const env = { ...process.env, HOME: userHome, USERPROFILE: userHome, GSD_HOME: userHome };
+    const env = isolatedEnv({ home: userHome, override: { GSD_HOME: userHome } });
     delete env.GSD_TEST_MODE;
     if (gsdHome === undefined) delete env.GSD_HOME; else env.GSD_HOME = gsdHome;
     return runNode(
@@ -388,10 +389,10 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
       const { runHook } = require('./helpers/process-seam.cjs');
       const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
       const script = `printf '%s' "${STORE}"`;
-      const run = (env) => runHook('-c', [script], { interpreter: 'bash', env: { ...process.env, HOME: '/h', ...env }, timeoutMs: PROBE_TIMEOUT_MS }).stdout;
+      const run = (env) => runHook('-c', [script], { interpreter: 'bash', env: isolatedEnv({ home: '/h', override: env }), timeoutMs: PROBE_TIMEOUT_MS }).stdout;
       assert.strictEqual(run({ GSD_HOME: '/g' }), '/g/.gsd/defaults.json');
       assert.strictEqual(run({ GSD_HOME: '' }), '/h/.gsd/defaults.json');
-      const env = { ...process.env, HOME: '/h' };
+      const env = isolatedEnv({ home: '/h' });
       delete env.GSD_HOME;
       assert.strictEqual(runHook('-c', [script], { interpreter: 'bash', env, timeoutMs: PROBE_TIMEOUT_MS }).stdout, '/h/.gsd/defaults.json');
     });

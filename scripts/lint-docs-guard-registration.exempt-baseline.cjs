@@ -31,6 +31,7 @@
  * `docs-guard-exempt:` marker for its specific reason.
  */
 const DOCS_GUARD_EXEMPT_BASELINE = [
+  '6455-mempalace-curator-grant.test.cjs',
   'adr-612-bracket-phase-counting.test.cjs',
   'adr-parser.test.cjs',
   'adr-parser.unit.test.cjs',
@@ -73,7 +74,6 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'manifest-version-sync.test.cjs',
   'milestone-archive.test.cjs',
   'model-resolver.test.cjs',
-  'new-project-mvp-prompt.test.cjs',
   'onboard-command.test.cjs',
   'opencode-command-dir-plural.test.cjs',
   'phase.test.cjs',
@@ -109,6 +109,10 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
  * exact same scan.
  */
 const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
+  // #6455: 'docs/reference/agents.md' is read as shipped product data by the
+  // parity row asserting the curator Tools row lists the mcp__mempalace__*
+  // grant; the file guards agent frontmatter, not docs content.
+  '6455-mempalace-curator-grant.test.cjs': ['docs/reference/agents.md'],
   // #2761: cites docs/adr/612-bracket-phase-id-convention.md in an explanatory
   // comment describing ADR-612's Decision 1; the file never reads that (or any)
   // docs/ file — every read call it makes targets a tmpdir .planning fixture.
@@ -217,7 +221,6 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'model-resolver.test.cjs': [
     'docs/TESTING-SUITES.md', 'docs/features/dynamic-routing-with-failure-tier-escalation.md',
   ],
-  'new-project-mvp-prompt.test.cjs': ['docs/CONFIGURATION.md'],
   'onboard-command.test.cjs': ['docs/adr/0001-runtime.md'],
   'opencode-command-dir-plural.test.cjs': ['docs/commands'],
   'phase.test.cjs': ['docs/adr/3524-...md', 'docs/adr/3524-cjs-sdk-hard-seam.md'],

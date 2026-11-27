@@ -8180,3 +8180,214 @@ describe('inserted phase name readers agree on the bare name (#5824)', () => {
     assert.strictEqual(init.phase_name, 'Name (Beta)');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #6270: ROADMAP plan rows versus PLAN files on disk
+//
+// Nothing noticed when a PLAN file was deleted after planning: `roadmap validate` reported no warning, and
+// `roadmap update-plan-progress` rewrote the `Plans:` count from disk but kept the row of the missing plan, so the
+// count and the list below it disagreed and no verb could remove the row. Validate now reports a row with no PLAN
+// file (V006) and a live PLAN file with no row (V007); update-plan-progress drops the rows whose file is gone.
+// ─────────────────────────────────────────────────────────────────────────────
+{
+const fc = require('fast-check');
+
+const planRowsRoadmap = (rows, { planLine = '**Plans**: 1/2 plans executed' } = {}) => [
+  '# Roadmap',
+  '',
+  '## Phases',
+  '',
+  '- [ ] **Phase 1: Alpha**',
+  '',
+  '### Phase 1: Alpha',
+  '',
+  '**Goal**: ship alpha',
+  planLine,
+  '',
+  'Plans:',
+  ...rows,
+  '',
+  '## Progress',
+  '',
+  '| Phase | Plans Complete | Status | Completed |',
+  '|-------|----------------|--------|-----------|',
+  '| 1. Alpha | 1/2 | In Progress | - |',
+  '',
+].join('\n');
+
+describe('#6270: ROADMAP plan rows versus PLAN files on disk', () => {
+  let tmpDir;
+  let phaseDir;
+
+  const plan = (n) => path.join(phaseDir, `01-0${n}-PLAN.md`);
+  const writePlan = (n, extra = '') => fs.writeFileSync(plan(n), `---\nphase: 1\nplan: ${n}\n${extra}---\n# plan ${n}\n`);
+  const writeSummary = (n) => fs.writeFileSync(path.join(phaseDir, `01-0${n}-SUMMARY.md`), `---\nphase: 1\nplan: ${n}\n---\n# summary ${n}\n`);
+  const setRoadmap = (text) => fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), text);
+  const readRoadmap = () => fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+  const validate = () => {
+    const r = runGsdToolsCaptured(['roadmap', 'validate'], tmpDir);
+    const start = r.stdout.indexOf('{');
+    return { exitCode: r.exitCode, warnings: JSON.parse(r.stdout.slice(start)).warnings };
+  };
+  const codes = (warnings) => warnings.map((w) => w.code);
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '01-alpha');
+    fs.mkdirSync(phaseDir, { recursive: true });
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  const ROWS = ['- [x] 01-01-PLAN.md — first plan', '- [ ] 01-02-PLAN.md — second plan'];
+
+  test('validate is silent while every listed plan has its file and every file its row', () => {
+    writePlan(1); writeSummary(1); writePlan(2);
+    setRoadmap(planRowsRoadmap(ROWS));
+    assert.deepEqual(validate(), { exitCode: 0, warnings: [] });
+  });
+
+  test('validate warns (V006) about a row whose PLAN file was deleted', () => {
+    writePlan(1); writeSummary(1);
+    setRoadmap(planRowsRoadmap(ROWS));
+    const { exitCode, warnings } = validate();
+    assert.equal(exitCode, 1);
+    assert.deepEqual(codes(warnings), ['V006']);
+    assert.match(warnings[0].message, /01-02/);
+    assert.doesNotMatch(warnings[0].message, /01-01/);
+  });
+
+  test('validate warns (V007) about a live PLAN file with no row, but only where the phase lists its plans', () => {
+    writePlan(1); writeSummary(1); writePlan(2);
+    setRoadmap(planRowsRoadmap([ROWS[0]]));
+    const withList = validate();
+    assert.deepEqual(codes(withList.warnings), ['V007']);
+    assert.match(withList.warnings[0].message, /01-02/);
+
+    setRoadmap(planRowsRoadmap([]));
+    assert.deepEqual(validate().warnings, [], 'a phase that lists no plan rows has no list to disagree with');
+  });
+
+  test('a superseded plan keeps its file, so its row is not stale, and with no row it is not a V007 either', () => {
+    writePlan(1); writeSummary(1); writePlan(2, 'status: superseded\n');
+    setRoadmap(planRowsRoadmap([ROWS[0], ROWS[1]]));
+    assert.deepEqual(validate().warnings, []);
+    setRoadmap(planRowsRoadmap([ROWS[0]]));
+    assert.deepEqual(validate().warnings, []);
+  });
+
+  test('update-plan-progress drops the row of a deleted plan so the count and the list agree', () => {
+    writePlan(1); writeSummary(1);
+    setRoadmap(planRowsRoadmap(ROWS));
+
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, result.error);
+    const out = JSON.parse(result.output);
+    assert.equal(out.plan_count, 1);
+    assert.ok((out.warnings || []).some((w) => /Dropped plan row\(s\).*01-02/.test(w)), JSON.stringify(out.warnings));
+
+    const after = readRoadmap();
+    assert.match(after, /\*\*Plans\*\*: 1\/1 plans/);
+    assert.match(after, /- \[x\] 01-01-PLAN\.md — first plan/);
+    assert.doesNotMatch(after, /01-02/);
+    assert.deepEqual(validate().warnings, [], 'validate agrees once the row is gone');
+  });
+
+  test('update-plan-progress keeps every row whose file exists, and the other rows byte-for-byte', () => {
+    writePlan(1); writeSummary(1); writePlan(2);
+    setRoadmap(planRowsRoadmap(ROWS));
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, result.error);
+    const after = readRoadmap();
+    assert.match(after, /- \[x\] 01-01-PLAN\.md — first plan/);
+    assert.match(after, /- \[ \] 01-02-PLAN\.md — second plan/);
+    assert.ok(!(JSON.parse(result.output).warnings || []).some((w) => /Dropped plan row/.test(w)));
+  });
+
+  test('a row with a wrapped continuation line is kept and reported, never half-dropped', () => {
+    writePlan(1); writeSummary(1);
+    setRoadmap(planRowsRoadmap([ROWS[0], ROWS[1], '  continuation of the second plan']));
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, result.error);
+    const after = readRoadmap();
+    assert.match(after, /- \[ \] 01-02-PLAN\.md — second plan\n {2}continuation of the second plan/);
+    assert.ok((JSON.parse(result.output).warnings || []).some((w) => /Kept plan row\(s\).*01-02/.test(w)));
+  });
+
+  test('a row inside a fenced code block is not a plan row', () => {
+    writePlan(1); writeSummary(1);
+    setRoadmap(planRowsRoadmap([ROWS[0], '```', '- [ ] 01-09-PLAN.md — an example in a code fence', '```']));
+    assert.deepEqual(validate().warnings, []);
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, result.error);
+    assert.match(readRoadmap(), /01-09-PLAN\.md — an example in a code fence/);
+  });
+
+  test('row spellings without the -PLAN.md suffix and with a bold id are read as the same plan rows', () => {
+    writePlan(1); writeSummary(1);
+    setRoadmap(planRowsRoadmap(['- [x] 01-01 — first plan', '- [ ] **01-02** second plan']));
+    const { warnings } = validate();
+    assert.deepEqual(codes(warnings), ['V006']);
+    assert.match(warnings[0].message, /01-02/);
+  });
+
+  test('checkboxes that are not plan rows (a dated criterion, a numeric range) are neither warned about nor dropped', () => {
+    writePlan(1); writeSummary(1);
+    const criteria = ['- [ ] 2026-11-21 release is tagged', '- [ ] 3-5 tickets are triaged', '- [ ] 01 plan numbers are two digits'];
+    setRoadmap(planRowsRoadmap([ROWS[0], ...criteria]));
+    assert.deepEqual(validate().warnings, []);
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, result.error);
+    const after = readRoadmap();
+    for (const line of criteria) assert.ok(after.includes(line), `${line} must survive`);
+    assert.ok(!(JSON.parse(result.output).warnings || []).some((w) => /Dropped plan row/.test(w)));
+  });
+
+  test('a plan file with a slug in its name keeps its row and raises no warning', () => {
+    fs.writeFileSync(path.join(phaseDir, '01-01-setup-PLAN.md'), '---\nphase: 1\nplan: 1\n---\n# plan 1\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-setup-SUMMARY.md'), '---\nphase: 1\nplan: 1\n---\n# summary 1\n');
+    writePlan(2);
+    setRoadmap(planRowsRoadmap(['- [x] 01-01-setup-PLAN.md — a', '- [ ] 01-02-PLAN.md — b']));
+    assert.deepEqual(validate().warnings, []);
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, result.error);
+    assert.match(readRoadmap(), /- \[x\] 01-01-setup-PLAN\.md — a/);
+    assert.ok(!(JSON.parse(result.output).warnings || []).some((w) => /Dropped plan row/.test(w)));
+  });
+
+  test('a file whose name has no plan id of the phase is not a V007 (it could never have a row)', () => {
+    writePlan(1); writeSummary(1);
+    fs.writeFileSync(path.join(phaseDir, '01-zzz-PLAN.md'), '---\nphase: 1\n---\n# odd\n');
+    setRoadmap(planRowsRoadmap([ROWS[0]]));
+    assert.deepEqual(validate().warnings, []);
+  });
+
+  test('a checkbox in a section after the last phase does not belong to the phase', () => {
+    writePlan(1); writeSummary(1); writePlan(2);
+    setRoadmap(`${planRowsRoadmap(ROWS)}\n## Notes\n\n- [ ] 01-09 a note that looks like a plan id\n`);
+    assert.deepEqual(validate().warnings, []);
+  });
+
+  test('property: validate names exactly the listed plans that have no file', () => {
+    fc.assert(fc.property(
+      fc.subarray([1, 2, 3, 4], { minLength: 1 }),
+      fc.subarray([1, 2, 3, 4]),
+      (listed, onDisk) => {
+        cleanup(phaseDir);
+        fs.mkdirSync(phaseDir, { recursive: true });
+        for (const n of onDisk) writePlan(n);
+        setRoadmap(planRowsRoadmap(listed.map((n) => `- [ ] 01-0${n}-PLAN.md — plan ${n}`)));
+        const missing = listed.filter((n) => !onDisk.includes(n)).map((n) => `01-0${n}`).sort();
+        const v006 = validate().warnings.filter((w) => w.code === 'V006');
+        if (missing.length === 0) {
+          assert.equal(v006.length, 0);
+        } else {
+          assert.equal(v006.length, 1);
+          const named = splitLines(v006[0].message)[0].match(/01-0\d/g).sort();
+          assert.deepEqual([...new Set(named)], missing);
+        }
+      },
+    ), { numRuns: 12 });
+  });
+});
+}

@@ -83,8 +83,8 @@ async function routeCapabilityCommand({ args, cwd, raw }) {
   const capReadStrict = () => {
     let cfgPath;
     try {
-      const { planningDir } = require('./planning-workspace.cjs');
-      cfgPath = path.join(planningDir(cwd), 'config.json');
+      const { projectConfigPath } = require('./planning-workspace.cjs');
+      cfgPath = projectConfigPath(cwd);
     } catch {
       return undefined; // cannot even resolve the project config dir — permissive default
     }

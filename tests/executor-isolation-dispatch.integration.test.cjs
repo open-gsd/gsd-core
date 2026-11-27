@@ -1,6 +1,6 @@
 // #5531: the executor-prompt compose blocks of
 // gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md, run in real bash.
-// The text checks that no shell run can show stay in tests/executor-isolation-prompt-contract.test.cjs.
+// The text checks that no shell run can show stay in the executor-isolation-prompt-contract text contract (scripts/static-checks/text-contracts/).
 // Integration suite: the Linux lane; the generator's suffix rule keeps *.integration.test.cjs out of the Windows and macOS tiers.
 'use strict';
 

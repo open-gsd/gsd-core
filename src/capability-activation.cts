@@ -5,14 +5,12 @@
  * activation uses one precedence chain and one prototype-pollution guard.
  */
 
-import path from 'node:path';
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planningWorkspaceMod = require('./planning-workspace.cjs');
-const { planningDir, planningRoot } = planningWorkspaceMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
-import configFileReadMod = require('./config-file-read.cjs');
-const { readConfigFileBounded } = configFileReadMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configValueResolver = require('./config-value-resolver.cjs');
+const { resolveConfigValue } = configValueResolver;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configLoader = require('./config-loader.cjs');
+const { honorsGlobalDefaults } = configLoader;
 
 function _getNestedConfigValue(
   config: Record<string, unknown>,
@@ -34,43 +32,6 @@ function _getNestedConfigValue(
     current = cur[seg];
   }
   return { found: true, value: current };
-}
-
-const _warnedRawConfigPaths = new Set<string>();
-
-// #6332: per invocation, like the config-loader warning sets.
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
-import invocationScopeMod = require('./invocation-scope.cjs');
-invocationScopeMod.registerInvocationReset('capability-activation.warnedRawConfigPaths', () => { _warnedRawConfigPaths.clear(); });
-
-function _readRawConfigKey(
-  filePath: string,
-  dotKey: string,
-  quiet = false,
-): { found: boolean; value: unknown } {
-  try {
-    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
-    // catch below, which reports the key as not found.
-    const raw = readConfigFileBounded(filePath);
-    if (raw === null) return { found: false, value: undefined };
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      if (!quiet && !_warnedRawConfigPaths.has(filePath)) {
-        _warnedRawConfigPaths.add(filePath);
-        try {
-          process.stderr.write(
-            `gsd-tools: warning: failed to parse ${filePath} as JSON — skipping for activation resolution\n`,
-          );
-        } catch { /* stderr might be closed */ }
-      }
-      return { found: false, value: undefined };
-    }
-    return _getNestedConfigValue(parsed, dotKey);
-  } catch {
-    return { found: false, value: undefined };
-  }
 }
 
 /**
@@ -101,17 +62,24 @@ function resolveConfigKey(
   const fromConfig = _getNestedConfigValue(config, dotKey);
   if (fromConfig.found) return { found: true, value: fromConfig.value };
 
-  // Level 2 + 3: raw config.json files (only when cwd is available)
+  // Level 2 + 3 (+ the global defaults layer, #4071): the Config Value Resolution Module walks the
+  // workstream, root and global-defaults files (#6030, ADR-1411 Decision 5). Only a file layer
+  // counts here: a built-in or schema default must not make an unset switch look configured, and
+  // the injected registry below stays the schema-default source.
   if (cwd) {
-    const wsConfigPath = path.join(planningDir(cwd), 'config.json');
-    const rootConfigPath = path.join(planningRoot(cwd), 'config.json');
-
-    const fromWs = _readRawConfigKey(wsConfigPath, dotKey, quiet);
-    if (fromWs.found) return { found: true, value: fromWs.value };
-
-    if (wsConfigPath !== rootConfigPath) {
-      const fromRoot = _readRawConfigKey(rootConfigPath, dotKey, quiet);
-      if (fromRoot.found) return { found: true, value: fromRoot.value };
+    const rawSchema = registry['configSchema'];
+    const resolved = resolveConfigValue(dotKey, {
+      cwd,
+      quiet,
+      honorGlobal: honorsGlobalDefaults,
+      // A gate key the registry does not declare still resolves over the file layers (#6032).
+      allowUndeclared: true,
+      ...(rawSchema && typeof rawSchema === 'object' && !Array.isArray(rawSchema)
+        ? { configSchema: rawSchema as Record<string, unknown> }
+        : {}),
+    });
+    if (resolved.found && (resolved.layer === 'workstream' || resolved.layer === 'root' || resolved.layer === 'global-defaults')) {
+      return { found: true, value: resolved.value };
     }
   }
 
@@ -137,7 +105,20 @@ function _resolveActivationValue(
   registry: Record<string, unknown>,
 ): boolean {
   const r = resolveConfigKey(dotKey, { config, cwd, registry });
-  return r.found ? Boolean(r.value) : false;
+  return r.found ? isActivationValueOn(r.value) : false;
+}
+
+/**
+ * A hand-edited config can carry a boolean switch as a string. `Boolean("false")` is true, which would
+ * turn a switch ON that the file says is off, so a string is read for its meaning: empty, "false", "0",
+ * "no" and "off" (any case, surrounding whitespace ignored) are off; every other string is on. A non-string
+ * keeps plain truthiness, so numbers, booleans and objects behave as before.
+ */
+const OFF_STRINGS: ReadonlySet<string> = new Set(['', 'false', '0', 'no', 'off']);
+
+function isActivationValueOn(value: unknown): boolean {
+  if (typeof value === 'string') return !OFF_STRINGS.has(value.trim().toLowerCase());
+  return Boolean(value);
 }
 
 /**
@@ -173,7 +154,6 @@ function _resolvePointGate(
 
 export = {
   _getNestedConfigValue,
-  _readRawConfigKey,
   _resolveActivationValue,
   _resolvePointGate,
   resolveConfigKey,

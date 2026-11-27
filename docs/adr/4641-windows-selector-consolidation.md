@@ -154,6 +154,8 @@ test-helper regexes. Phase 3's classifier behavior for `src/` diffs is provably 
 
 ### 3. A proportional ceiling, asserted failing-first
 
+*Superseded for the bound itself by the [2026-11-22 amendment](#amendment-2026-11-22-the-tier-is-bounded-by-its-size-not-by-a-ratio-6551): the tiers are bounded by size baselines, not by these ratios.*
+
 The missing Phase 2 gate is added as a test, and it is expressed as a **ratio against a live
 denominator**, not a count:
 
@@ -432,7 +434,7 @@ Before and after (2026-11-08, live tree, 1174 eligible unit-suite files):
 
 The macOS shrink comes from the same comment stripping applied to `MACOS_CATEGORIES`, not from the
 child-process change. A new macOS category `realpath` (`/\brealpath(Sync)?\b/`, matched in code only)
-keeps files that normalize the macOS `/var` to `/private/var` tmpdir symlink. `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.
+keeps files that normalize the macOS `/var` to `/private/var` tmpdir symlink. `WINDOWS_TIER_RATIO_CEILING` (0.33) was unchanged (superseded by the 2026-11-22 amendment).
 
 Maintainer review of four files that mention a macOS behavior only in a comment. All four are released
 from the macOS tier (their code does not exercise the behavior), and a test pins that:
@@ -443,3 +445,27 @@ from the macOS tier (their code does not exercise the behavior), and a test pins
 - `tests/ensure-runtime-build.test.cjs:320-321`: released. The code passes the real tsc path explicitly to avoid creating a directory symlink.
 
 No `MACOS_ALWAYS_REAL_OS` map was added and no kept entries result. macOS tier size went from 270 to 263 (the shrink above), with no map entries added.
+
+## Amendment, 2026-11-22: the tier is bounded by its size, not by a ratio (#6551)
+
+The proportional ceilings of section 3 (Windows 33%, macOS 25% of eligible unit-suite files) measured the tier
+against a live denominator, which section "Rejected alternatives" already disclosed as a weakness in one direction: adding
+OS-agnostic tests loosens the ratio. [ADR-6315](6315-ci-redesign.md) item 19 moves the other way. It converts
+OS-agnostic test files to static checks and deletes them, so the denominator shrinks and the ratio of a tier that did
+not grow rises. Batch 7 of that item took the macOS tier from 301/1207 (24.9%) to 301/1192 (25.3%) without adding a
+file to it, and the ceiling test failed.
+
+What the ceiling protects is unchanged: the Windows and macOS lanes (the merge queue's critical path) run a small,
+explicit set of files, and a detector change or a run of new tests cannot quietly pull the suite back onto them, as
+happened in epic #4589 (546 files, 59% of the suite). That protection does not need a denominator. The two ceilings
+are replaced by size ratchets in `tests/platform-conformance-tier.test.cjs`: `WINDOWS_TIER_SIZE_BASELINE` (366 files)
+and `MACOS_TIER_SIZE_BASELINE` (301 files), taken from the same committed lists the ratios were measured on. The tier
+may not grow past its baseline (a file joining it is a deliberate edit of the constant, with the reason in review) and
+may not sit below it (a tier that shrank lowers the constant in the same change, so the bound only tightens), the same
+baseline-ratchet idea as the comment-ratchet baseline. The 33% and 25% figures remain the evidence the first
+baselines were taken from. Two limits are stated rather than hidden. A change that adds one signal-bearing file and
+removes one tier file keeps the count equal, so the size test does not see it; the real-tree tests that compare a fresh
+sweep with the committed list do, and so does review of the generated-list diff. And two changes that each delete a
+tier file edit the same constant, so the second needs a rebase. Item 20 of ADR-6315 (AC3) retires the content-signal
+classifiers these baselines are measured on, and records its own dated section here; what bounds the tiers chosen by
+filename is that item's decision, not this amendment's.

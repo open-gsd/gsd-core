@@ -261,7 +261,7 @@ examined. A document that exists but is empty was read (`found ''`), so it is no
 
 ## Error code taxonomy
 
-Codes are frozen constants in `gsd-core/bin/lib/core.cjs` under
+Codes are frozen constants in `src/io.cts` (compiled to `gsd-core/bin/lib/io.cjs`) under
 `ERROR_REASON`.  Tests must assert on `reason` values (stable), not `message`
 text (unstable).
 
@@ -305,6 +305,7 @@ text (unstable).
 |------|-------------|
 | `phase_not_found` | Phase directory lookup returns no match |
 | `summary_no_planning` | Summary operation when no `.planning/` directory exists |
+| `plans_no_line` | `state begin-phase --plans N` on a STATE.md with no `Total Plans in Phase:` field and no `Plan:` line in `## Current Position` to record the count; nothing is written. Add the field, or run without `--plans`. |
 | `verification_status_invalid` | A phase's `*-VERIFICATION.md` frontmatter `status` is outside the closed set `passed \| gaps_found \| human_needed` (for example `verified`, `Passed`, `stale`, or a non-string value). Emitted, with stdout empty, by every surface that reads the report — `verification status`, `phase uat-passed`, `phase complete`, `roadmap analyze`, `state sync`, `planning inspect`, `init *`, `smart-entry`, `audit-open`, `audit-uat`. The message names the report file, the value, and the accepted values, and states the recovery: set the report's `status:` to an accepted value, or delete the report and re-run the phase's verification. `validate health` reports the file as warning `W030` instead (#5118) |
 
 ### Estimate errors
@@ -354,7 +355,7 @@ assert.strictEqual(err.reason, 'sdk_unknown_command');
 ## Adding a new error code
 
 1. Add the constant to `ERROR_REASON` in
-   `gsd-core/bin/lib/core.cjs` (snake\_case, prefixed by subsystem).
+   `src/io.cts` (snake\_case, prefixed by subsystem).
 2. Pass it as the second argument to `error()` at the call site.
 3. Add a row to this document.
 4. Add a test asserting the new `reason` code via `JSON.parse`.

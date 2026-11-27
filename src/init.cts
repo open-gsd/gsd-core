@@ -19,6 +19,8 @@ import { STATE_MD_ENTRY_MAX_CHARS } from './state-md-schema.cjs';
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 config-value-resolver.cjs is an export= CommonJS module
+import configValueResolver = require('./config-value-resolver.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
 import capabilityLedger = require('./capability-ledger.cjs');
 import { findProjectRoot } from './project-root.cjs';
@@ -127,6 +129,7 @@ const {
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
   extractPhaseDependencyTokens,
+  isNegatedDependencyLead,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   extractPhaseToken,
@@ -678,19 +681,9 @@ function detectHasPriorPhases(cwd: string, phaseInfo: Record<string, unknown> | 
  * default-ON key read here silently inverts its unset value (#4977).
  */
 function readConfigJsonBoolean(cwd: string, keyPath: readonly string[]): boolean {
-  try {
-    // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to false below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
-    if (raw === null) return false;
-    let cursor: unknown = JSON.parse(raw);
-    for (const segment of keyPath) {
-      if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return false;
-      cursor = (cursor as Record<string, unknown>)[segment];
-    }
-    return cursor === true;
-  } catch {
-    return false;
-  }
+  // #6030: the value comes from the resolver, which reports a declared default as found, so a
+  // default-ON key now reads its default here instead of inverting it (#4977).
+  return readConfigJsonValue(cwd, keyPath) === true;
 }
 
 /** Reads `filePath`; returns its content, or `null` when missing/unreadable/empty. */
@@ -716,8 +709,18 @@ function readNonEmptyFileOrNull(filePath: string): string | null {
  */
 function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
   try {
+    // #6030 (ADR-1411 Decision 5): the resolver owns the layers, so root inheritance, the global
+    // defaults and the declared defaults apply here as they do everywhere else. A quiet read: an
+    // unusable layer is "not set", as before.
+    const resolved = configValueResolver.resolveConfigValue(keyPath.join('.'), {
+      cwd, family: 'A', quiet: true, honorGlobal: configLoader.honorsGlobalDefaults,
+    });
+    if (resolved.found) return resolved.value;
+    // A key the resolver does not declare (a legacy flat spelling or a container such as
+    // review.reviewer_instances) keeps the single-file read of the workstream-aware directory.
+    if (resolved.reason !== configLoader.CONFIG_REASON.NOT_CONFIGURED) return undefined;
     // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
-    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    const raw = configLoader.readConfigFileBounded(planningWorkspace.projectConfigPath(cwd));
     if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
@@ -1074,6 +1077,16 @@ function findDuplicateThreatIds(cwd: string, phaseDirRel: string | null | undefi
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/**
+ * A resolved-config flag for an init payload. A section the config marks as a present
+ * non-object removes its projections (#5096), so an absent flag reads as `false` here
+ * rather than surfacing as a dropped JSON key.
+ */
+function flagOrFalse<T extends object>(config: T, key: keyof T): T[keyof T] | false {
+  const value = config[key];
+  return value === undefined ? false : value;
+}
+
 function cmdInitExecutePhase(
   cwd: string,
   phase: string,
@@ -1145,14 +1158,14 @@ function cmdInitExecutePhase(
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
 
     tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     sub_repos: config.sub_repos,
     parallelization: config.parallelization,
     context_window: config.context_window,
     branching_strategy: config.branching_strategy,
     phase_branch_template: config.phase_branch_template,
     milestone_branch_template: config.milestone_branch_template,
-    verifier_enabled: config.verifier,
+    verifier_enabled: flagOrFalse(config, 'verifier'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute (anchored on cwd/project_root), not orchestrator-cwd-relative —
@@ -1360,11 +1373,11 @@ function cmdInitPlanPhase(
 
     tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
     granularity,
-    research_enabled: config.research,
-    plan_checker_enabled: config.plan_checker,
-    nyquist_validation_enabled: config.nyquist_validation,
-    commit_docs: config.commit_docs,
-    text_mode: config.text_mode,
+    research_enabled: flagOrFalse(config, 'research'),
+    plan_checker_enabled: flagOrFalse(config, 'plan_checker'),
+    nyquist_validation_enabled: flagOrFalse(config, 'nyquist_validation'),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
+    text_mode: flagOrFalse(config, 'text_mode'),
     auto_advance: !!(config.auto_advance),
     auto_chain_active: !!(config._auto_chain_active),
     mode: config.mode || 'interactive',
@@ -1631,7 +1644,7 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
 
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #4040: partial-init discriminator (see buildInitCompletenessFields).
     // Spread BEFORE this literal's own planning_exists so the existing
@@ -1717,8 +1730,8 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
 
-    commit_docs: config.commit_docs,
-    research_enabled: config.research,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
+    research_enabled: flagOrFalse(config, 'research'),
 
     // #3216 review Finding 2: `?? null` so an unresolved milestone still emits
     // the key with an explicit `null` rather than letting JSON.stringify drop
@@ -1849,7 +1862,7 @@ function cmdInitQuick(
     // so model_overrides / models.verification apply (was reusing executor_model).
     reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
 
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     branch_name: quickBranchName,
 
     quick_id: quickId,
@@ -1921,7 +1934,7 @@ function cmdInitQuickBatch(
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
     reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
 
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase; a
     // per-item task_dir is re-derived by the workflow itself (quick_id +
@@ -1961,7 +1974,7 @@ function cmdInitIngestDocs(cwd: string, raw: boolean): void {
     state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
     intel_dir: toPosixPath(path.join(planningDir(cwd), 'intel')),
     conflicts_path: toPosixPath(path.join(planningDir(cwd), 'INGEST-CONFLICTS.md')),
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
   };
   output(withProjectRoot(cwd, result), raw);
 }
@@ -2017,7 +2030,7 @@ function cmdInitResume(cwd: string, raw: boolean): void {
     has_interrupted_agent: !!interruptedAgentId,
     interrupted_agent_id: interruptedAgentId,
 
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
   };
 
   output(withProjectRoot(cwd, result), raw);
@@ -2084,7 +2097,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
 
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase. phaseDir
@@ -2180,7 +2193,7 @@ function cmdInitCodeReview(
   const fallow = detectFallowConfig(cwd);
 
   const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
@@ -2340,7 +2353,7 @@ function cmdInitDiscussPhaseAssumptions(
     readConfigJsonBoolean(cwd, ['workflow', 'auto_advance']);
 
   const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
@@ -2468,7 +2481,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const requirementsPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
 
   const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     brave_search:
       typeof config.brave_search === 'string'
         ? maskIfSecret('brave_search', config.brave_search)
@@ -2808,7 +2821,7 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
   }
 
   const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     date: realClock.localToday(),
     timestamp: realClock.nowIso(),
@@ -2944,7 +2957,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
   }
 
   const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #3216 review Finding 2: `?? null` so an unresolved milestone still emits
     // the key with an explicit `null` rather than letting JSON.stringify drop
@@ -2993,10 +3006,10 @@ function cmdInitMapCodebase(cwd: string, raw: boolean): void {
   const result: Record<string, unknown> = {
     mapper_model: resolveModelInternal(cwd, 'gsd-codebase-mapper'),
 
-    commit_docs: config.commit_docs,
-    search_gitignored: config.search_gitignored,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
+    search_gitignored: flagOrFalse(config, 'search_gitignored'),
     parallelization: config.parallelization,
-    subagent_timeout: config.subagent_timeout,
+    subagent_timeout: config.subagent_timeout === undefined ? configLoader.CONFIG_DEFAULTS.subagent_timeout : config.subagent_timeout,
 
     date: realClock.localToday(),
     timestamp: realClock.nowIso(),
@@ -3411,9 +3424,20 @@ function cmdInitManager(cwd: string, raw: boolean): void {
         : null;
       const depNums: string[] = [];
       const seen = new Set<string>();
-      const dependencyTokens = phaseIdConvention === 'bracket'
-        ? extractPhaseDependencyTokens(prose, phaseIdConvention)
-        : legacyManagerDependencyTokens(prose);
+      let dependencyTokens: string[];
+      if (phaseIdConvention === 'bracket') {
+        // #6507: the shared owner returns [] for a Nothing/None lead itself.
+        dependencyTokens = extractPhaseDependencyTokens(prose, phaseIdConvention);
+      } else if (isNegatedDependencyLead(prose)) {
+        // #6507: a lead negation is the writer's decision, not prose to mine —
+        // even "Nothing except Phase 1" resolves to no dependencies; guidance
+        // tells writers to use a plain list when a dependency exists. The gate
+        // stays inside this branch so the exact-none short-circuit above keeps
+        // its payload shape (no dep_phases key).
+        dependencyTokens = [];
+      } else {
+        dependencyTokens = legacyManagerDependencyTokens(prose);
+      }
       for (const token of dependencyTokens) {
         const identity = bracketIdentityKey(token);
         if (identity) {
@@ -3787,7 +3811,7 @@ function cmdInitDocsUpdate(cwd: string, raw: boolean, options: Record<string, un
  * `state:chunked-mode`/`state:plan-strategy-converge`). This DELIBERATELY
  * does not replace `update.md`'s own `parse_update_channel` case-statement
  * (`TAG="next"`/`TAG="latest"`) — issue #815's regression test
- * (`tests/update-workflow.test.cjs`) asserts that literal
+ * (the `update-workflow` text contract) asserts that literal
  * case-statement text stays in `update.md` verbatim (the npm dist-tag
  * selection has to run in the workflow's own shell before any `gsd_run`
  * round-trip), so `next_channel` exists purely to gate the `channel-banner`
@@ -3900,7 +3924,7 @@ function cmdInitDebug(cwd: string, raw: boolean, options: Record<string, unknown
   const config = loadConfig(cwd);
 
   const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     // #2376: absolute — debug.md builds `debug_file_path` as
     // `{debug_dir}/{slug}.md` for its gsd-debug-session-manager spawns, whose
     // own cwd may differ from the orchestrator's.
@@ -4195,7 +4219,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
 
-    commit_docs: config.commit_docs,
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #3216 review Finding 2: `?? null` so an unresolved milestone still emits
     // the key with an explicit `null` rather than letting JSON.stringify drop
@@ -4793,6 +4817,21 @@ interface SkillManifest {
   };
 }
 
+/**
+ * A directory entry that is a directory, or a symlink that resolves to one (#6719): a skill pack
+ * installed through a link is still a skill directory. A dangling link or a link to a file is not,
+ * and is skipped rather than thrown on.
+ */
+function isDirectoryEntry(parent: string, entry: fs.Dirent): boolean {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return fs.statSync(path.join(parent, entry.name)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function buildSkillManifest(cwd: string, skillsDir: string | null = null): SkillManifest {
   interface CanonicalRoot {
     root: string;
@@ -4980,7 +5019,8 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
 
     let skillCount = 0;
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // #6719: a skill installed through a directory symlink is a skill directory too.
+      if (!isDirectoryEntry(rootPath, entry)) continue;
 
       const skillMdPath = path.join(rootPath, entry.name, 'SKILL.md');
       const content = capabilityLedger.readSkillFile(skillMdPath);

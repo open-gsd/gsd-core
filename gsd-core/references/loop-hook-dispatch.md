@@ -37,6 +37,8 @@ only where a landing site reads it:
 |---|---|---|---|
 | `code-reviewer` | the review step's loop point (`execute:post`, or `execute:wave:post` per `workflow.code_review_point`) | `code-review.md`, appended to the `gsd-code-reviewer` prompt | `execute:pre`, `execute:wave:pre` |
 | `verifier` | `execute:post` | `execute-phase/steps/verify-phase-goal.md` `verifier_dispatch`, appended to the `gsd-verifier` prompt after `${VERIFIER_SKILLS}` inside `<capability_verifier_rules>` | `execute:pre`, `execute:wave:pre`, `execute:wave:post` |
+| `reviewer` | `review:pre` | `review.md` `build_prompt`, appended once to the shared prompt file every external reviewer lane reads, inside `<capability_reviewer_rules>` (#3997) | (the point is wired for contributions only; a `step` or `gate` there fails the registry build) |
+
 
 A `verifier` contribution declared at a point not listed as delivered installs and renders in
 `activeHooks` but is never inlined into a prompt; declare it at `execute:post`. Delivery is advisory: a failure
@@ -97,6 +99,8 @@ handed to its consolidator — those are NOT part of what this trait makes reusa
 A `step` is **advisory by construction**: it never blocks or redirects the host workflow —
 that is what a `gate` is for. Each dispatch is best-effort; on error record a warning and
 continue, honoring `onError`.
+
+**Advisor pre-filter contribution (#4795).** The optional `advisor-prefilter` capability registers a `contribution` `into: orchestrator` at `verify:post` and `ship:pre`, gated by `workflow.advisor_prefilter` (default off). `verify-work.md` and `ship.md` inject it like any orchestrator contribution: the fragment tells the orchestrator to consult the session advisor tool once and to skip silently when the session has none. It never blocks and does not replace the reviewer subagents. `execute:*` publishes no `orchestrator` role, so the capability declares nothing there. See [ADR-4795](../../docs/adr/4795-advisor-prefilter-in-review-pipeline.md).
 
 **A point whose workflow hand-rolls one `kind` does not implement this contract.** Several
 host workflows historically matched a single hook (e.g. `execute:post` matched only

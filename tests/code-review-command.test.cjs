@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const CONFIG_CJS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config.cjs');
 const SHIP_MD_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
@@ -43,7 +44,7 @@ describe('code_review_command config key', () => {
       const result = runGsdTools(
         ['config-set', 'workflow.code_review_command', 'my-review-tool --review'],
         tmpDir,
-        { HOME: tmpDir }
+        isolatedEnv({ home: tmpDir })
       );
       assert.ok(result.success, 'config-set should succeed');
 

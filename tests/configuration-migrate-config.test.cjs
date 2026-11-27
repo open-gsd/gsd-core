@@ -444,7 +444,7 @@ test('mergeDefaults clones defaults without JSON serialization fragility (#321)'
       const dir = track(__project3760(text));
       try {
         let result;
-        __emissionsDuring3760(() => { result = __migrate3760(dir); });
+        __emissionsDuring3760(() => { result = __migrate3760(dir, require('node:path').join(dir, '.planning', 'config.json')); });
         __assert3760.strictEqual(result.migrated, false, 'nothing was migrated, so nothing may be written');
         __assert3760.strictEqual(result.wrote, null);
         __assert3760.strictEqual(
@@ -462,7 +462,7 @@ test('mergeDefaults clones defaults without JSON serialization fragility (#321)'
       const dir = track(__project3760(text));
       try {
         let result;
-        __emissionsDuring3760(() => { result = __migrate3760(dir); });
+        __emissionsDuring3760(() => { result = __migrate3760(dir, require('node:path').join(dir, '.planning', 'config.json')); });
         __assert3760.strictEqual(result.migrated, false);
         __assert3760.strictEqual(__readConfig3760(dir), text);
       } finally {
@@ -482,7 +482,7 @@ test('mergeDefaults clones defaults without JSON serialization fragility (#321)'
       __fs3760.mkdirSync(__path3760.join(dir, 'sub', '.git'), { recursive: true });
       try {
         let result;
-        __emissionsDuring3760(() => { result = __migrate3760(dir); });
+        __emissionsDuring3760(() => { result = __migrate3760(dir, require('node:path').join(dir, '.planning', 'config.json')); });
         __assert3760.strictEqual(result.migrated, false, 'nothing migrated, so nothing written');
         __assert3760.strictEqual(
           __readConfig3760(dir), text,
@@ -502,7 +502,7 @@ test('mergeDefaults clones defaults without JSON serialization fragility (#321)'
       __fs3760.mkdirSync(__path3760.join(dir, 'sub', '.git'), { recursive: true });
       try {
         let result;
-        __emissionsDuring3760(() => { result = __migrate3760(dir); });
+        __emissionsDuring3760(() => { result = __migrate3760(dir, require('node:path').join(dir, '.planning', 'config.json')); });
         const after = JSON.parse(__readConfig3760(dir));
         __assert3760.strictEqual(result.migrated, true);
         __assert3760.deepStrictEqual(after.planning.sub_repos, ['sub']);
@@ -518,7 +518,7 @@ test('mergeDefaults clones defaults without JSON serialization fragility (#321)'
       __fs3760.mkdirSync(__path3760.join(dir, 'sub', '.git'), { recursive: true });
       try {
         let result;
-        __emissionsDuring3760(() => { result = __migrate3760(dir); });
+        __emissionsDuring3760(() => { result = __migrate3760(dir, require('node:path').join(dir, '.planning', 'config.json')); });
         const after = JSON.parse(__readConfig3760(dir));
         __assert3760.strictEqual(result.migrated, true);
         __assert3760.deepStrictEqual(after.planning.sub_repos, ['sub']);
@@ -537,7 +537,7 @@ test('mergeDefaults clones defaults without JSON serialization fragility (#321)'
       const dir = track(__project3760(JSON.stringify({ git: 'main', branching_strategy: 'none' }, null, 2)));
       try {
         let result;
-        const emitted = __emissionsDuring3760(() => { result = __migrate3760(dir); });
+        const emitted = __emissionsDuring3760(() => { result = __migrate3760(dir, require('node:path').join(dir, '.planning', 'config.json')); });
         __assert3760.strictEqual(emitted, 0, 'the pure module must not reach the diagnostic seam');
         __assert3760.strictEqual(result.skipped.length, 1, 'but it must still report the refusal in-band');
       } finally {

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { extractCurrentMilestone } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
@@ -915,7 +916,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
           fs.appendFileSync(planning(dir, 'ROADMAP.md'), '\n```md\n### [CK.02] 02: Example\n```\n');
         }
         const before = snapshotTree(planning(dir));
-        const result = runGsdTools(['--json-errors', 'phase', 'remove', argument, '--force'], dir, { HOME: dir, USERPROFILE: dir });
+        const result = runGsdTools(['--json-errors', 'phase', 'remove', argument, '--force'], dir, isolatedEnv({ home: dir }));
         assert.equal(result.success, false, result.output);
         assert.equal(JSON.parse(result.error).reason, 'usage');
         assert.deepEqual(snapshotTree(planning(dir)), before);
@@ -940,7 +941,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       test(`${argument} refuses a slug mismatch without writing`, () => {
         const dir = removalFixture(['01', '02', '03']);
         const before = snapshotTree(planning(dir));
-        const result = runGsdTools(['--json-errors', 'phase', 'remove', argument, '--force'], dir, { HOME: dir, USERPROFILE: dir });
+        const result = runGsdTools(['--json-errors', 'phase', 'remove', argument, '--force'], dir, isolatedEnv({ home: dir }));
         assert.equal(result.success, false, result.output);
         const payload = JSON.parse(result.error);
         assert.equal(payload.reason, 'usage');
@@ -987,7 +988,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   test('review 1025 Minor-4 begin-phase clearly refuses a qualified phase before writing', () => {
     const dir = removalFixture(['01', '02', '03']);
     const before = snapshotTree(planning(dir));
-    const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', 'CK.02-02', '--name', 'two', '--plans', '1'], dir, { HOME: dir, USERPROFILE: dir });
+    const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', 'CK.02-02', '--name', 'two', '--plans', '1'], dir, isolatedEnv({ home: dir }));
     assert.equal(result.success, false, result.output);
     const payload = JSON.parse(result.error);
     assert.equal(payload.reason, 'usage');

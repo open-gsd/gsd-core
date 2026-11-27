@@ -18,7 +18,7 @@ import ioMod = require('./io.cjs');
 const { output, error, formatDiagnosticToken, declineNoOp } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { phaseMarkdownRegexSource, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
+const { phaseMarkdownRegexSource, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const {
@@ -35,7 +35,7 @@ const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestone
 
 /** Every phase-list entry line, any phase: the rows between two of them belong to the first. */
 const ANY_PHASE_ENTRY_LINE = phaseEntryRegExp('Phase[ \\t][^\\r\\n]*$', 'gi');
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, iterateBullets, stripFencedCode, updateBullet } from './markdown-sectionizer.cjs';
 import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
 import { normalizeMilestoneToken, editRoadmapProgress } from './roadmap-progress.cjs';
@@ -1188,6 +1188,133 @@ function editFromPhaseTable(scoped: string, edit: (scoped: string) => string): s
   return scoped.slice(0, at) + edit(scoped.slice(at));
 }
 
+// ─── #6270: plan rows versus PLAN files ──────────────────────────────────────────────────────────────────────────
+// A phase's ROADMAP plan list and its PLAN files on disk must not silently disagree. A plan row is a checkbox bullet whose
+// first token is a plan id OF THIS PHASE: the phase directory's own prefix (`01` from `01-alpha`), a `-` and the plan
+// number (`01-01`, `01-02.1`), with or without the `-PLAN.md` suffix, a slug after the id, and an optional bold wrapper;
+// the same spellings `planRowPattern` ticks. Any other checkbox (`- [ ] 2026-11-21 release is tagged`, `- [ ] 3-5 tickets`)
+// is never a plan row, so it is neither warned about nor dropped, and a phase whose directory has no numeric prefix (a custom
+// phase id) has no recognised plan rows at all.
+const CONTINUATION_LINE_RE = /^[ \t]+\S/;
+const BULLET_LINE_RE = /^[ \t]*(?:[-*+]|\d+\.)[ \t]/;
+const DROPPED_ROW_SENTINEL = '\u0000gsd-dropped-plan-row\u0000';
+
+/** The numeric prefix of a phase directory name (`01` from `01-alpha`, `02.1` from `02.1-fix`), or null. */
+function phasePlanPrefix(directory: string): string | null {
+  const m = new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})(?=-|$)`, 'i').exec(path.basename(directory));
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** The plan id at the start of a checkbox row's text: this phase's prefix, `-`, the plan number, then the id's boundary. */
+function planRowStemRegex(prefix: string): RegExp {
+  return new RegExp(
+    `^(?:\\*\\*)?(${escapeRegex(prefix)}-${PHASE_NUMBER_TOKEN_SOURCE})(?:-PLAN\\.md|(?![\\w.]|-\\d))`,
+    'i',
+  );
+}
+
+/** The plan ids (lower-cased stems) `text` lists as checkbox rows of the phase with this prefix; fenced code is skipped. */
+function listedPlanRowStems(text: string, prefix: string | null): string[] {
+  if (prefix === null) return [];
+  const stemRe = planRowStemRegex(prefix);
+  const stems: string[] = [];
+  for (const bullet of iterateBullets(stripFencedCode(text).text)) {
+    if (bullet.checked === null) continue;
+    const m = stemRe.exec(bullet.text);
+    if (m) stems.push(m[1].toLowerCase());
+  }
+  return stems;
+}
+
+/**
+ * Remove the single-line plan rows of `text` whose stem is in `stems`, through the bullet seam (`updateBullet` is
+ * fence-aware and never touches another line). A row followed by an indented continuation line is kept (dropping only its
+ * first line would leave the continuation attached to the row above), and so is reported in `kept`.
+ */
+function dropPlanRows(text: string, stems: ReadonlySet<string>): { text: string; dropped: string[]; kept: string[] } {
+  const dropped: string[] = [];
+  const kept: string[] = [];
+  let out = text;
+  for (const stem of stems) {
+    const rowRe = coreUtils.planRowPattern(stem, { anchored: true, anyState: true });
+    for (;;) {
+      let continuation = false;
+      const next = updateBullet(
+        out,
+        (_bulletText, rawLine, lineIndex) => {
+          if (!rowRe.test(rawLine)) return false;
+          const following = out.split('\n')[lineIndex + 1];
+          continuation = following !== undefined && CONTINUATION_LINE_RE.test(following) && !BULLET_LINE_RE.test(following);
+          return true;
+        },
+        () => DROPPED_ROW_SENTINEL,
+      );
+      if (next === out) break;
+      if (continuation) { kept.push(stem); break; }
+      out = next.split('\n').filter((line) => line !== DROPPED_ROW_SENTINEL).join('\n');
+      dropped.push(stem);
+    }
+  }
+  return { text: out, dropped, kept };
+}
+
+/** The plan ids (lower-cased canonical stems) of every `*-PLAN.md` file in a phase directory, superseded plans included. */
+function planFileStems(phaseDir: string): Set<string> {
+  // `allPlanFiles` is every plan file the scan owner sees; a nested `plans/` entry keeps its basename. The id is the
+  // canonical one the counts pair summaries by, so `01-01-setup-PLAN.md` is plan `01-01`.
+  return new Set(scanPhasePlans(phaseDir).allPlanFiles.map((file: string) => coreUtils.extractCanonicalPlanId(path.basename(file)).toLowerCase()));
+}
+
+/**
+ * `roadmap validate` rules V006 and V007 (#6270): for each phase whose own detail section lists plan rows, a row whose
+ * PLAN file is gone (V006), and a live PLAN file that no plan row anywhere in the roadmap names (V007; a
+ * `status: superseded` plan is excluded, as from every count, and so is a file whose name has no canonical plan id, which
+ * could never have a row). A phase that lists no plan rows has no list to disagree with and is skipped.
+ */
+function checkPlanRowsAgainstDisk(cwd: string, roadmapContent: string): Array<{ code: string; message: string }> {
+  const warnings: Array<{ code: string; message: string }> = [];
+  const visible = roadmapParserModule.maskArchivedDetails(roadmapContent, cwd).visible;
+  const directoryContext = phaseDirectoryOptions(cwd, undefined, roadmapContent);
+  const headings = tokenizeHeadings(visible);
+  const phaseHeadingText = (text: string): string => text.replace(/^\[[^\]]*\]\s*/, '');
+  headings.forEach((heading, i) => {
+    const m = /^Phase\s+(\S+?)\s*(?:\([^)\n]*\))?\s*:/i.exec(phaseHeadingText(heading.text));
+    if (!m) return;
+    // The phase's own section runs to the next heading at its level or above, so rows under a `#### Plans` sub-heading count
+    // and a trailing `## Notes` section does not.
+    const next = headings.slice(i + 1).find((h) => h.level <= heading.level);
+    const section = visible.slice(heading.offset, next ? next.offset : visible.length);
+    const phaseInfo = findPhaseInternal(cwd, m[1], undefined, directoryContext);
+    if (!phaseInfo) return;
+    const prefix = phasePlanPrefix(phaseInfo.directory);
+    const listed = new Set(listedPlanRowStems(section, prefix));
+    if (listed.size === 0) return;
+    const phaseDir = path.join(cwd, phaseInfo.directory);
+    const onDisk = planFileStems(phaseDir);
+    const rowsWithoutFile = [...listed].filter((stem) => !onDisk.has(stem)).sort();
+    if (rowsWithoutFile.length > 0) {
+      warnings.push({
+        code: 'V006',
+        message: `Phase ${formatDiagnosticToken(m[1])} lists plan row(s) with no PLAN file on disk: ${rowsWithoutFile.join(', ')}. Run \`gsd-tools query roadmap.update-plan-progress ${m[1]}\` to drop them, or restore the file.`,
+      });
+    }
+    // A row anywhere in the roadmap (the phase's checklist bullet included) names a plan: the insert step reads presence the same way.
+    const namedAnywhere = new Set(listedPlanRowStems(visible, prefix));
+    const canonicalStem = new RegExp(`^${escapeRegex(prefix as string)}-${PHASE_NUMBER_TOKEN_SOURCE}$`, 'i');
+    const filesWithoutRow = scanPhasePlans(phaseDir).planFiles
+      .map((file: string) => coreUtils.extractCanonicalPlanId(path.basename(file)).toLowerCase())
+      .filter((stem: string) => canonicalStem.test(stem) && !namedAnywhere.has(stem))
+      .sort();
+    if (filesWithoutRow.length > 0) {
+      warnings.push({
+        code: 'V007',
+        message: `Phase ${formatDiagnosticToken(m[1])} has PLAN file(s) with no plan row in ROADMAP.md: ${[...new Set(filesWithoutRow)].join(', ')}. Run \`gsd-tools query roadmap.update-plan-progress ${m[1]}\` to add them.`,
+      });
+    }
+  });
+  return warnings;
+}
+
 /**
  * Scope a ROADMAP.md content string down to its "Progress table" writable
  * slice, run `edit` against just that slice, then splice the result back into
@@ -1856,6 +1983,33 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       }
     }
 
+    // #6270: a plan row whose PLAN file is gone is dropped from the phase's own detail section, so the `Plans:` count (read
+    // from disk) and the list under it agree. A row with a wrapped continuation line is kept and reported, since dropping
+    // its first line alone would hand the continuation to the row above.
+    const planPrefix = phasePlanPrefix(phaseInfo!.directory);
+    if (planPrefix !== null) {
+      const onDisk = planFileStems(phaseDir);
+      let sectionRows: string[] = [];
+      withPhaseSection(roadmapContent, phaseNum, (section) => { sectionRows = listedPlanRowStems(section, planPrefix); return section; }, true);
+      const gone = new Set(sectionRows.filter((stem) => !onDisk.has(stem)));
+      if (gone.size > 0) {
+        const droppedRows = new Set<string>();
+        const keptRows = new Set<string>();
+        roadmapContent = withPhaseSection(roadmapContent, phaseNum, (section) => {
+          const result = dropPlanRows(section, gone);
+          result.dropped.forEach((stem) => droppedRows.add(stem));
+          result.kept.forEach((stem) => keptRows.add(stem));
+          return result.text;
+        }, true);
+        if (droppedRows.size > 0) {
+          warnings.push(`Dropped plan row(s) with no PLAN file on disk from phase ${formatDiagnosticToken(String(phaseNum))}: ${[...droppedRows].sort().join(', ')}.`);
+        }
+        if (keptRows.size > 0) {
+          warnings.push(`Kept plan row(s) with no PLAN file on disk in phase ${formatDiagnosticToken(String(phaseNum))} because the row spans more than one line: ${[...keptRows].sort().join(', ')}; remove them by hand.`);
+        }
+      }
+    }
+
     // #3957 (B9.4): write and report an update only when the transforms
     // above actually produced different bytes — mirroring the sibling
     // `cmdRoadmapAnnotateDependencies`'s existing `nextContent !== content`
@@ -2281,6 +2435,7 @@ export = {
   cmdRoadmapMilestoneScope,
   cmdRoadmapUpdatePlanProgress,
   cmdRoadmapAnnotateDependencies,
+  checkPlanRowsAgainstDisk,
   buildPhaseHeadingRegex,
   editFromPhaseTable,
   findPhaseTableHeader,

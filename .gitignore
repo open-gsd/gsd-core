@@ -71,6 +71,9 @@ build/
 # by `npm run build:lib`). Source of truth is src/; these are emitted, never edited.
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /tsconfig.build.tsbuildinfo
+/gsd-core/bin/lib/config-value-resolver.cjs
+/gsd-core/bin/lib/config-schema-defaults.cjs
+/gsd-core/bin/lib/settings-jsonc.cjs
 /gsd-core/bin/lib/commonjs-marker.cjs
 /gsd-core/bin/lib/broken-windows.cjs
 /gsd-core/bin/lib/complexity-trigger.cjs
@@ -228,6 +231,7 @@ build/
 /gsd-core/bin/lib/installer-migrations.cjs
 /gsd-core/bin/lib/worktree-base-ref.cjs
 /gsd-core/bin/lib/gsd-tool-dir.cjs
+/gsd-core/bin/lib/dispatch-isolation.cjs
 /gsd-core/bin/lib/worktree-safety.cjs
 /gsd-core/bin/lib/planning-workspace.cjs
 /gsd-core/bin/lib/planning-scope.cjs
@@ -254,6 +258,7 @@ build/
 /gsd-core/bin/lib/health-diagnostic-rules/consistency.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/install-surface-shadowing.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/context-bridge.cjs
+/gsd-core/bin/lib/health-diagnostic-rules/project-skills-budget.cjs
 /gsd-core/bin/lib/command-roster.cjs
 /gsd-core/bin/lib/runtime-artifact-conversion.cjs
 /gsd-core/bin/lib/runtime-artifact-layout.cjs

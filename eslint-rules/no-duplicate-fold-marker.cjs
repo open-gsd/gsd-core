@@ -53,10 +53,9 @@
  *
  * ── What is deliberately NOT flagged ──────────────────────────────────────────
  *
- *   - A `__foldDescribe` title without a `folded:` prefix. The alias is reused
- *     for at least one ordinary describe block
- *     (tests/review-default-reviewers-workflow.test.cjs). Those are not folds
- *     and carry no uniqueness obligation.
+ *   - A `__foldDescribe` title without a `folded:` prefix. The alias may be
+ *     reused for an ordinary describe block. Those are not folds and carry no
+ *     uniqueness obligation.
  *   - A plain `describe("folded:…")`. The convention this rule enforces is the
  *     fold alias; a bare `describe` with a colliding title is a different
  *     (and currently non-existent) shape.

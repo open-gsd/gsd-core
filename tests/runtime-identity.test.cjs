@@ -20,6 +20,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runNode, runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -351,7 +352,7 @@ describe('launcher resolver: PATH branch prefers the collision-free bin', () => 
       // PATH holds ONLY our fixture bin, so a real gsd_run installed on the
       // developer's machine cannot silently satisfy the resolver and turn a
       // failing case green.
-      env: { PATH: binDir, HOME: dir, RUNTIME_DIR: dir },
+      env: isolatedEnv({ home: dir, path: binDir, base: {}, override: { RUNTIME_DIR: dir } }),
     });
   };
 
@@ -577,7 +578,7 @@ function makeIdentityFixture() {
       timeoutMs: PROBE_TIMEOUT_MS,
       // PATH holds only the fixture bin (plus a node symlink) so a real gsd_run
       // on the developer's machine cannot satisfy the resolver instead.
-      env: { PATH: binDir, HOME: dir, RUNTIME_DIR: dir },
+      env: isolatedEnv({ home: dir, path: binDir, base: {}, override: { RUNTIME_DIR: dir } }),
     });
   };
 

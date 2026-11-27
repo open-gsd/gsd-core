@@ -147,7 +147,7 @@ Ultraplan runs as a standard Claude Code on the web session. For Pro/Max subscri
 
 ## Test Coverage
 
-`tests/ultraplan-phase.test.cjs` — structural assertions covering:
+the `ultraplan-phase` text contract — structural assertions covering:
 - File existence (command + workflow)
 - Command frontmatter completeness (name, description with `[BETA]`, argument-hint)
 - Command references workflow

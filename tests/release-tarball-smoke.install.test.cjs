@@ -17,6 +17,7 @@ const { spawnSync } = require('node:child_process');
 
 const { cleanup, createTempDir, runNpm, isolatedNpmEnv } = require('./helpers.cjs');
 const { ensureHooksDist } = require('./helpers/hooks-dist.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { SMOKE, runSmoke, entrypointFixtureHome, CHILD_TIMEOUT_MS, configuredEntrypointsIn } = require('../scripts/release-tarball-smoke.cjs');
 
 const smokeMsg = (label, result) =>
@@ -367,16 +368,16 @@ describe('release-tarball-smoke', () => {
           configDir,
         ], {
           cwd: runtimeRoot,
-          env: {
-            ...process.env,
-            ...isolatedNpmEnv(),
-            HOME: runtimeRoot,
-            USERPROFILE: runtimeRoot,
-            GSD_HOME: runtimeRoot,
-            GSD_TEST_MODE: '',
-            NO_UPDATE_NOTIFIER: '1',
-            npm_config_update_notifier: 'false',
-          },
+          env: isolatedEnv({
+            home: runtimeRoot,
+            base: { ...process.env, ...isolatedNpmEnv() },
+            override: {
+              GSD_HOME: runtimeRoot,
+              GSD_TEST_MODE: '',
+              NO_UPDATE_NOTIFIER: '1',
+              npm_config_update_notifier: 'false',
+            },
+          }),
           encoding: 'utf8',
           timeout: CHILD_TIMEOUT_MS,
         });
@@ -424,16 +425,16 @@ describe('release-tarball-smoke', () => {
         upgradedConfigDir,
       ], {
         cwd: upgradeCwd,
-        env: {
-          ...process.env,
-          ...isolatedNpmEnv(),
-          HOME: upgradedHome,
-          USERPROFILE: upgradedHome,
-          GSD_HOME: upgradedHome,
-          GSD_TEST_MODE: '',
-          NO_UPDATE_NOTIFIER: '1',
-          npm_config_update_notifier: 'false',
-        },
+        env: isolatedEnv({
+          home: upgradedHome,
+          base: { ...process.env, ...isolatedNpmEnv() },
+          override: {
+            GSD_HOME: upgradedHome,
+            GSD_TEST_MODE: '',
+            NO_UPDATE_NOTIFIER: '1',
+            npm_config_update_notifier: 'false',
+          },
+        }),
         encoding: 'utf8',
         timeout: CHILD_TIMEOUT_MS,
       });
@@ -488,7 +489,7 @@ describe('release-tarball-smoke', () => {
       ].join('');
       const upgradedOfflineResult = spawnSync(process.execPath, ['-e', upgradedOfflineScript], {
         cwd: runtimeRoot,
-        env: { ...process.env, HOME: upgradedHome, USERPROFILE: upgradedHome, GSD_HOME: upgradedHome, GSD_TEST_MODE: '' },
+        env: isolatedEnv({ home: upgradedHome, override: { GSD_HOME: upgradedHome, GSD_TEST_MODE: '' } }),
         encoding: 'utf8',
         timeout: CHILD_TIMEOUT_MS,
       });
@@ -515,7 +516,7 @@ describe('release-tarball-smoke', () => {
       ].join('');
       const legacyResult = spawnSync(process.execPath, ['-e', legacyChildScript], {
         cwd: runtimeRoot,
-        env: { ...process.env, HOME: runtimeRoot, USERPROFILE: runtimeRoot, GSD_HOME: runtimeRoot, GSD_TEST_MODE: '' },
+        env: isolatedEnv({ home: runtimeRoot, override: { GSD_HOME: runtimeRoot, GSD_TEST_MODE: '' } }),
         encoding: 'utf8',
         timeout: CHILD_TIMEOUT_MS,
       });
@@ -543,7 +544,7 @@ describe('release-tarball-smoke', () => {
         ].join('');
         const result = spawnSync(process.execPath, ['-e', childScript], {
           cwd: runtimeRoot,
-          env: { ...process.env, HOME: runtimeRoot, USERPROFILE: runtimeRoot, GSD_HOME: runtimeRoot, GSD_TEST_MODE: '' },
+          env: isolatedEnv({ home: runtimeRoot, override: { GSD_HOME: runtimeRoot, GSD_TEST_MODE: '' } }),
           encoding: 'utf8',
           timeout: CHILD_TIMEOUT_MS,
         });
@@ -1086,7 +1087,7 @@ describe('bug-131: runNpm isolates HOME from the caller environment', () => {
     ].join('\n');
     const result = runNode(['-e', script], {
       timeoutMs: NPM_HARNESS_SPAWN_TIMEOUT_MS,
-      env: { ...process.env, HOME: callerHome, USERPROFILE: callerHome, GSD_HOME: callerHome, TMPDIR: callerTemp, TEMP: callerTemp, TMP: callerTemp },
+      env: isolatedEnv({ home: callerHome, override: { GSD_HOME: callerHome, TMPDIR: callerTemp, TEMP: callerTemp, TMP: callerTemp } }),
     });
     assert.equal(result.exitCode, 0, result.stderr);
     const actual = JSON.parse(result.stdout);

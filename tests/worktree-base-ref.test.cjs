@@ -176,6 +176,14 @@ describe('applyWorktreeBaseRef', () => {
   });
 });
 
+// Pre-#6031 shape of the cascade: a claudeDir, an optional user directory, and a bare string
+// (or null). The ladder is read through the family-B resolver; these cases pin that the same
+// files still resolve to the same strings (no user layer unless one is named).
+function legacyBaseRef(claudeDir, deps, userClaudeDir) {
+  const r = resolveEffectiveBaseRef(path.dirname(claudeDir), { ...deps, userClaudeDir: userClaudeDir ?? null });
+  return r.found ? r.value : null;
+}
+
 // ─── resolveEffectiveBaseRef ──────────────────────────────────────────────────
 
 describe('resolveEffectiveBaseRef', () => {
@@ -183,77 +191,92 @@ describe('resolveEffectiveBaseRef', () => {
   function makeReadFile(files) {
     return (p) => (Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null);
   }
+  const cwd = '/repo';
+  const claudeDir = path.join(cwd, '.claude');
+  const LOCAL = path.join(claudeDir, 'settings.local.json');
+  const SHARED = path.join(claudeDir, 'settings.json');
+  // The ladder is read through the family-B resolver (#6031): no user layer unless one is named.
+  const resolve = (files, userClaudeDir = null) => resolveEffectiveBaseRef(cwd, { readFile: makeReadFile(files), userClaudeDir });
+  const quiet = (fn) => {
+    const original = process.stderr.write;
+    process.stderr.write = () => true;
+    try { return fn(); } finally { process.stderr.write = original; }
+  };
 
-  test('returns baseRef from settings.local.json when present', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
+  test('returns the settings.local.json baseRef with its layer when present', () => {
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+    });
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-local']);
   });
 
   test('falls back to settings.json when settings.local.json has no baseRef', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ other: 'value' }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ other: 'value' }),
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+    });
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'fresh', 'runtime-shared']);
   });
 
-  test('returns null when both files are missing', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = { readFile: () => null };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
+  test('reads the user layer last and reports it', () => {
+    const user = '/home/user/.claude';
+    const r = resolve({ [path.join(user, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }) }, user);
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-user']);
   });
 
-  test('returns null when both files exist but have no baseRef', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ other: 'value' }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ other: 'value2' }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
+  test('returns an unfound resolution when both files are missing', () => {
+    const r = resolve({});
+    assert.deepStrictEqual([r.found, r.value, r.layer], [false, undefined, null]);
+  });
+
+  test('returns an unfound resolution when both files exist but have no baseRef', () => {
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ other: 'value' }),
+      [SHARED]: JSON.stringify({ other: 'value2' }),
+    });
+    assert.equal(r.found, false);
   });
 
   test('ignores malformed JSON in settings.local.json and falls back', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: 'not valid json {{{',
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
+    const r = quiet(() => resolve({
+      [LOCAL]: 'not valid json {{{',
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+    }));
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-shared']);
   });
 
   test('ignores malformed JSON in settings.json', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: null,
-        [path.join(claudeDir, 'settings.json')]: 'not valid json',
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
+    const r = quiet(() => resolve({ [LOCAL]: null, [SHARED]: 'not valid json' }));
+    assert.equal(r.found, false);
   });
 
-  test('settings.local.json null baseRef falls back to settings.json', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: null } }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
+  test('a null baseRef in settings.local.json falls back to settings.json', () => {
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ worktree: { baseRef: null } }),
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+    });
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'fresh', 'runtime-shared']);
+  });
+
+  test('a non-object worktree parent at a layer is skipped like the bare-string cascade did', () => {
+    for (const parent of [null, 'x', 7, []]) {
+      const r = resolve({
+        [LOCAL]: JSON.stringify({ worktree: parent }),
+        [SHARED]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      });
+      assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-shared'], JSON.stringify(parent));
+    }
+  });
+
+  test('a non-string baseRef at a layer is skipped like a null one', () => {
+    for (const bad of [7, true, {}, []]) {
+      const r = resolve({
+        [LOCAL]: JSON.stringify({ worktree: { baseRef: bad } }),
+        [SHARED]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      });
+      assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-shared'], JSON.stringify(bad));
+    }
   });
 });
 
@@ -1165,7 +1188,7 @@ describe('resolveEffectiveBaseRef — JSONC (FIX 2)', () => {
         [path.join(claudeDir, 'settings.local.json')]: jsonc,
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps), 'head');
   });
 
   test('returns baseRef from settings.local.json with /* */ block comments', () => {
@@ -1182,7 +1205,7 @@ describe('resolveEffectiveBaseRef — JSONC (FIX 2)', () => {
         [path.join(claudeDir, 'settings.local.json')]: jsonc,
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps), 'fresh');
   });
 });
 
@@ -1334,7 +1357,7 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'head');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'head');
   });
 
   test('(b) project local "fresh" OVERRIDES user/global "head" → returns "fresh"', () => {
@@ -1344,7 +1367,7 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
   });
 
   test('(c) project shared "fresh" (no local) OVERRIDES user/global "head" → returns "fresh"', () => {
@@ -1354,17 +1377,17 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
   });
 
   test('(d) userClaudeDir undefined → behaves as before, returns null when both project files absent', () => {
     const deps = { readFile: () => null };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, undefined), null);
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, undefined), null);
   });
 
   test('(d) userClaudeDir null → behaves as before, returns null when both project files absent', () => {
     const deps = { readFile: () => null };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, null), null);
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, null), null);
   });
 
   test('user/global settings.json absent → returns null (no fallback beyond user layer)', () => {
@@ -1374,7 +1397,7 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ other: 'value' }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), null);
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), null);
   });
 
   test('userClaudeDir === claudeDir → does not double-read (avoids re-reading shared settings.json)', () => {
@@ -1390,8 +1413,8 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         return null;
       },
     };
-    // resolveEffectiveBaseRef(sameDir, deps, sameDir) — userClaudeDir === claudeDir
-    const result = resolveEffectiveBaseRef(sameDir, deps, sameDir);
+    // legacyBaseRef(sameDir, deps, sameDir) — userClaudeDir === claudeDir
+    const result = legacyBaseRef(sameDir, deps, sameDir);
     assert.strictEqual(result, 'head'); // still reads shared settings.json (the project layer)
     // The shared settings.json should have been read exactly once (project layer), not twice
     assert.strictEqual(readCount, 2, 'only local + shared should be read; user layer skipped when same dir');

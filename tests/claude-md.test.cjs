@@ -18,6 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('generate-claude-md', () => {
   let tmpDir;
@@ -415,7 +416,7 @@ describe('bug #3163: generate-claude-md uses AGENTS.md for Codex runtime', () =>
       'utf-8'
     );
 
-    const result = runGsdTools('generate-claude-md', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('generate-claude-md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -441,7 +442,7 @@ describe('bug #3163: generate-claude-md uses AGENTS.md for Codex runtime', () =>
       'utf-8'
     );
 
-    const result = runGsdTools('generate-claude-md', tmpDir, { HOME: tmpDir, GSD_RUNTIME: 'codex' });
+    const result = runGsdTools('generate-claude-md', tmpDir, isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: 'codex' } }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -467,7 +468,7 @@ describe('bug #3163: generate-claude-md uses AGENTS.md for Codex runtime', () =>
     const result = runGsdTools(
       ['generate-claude-md', '--output', 'EXPLICIT-OUTPUT.md'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -488,7 +489,7 @@ describe('bug #3163: generate-claude-md uses AGENTS.md for Codex runtime', () =>
       'utf-8'
     );
 
-    const result = runGsdTools('generate-claude-md', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('generate-claude-md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -558,7 +559,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -580,7 +581,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath],
       tmpDir,
-      { HOME: tmpDir, GSD_RUNTIME: 'codex' }
+      isolatedEnv({ home: tmpDir, override: { GSD_RUNTIME: 'codex' } })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -599,7 +600,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath, '--output', 'EXPLICIT-OUTPUT.md'],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -616,7 +617,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -638,7 +639,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath, '--global'],
       tmpDir,
-      { HOME: tmpDir, CODEX_HOME: codexHome }
+      isolatedEnv({ home: tmpDir, override: { CODEX_HOME: codexHome } })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -662,7 +663,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const result = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath, '--global'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `Command failed: ${result.error}`);
 
@@ -681,7 +682,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     writeConfig({ runtime: 'codex' });
     const analysisPath = writeAnalysis();
 
-    const mdResult = runGsdTools('generate-claude-md', tmpDir, { HOME: tmpDir });
+    const mdResult = runGsdTools('generate-claude-md', tmpDir, isolatedEnv({ home: tmpDir }));
     assert.ok(mdResult.success, `generate-claude-md failed: ${mdResult.error}`);
     const mdParsed = JSON.parse(mdResult.output);
 
@@ -692,7 +693,7 @@ describe('bug #2565: generate-claude-profile uses AGENTS.md for Codex runtime', 
     const profileResult = runGsdTools(
       ['generate-claude-profile', '--analysis', analysisPath],
       tmpDir,
-      { HOME: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(profileResult.success, `generate-claude-profile failed: ${profileResult.error}`);
     const profileParsed = JSON.parse(profileResult.output);

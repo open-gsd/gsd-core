@@ -150,7 +150,7 @@ describe('tdd-walk harness', () => {
 });
 
 // Non-regression (see 50-test-matrix.md "Non-regression"): this file shares
-// no file with tests/tdd-single-statement.test.cjs, tests/tdd-backend-wiring.test.cjs,
+// no file with the tdd-single-statement and tdd-backend-wiring text contracts,
 // or tests/phase-tdd-applicable.test.cjs — it only reuses tests/helpers.cjs
 // and tests/qa/tdd-walk.cjs (new, own to this phase), so those suites' own
 // runs are the actual non-regression proof; nothing further to assert here.

@@ -5,7 +5,7 @@
  * release.yml step bodies run under a real bash against a fake `gh`, and the
  * `--output` symlink guards (symlink semantics differ per OS). The remaining
  * release-notes tests are platform-free and live in
- * changelog-release-notes.test.cjs and release-finalize-notes-5922.test.cjs.
+ * changelog-release-notes.test.cjs and the release-finalize-notes-5922 text contract.
  */
 
 const { describe, test } = require('node:test');

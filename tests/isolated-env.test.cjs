@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable, homePair, setEnvForTest, withHome } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -81,11 +81,201 @@ function writeShellStub(dir, name) {
   return target;
 }
 
+describe('homePair (#6639)', () => {
+  test('returns a new HOME/USERPROFILE pair for the directory given, on every call', () => {
+    const first = homePair('/h/one');
+    assert.deepEqual(Object.keys(first).sort(), ['HOME', 'USERPROFILE']);
+    assert.equal(first.HOME, '/h/one');
+    assert.equal(first.USERPROFILE, '/h/one');
+    assert.notEqual(homePair('/h/one'), first);
+    delete first.HOME;
+    assert.equal(homePair('/h/one').HOME, '/h/one', 'a caller mutating one pair must not change the next');
+  });
+
+  test('isolated-env.cjs and helpers.cjs load in either order, with no require cycle', (t) => {
+    const isolatedEnvPath = path.join(__dirname, 'helpers', 'isolated-env.cjs');
+    const helpersPath = path.join(__dirname, 'helpers.cjs');
+    const script = [
+      'const [a, b] = process.argv.slice(1).map((p) => require(p));',
+      'const iso = a.homePair ? a : b;',
+      'const hel = a.homeSandboxEnv ? a : b;',
+      'process.stdout.write(JSON.stringify({',
+      '  pair: iso.homePair("/x"),',
+      '  sandbox: hel.homeSandboxEnv("/y"),',
+      '  built: iso.isolatedEnv({ home: process.cwd(), base: {} }).HOME === process.cwd(),',
+      '}));',
+    ].join('\n');
+    const home = tmp(t, 'gsd-6639-order-');
+
+    for (const order of [[isolatedEnvPath, helpersPath], [helpersPath, isolatedEnvPath]]) {
+      const out = probe(script, isolatedEnv({ home }), order);
+      assert.equal(out.pair.HOME, '/x', `load order ${order.map((p) => path.basename(p)).join(' then ')}`);
+      assert.equal(out.pair.USERPROFILE, '/x');
+      assert.equal(out.sandbox.HOME, '/y');
+      assert.equal(out.sandbox.USERPROFILE, '/y');
+      assert.equal(out.built, true, 'isolatedEnv builds an env after both modules loaded');
+    }
+  });
+});
+
+describe('withHome (#6639)', () => {
+  /** A stand-in for the node:test context: collects the after-hooks so the test runs them itself. */
+  const fakeContext = () => {
+    const hooks = [];
+    return { after: (fn) => hooks.push(fn), finish: () => hooks.splice(0).forEach((fn) => fn()) };
+  };
+
+  test('os.homedir() follows the directory while the test lives, and each variable is put back after', (t) => {
+    const names = Object.keys(homePair('x'));
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+    const dir = tmp(t, 'gsd-6639-withhome-');
+    const ctx = fakeContext();
+
+    withHome(ctx, dir);
+    assert.equal(process.env.HOME, dir);
+    assert.equal(process.env.USERPROFILE, dir);
+    assert.equal(os.homedir(), dir);
+
+    ctx.finish();
+    assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before);
+  });
+
+  test('a variable that was unset is deleted again, not left as the string "undefined"', (t) => {
+    const saved = process.env.USERPROFILE;
+    t.after(() => {
+      if (saved === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = saved;
+    });
+    delete process.env.USERPROFILE;
+    const homeBefore = process.env.HOME;
+    t.after(() => {
+      if (homeBefore === undefined) delete process.env.HOME;
+      else process.env.HOME = homeBefore;
+    });
+    const ctx = fakeContext();
+
+    withHome(ctx, '/h/two');
+    assert.equal(process.env.USERPROFILE, '/h/two');
+    ctx.finish();
+
+    assert.equal('USERPROFILE' in process.env, false);
+    assert.equal(process.env.HOME, homeBefore);
+  });
+
+  test('calls on one context stack: the restore is to the value from before the first call, in either hook order', (t) => {
+    const names = Object.keys(homePair('x'));
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+
+    for (const order of ['forward', 'reverse']) {
+      const hooks = [];
+      const ctx = { after: (fn) => hooks.push(fn) };
+      withHome(ctx, '/h/first');
+      withHome(ctx, '/h/second');
+      setEnvForTest(ctx, { GSD_6639_STACK_PROBE: 'on' });
+      assert.equal(process.env.HOME, '/h/second');
+      assert.equal(process.env.GSD_6639_STACK_PROBE, 'on');
+
+      for (const fn of order === 'forward' ? hooks : [...hooks].reverse()) fn();
+      assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before, order);
+      assert.equal('GSD_6639_STACK_PROBE' in process.env, false, order);
+      assert.equal(hooks.length, 1, 'one restore hook per context, however many calls');
+    }
+  });
+
+  test('a context reused after its hooks ran gets a fresh snapshot and a fresh hook', (t) => {
+    const names = Object.keys(homePair('x'));
+    const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    t.after(() => {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    });
+    const hooks = [];
+    const ctx = { after: (fn) => hooks.push(fn) };
+
+    withHome(ctx, '/h/one');
+    hooks.splice(0).forEach((fn) => fn());
+    assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before);
+
+    withHome(ctx, '/h/two');
+    assert.equal(process.env.HOME, '/h/two');
+    assert.equal(hooks.length, 1, 'the second use registers its own restore hook');
+    hooks.splice(0).forEach((fn) => fn());
+    assert.deepEqual(Object.fromEntries(names.map((name) => [name, process.env[name]])), before);
+  });
+
+  test('undefined unsets a variable for the test; any other non-string is a TypeError and changes nothing', (t) => {
+    const saved = process.env.GSD_6639_UNSET_PROBE;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_6639_UNSET_PROBE;
+      else process.env.GSD_6639_UNSET_PROBE = saved;
+    });
+    process.env.GSD_6639_UNSET_PROBE = 'set';
+    const goodSaved = process.env.GSD_6639_GOOD_PROBE;
+    t.after(() => {
+      if (goodSaved === undefined) delete process.env.GSD_6639_GOOD_PROBE;
+      else process.env.GSD_6639_GOOD_PROBE = goodSaved;
+    });
+    delete process.env.GSD_6639_GOOD_PROBE;
+    const hooks = [];
+    const ctx = { after: (fn) => hooks.push(fn) };
+
+    setEnvForTest(ctx, { GSD_6639_UNSET_PROBE: undefined });
+    assert.equal('GSD_6639_UNSET_PROBE' in process.env, false);
+    hooks.splice(0).forEach((fn) => fn());
+    assert.equal(process.env.GSD_6639_UNSET_PROBE, 'set');
+
+    for (const bad of [null, 1, true, {}]) {
+      assert.throws(() => setEnvForTest(ctx, { GSD_6639_UNSET_PROBE: bad }), TypeError);
+      // A valid entry ahead of the bad one must not be applied: the whole call is validated first.
+      assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'x', GSD_6639_UNSET_PROBE: bad }), TypeError);
+      assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
+    }
+    for (const name of ['', 'A=B', 'A\0B']) {
+      assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'x', [name]: 'y' }), TypeError, JSON.stringify(name));
+      assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
+    }
+    assert.throws(() => setEnvForTest(ctx, { GSD_6639_GOOD_PROBE: 'a\0b' }), TypeError);
+    assert.equal('GSD_6639_GOOD_PROBE' in process.env, false);
+    assert.equal(process.env.GSD_6639_UNSET_PROBE, 'set');
+    assert.equal(hooks.length, 0, 'a rejected call registers no hook');
+  });
+
+  test('undefined for a variable that was never set leaves it unset after the restore', (t) => {
+    const saved = process.env.GSD_6639_ABSENT_PROBE;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_6639_ABSENT_PROBE;
+      else process.env.GSD_6639_ABSENT_PROBE = saved;
+    });
+    delete process.env.GSD_6639_ABSENT_PROBE;
+    const hooks = [];
+    const ctx = { after: (fn) => hooks.push(fn) };
+
+    setEnvForTest(ctx, { GSD_6639_ABSENT_PROBE: undefined });
+    assert.equal('GSD_6639_ABSENT_PROBE' in process.env, false);
+    hooks.splice(0).forEach((fn) => fn());
+    assert.equal('GSD_6639_ABSENT_PROBE' in process.env, false);
+  });
+});
+
 describe('isolatedEnv: home', () => {
   test('HOME and USERPROFILE both point at home', (t) => {
     const home = tmp(t, 'gsd-6033-home-');
     const hostile = tmp(t, 'gsd-6033-hostile-home-');
-    const base = { ...SYSTEM_VARS, HOME: hostile, USERPROFILE: hostile };
+    const base = { ...SYSTEM_VARS, ...homePair(hostile) };
 
     const view = childView(isolatedEnv({ home, base }));
     assert.equal(view.env.HOME, home);
@@ -95,6 +285,25 @@ describe('isolatedEnv: home', () => {
     // Bypass: the same probe against the raw hostile base sees the hostile home.
     const raw = childView({ ...base });
     assert.equal(raw.home, hostile);
+  });
+
+  test('userProfile sets USERPROFILE apart from HOME, defaults to home, and rejects a non-absolute path (#6638)', (t) => {
+    const home = tmp(t, 'gsd-6638-home-');
+    const profile = tmp(t, 'gsd-6638-profile-');
+
+    const split = isolatedEnv({ home, userProfile: profile, base: {} });
+    assert.equal(split.HOME, home);
+    assert.equal(split.USERPROFILE, profile);
+
+    assert.equal(isolatedEnv({ home, base: {} }).USERPROFILE, home, 'omitted: USERPROFILE is home');
+    assert.equal(isolatedEnv({ home, userProfile: undefined, base: {} }).USERPROFILE, home);
+
+    assert.throws(() => isolatedEnv({ home, userProfile: 'relative/dir', base: {} }), TypeError);
+    assert.throws(() => isolatedEnv({ home, userProfile: '', base: {} }), TypeError);
+    assert.throws(() => isolatedEnv({ home, userProfile: null, base: {} }), TypeError);
+    // an absolute path other than home is accepted, whatever its form.
+    const absolute = path.resolve(os.tmpdir());
+    assert.equal(isolatedEnv({ home, userProfile: absolute, base: {} }).USERPROFILE, absolute);
   });
 
   test('rejects a missing or relative home', () => {
@@ -391,7 +600,7 @@ describe('createHermeticRoot: ancestor config discovery', () => {
 
   /** Bypass: the same probe, but the child's HOME/USERPROFILE come from a raw (un-isolated) merge. */
   function readToolsRaw(dir, home) {
-    return probe(MODEL_PROBE, { ...SYSTEM_VARS, HOME: home, USERPROFILE: home }, [MODEL_RESOLVER, dir]);
+    return probe(MODEL_PROBE, { ...SYSTEM_VARS, ...homePair(home) }, [MODEL_RESOLVER, dir]);
   }
 
   function ancestorWithTools(t) {

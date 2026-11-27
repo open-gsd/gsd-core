@@ -526,7 +526,7 @@ function buildStateFields(statePath: string): StateFields {
  * rootBase-vs-wsBase split at cmdValidateHealth's top.
  */
 function buildConfigField(cwd: string): { value: Record<string, unknown> | null; scope: Scope; exists: boolean } {
-  const configPath = path.join(planningRoot(cwd), 'config.json');
+  const configPath = planningWorkspace.rootConfigPath(cwd);
   try {
     // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws and is
     // reported as present-but-unreadable below.

@@ -82,12 +82,6 @@ const DEPTH_TO_GRANULARITY: Record<string, string> = {
 };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
-function planningDir(cwd: string, workstream?: string): string {
-  if (!workstream)
-    return join(cwd, '.planning');
-  return join(cwd, '.planning', 'workstreams', workstream);
-}
-
 function detectSubRepos(cwd: string): string[] {
   const results: string[] = [];
   try {
@@ -166,7 +160,7 @@ interface SkippedNormalization {
    * The type is the whole diagnostic ("this is a string where an object belongs"),
    * and the value is still sitting untouched in the file, so echoing it buys
    * nothing. It would cost something: `cmdMigrateConfig` prints this report
-   * verbatim on `gsd-tools migrate-config --json`, and config values are treated
+   * verbatim on `gsd-tools migrate-config` (default JSON output), and config values are treated
    * as potentially secret-bearing elsewhere in this module (`maskSecret` on the
    * `config set/unset` output path).
    */
@@ -358,14 +352,14 @@ function readConfigBounded(filePath: string): string {
   }
 }
 
-function migrateOnDisk(cwd: string, workstream?: string, configPathOverride?: string): MigrateOnDiskResult {
+function migrateOnDisk(cwd: string, configPath: string): MigrateOnDiskResult {
   // #3749: the caller (cmdMigrateConfig in config.cts) supplies the config
-  // path resolved through planning-workspace's PROJECT-aware planningDir.
+  // path resolved through the owner's PROJECT-aware `projectConfigPath`.
   // This module cannot import that sibling (#3571 install-layout contract),
-  // and its own local planningDir above is deliberately workstream-only —
-  // resolving here through the local copy made migrate-config under
-  // GSD_PROJECT rewrite the ROOT config instead of the scoped one.
-  const configPath = configPathOverride ?? join(planningDir(cwd, workstream), 'config.json');
+  // and a path built here could only be workstream-scoped — resolving through
+  // such a local copy made migrate-config under GSD_PROJECT rewrite the ROOT
+  // config instead of the scoped one. #6032: the path is therefore a required
+  // argument, never rebuilt here.
   let raw: string;
   try {
     raw = readConfigBounded(configPath);

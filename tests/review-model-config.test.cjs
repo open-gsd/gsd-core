@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('review.models.<cli> config key', () => {
   let tmpDir;
@@ -20,7 +21,7 @@ describe('review.models.<cli> config key', () => {
   beforeEach(() => {
     tmpDir = createTempProject();
     // Ensure config exists for set/get
-    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir }));
   });
 
   afterEach(() => {
@@ -31,7 +32,7 @@ describe('review.models.<cli> config key', () => {
     const result = runGsdTools(
       ['config-set', 'review.models.codex', 'gpt-5-codex'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `config-set should succeed for review.models.codex: ${result.error}`);
   });
@@ -40,7 +41,7 @@ describe('review.models.<cli> config key', () => {
     const result = runGsdTools(
       ['config-set', 'review.models.claude', 'claude-opus-4-6'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(result.success, `config-set should succeed for review.models.claude: ${result.error}`);
   });
@@ -49,14 +50,14 @@ describe('review.models.<cli> config key', () => {
     const setResult = runGsdTools(
       ['config-set', 'review.models.claude', 'claude-opus-4-6'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     const getResult = runGsdTools(
       ['config-get', 'review.models.claude', '--raw'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(getResult.success, `config-get failed: ${getResult.error}`);
     assert.strictEqual(
@@ -72,7 +73,7 @@ describe('review.models.<cli> config key', () => {
     const result = runGsdTools(
       ['config-set', 'review.model', 'gemini-3.1-pro-preview'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(!result.success, 'config-set should fail for review.model');
     assert.ok(
@@ -85,14 +86,14 @@ describe('review.models.<cli> config key', () => {
     const setResult = runGsdTools(
       ['config-set', 'review.models.codex', 'gpt-5.6-sol'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     const getResult = runGsdTools(
       ['config-get', 'review.models.codex', '--raw'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(getResult.success, `config-get failed: ${getResult.error}`);
     assert.strictEqual(
@@ -112,14 +113,14 @@ describe('review.models.<cli> config key', () => {
     const setResult = runGsdTools(
       ['config-set', 'review.models.codex', 'gpt-5.6-sol'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
 
     const clearResult = runGsdTools(
       ['config-set', 'review.models.codex', 'null'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.ok(clearResult.success, `config-set null failed: ${clearResult.error}`);
 
@@ -151,7 +152,7 @@ describe('review.models.<cli> config key', () => {
     const getResult = runGsdTools(
       ['config-get', 'review.models.codex', '--raw'],
       tmpDir,
-      { HOME: tmpDir, USERPROFILE: tmpDir }
+      isolatedEnv({ home: tmpDir })
     );
     assert.strictEqual((getResult.output || '').trim(), '',
       'config-get on a cleared key must yield empty output');

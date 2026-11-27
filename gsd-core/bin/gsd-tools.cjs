@@ -323,7 +323,7 @@ try {
 } catch { /* advisory — never block */ }
 
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv, peekActiveWorkstream } = require('./lib/active-workstream-store.cjs');
-const { specFor, GLOBAL_FLAGS } = require('./lib/cli-surface.cjs');
+const { specFor, GLOBAL_FLAGS, CLI_SURFACE } = require('./lib/cli-surface.cjs');
 
 // #5865: every ./lib module below is required on first use instead of here, so
 // a command loads only the modules it runs. The requires above stay eager:
@@ -839,6 +839,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigEnsureSection({ args, cwd, raw }) {
+    parseNamedArgsOrExit(args, specFor('config-ensure-section'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-ensure-section',
       registryArgs: args.slice(1),
@@ -868,6 +869,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigSetModelProfile({ args, cwd, raw }) {
+    // The seam starts after the owned profile slot; refuse flag-shaped profiles too.
+    if (typeof args[1] === 'string' && args[1].startsWith('-')) {
+      error(`Unknown flag for ${args[0]}: ${args[1]}`, ERROR_REASON.USAGE);
+    }
+    parseNamedArgsOrExit(args, specFor('config-set-model-profile'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-set-model-profile',
       registryArgs: args.slice(1),
@@ -2400,6 +2406,50 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
   }
 
+  /**
+   * #4222 — re-derive the #683 worktree base-check degrade in-process, the
+   * same way `projectWorktreesOptedOut` re-derives the #3737 opt-out: the
+   * one evaluation `worktree base-check` (a sibling subcommand of this file)
+   * performs, reached through the shared `evaluateWorktreeBaseDegradeForCwd`
+   * so the resolver and the CLI subcommand can never disagree on the fork
+   * base. True only when the evaluation ran and said `shouldDegrade`; a
+   * mode this check does not apply to (`none`), an unbuilt runtime lib, or
+   * any thrown error degrades to false — "no degrade re-derived", which
+   * leaves the workflow's own shell-computed `--force-isolation none` as the
+   * record exactly as before this fix. Never throws.
+   */
+  function baseCheckDegrades(cwd, isolationMode) {
+    try {
+      // #4630 child 1 — the base-check subset is READ FROM THE OWNER, not
+      // re-stated here. Loaded inside this existing `try`, beside
+      // worktree-base-ref.cjs, so an unbuilt runtime lib takes the same
+      // warn-and-`false` fallback the evaluation itself does; there is
+      // deliberately no catch-side literal, which would be a fresh copy of
+      // the very thing the seam removes.
+      const { isBaseCheckIsolationMode } = dispatchIsolationOwner();
+      if (!isBaseCheckIsolationMode(isolationMode)) return false;
+      const { evaluateWorktreeBaseDegradeForCwd } = require('./lib/worktree-base-ref.cjs');
+      const evaluation = evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode);
+      // #4734 landed after #4232 closed and flipped the verified
+      // no-git-repository case from `shouldDegrade: false` to `true`. That is
+      // right for the GUARD — a non-git root can never host a harness worktree,
+      // and #4734's own fallback already allows the flag-less dispatch there —
+      // but it is not a BASE CHECK: there is no HEAD to compare against a fork
+      // base, so the resolver has re-derived nothing. Recording it here would
+      // make the resolver the second owner of #4734's decision and would flip
+      // the recorded isolation of every non-git project root. Left to the
+      // guard. `headAbsenceVerified === true` is git's definitive "no
+      // repository" answer (exit 128) and is set by no other outcome; the
+      // indeterminate `head-unresolvable` degrade is deliberately NOT caught
+      // here, because failing closed on an indeterminate answer is #3050's
+      // rule and still applies.
+      if (evaluation.headAbsenceVerified === true) return false;
+      return evaluation.shouldDegrade === true;
+    } catch {
+      return false;
+    }
+  }
+
   function routeDispatchIsolation({ args, cwd, raw, error }) {
     const parsed = parseNamedArgsOrExit(args, specFor('dispatch-isolation'), error);
     // #2584 Phase 3 (#2627): typed query exposing the negotiated
@@ -2420,8 +2470,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //
     // Output:
     //   --raw   → prints exactly harness-worktree | orchestrator-worktree | none
-    //   --json  → prints { runtime, isolation, exec }
+    //   --json  → prints { runtime, executorRuntime, isolation, exec, harnessFlag,
+    //             fallback, held, decidedAt }
     //   default → same as --raw
+    //
+    // `held` is true when a plain query is holding a recorded degrade (#4561,
+    // below); `isolation` is then that degrade's `none`, unless the plan goes to
+    // another runtime (#6303, below), and `decidedAt` the epoch ms it was
+    // decided (null whenever `held` is false).
     //
     // `exec` is the resolved orchestratorExec argv/cwd shape, present only for
     // `orchestrator-worktree`. It requires `--cwd-target` (the GSD-created
@@ -2443,7 +2499,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // additional context this resolver cannot see (the #2474 per-plan
     // submodule intersection, computed in shell in
     // `per-plan-worktree-gate.md`) override the naturally-resolved mode
-    // while still going through this single write path. Best-effort: a
+    // while still going through this single write path. `--renew-held <ms>`,
+    // beside `--force-isolation none`, marks that write as a dispatch site
+    // following a held degrade rather than deciding a new one, and carries the
+    // held answer's own `decidedAt` (#4904). Best-effort: a
     // sentinel write failure here must never fail the wave.
     const decision = resolveDispatchIsolationDecision({ parsed, cwd });
     const runtimeId = decision.runtimeId;
@@ -2456,7 +2515,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // not a hard usage gate. Forcing to 'none' clears harnessFlag/exec since
     // neither applies to sequential dispatch.
     const forcedIsolation = parsed['force-isolation'];
-    if (forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation)) {
+    // Decided once: the hold and the record's provenance below read it too.
+    const forcedApplied = dispatchIsolationOwner().isDispatchIsolation(forcedIsolation);
+    if (forcedApplied) {
       isolation = forcedIsolation;
       if (isolation === 'none') {
         harnessFlag = null;
@@ -2488,7 +2549,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     // #6303 (ADR-3711): a plan that declares `executor_runtime` resolves to the target runtime's
     // exec when the gate and every precondition hold, else to `fallback` (one reason) with the host
-    // decision untouched. The single sentinel write below records whichever decision stands.
+    // decision untouched. The single sentinel write below records whichever decision stands. A query
+    // that holds a caller's `none` (#4904, below) writes no decision record, and its stdout and --json
+    // still carry the foreign dispatch resolved here: the hold governs what the guards read, and a
+    // foreign plan is launched as a process the guards do not see.
     const cross = resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId: runtimeId });
     const foreign = cross.isolation !== null;
     if (foreign) {
@@ -2499,29 +2563,119 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       process.stderr.write(`note: plan ${planArg} declares executor_runtime${cross.executorRuntime ? ` '${cross.executorRuntime}'` : ''} but is dispatched on the host (${cross.fallback}).\n`);
     }
 
-    // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
-    // Never allowed to affect this query's own stdout contract or throw.
+    // #4222: the #683 worktree base-check degrade is re-derived here for the
+    // RECORDED decision, as #3737 re-derives the opt-out above, so a plain
+    // re-query re-derives `none` instead of re-persisting the host capability
+    // over the degrade the shell recorded. It reads live git state each time it
+    // runs, so nothing is sticky. It reaches the sentinel only, never stdout:
+    // stdout is the host capability the dispatch sites branch on, and they
+    // fail closed on an unguarded `none`. It applies after --force-isolation,
+    // as #3737 does, because the harness forks from the diverged base whatever
+    // the caller asked. A query that carries `--plan`, even with an empty
+    // value, does not re-derive it: that write is a plan's record (ADR-4630
+    // Decision 2, "A plan-scoped write does not re-derive the base check").
+    const heldDegrade = !forcedApplied
+      ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
+      : null;
+    // WHAT A HELD QUERY REFRESHES (#4904 review 2026-11-17, option (c)): no
+    // decision record, so neither the hold nor the guards' ten-minute window
+    // moves; only the executor identity it derives, to its own scope's
+    // identity record, which the guards' classification (isExecutorDispatch)
+    // unions with the decision records. If that write cannot land, the query
+    // still holds and writes no decision record: the caller's `none` stands.
+    // While any hold-eligible record is among those read, the guards' reader
+    // fails classification closed in the write-stopping states ADR-4630 lists
+    // (a transient I/O error leaves no trace); the state ends once no such
+    // record remains, ten minutes after the latest one's `decided_at` at the
+    // latest. A decision write removes its scope's identity record. Decided
+    // before the #4222 re-derivation below, so a query that stops holding
+    // re-derives (ADR-4630 Decision 2, "A held query refreshes executor identity").
     let truncatedRecord = false;
-    try {
-      const written = writeDispatchIsolationSentinel(cwd, {
-        isolation, harnessFlag, phase: phaseArg, plan: planArg,
-        ...(foreign ? { producer: 'dispatch-isolation', executorRuntime: cross.executorRuntime } : {}),
-        // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
-        // (no plan) names every routable hinted executor of its phase (`executor_types`).
-        executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
-        executorTypes: planArg ? null : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
+    const warnDropped = (dropped) => {
+      truncatedRecord = true;
+      process.stderr.write(`warning: dispatch-isolation phase ${phaseArg}: executor_types capped at 64 names or did not fit the record; names left out: ${dropped.join(', ')} (#6213)\n`);
+    };
+    if (heldDegrade !== null) {
+      const identity = writeExecutorIdentityRecord(cwd, {
+        phase: phaseArg, plan: planArg,
+        executorType: planArg ? deriveRecordedExecutor(cwd, phaseArg, planArg).resolved : null,
+        executorTypes: planArg ? [] : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
       });
-      truncatedRecord = !!written.droppedExecutorTypes;
-      if (written.droppedExecutorTypes) {
-        process.stderr.write(`warning: dispatch-isolation phase ${phaseArg}: executor_types capped at 64 names or did not fit the record; names left out: ${written.droppedExecutorTypes.join(', ')} (#6213)\n`);
+      if (identity.recorded) {
+        if (identity.dropped.length > 0) warnDropped(identity.dropped);
+      } else {
+        process.stderr.write('warning: dispatch-isolation: could not record executor identity for a held decision; the decision stands unchanged (#4904)\n');
       }
-    } catch {
-      // writeDispatchIsolationSentinel already swallows its own errors into
-      // a { recorded: false } result; this catch is defense in depth only.
+    }
+    let recordedIsolation = isolation;
+    let recordedHarnessFlag = harnessFlag;
+    // `plan` is a bareEmptyFlags member of the verb's spec (src/cli-surface.cts),
+    // so a bare `--plan` reads '' and only an absent flag reads null.
+    if (recordedIsolation !== 'none' && parsed.plan === null && heldDegrade === null && baseCheckDegrades(cwd, recordedIsolation)) {
+      recordedIsolation = 'none';
+      recordedHarnessFlag = null;
     }
 
+    // #4561: a PLAIN query holds a fresh, in-scope `none` a caller recorded
+    // instead of overwriting it. Three dispatch sites compute a degrade the
+    // resolver cannot re-derive (the gate's single-agent fallback, the #2474
+    // per-plan submodule intersection, execute-plan's Pattern B segments) and
+    // record it with `--force-isolation none`; a later plain query used to
+    // re-persist the host capability over it, and the guard then denied the
+    // sequential dispatch (#4222's race). A forced write always records. A
+    // plain query holds a record that is fresh, well-formed, `none`, decided by
+    // the caller less than ten minutes ago (`decided_at`), and equal to every
+    // scope identifier the query names. A held query prints `none`, `held: true`
+    // under --json and no `harnessFlag` or `exec`, unless its plan goes to
+    // another runtime (#6303). The hold is consulted on every plain query, even
+    // one deriving `none` itself, so a caller's record is never re-owned as
+    // `resolver`. The read-then-write takes no lock. ADR-4630 Decision 2.
+
+    // Side-effect write (#3045 CORE REDESIGN): it never changes this query's
+    // stdout and never throws. Provenance names who produced the recorded
+    // VALUE: the #3737 opt-out and the #4222 degrade run after --force-isolation
+    // and can overrule it, and a `none` they substitute is the resolver's own,
+    // so the record is the caller's only when it records exactly what was forced.
+    const decidedBy = forcedApplied && recordedIsolation === forcedIsolation ? 'caller' : 'resolver';
+    // `--renew-held <ms>` (#4904): a dispatch site re-recording the
+    // `none` its own plain query reported as held passes that answer's
+    // `decidedAt`, so the record keeps the decision it followed and the hold
+    // does not outlive the degrade that started it. The value comes from the
+    // answer the site acted on, never from the file at write time: by then the
+    // file can hold another plan's record, whose time is not this hold's.
+    // Honoured only for a caller-owned forced `none` and a non-negative
+    // integer; anything else is a fresh decision. The reader clamps it to the
+    // write time, so it cannot run past the write time (a forced `none`).
+    const decidedAt = decidedBy === 'caller' && recordedIsolation === 'none'
+      ? dispatchIsolationOwner().parseRenewHeldMs(parsed['renew-held'])
+      : null;
+    if (heldDegrade === null) {
+      try {
+        const written = writeDispatchIsolationSentinel(cwd, {
+          isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy, decidedAt,
+          ...(foreign ? { producer: 'dispatch-isolation', executorRuntime: cross.executorRuntime } : {}),
+          // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
+          // (no plan) names every routable hinted executor of its phase (`executor_types`). A held query
+          // does not reach this write; it refreshes identity through writeExecutorIdentityRecord above.
+          executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
+          executorTypes: planArg ? null : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
+        });
+        if (written.droppedExecutorTypes) warnDropped(written.droppedExecutorTypes);
+      } catch {
+        // writeDispatchIsolationSentinel already swallows its own errors into
+        // a { recorded: false } result; this catch is defense in depth only.
+      }
+    }
+
+    const held = heldDegrade !== null;
+    // A held foreign dispatch keeps the target runtime's answer (see the #6303 block above).
+    if (held && !foreign) {
+      isolation = 'none';
+      harnessFlag = null;
+      exec = null;
+    }
     if (parsed.json) {
-      output({ runtime: runtimeId, executorRuntime: cross.executorRuntime, isolation, exec, harnessFlag, fallback: cross.fallback, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
+      output({ runtime: runtimeId, executorRuntime: cross.executorRuntime, isolation, exec, harnessFlag, fallback: cross.fallback, held, decidedAt: held ? (heldDegrade.decidedAt ?? null) : null, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2786,7 +2940,37 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     return trimmed;
   }
 
-  const DISPATCH_ISOLATION_VOCABULARY = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
+  // #4561: the closed vocabulary has ONE owner — src/dispatch-isolation.cts,
+  // compiled to ./lib/dispatch-isolation.cjs. Previously a hand-written Set,
+  // one of eight uncross-checked copies.
+  //
+  // Loaded on first use, never at module load. This is module scope, so a
+  // top-level require ran on EVERY gsd-tools command, and the bootstrap's
+  // ensureRuntimeBuild cannot cover the gap: its fast path keys on a single
+  // sentinel, so a lib compiled before this module existed reads as built and
+  // every command died on a bare `Cannot find module`. Loaded lazily, a
+  // command that loads neither this owner nor capability-validator.cjs still
+  // runs on such a tree. One that loads either names the `build:lib` remedy:
+  // the dispatch-isolation verbs here, and any command that reaches
+  // capability-source.cjs or capability-lifecycle.cjs, which require the
+  // validator at load, where it raises the same error.
+  let _dispatchIsolationOwner;
+  function dispatchIsolationOwner() {
+    if (_dispatchIsolationOwner === undefined) {
+      try {
+        _dispatchIsolationOwner = require('./lib/dispatch-isolation.cjs');
+      } catch (err) {
+        if (err && err.code === 'MODULE_NOT_FOUND' && /dispatch-isolation\.cjs/.test(String(err.message))) {
+          throw new Error(
+            'gsd-tools: the compiled runtime lib ./lib/dispatch-isolation.cjs is missing — this tree was built '
+            + 'before src/dispatch-isolation.cts existed. Run `npm run build:lib` (#4561).',
+          );
+        }
+        throw err;
+      }
+    }
+    return _dispatchIsolationOwner;
+  }
 
   /**
    * Shared, side-effect-free resolution of the negotiated dispatch isolation:
@@ -2800,6 +2984,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * recorded to the sentinel.
    */
   function resolveDispatchIsolationDecision({ parsed, cwd }) {
+    // Load the owner BEFORE the try below. Its catch turns any failure into a
+    // successful `none`, which dispatch-isolation-gate.md reads as "the runtime
+    // declares no isolation primitive" (#2652 keeps those distinguishable). A
+    // lib built before the owner existed is a failure to resolve, so it must
+    // exit non-zero with the build:lib remedy, never answer `none`.
+    dispatchIsolationOwner();
     let isolation = 'none';
     let runtimeId = null;
     let exec = null;
@@ -2826,7 +3016,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         ? registry.runtimes[runtimeId]
         : null;
       const declared = runtimeEntry?.runtime?.hostIntegration?.dispatch?.isolation ?? null;
-      if (typeof declared === 'string' && DISPATCH_ISOLATION_VOCABULARY.has(declared)) {
+      if (dispatchIsolationOwner().isDispatchIsolation(declared)) {
         isolation = declared;
       }
 
@@ -2886,8 +3076,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (declaresModelFlag) {
             const { readGsdEffectiveModelOverrides, resolveAgentModelOverride } =
               require('./lib/install-model-override-resolver.cjs');
+            // #4669: the 4th arg names the host being dispatched to, so a runtime-keyed
+            // `model_overrides["gsd-executor"]` entry selects THIS host's pin. It does not
+            // loosen the explicit-pin-only rule above: the runtime resolver stays `null`.
             const pinned = resolveAgentModelOverride(
-              'gsd-executor', readGsdEffectiveModelOverrides(cwd), null);
+              'gsd-executor', readGsdEffectiveModelOverrides(cwd), null, runtimeId);
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
           const resolution = resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model);
@@ -2961,7 +3154,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       if (projectWorktreesOptedOut(cwd)) return degrade('worktrees_off');
       // A caller that forced this plan's isolation (the #2474 submodule gate, the #683 base-check
       // degrade) has decided it with context this resolver cannot see; the foreign dispatch never overrides it.
-      if (parsed['force-isolation'] && DISPATCH_ISOLATION_VOCABULARY.has(parsed['force-isolation'])) return degrade('forced_isolation');
+      if (dispatchIsolationOwner().isDispatchIsolation(parsed['force-isolation'])) return degrade('forced_isolation');
       const runtimes = require('./lib/capability-registry.cjs').runtimes;
       if (!runtimes || !Object.hasOwn(runtimes, target)) return degrade('unknown_runtime');
       if (target === hostRuntimeId) return degrade('same_runtime');
@@ -3039,10 +3232,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //     read has nothing to record.
     const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ parsed, cwd });
     if (parsed.json) {
-      // #6303: the same key set as `dispatch-isolation --json`, so a consumer written against either verb
-      // reads the other verbatim. This read has no plan (--plan is refused above), so it declares no
-      // executor runtime and never reports a fallback.
-      output({ runtime: runtimeId, executorRuntime: null, isolation, exec, harnessFlag, fallback: null }, raw);
+      // #6303 / #4904: the same key set as `dispatch-isolation --json`, so a consumer written against
+      // either verb reads the other verbatim. This read has no plan (--plan is refused above), so it
+      // declares no executor runtime and never reports a fallback; it reads no record, so it never
+      // holds one.
+      output({ runtime: runtimeId, executorRuntime: null, isolation, exec, harnessFlag, fallback: null, held: false, decidedAt: null }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -3067,12 +3261,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const keyedFile = payload.plan
         ? keyedSentinelPath(cwd, payload.phase, payload.plan)
         : phaseSentinelPath(cwd, payload.phase);
-      if (!keyedFile) return;
+      if (!keyedFile) return 'none';
       const keyedDir = nodePath.join(cwd, KEYED_SENTINEL_DIR);
       nodeFs.mkdirSync(keyedDir, { recursive: true });
       if (nodeFs.lstatSync(keyedDir).isSymbolicLink() ||
           nodePath.relative(nodeFs.realpathSync(sentinelDir), nodeFs.realpathSync(keyedDir)) !== 'dispatch-isolation') {
-        return;
+        return 'failed';
       }
       const tmpPath = `${keyedFile}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
       try {
@@ -3093,7 +3287,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
         } catch (_) { /* best-effort prune */ }
       }
-    } catch (_) { /* keyed record is best-effort; the legacy record already landed */ }
+      return 'written';
+    } catch (_) {
+      /* keyed record is best-effort; the legacy record already landed */
+      return 'failed';
+    }
   }
 
   /**
@@ -3106,11 +3304,126 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null, producer = null, executorRuntime = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+  // The `.gsd/.gitignore` rules both dispatch-isolation writers seed (#5757 tool-owned directory), so the
+  // executor-identity directory (#4904) is ignored whichever writer runs first.
+  const DISPATCH_SENTINEL_IGNORE = Object.freeze({
+    marker: '# gsd-core dispatch sentinel',
+    rules: Object.freeze([
+      '/dispatch-isolation-sentinel.json',
+      '/dispatch-isolation-sentinel.json.tmp-*',
+      '/dispatch-isolation/',
+      '/dispatch-isolation-identity/',
+      '/.gitignore',
+    ]),
+  });
+
+  /**
+   * #4904 (option (c), ADR-4630): write the executor identity a HELD plain query derived, for its own scope,
+   * to `.gsd/dispatch-isolation-identity/<scope>.json` (`identityRecordName`). Only a held query calls this:
+   * it writes no decision record, so without it the names the guards classify by would be as of the caller's
+   * write. Never touches a decision record. Each scope (plan, phase, neither) has its own file, replaced whole
+   * by an exclusive temp file and a rename, so a reader sees one complete snapshot; two queries at the same
+   * scope race on the rename, and the file holds the snapshot renamed last. Records older than
+   * AGED_NONE_MAX_MS are pruned, as in the keyed directory. Returns `{ recorded, dropped }`; never throws.
+   */
+  function writeExecutorIdentityRecord(cwd, { phase, plan, executorType, executorTypes }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+    const nodePath = require('path');
+    const nodeFs = require('fs');
+    let tmpPath = null;
+    try {
+      const sentinelLib = require('../../hooks/lib/isolation-sentinel.js');
+      const executorTypeLib = require('./lib/executor-type.cjs');
+      const name = sentinelLib.identityRecordName(phase, plan);
+      if (!name) return { recorded: false, dropped: [] };
+      const { record, dropped } = executorTypeLib.buildExecutorIdentityRecord({ phase, plan }, executorType, executorTypes, clock.now());
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
+      toolDir.ensureToolOwnedGsdDir(cwd, DISPATCH_SENTINEL_IGNORE);
+      const gsdDir = nodePath.join(cwd, '.gsd');
+      const identityDir = nodePath.join(cwd, sentinelLib.IDENTITY_RECORD_DIR);
+      nodeFs.mkdirSync(identityDir, { recursive: true });
+      // The tool-owned .gsd owner vetted `.gsd`; the record directory must be a real directory directly inside it.
+      if (nodeFs.lstatSync(identityDir).isSymbolicLink() ||
+          nodePath.relative(nodeFs.realpathSync(gsdDir), nodeFs.realpathSync(identityDir)) !== executorTypeLib.EXECUTOR_IDENTITY_DIR) {
+        return { recorded: false, dropped };
+      }
+      const file = nodePath.join(identityDir, name);
+      const candidateTmp = `${file}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      // Tracked from the exclusive create, so a failed write never leaves a partial temp file behind.
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
+      tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(record));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, file);
+      tmpPath = null;
+      // The record has landed: the prune is best-effort and its own failure never voids the write. It reads
+      // at most the reader's entry bound per write, so a crowded directory costs a write no more than it
+      // costs a guard read; each later write prunes further.
+      try {
+        const cutoff = clock.now() - sentinelLib.AGED_NONE_MAX_MS;
+        const handle = nodeFs.opendirSync(identityDir);
+        try {
+          let seen = 0;
+          for (let ent = handle.readSync(); ent !== null && seen < sentinelLib.MAX_SCANNED_DIR_ENTRIES; ent = handle.readSync()) {
+            seen += 1;
+            const entry = ent.name;
+            if (entry === name || !(sentinelLib.hasJsonSuffix(entry) || entry.includes('.json.tmp-'))) continue;
+            try {
+              const old = nodePath.join(identityDir, entry);
+              if (nodeFs.lstatSync(old).mtimeMs < cutoff) nodeFs.unlinkSync(old);
+            } catch (_) { /* best-effort prune */ }
+          }
+        } finally {
+          handle.closeSync();
+        }
+      } catch (_) { /* best-effort prune: the record is written */ }
+      return { recorded: true, dropped };
+    } catch (_) {
+      return { recorded: false, dropped: [] };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
+    }
+  }
+
+  /**
+   * #4904: remove the executor-identity record of one query scope, after a decision write recorded that
+   * scope's decision (an unheld or forced `dispatch-isolation` query and `record-dispatch-isolation` alike):
+   * the guards then read that decision for the scope, as on `next`. A regular file or a link is removed;
+   * anything else, or any failure, is left for the reader's fail-closed rules and the 24-hour prune.
+   * Never throws.
+   */
+  function removeExecutorIdentityRecord(cwd, phase, plan) {
+    try {
+      const nodePath = require('path');
+      const nodeFs = require('fs');
+      const sentinelLib = require('../../hooks/lib/isolation-sentinel.js');
+      const name = sentinelLib.identityRecordName(phase, plan);
+      if (!name) return;
+      // Only inside the project: `.gsd` and the record directory must both be real directories, so a
+      // linked directory can never steer the unlink to a file elsewhere.
+      const gsdDir = nodePath.join(cwd, '.gsd');
+      const identityDir = nodePath.join(cwd, sentinelLib.IDENTITY_RECORD_DIR);
+      for (const dir of [gsdDir, identityDir]) {
+        const st = nodeFs.lstatSync(dir);
+        if (!st.isDirectory() || st.isSymbolicLink()) return;
+      }
+      const file = nodePath.join(identityDir, name);
+      const st = nodeFs.lstatSync(file);
+      if (st.isFile() || st.isSymbolicLink()) nodeFs.unlinkSync(file);
+    } catch (_) { /* absent, or not ours to remove */ }
+  }
+
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, decidedBy = 'caller', decidedAt = null, executorType = null, executorTypes = null, producer = null, executorRuntime = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
     const sentinelPath = nodePath.join(sentinelDir, 'dispatch-isolation-sentinel.json');
+    // The clock seam, so a test can pin both timestamps (GSD_NOW_MS, #474).
+    const writtenAt = clock.now();
     const payload = {
       isolation,
       harness_flag: harnessFlag || null,
@@ -3118,7 +3431,24 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       plan: plan || null,
       // #6213: a type the guards would refuse to read back is recorded as null (resolved just below).
       executor_type: null,
-      written_at: clock.now(),
+      // #4630 ADR Phase 2 — the record states WHO decided, so a re-query can
+      // tell a decision it may re-derive from one it must honour. `resolver`:
+      // derived here from state this resolver reads live on every call (the
+      // #3737 opt-out, the #4222 base check), so a later query re-evaluates it
+      // rather than holding it. `caller`: a `--force-isolation` decision from a
+      // dispatch site that computed a degrade this resolver structurally
+      // cannot reconstruct, so a later plain query must hold it. Defaulted to
+      // `caller` on purpose: holding a degrade that could have been re-derived
+      // costs one sequential run, while clobbering one the caller owns makes
+      // the guard refuse the dispatch and the work does not run at all.
+      decided_by: decidedBy,
+      // #4904 — WHEN the decision was first made, so a renewed hold
+      // lapses ten minutes after the degrade itself, not after the last gate
+      // that re-recorded it. A fresh decision is decided as it is written; a
+      // `--renew-held` re-record passes the held record's value through; the
+      // reader clamps it to `written_at`, which covers every writer.
+      decided_at: decidedAt ?? writtenAt,
+      written_at: writtenAt,
       // #6303 (ADR-3711 D8): present only on a foreign dispatch's record, so every other record is unchanged.
       ...(producer ? { producer } : {}),
       ...(executorRuntime ? { executor_runtime: executorRuntime } : {}),
@@ -3161,15 +3491,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // ignore-file IO failure must not prevent recording isolation.
       const toolDir = require('./lib/gsd-tool-dir.cjs');
       try {
-        toolDir.ensureToolOwnedGsdDir(cwd, {
-          marker: '# gsd-core dispatch sentinel',
-          rules: [
-            '/dispatch-isolation-sentinel.json',
-            '/dispatch-isolation-sentinel.json.tmp-*',
-            '/dispatch-isolation/',
-            '/.gitignore',
-          ],
-        });
+        toolDir.ensureToolOwnedGsdDir(cwd, DISPATCH_SENTINEL_IGNORE);
       } catch (ownerError) {
         // The recorded `error` text is observable JSON (hyrums-law): keep the
         // sentinel's historical wording, translating by the owner's stable code.
@@ -3198,7 +3520,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
       tmpPath = null;
-      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
+      const keyed = writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
+      // #4904: this scope's decision is now what the guards read for it, so its identity record is
+      // superseded, as on `next` where the decision write replaces the record that carried the names.
+      // Only once the scope's own keyed record landed (or it has none): a failed keyed write leaves the
+      // identity record in place rather than leave the scope with neither.
+      if (keyed !== 'failed') removeExecutorIdentityRecord(cwd, payload.phase, payload.plan);
       return {
         recorded: true,
         path: '.gsd/dispatch-isolation-sentinel.json',
@@ -3210,6 +3537,53 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       if (tmpPath) {
         try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
       }
+    }
+  }
+
+  /**
+   * #4561 — the degrade record a PLAIN `dispatch-isolation` query must not
+   * overwrite, or `null`. Reads what `writeDispatchIsolationSentinel` writes
+   * under `<cwd>/.gsd/` through the guards' shared reader, at the query's own
+   * scope (`ownScope`; #5682 keyed records), so a parallel orchestrator's write
+   * can neither hide the record nor outrank it. Returns it only when it is
+   * present, fresh, well-formed, inside its hold window (`holdExpired`, from
+   * `decided_at`, which `--renew-held` does not move), `none`, decided by the
+   * caller, and every identifier the query names equals the record's. Never
+   * throws: where hooks/lib/ is not installed
+   * (`hostBehaviors.skipSharedHooksInstall`) it returns `null`, the pre-#4561
+   * behaviour on installs that have no guard hook.
+   */
+  function heldDegradeRecord(cwd, { phase, plan }) {
+    const held = readDegradeRecord(cwd, { phase, plan });
+    if (!held || !held.present || held.stale || held.holdExpired || held.malformed) return null;
+    if (held.isolation !== 'none') return null;
+    // #4630 ADR Phase 2. Pre-fix this held ANY fresh in-scope `none`, which
+    // made #4222 and #4561 mutually exclusive: the degrade #4222 re-derives is
+    // itself written as a fresh in-scope `none`, so the next plain query held
+    // the resolver's OWN prior answer and #4222's "reads live git state" was
+    // silently untrue. Only a decision this resolver cannot re-derive is held.
+    if (held.decidedBy !== 'caller') return null;
+    if (phase !== null && phase !== held.phase) return null;
+    if (plan !== null && plan !== held.plan) return null;
+    return held;
+  }
+
+  // The shared reader at the resolver's own path and clock, for the query's
+  // own scope, or null when the reader cannot be loaded or throws (see
+  // heldDegradeRecord).
+  function readDegradeRecord(cwd, dispatchIds) {
+    let readSentinelAt;
+    let realClock;
+    try {
+      ({ readSentinelAt } = require('../../hooks/lib/isolation-sentinel.js'));
+      ({ realClock } = require('./lib/clock.cjs'));
+    } catch {
+      return null;
+    }
+    try {
+      return readSentinelAt(cwd, { clock: realClock, dispatchIds, ownScope: true });
+    } catch {
+      return null;
     }
   }
 
@@ -3230,12 +3604,15 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // registry+config check, so a missing sentinel is safe, just less precise.
     //
     // Output: { recorded: true|false, path, error? }
-    const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
     const parsed = parseNamedArgsOrExit(args, specFor('record-dispatch-isolation'), error);
+    // #4561: the same owner guard `routeDispatchIsolation` validates with — the
+    // two verbs can no longer disagree on what a mode is.
     const isolation = parsed.isolation;
-    if (!VALID_ISOLATION.has(isolation)) {
+    if (!dispatchIsolationOwner().isDispatchIsolation(isolation)) {
+      // The mode list is read from the owner, so the usage text cannot name a
+      // vocabulary the validation one line up does not accept.
       error(
-        'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
+        `Usage: record-dispatch-isolation --isolation <${dispatchIsolationOwner().DISPATCH_ISOLATION_MODES.join('|')}> ` +
         '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>] [--executor-type <agent>]',
         ERROR_REASON.USAGE,
       );
@@ -3267,7 +3644,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       warnRefusedExecutorType(executorType);
       executorType = null;
     }
-    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan, executorType });
+    // `record-dispatch-isolation` records a caller's own decision, the same
+    // record `query dispatch-isolation --force-isolation` writes for the
+    // dispatch sites. Stated rather than defaulted: this is the record #4561's
+    // hold exists to protect (#4630 ADR Phase 2).
+    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan, executorType, decidedBy: 'caller' });
     output(result, raw);
   }
 
@@ -4726,8 +5107,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           let configuredAuthority = 'grep';
           let intelEnabled = false;
           try {
-            const { planningDir } = require('./lib/planning-workspace.cjs');
-            const cfgPath = require('path').join(planningDir(cwd), 'config.json');
+            const { projectConfigPath } = require('./lib/planning-workspace.cjs');
+            const cfgPath = projectConfigPath(cwd);
             // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
             // catch below (defaults apply) instead of blocking; null is an absent file.
             const rawCfgText = require('./lib/config-file-read.cjs').readConfigFileBounded(cfgPath);
@@ -5421,6 +5802,7 @@ function runWithTimeout(argv) {
 // independently hand-maintained sites and nothing previously caught them
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
+  'The config-ensure-section, config-set-model-profile and migrate-config commands reject --pick and --default.\n' +
   'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, project-context, ' +
   'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
@@ -5731,6 +6113,21 @@ function main() {
   const raw = rawIndex !== -1;
   if (rawIndex !== -1) args.splice(rawIndex, 1);
 
+  // Closed mutation verbs do not consume output selectors or config-get defaults.
+  // Refuse them before global value extraction can hide an unsupported flag.
+  const closedConfigMutations = Object.keys(CLI_SURFACE).filter((verb) => CLI_SURFACE[verb].rejectedGlobalFlags);
+  // eslint-disable-next-line local/named-args-spec-from-registry -- main preserves global flags declared by GLOBAL_FLAGS before extraction; rejection policy comes from CLI_SURFACE (#5286)
+  const originalGlobalValueFlags = GLOBAL_FLAGS.valueFlags.filter((flag) => args.includes(`--${flag}`));
+  function rejectConfigMutationValueFlags(verb) {
+    const rejected = CLI_SURFACE[verb]?.rejectedGlobalFlags ?? [];
+    const flag = rejected.find((name) => originalGlobalValueFlags.includes(name));
+    if (flag) error(`Unknown flag for ${verb}: --${flag}`, ERROR_REASON.USAGE);
+  }
+  const restrictedGlobalNames = new Set(Object.values(CLI_SURFACE).flatMap((spec) => spec.rejectedGlobalFlags ?? []));
+  let prefixEnd = 0;
+  while (typeof args[prefixEnd] === 'string' && isFlagToken(args[prefixEnd]) && restrictedGlobalNames.has(args[prefixEnd].slice(2))) prefixEnd += 2;
+  rejectConfigMutationValueFlags(args[prefixEnd] === 'query' ? args[prefixEnd + 1] : args[prefixEnd]);
+
   // --pick <name>: extract a single field from JSON output (replaces jq dependency).
   // Supports dot-notation (e.g., --pick workflow.research) and bracket notation
   // for arrays (e.g., --pick directories[-1]).
@@ -5781,6 +6178,16 @@ function main() {
       command = head;
       args = [head, rest, ...args.slice(1)];
     }
+  }
+
+  // A global value flag may precede the verb. Its original presence survives
+  // extraction so a dash-led value cannot be swallowed before route validation.
+  rejectConfigMutationValueFlags(command);
+  if (closedConfigMutations.includes(command)) {
+    // Idempotent global --raw is consumed before the declared migrate-config
+    // router, just as it is for the other two config routers (#5286).
+    // eslint-disable-next-line local/named-args-spec-from-registry -- global raw is declared in GLOBAL_FLAGS and normalized in main, not a verb-local flag (#5286)
+    args = args.filter((arg) => arg !== '--raw');
   }
 
   if (!command) {

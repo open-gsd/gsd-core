@@ -41,9 +41,9 @@ If you're looking for the canonical statement of a concept, this is where to fin
 Structural contract tests for each integration site live under `tests/`:
 
 - `plan-phase-mvp-flag.test.cjs` — plan-phase MVP_MODE resolution chain
-- `planner-mvp-mode.test.cjs` — gsd-planner agent MVP section
-- `mvp-phase-command.test.cjs`, `mvp-phase-integration.test.cjs`, `mvp-phase-spidr.test.cjs` — `/gsd:mvp-phase`
+- the `planner-mvp-mode` text contract (`scripts/static-checks/text-contracts/planner-mvp-mode.cjs`) — gsd-planner agent MVP section
+- the `mvp-phase-command` and `mvp-phase-spidr` text contracts (`scripts/static-checks/text-contracts/`), `mvp-phase-integration.test.cjs` — `/gsd:mvp-phase`
 - `execute-mvp-tdd-gate.test.cjs`, `executor-mvp-tdd-section.test.cjs` — MVP+TDD Gate
-- `verifier-mvp-section.test.cjs`, `verify-mvp-uat.test.cjs` — verifier UAT framing
-- `new-project-mvp-prompt.test.cjs` — mode prompt at init
-- `progress-mvp-display.test.cjs`, `stats-mvp-display.test.cjs`, `graphify-mvp-viz.test.cjs` — discovery surfaces
+- the `verifier-mvp-section` text contract (`scripts/static-checks/text-contracts/verifier-mvp-section.cjs`), the `verify-mvp-uat` text contract (`scripts/static-checks/text-contracts/verify-mvp-uat.cjs`) — verifier UAT framing
+- the `new-project-mvp-prompt` text contract (`scripts/static-checks/text-contracts/`) — mode prompt at init
+- the `progress-mvp-display` text contract, `stats-mvp-display.test.cjs`, `graphify-mvp-viz.test.cjs` — discovery surfaces

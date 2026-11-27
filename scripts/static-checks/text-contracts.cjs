@@ -7,12 +7,14 @@
  *   ctx.doc(rel)              a document (LF-normalised text) or a finding if the file is missing
  *   ctx.docs([rel…])          one document that is the union of several files (each must load)
  *   ctx.exists/absent(rel, why)  the file is / is not in the tree
+ *   ctx.list(dir, suffix, why)   the sorted repo-relative files under dir ending in suffix (none is a finding)
  *   doc.has/lacks(pattern, why)  pattern (RegExp or string) must / must not appear
  *   doc.slice(from, to)       the document between two markers; `to` may list several, earliest wins
  *   doc.step(name)            the `<step name="…">` … `</step>` body of a workflow
  *   doc.frontmatter()         the closed YAML frontmatter block (a finding if there is none)
  *   doc.before(a, b, why)     the first a precedes the first b; doc.followedBy(a, b, why): b after a
  *   doc.shorterThan(n, why)   the text is under n characters
+ *   doc.satisfies(fn, why)    fn(text) returns true, or a string naming the violation (a count, a loop)
  *   ctx.fail(rel, why)        a finding of its own
  * A failed assertion is one finding naming the file and the contract. A contract that throws is
  * a finding too, and a directory with no contracts fails the run, so nothing passes by absence.
@@ -24,7 +26,7 @@ const path = require('node:path');
 const CONTRACT_DIR = path.join(__dirname, 'text-contracts');
 // The number of shipped contracts. A test pins it to the directory's count, so deleting a contract
 // file (or adding one without raising this) fails instead of passing by absence.
-const MIN_CONTRACTS = 11;
+const MIN_CONTRACTS = 168;
 
 const lf = (text) => text.replace(/\r\n/g, '\n');
 const describePattern = (pattern) => (pattern instanceof RegExp ? String(pattern) : JSON.stringify(pattern));
@@ -90,6 +92,15 @@ function makeContext(root, id, findings) {
       shorterThan(limit, why) {
         assertions += 1;
         if (!dead && !(text.length < limit)) report(rel, `${why} (${text.length} characters, expected fewer than ${limit})`);
+        return doc;
+      },
+      // A computed assertion for what no pattern states (a count, a per-section loop, a number read
+      // out of a block). `predicate(text)` returns true to pass, a string naming the violation, or false.
+      satisfies(predicate, why) {
+        assertions += 1;
+        if (dead) return doc;
+        const verdict = predicate(text);
+        if (verdict !== true) report(rel, typeof verdict === 'string' ? `${why} (${verdict})` : why);
         return doc;
       },
       step(name) {
@@ -206,6 +217,44 @@ function makeContext(root, id, findings) {
       let present = true;
       try { fs.lstatSync(at.abs); } catch (err) { present = err.code !== 'ENOENT'; }
       if (present) report(rel, `${why} (expected no file at ${rel})`);
+    },
+    // The repo-relative paths (sorted) of the regular files under a directory, recursively, whose name ends with
+    // `suffix`; read each with ctx.doc. A directory that is missing, or holds none, is a finding (a scan over nothing
+    // would pass). A symlink is not followed.
+    list(relDir, suffix, why) {
+      assertions += 1;
+      const at = locate(relDir);
+      if (!at.ok) {
+        report(String(relDir), at.message);
+        return [];
+      }
+      const base = String(relDir).split('/').filter(Boolean).join('/');
+      // The directory itself is not a symlink: readdir would follow it out of the tree.
+      let top = null;
+      try { top = fs.lstatSync(at.abs); } catch { /* reported by the walk below */ }
+      if (top && !top.isDirectory()) {
+        report(base, `${why} (${base} is ${top.isSymbolicLink() ? 'a symlink' : 'not a directory'}, expected a directory)`);
+        return [];
+      }
+      const files = [];
+      let unreadable = false;
+      const walk = (abs, rel) => {
+        let entries;
+        try {
+          entries = fs.readdirSync(abs, { withFileTypes: true });
+        } catch (err) {
+          unreadable = true;
+          report(rel, `cannot read the directory: ${err.code || err.message}`);
+          return;
+        }
+        for (const entry of entries) {
+          if (entry.isDirectory()) walk(path.join(abs, entry.name), `${rel}/${entry.name}`);
+          else if (entry.isFile() && entry.name.endsWith(suffix)) files.push(`${rel}/${entry.name}`);
+        }
+      };
+      walk(at.abs, base);
+      if (files.length === 0 && !unreadable) report(base, `${why} (no ${suffix} file under ${base})`);
+      return files.sort();
     },
   };
 }

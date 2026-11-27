@@ -24,6 +24,7 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
@@ -1200,10 +1201,10 @@ describe('feat-3210: workflow and config contracts', () => {
   test('init code-review\'s fallow_enabled field tracks the code_quality.fallow.enabled config key (behavioral form of detectFallowConfig)', () => {
     const tmpDir = createTempProject('gsd-fallow-detect-');
     try {
-      const setTrue = runGsdTools(['config-set', 'code_quality.fallow.enabled', 'true'], tmpDir, { HOME: tmpDir });
+      const setTrue = runGsdTools(['config-set', 'code_quality.fallow.enabled', 'true'], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(setTrue.success, `config-set code_quality.fallow.enabled true failed: ${setTrue.error}`);
 
-      const trueResult = runGsdTools(['init', 'code-review', '1'], tmpDir, { HOME: tmpDir });
+      const trueResult = runGsdTools(['init', 'code-review', '1'], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(trueResult.success, `init code-review failed: ${trueResult.error}`);
       assert.strictEqual(
         JSON.parse(trueResult.output).fallow_enabled,
@@ -1211,10 +1212,10 @@ describe('feat-3210: workflow and config contracts', () => {
         'init code-review must report fallow_enabled: true once code_quality.fallow.enabled is set true',
       );
 
-      const setFalse = runGsdTools(['config-set', 'code_quality.fallow.enabled', 'false'], tmpDir, { HOME: tmpDir });
+      const setFalse = runGsdTools(['config-set', 'code_quality.fallow.enabled', 'false'], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(setFalse.success, `config-set code_quality.fallow.enabled false failed: ${setFalse.error}`);
 
-      const falseResult = runGsdTools(['init', 'code-review', '1'], tmpDir, { HOME: tmpDir });
+      const falseResult = runGsdTools(['init', 'code-review', '1'], tmpDir, isolatedEnv({ home: tmpDir }));
       assert.ok(falseResult.success, `init code-review failed: ${falseResult.error}`);
       assert.strictEqual(
         JSON.parse(falseResult.output).fallow_enabled,
