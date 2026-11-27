@@ -166,6 +166,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     'gsd-core/workflows/debug.md',
     'gsd-core/workflows/eval-review.md',
     'gsd-core/workflows/execute-phase.md',
+    'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md',
     'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
     'gsd-core/workflows/execute-phase/steps/post-merge-gate.md',
     'gsd-core/workflows/execute-phase/steps/regression-gate-run.md',
@@ -1042,18 +1043,19 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         ['the standard wave contract gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('Standard wave contract').join('Normal wave rule')), 'execute-phase-step-5-5-deviation-doc', /step 5\.5 must name the standard wave contract explicitly/],
         ['the standard wave contract only after step 5.5', 'gsd-core/workflows/execute-phase.md', (text) => `${within('\n5.5.', '\n5.6.', (block) => block.split('Standard wave contract').join('Normal wave rule'))(text)}\nStandard wave contract\n`, 'execute-phase-step-5-5-deviation-doc', /step 5\.5 must name the standard wave contract explicitly/],
         ['the cross-wave deviation gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('Cross-wave dependency deviation').join('Other deviation')), 'execute-phase-step-5-5-deviation-doc', /step 5\.5 must name the cross-wave dependency deviation as a supported mode/],
-        ['git worktree prune gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('git worktree prune').join('git gc')), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git worktree prune/],
-        ['git worktree remove gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('git worktree remove').join('git worktree rm')), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git worktree remove --force/],
-        ['--force gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('--force').join('-f')), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git worktree remove --force/],
-        ['git worktree unlock gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('git worktree unlock').join('git worktree lock')), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git worktree unlock/],
-        ['git branch -D gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('git branch -D').join('git branch -d')), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git branch -D/],
+        ['the cleanup-tail fragment reference gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('execute-phase/steps/worktree-cleanup-tail.md').join('other-step.md')), 'execute-phase-step-5-5-deviation-doc', /step 5\.5 must reference the cleanup-tail fragment/],
+        ['git worktree prune gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('git worktree prune').join('git gc'), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git worktree prune/],
+        ['non-forced worktree remove gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('if ! git worktree remove "$WT"; then').join('if ! git worktree remove --force "$WT"; then'), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must invoke non-forced worktree removal/],
+        ['git worktree unlock gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('git worktree unlock').join('git worktree lock'), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must include git worktree unlock/],
+        ['git branch -d gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('git branch -d ').join('git branch --delete '), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must use non-forced branch deletion/],
+        ['git branch -D reintroduced in cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', append('git branch -D "$WT_BRANCH"'), 'execute-phase-step-5-5-deviation-doc', /the step 5\.5 cleanup-tail snippet must not force-delete branches with git branch -D/],
         ['WAVE_WORKTREE_PLANS gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('WAVE_WORKTREE_PLANS').join('WAVE_PLANS')), 'execute-phase-step-5-5-deviation-doc', /step 5\.5 must document the empty-WAVE_WORKTREE_PLANS skip condition/],
         ['cleanup-tail gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('cleanup-tail').join('cleanup')), 'execute-phase-step-5-5-deviation-doc', /step 5\.5 must document the custom-merge-deviation skip condition with a pointer to the cleanup-tail/],
-        ['WAVE_WORKTREE_MANIFEST gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('WAVE_WORKTREE_MANIFEST').join('WAVE_MANIFEST')), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must consume the current wave manifest/],
-        ['the manifest-scope reason gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('avoid touching unrelated active agents').join('be careful')), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must document why manifest-scoped cleanup is required/],
-        ['the line-by-line manifest read gone from step 5.5', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => block.split('IFS= read -r').join('read')), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must still read manifest paths line by line/],
-        ['global agent worktree discovery in the cleanup-tail', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => `${block}\ngit worktree list --porcelain | grep '.claude/worktrees/agent-'\n`), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must not parse global git worktree list output for agent worktrees/],
-        ['global agent worktree discovery spread over many lines', 'gsd-core/workflows/execute-phase.md', within('\n5.5.', '\n5.6.', (block) => `${block}\ngit worktree list --porcelain\n${'filler line\n'.repeat(500)}.claude/worktrees/agent-x\n`), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must not parse global git worktree list output for agent worktrees/],
+        ['WAVE_WORKTREE_MANIFEST gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('WAVE_WORKTREE_MANIFEST').join('WAVE_MANIFEST'), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must consume the current wave manifest/],
+        ['the manifest-scope reason gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('avoid touching unrelated active agents').join('be careful'), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must document why manifest-scoped cleanup is required/],
+        ['the line-by-line manifest read gone from cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', (text) => text.split('IFS= read -r').join('read'), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must still read manifest paths line by line/],
+        ['global agent worktree discovery in the cleanup-tail', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', append("git worktree list --porcelain | grep '.claude/worktrees/agent-'\n"), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must not parse global git worktree list output for agent worktrees/],
+        ['global agent worktree discovery spread over many lines', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md', append(`git worktree list --porcelain\n${'filler line\n'.repeat(500)}.claude/worktrees/agent-x\n`), 'execute-phase-step-5-5-deviation-doc', /the cleanup-tail must not parse global git worktree list output for agent worktrees/],
         ['the human_needed branch gone', 'gsd-core/workflows/execute-phase.md', eraseAll('human_needed'), 'execute-phase-step-5-5-deviation-doc', /execute-phase\.md must contain a human_needed branch/],
         ['the approved shortcut back in the workflow', 'gsd-core/workflows/execute-phase.md', append('Reply "approved" → continue to advance.'), 'execute-phase-step-5-5-deviation-doc', /the human_needed branch must not offer "approved" → continue/],
         ['the gaps_found section ahead of the human_needed section', 'gsd-core/workflows/execute-phase.md', (text) => `**If gaps_found:**\n${text}`, 'execute-phase-step-5-5-deviation-doc', /the human_needed section must appear before the gaps_found section/],
@@ -2829,22 +2831,22 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     {
       const CONTRACT = 'execute-phase-step-5-5-deviation-doc';
       const WORKFLOW_MD = 'gsd-core/workflows/execute-phase.md';
-      const inBlock = (edit) => within('\n5.5.', '\n5.6.', edit);
+      const CLEANUP_TAIL_MD = 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md';
       const inHumanNeeded = (edit) => within('**If human_needed:**', '**If gaps_found:**', edit);
-      passes('an agent worktree path before the worktree list command is not discovery', WORKFLOW_MD, inBlock((block) => `${block.split('git worktree list --porcelain').join('git worktree show')}\n.claude/worktrees/agent-a\ngit worktree list --porcelain\n`), CONTRACT);
-      passes('a worktree list command with no agent path after it is not discovery', WORKFLOW_MD, inBlock((block) => `${block}\ngit worktree list --porcelain\n`), CONTRACT);
-      passes('an agent path after step 5.5 is outside the probe', WORKFLOW_MD, (text) => `${inBlock((block) => `${block}\ngit worktree list --porcelain\n`)(text)}\n.claude/worktrees/agent-a\n`, CONTRACT);
+      passes('an agent worktree path before the worktree list command is not discovery', CLEANUP_TAIL_MD, (text) => `${text.split('git worktree list --porcelain').join('git worktree show')}\n.claude/worktrees/agent-a\ngit worktree list --porcelain\n`, CONTRACT);
+      passes('a worktree list command with no agent path after it is not discovery', CLEANUP_TAIL_MD, append('git worktree list --porcelain\n'), CONTRACT);
+      passes('an agent path in execute-phase.md after step 5.5 is outside the cleanup-tail probe', WORKFLOW_MD, append('.claude/worktrees/agent-a\n'), CONTRACT);
       test('a worktree list command followed by an agent path 100000 characters later is still discovery', (t) => {
         const root = copyOfRepoFiles(t);
-        const abs = path.join(root, ...WORKFLOW_MD.split('/'));
-        fs.writeFileSync(abs, inBlock((block) => `${block}\ngit worktree list --porcelain${'x'.repeat(100000)}.claude/worktrees/agent-a\n`)(fs.readFileSync(abs, 'utf8')));
+        const abs = path.join(root, ...CLEANUP_TAIL_MD.split('/'));
+        fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\ngit worktree list --porcelain${'x'.repeat(100000)}.claude/worktrees/agent-a\n`);
         const findings = runShipped(root, [CONTRACT]);
         assert.ok(findings.some((f) => /the cleanup-tail must not parse global git worktree list output for agent worktrees/.test(f.message)), JSON.stringify(findings));
       });
       test('a worktree list command followed by an agent path after a blank line is still discovery', (t) => {
         const root = copyOfRepoFiles(t);
-        const abs = path.join(root, ...WORKFLOW_MD.split('/'));
-        fs.writeFileSync(abs, inBlock((block) => `${block}\ngit worktree list --porcelain\n\n\n.claude/worktrees/agent-a\n`)(fs.readFileSync(abs, 'utf8')));
+        const abs = path.join(root, ...CLEANUP_TAIL_MD.split('/'));
+        fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\ngit worktree list --porcelain\n\n\n.claude/worktrees/agent-a\n`);
         const findings = runShipped(root, [CONTRACT]);
         assert.ok(findings.some((f) => /the cleanup-tail must not parse global git worktree list output for agent worktrees/.test(f.message)), JSON.stringify(findings));
       });

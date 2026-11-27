@@ -116,6 +116,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Move GSD from OpenCode 1.x to OpenCode 2.x](how-to/upgrade-opencode-1-to-2.md) — upgrade the binary and the install before the 1.x window ends on 2026-12-31
 - [Clean up get-shit-done-cc](cleanup-get-shit-done-cc.md) — remove leftover old-package artifacts that cause a spurious `⬆ /gsd-update` indicator after migrating to `@opengsd/gsd-core`
 - [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md) — resolve the branch-divergence condition that halts parallel phase execution
+- [Reconcile an interrupted wave](how-to/reconcile-an-interrupted-wave.md) — discover and clean up in-flight wave manifests and residual executor worktrees after an interrupted wave run
 - [Recover and troubleshoot](how-to/recover-and-troubleshoot.md) — fix common problems, rebuild context, and uninstall
 - [Run a long-running job asynchronously](how-to/async-external-jobs.md) — run a legitimately long execute task through the SLURM adapter
 - [Author a host plugin](how-to/author-a-host-plugin.md) — for external tool authors who want to embed GSD's orchestration
