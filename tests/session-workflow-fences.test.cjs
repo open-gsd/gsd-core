@@ -247,6 +247,38 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
       assert.equal(exists('HANDOFF.claimed.coordinator.s1.json'), true);
     });
 
+    test('aHeldClaimMarkerMakesTheSessionLoseAndLeavesTheHandoffAndTheMarker', () => {
+      const marker = path.join(planning, '.handoff-claim.coordinator');
+      fs.writeFileSync(marker, '');
+      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'still unclaimed' });
+      const r = runBash(tmp, script([claim()], '--role coordinator'), 's1');
+      assert.equal(r.status, 0, r.err);
+      assert.match(r.out, /NO_UNCLAIMED_HANDOFF role_id=coordinator/);
+      assert.doesNotMatch(r.out, /HANDOFF_FILE=/);
+      assert.equal(exists('HANDOFF.latest.coordinator.json'), true, 'the handoff stays for the marker holder');
+      assert.equal(fs.existsSync(marker), true, 'a loser never removes the winner\'s marker');
+    });
+
+    test('aStaleClaimMarkerIsSweptAndTheClaimSucceeds', () => {
+      const marker = path.join(planning, '.handoff-claim.coordinator');
+      fs.writeFileSync(marker, '');
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      fs.utimesSync(marker, twoDaysAgo, twoDaysAgo);
+      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'after a crash' });
+      const r = runBash(tmp, script([claim()], '--role coordinator'), 's1');
+      assert.equal(r.status, 0, r.err);
+      assert.match(r.out, /HANDOFF_FILE=\.planning\/HANDOFF\.claimed\.coordinator\.s1\.json/);
+      assert.match(r.out, /after a crash/);
+      assert.equal(fs.existsSync(marker), false, 'the winner removes the marker in the same block');
+    });
+
+    test('aWinningClaimLeavesNoMarkerBehind', () => {
+      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'ship it' });
+      const r = runBash(tmp, script([claim()], '--role coordinator'), 's1');
+      assert.equal(r.status, 0, r.err);
+      assert.equal(fs.existsSync(path.join(planning, '.handoff-claim.coordinator')), false);
+    });
+
     test('twoSessionsResumingOneRoleYieldExactlyOneWinner', async () => {
       put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'only one reads this' });
       const results = await Promise.all([
