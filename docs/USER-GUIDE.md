@@ -793,6 +793,8 @@ Switch to the budget profile: `/gsd-config --profile budget`. Disable research a
 
 To spend by phase type (Opus for planning, Sonnet for the rest), by agent, or to start cheap and escalate on failure, follow [How to configure model profiles](how-to/configure-model-profiles.md): it covers the `models` block, `model_overrides`, `dynamic_routing` and the resolution precedence. The keys are in [Per-Phase-Type Models](CONFIGURATION.md#per-phase-type-models-models--added-in-v140) and [Dynamic Routing](CONFIGURATION.md#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140).
 
+### Trim MCP servers to reduce per-turn cost
+
 Before tuning any of those, trim the MCP servers your harness has enabled: each one adds its tool schema to every turn, and the saving applies to every subagent. This is a harness setting, not a GSD setting, in `.claude/settings.json`:
 
 ```json
