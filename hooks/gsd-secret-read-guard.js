@@ -128,18 +128,15 @@
 //   `watch -x env -S 'cat .env'`), though the secret-read scan does read a
 //   shell script there (#6114; the debugger-spawn check reads none of these
 //   sub-commands, #6147); the sub-command's own words are still checked as
-//   operands. A shell reserved word before a command (`if`,
+//   operands. An `env -S` string behind a shell reserved word (`if`,
 //   `then`, `elif`, `else`,
 //   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
-//   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
-//   wrapper walk, a shell script, an `env -S` string and the debugger-spawn
-//   check behind it are not reached (`if true; then env -S 'cat .env'; fi`,
+//   `nocorrect`, `noglob` and `-`) can go unread
+//   (`if true; then env -S 'cat .env'; fi`,
 //   `for i in 1; do env -S 'cat .env'; done`, `! env -S 'cat .env'`, which
 //   bash 5.2 and dash 0.5.12 run; `coproc env -S 'cat .env'`, which bash 5.2
 //   runs; `repeat 1 env -S 'cat .env'` and `noglob env -S 'cat .env'`, which
-//   zsh 5.9 runs; `if true; then sh -c 'cat .env'; fi`;
-//   `if true; then claude --agent gsd-debugger -p x; fi`); the command's own
-//   operands are still checked. `env -S`
+//   zsh 5.9 runs); the command's own operands are still checked. `env -S`
 //   strings are
 //   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
 //   backslash before a blank is that blank) and uutils env's (a
@@ -231,11 +228,14 @@
 //        work budget, is denied as `command-too-complex` (#5255), because
 //        failing open there allows a read the scan had not yet reached.
 //        Any other error in one of the readings that run beside the plain
-//        one — the dollar-quoting readings (#5255) and the further reading
-//        (#5779) — is a bug, and the hook fails open on it as on a crash:
-//        that reading's denials are lost, the other readings' stand, and when
-//        nothing denies the command the hook writes one `reading-failed` line
-//        on stderr (DIAGNOSTIC.READING_FAILED).
+//        one — the dollar-quoting readings (#5255) — is a bug, and the hook
+//        fails open on it as on a crash: that reading's denials are lost, the
+//        other readings' stand, and when nothing denies the command the hook
+//        writes one `reading-failed` line on stderr (DIAGNOSTIC.READING_FAILED).
+//        An error in a scan of the further reading (#5779) is taken as one in
+//        a scan of an `env -S` reading (#5514) is: that scan finds nothing,
+//        the scans after it still run, and a command nothing denies gets the
+//        host's crash policy.
 //        A host may opt in to failing closed instead with
 //        GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): a hook error, a shell
 //        reading that fails on a command no scan blocked (its
