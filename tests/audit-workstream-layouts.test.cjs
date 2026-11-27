@@ -17,8 +17,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const auditMod = require('../gsd-core/bin/lib/audit.cjs');
+const { VERIFIER_STATUSES, VerificationStatusError } = require('../gsd-core/bin/lib/verification.cjs');
 
 function seedPhaseArtifact(dir, kind) {
   fs.mkdirSync(dir, { recursive: true });
@@ -175,9 +178,6 @@ describe('#3804: audit-uat sees all three phase layouts', () => {
 // the hard refusal.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const fc = require('fast-check');
-const auditMod = require('../gsd-core/bin/lib/audit.cjs');
-
 function seedVerification(root, dirName, statusLine, extraFm = []) {
   const dir = path.join(root, dirName);
   fs.mkdirSync(dir, { recursive: true });
@@ -242,7 +242,7 @@ describe('#6172: archived out-of-set verification status does not abort audit-op
     assert.equal(out.counts.verification_gaps, 3, 'a passed archived report produces no item');
   });
 
-  test('#6172: the same out-of-set status in the ACTIVE phases root still exits 1', (t) => {
+  test('#6172 (control): the same out-of-set status in the ACTIVE phases root still exits 1', (t) => {
     const tmpDir = createTempProject('gsd-6172-active-');
     t.after(() => cleanup(tmpDir));
     seedVerification(ACTIVE_ROOT(tmpDir), '13-beta', 'status: resolved');
@@ -285,55 +285,123 @@ describe('#6172: archived out-of-set verification status does not abort audit-op
     assert.equal(second.acknowledged.verification_gaps, 1);
   });
 
-  test('#6172: a non-string status in an archived report does not throw and displays as a string', (t) => {
-    const tmpDir = createTempProject('gsd-6172-nonstr-');
+  // Under FAILSAFE_SCHEMA every scalar is a string, so a list, a map and a bare
+  // `status:` ({}) are the only non-string statuses a report can carry.
+  const NON_STRING_STATUSES = [
+    ['a list', 'status: [a, b]', '["a","b"]'],
+    ['a map', 'status: {k: V}', '{"k":"v"}'],
+    ['a bare `status:`', 'status:', '{}'],
+  ];
+  for (const [label, statusLine, shown] of NON_STRING_STATUSES) {
+    test(`#6172: ${label} status in an archived report is one item, displayed as ${shown}`, (t) => {
+      const tmpDir = createTempProject('gsd-6172-nonstr-');
+      t.after(() => cleanup(tmpDir));
+      seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', statusLine);
+      const r = runGsdTools(['query', 'audit-open', '--json'], tmpDir);
+      assert.ok(r.success, r.error);
+      const items = JSON.parse(r.output).items.verification_gaps;
+      assert.equal(items.length, 1);
+      assert.equal(items[0].status, shown);
+    });
+
+    test(`#6172: ${label} status in an archived report can be acknowledged and re-scans as acknowledged`, (t) => {
+      const tmpDir = createTempProject('gsd-6172-nonstr-ack-');
+      t.after(() => cleanup(tmpDir));
+      seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', statusLine);
+      const first = JSON.parse(runGsdTools(['query', 'audit-open', '--json'], tmpDir).output);
+      assert.equal(first.items.verification_gaps.length, 1);
+
+      const ack = runGsdTools([
+        'audit-open', 'acknowledge', '--category', 'verification_gaps', '--milestone', 'v1.3',
+        '--phase', first.items.verification_gaps[0].phase, '--file', first.items.verification_gaps[0].file,
+        '--archived-milestone', 'v1.3',
+      ], tmpDir);
+      assert.ok(ack.success, `acknowledge must not throw on ${label}: ${ack.error}`);
+
+      const second = JSON.parse(runGsdTools(['query', 'audit-open', '--json'], tmpDir).output);
+      assert.equal(second.counts.verification_gaps, 0);
+      assert.equal(second.acknowledged.verification_gaps, 1);
+    });
+  }
+
+  test('#6172: an out-of-set item says so in --json (out_of_set) and in the human report; a genuine gap does not', (t) => {
+    const tmpDir = createTempProject('gsd-6172-flag-');
     t.after(() => cleanup(tmpDir));
-    seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', 'status: [a, b]');
-    seedVerification(ARCHIVE_ROOT(tmpDir), '13-beta', 'status: 7');
-    const r = runGsdTools(['query', 'audit-open', '--json'], tmpDir);
-    assert.ok(r.success, r.error);
-    const items = JSON.parse(r.output).items.verification_gaps;
-    assert.equal(items.length, 2);
-    for (const item of items) assert.equal(typeof item.status, 'string');
+    seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', 'status: resolved');
+    seedVerification(ARCHIVE_ROOT(tmpDir), '13-beta', 'status: gaps_found');
+    const out = JSON.parse(runGsdTools(['query', 'audit-open', '--json'], tmpDir).output);
+    const byFile = Object.fromEntries(out.items.verification_gaps.map((i) => [i.file, i]));
+    assert.equal(byFile['12-VERIFICATION.md'].out_of_set, true);
+    assert.equal('out_of_set' in byFile['13-VERIFICATION.md'], false);
+
+    const human = runGsdTools(['query', 'audit-open'], tmpDir).output.split('\n');
+    assert.match(human.find((l) => l.includes('12-VERIFICATION.md')), /outside gaps_found\/human_needed\/passed/);
+    assert.doesNotMatch(human.find((l) => l.includes('13-VERIFICATION.md')), /outside/);
   });
 
-  test('#6172: control bytes in a raw archived status are sanitized for display', (t) => {
+  test('#6172: a number-looking status is the string "7" (FAILSAFE_SCHEMA) and is reported with that exact value', (t) => {
+    const tmpDir = createTempProject('gsd-6172-seven-');
+    t.after(() => cleanup(tmpDir));
+    seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', 'status: 7');
+    const r = runGsdTools(['query', 'audit-open', '--json'], tmpDir);
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).items.verification_gaps[0].status, '7');
+  });
+
+  test('#6172: control bytes in a raw archived status are shown in escaped form, not stripped', (t) => {
     const tmpDir = createTempProject('gsd-6172-sanitize-');
     t.after(() => cleanup(tmpDir));
-    seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', 'status: "evil\\u001b[31mred"');
+    // JSON-style escapes inside a double-quoted scalar: ESC, a tab and DEL.
+    seedVerification(ARCHIVE_ROOT(tmpDir), '12-alpha', 'status: "evil\\u001b[31m\\tred\\u007f"');
     const r = runGsdTools(['query', 'audit-open', '--json'], tmpDir);
     assert.ok(r.success, r.error);
     const item = JSON.parse(r.output).items.verification_gaps[0];
-    // eslint-disable-next-line no-control-regex
-    assert.doesNotMatch(item.status, /[\u0000-\u001f\u007f]/);
+    assert.equal(item.status, 'evil\\x1b[31m\\tred\\x7f', 'every control byte is visible as an escape');
   });
 
-  test('#6172 property: over arbitrary raw status strings, archived never throws; active throws iff outside the closed set', () => {
-    // Source the closed set from the owner so the oracle cannot drift from it.
-    const CLOSED = require('../gsd-core/bin/lib/verification.cjs').VERIFIER_STATUSES;
-    // Bare YAML scalars that parse to null/boolean rather than a string are
-    // "no status" to the closed-set reader, a different branch; exclude them.
-    const NON_STRING_SCALARS = new Set(['null', 'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n']);
-    const statusArb = fc.oneof(
-      fc.constantFrom(...CLOSED),
-      fc.string({ unit: fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz_'.split('')), minLength: 1, maxLength: 12 }),
-    ).filter((s) => !NON_STRING_SCALARS.has(s.toLowerCase()));
-    const auditStatus = (root, status) => {
+  test('#6172: an archived workstream milestone under milestones/ws-<slug>-<date>/phases is archived too', (t) => {
+    const tmpDir = createTempProject('gsd-6172-wsarch-');
+    t.after(() => cleanup(tmpDir));
+    const wsArchive = path.join(tmpDir, '.planning', 'milestones', 'ws-v7-3-catalog-models-2026-08-23', 'phases');
+    seedVerification(wsArchive, '185-catalog-admin', 'status: resolved');
+    const r = runGsdTools(['query', 'audit-open', '--json'], tmpDir);
+    assert.ok(r.success, `audit-open must not abort on a ws-* archive: ${r.error}`);
+    const items = JSON.parse(r.output).items.verification_gaps;
+    assert.equal(items.length, 1);
+    assert.equal(items[0].file, '185-VERIFICATION.md');
+    assert.ok(items[0].archived_milestone, 'the item carries its archived milestone label');
+  });
+
+  test('#6172 property: over arbitrary raw status strings, archived never throws; active throws VerificationStatusError iff the trimmed status is non-empty and outside the closed set', () => {
+    // The oracle is the closed set itself, sourced from the owner, and the
+    // rule "empty after trim is no status" — not a re-run of the scanner.
+    const statusArb = fc.string({
+      unit: fc.constantFrom(...'abcxyzABCXYZ_ \t"\'\\:#'.split(''), '\u0001', '\u001b', '\u007f'),
+      maxLength: 12,
+    });
+    const scan = (root, status) => {
       const tmpDir = createTempProject('gsd-6172-prop-');
       try {
-        seedVerification(root(tmpDir), '12-alpha', `status: ${status}`);
-        auditMod.auditOpenArtifacts(tmpDir);
-        return false;
-      } catch {
-        return true;
+        // A JSON string is a valid double-quoted scalar: any byte round-trips.
+        seedVerification(root(tmpDir), '12-alpha', `status: ${JSON.stringify(status)}`);
+        return { items: auditMod.auditOpenArtifacts(tmpDir).items.verification_gaps };
+      } catch (err) {
+        if (!(err instanceof VerificationStatusError)) throw err;
+        return { threw: true };
       } finally {
         cleanup(tmpDir);
       }
     };
     fc.assert(fc.property(statusArb, (status) => {
-      const archivedThrew = auditStatus(ARCHIVE_ROOT, status);
-      const activeThrew = auditStatus(ACTIVE_ROOT, status);
-      return archivedThrew === false && activeThrew === !CLOSED.has(status);
+      const trimmed = status.trim();
+      const outsideClosedSet = trimmed.length > 0 && !VERIFIER_STATUSES.has(trimmed);
+      const archived = scan(ARCHIVE_ROOT, status);
+      const active = scan(ACTIVE_ROOT, status);
+      const archivedItems = archived.threw ? null : archived.items;
+      const expectedItems = outsideClosedSet || trimmed === 'gaps_found' || trimmed === 'human_needed' ? 1 : 0;
+      return archivedItems !== null
+        && archivedItems.length === expectedItems
+        && Boolean(active.threw) === outsideClosedSet;
     }), { numRuns: 60 });
   });
 });

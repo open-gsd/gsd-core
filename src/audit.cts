@@ -107,6 +107,8 @@ interface VerificationGapItem {
   status: string;
   scan_error?: boolean;
   archived_milestone?: string;
+  /** #6172: archived report whose status is outside the closed verifier set. */
+  out_of_set?: true;
 }
 
 interface ContextQuestionItem {
@@ -1100,6 +1102,19 @@ function scanUatGaps(planDir: string, cwd: string): ScanOutcome<UatGapItem> {
   return { items: results, acknowledged };
 }
 
+/**
+ * The value `audit_acknowledged.status` snapshots for a `verification_gaps`
+ * item — shared by `scanVerificationGaps` (out-of-set archived reports) and
+ * `cmdAuditAcknowledge` so the writer and the scanner cannot disagree (#6172).
+ * A string is kept as is; a list or map (the only non-strings the frontmatter
+ * parser yields, including the `{}` of a bare `status:`) is JSON text; an
+ * absent or empty status is `unknown`. Lowercased, padding preserved.
+ */
+function deriveVerificationStatusSnapshotValue(rawStatus: unknown): string {
+  if (!rawStatus) return 'unknown';
+  return (typeof rawStatus === 'string' ? rawStatus : JSON.stringify(rawStatus)).toLowerCase();
+}
+
 // ─── scanVerificationGaps ─────────────────────────────────────────────────────
 
 /**
@@ -1169,13 +1184,9 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
       } catch (err) {
         if (!(err instanceof VerificationStatusError) || target.milestone === undefined) throw err;
         outOfSet = true;
-        // Raw, not the reader's trimmed value, and lowercased: this is the
-        // exact value `cmdAuditAcknowledge` snapshots for verification_gaps
-        // (`fm.status.toLowerCase()`), so an acknowledged item matches.
-        // `fm.status` may be a non-string (list/map/number): JSON keeps it a
-        // displayable string rather than throwing on `.toLowerCase`.
-        const rawStatus = fm['status'];
-        status = (typeof rawStatus === 'string' ? rawStatus : JSON.stringify(rawStatus)).toLowerCase();
+        // Same derivation `cmdAuditAcknowledge` snapshots, so an acknowledged
+        // item matches on the next scan.
+        status = deriveVerificationStatusSnapshotValue(fm['status']);
       }
 
       if (status === null) continue;
@@ -1190,9 +1201,10 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
         phase: sanitizeLabel(phaseNum),
         file: sanitizeLabel(file),
         // An out-of-set status is raw, author-controlled content that lands in
-        // a one-line report: escape control bytes (ESC, CR, LF) visibly first.
+        // a one-line report: escape every C0, DEL and C1 character visibly first.
         status: sanitizeForDisplay(outOfSet ? sanitizeLabel(status) : status),
       };
+      if (outOfSet) item.out_of_set = true;
       if (target.milestone !== undefined) item.archived_milestone = sanitizeLabel(target.milestone);
       results.push(item);
     }
@@ -1546,7 +1558,8 @@ function formatAuditReport(auditResult: AuditResult): string {
     lines.push(`🔴 Verification Gaps (${counts.verification_gaps} unresolved${ackSuffix(acknowledged.verification_gaps)})`);
     for (const item of items.verification_gaps.filter(i => !i.scan_error)) {
       const archived = item.archived_milestone ? ` (archived ${item.archived_milestone})` : '';
-      lines.push(`   • Phase ${item.phase}${archived}: ${item.file} [${item.status}]`);
+      const outOfSet = item.out_of_set ? ' — status is outside gaps_found/human_needed/passed' : '';
+      lines.push(`   • Phase ${item.phase}${archived}: ${item.file} [${item.status}]${outOfSet}`);
     }
   }
 
@@ -1809,7 +1822,7 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
       currentValue = deriveUatGapSnapshotValue(((fm.status as string) || 'unknown').toLowerCase(), normalizedContent);
     } else if (category === 'verification_gaps') {
       snapshotKey = 'status';
-      currentValue = ((fm.status as string) || 'unknown').toLowerCase();
+      currentValue = deriveVerificationStatusSnapshotValue(fm.status);
     } else {
       // context_questions — WARNING 2: snapshot a content digest of the
       // question set, not just its count (see `deriveOpenQuestionsDigest`'s
