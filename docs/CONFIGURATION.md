@@ -1069,13 +1069,7 @@ Known limits. A skill that is both listed in `agent_skills` and sits in a discov
 
 ## Trusted Global Skill Roots (`agent_skills_security.trusted_global_roots`)
 
-Widen the symlink-safety boundary for `global:` skills by declaring additional trusted root directories.
-
-### Purpose
-
-By default, a `global:<name>` skill whose `SKILL.md` real path (after resolving symlinks) escapes the runtime's global skills directory (e.g. `~/.claude/skills/`) is rejected as a symlink-escape. `agent_skills_security.trusted_global_roots` lets you declare additional trusted root directories so symlinked skills whose real target lives under one of them are accepted.
-
-Common use case: a single source-of-truth skills directory elsewhere on disk (e.g. `~/shared/skills`) symlinked into `~/.claude/skills/` so `git pull` or `rsync` keeps a team's skills up to date without maintaining copies.
+Widen the symlink-safety boundary boundary for `global:` skills by declaring additional trusted root directories. Why the boundary exists and how it is resolved: [The trusted-roots boundary](explanation/agent-skills-dual-injection.md#the-trusted-roots-boundary).
 
 ### Configuration
 
@@ -1090,14 +1084,7 @@ Common use case: a single source-of-truth skills directory elsewhere on disk (e.
 }
 ```
 
-### How It Works
-
-- **Default `[]`** — behavior is byte-identical to omitting the option entirely: only skills whose real `SKILL.md` path resolves inside the default global skills directory are accepted.
-- **Absolute or tilde-prefixed paths only.** Each entry must be an absolute path (`/opt/shared-skills`) or a `~`/`~/`-prefixed path (tilde expands to your home directory). Project-relative paths are rejected, so an untrusted repo's `.planning/config.json` cannot point trust at a directory inside itself.
-- **`realpathSync` at load time.** Each declared root is resolved with `realpathSync` on every run, so trust follows the real target and cannot silently drift if a root itself later becomes a symlink. Non-existent or unreadable roots are dropped without error.
-- **Dangerously broad roots are refused.** The filesystem root (`/`), drive or UNC roots, and your home directory itself cannot be declared as trusted roots — these would make the allowlist meaningless.
-- **Acceptance rule.** A skill is accepted if and only if its real `SKILL.md` path lies inside the default global skills directory OR inside one of the resolved trusted roots. Skills resolving outside all of these are still rejected.
-- **Audit note.** When a skill is accepted via a trusted root rather than the default global skills directory, a `[agent-skills] NOTE:` line is written to stderr so the widened boundary remains visible.
+Each entry is an absolute path (`/opt/shared-skills`) or a `~`/`~/`-prefixed path. The default is `[]`, which behaves exactly as if the key were omitted. Project-relative paths, the filesystem root, drive or UNC roots and the home directory itself are refused, and roots that do not exist or cannot be read are dropped without error. A skill loaded through a trusted root writes a `[agent-skills] NOTE:` line to stderr.
 
 > **Security note:** `trusted_global_roots` is read from the project-local `.planning/config.json`. Only add roots you control and trust. Declaring a broad shared directory widens which symlinked global skills will load for every agent in this project.
 

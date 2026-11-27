@@ -48,3 +48,19 @@ If no skills are configured, the block is omitted (zero overhead).
 - [Context engineering](context-engineering.md) — why agents get fresh, bounded context
 - [Attach a plugin-provided skill to a GSD agent](../how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — the steps for the `global:plugin:skill` form
 - [ADR 1866](../adr/1866-agent-skills-dual-injection-contract.md) — the contract record
+
+## The trusted-roots boundary
+
+By default, a `global:<name>` skill whose `SKILL.md` real path (after resolving symlinks) escapes the runtime's global skills directory (for example `~/.claude/skills/`) is rejected as a symlink-escape. The check exists because both seams read the `SKILL.md` a name resolves to, and a symlink can make that file live anywhere on disk. [`agent_skills_security.trusted_global_roots`](../CONFIGURATION.md#trusted-global-skill-roots-agent_skills_securitytrusted_global_roots) lets a project declare additional roots, so a symlinked skill whose real target lies under one of them is accepted.
+
+The common case is a single source-of-truth skills directory elsewhere on disk (for example `~/shared/skills`) symlinked into `~/.claude/skills/`, so `git pull` or `rsync` keeps a team's skills current without copies.
+
+How the boundary is resolved:
+
+- **Absolute or tilde-prefixed entries only.** Project-relative paths are rejected, so an untrusted repository's `.planning/config.json` cannot point trust at a directory inside itself.
+- **`realpathSync` on every run.** Each declared root is resolved when skills load, so trust follows the real target and cannot drift silently if a root later becomes a symlink. Roots that do not exist or cannot be read are dropped without error.
+- **Broad roots are refused.** The filesystem root (`/`), drive or UNC roots and the home directory itself cannot be declared, because they would make the allowlist meaningless.
+- **One acceptance rule.** A skill is accepted if and only if its real `SKILL.md` path lies inside the default global skills directory or inside one of the resolved trusted roots. Everything else is still rejected.
+- **The widened boundary stays visible.** A skill accepted through a trusted root rather than the default directory writes a `[agent-skills] NOTE:` line to stderr.
+
+The key is read from the project-local `.planning/config.json`, which is why the reference page carries a security note: a declared root applies to every agent in that project.
