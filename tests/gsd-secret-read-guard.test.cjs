@@ -1129,6 +1129,35 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     });
   }
 
+  // A heredoc a `case` arm opens is still waiting when the substitution closes, and
+  // bash reads its body from the next line: the `"` or `'` line is that body and
+  // opens no string, and bash 5.2 reads the file after the `A` line. The same
+  // command reading README.md is allowed.
+  for (const body of ['"', "'"]) {
+    const cmd = `echo "$(case x in x) cat <<A;; esac)"\n${body}\nA\ncat .env`;
+    test(`blocks a read after the body of a heredoc a case arm leaves waiting: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      const twin = cmd.replace(/cat \.env$/, 'cat README.md');
+      assertAllowed(runHook(bash(twin)), twin);
+    });
+  }
+
+  // The same heredoc, unquoted, with a line after it that opens a heredoc of its own:
+  // bash 5.2 reads the file in the last line. The README.md twin is allowed.
+  test('blocks a read after a waiting heredoc whose next line opens another heredoc', () => {
+    const cmd = 'echo $(case x in x) cat <<A;; esac)\nA$(:<<B)\nB\ncat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    const twin = cmd.replace(/cat \.env$/, 'cat README.md');
+    assertAllowed(runHook(bash(twin)), twin);
+  });
+
+  // A heredoc opened in a `$( )` inside a delimiter word: bash 5.2 runs no `cat` in
+  // this command, and it is allowed, as on `next`.
+  test('allows a command whose delimiter word holds a heredoc, with no read bash runs', () => {
+    const cmd = "cat <<A$(:<<B)\nA$(:<<B)\necho '\nB\ncat .env\n'";
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
   // A `$( )` inside "…" in a heredoc tag is read under the shell reading too: its
   // `$'\''` closes nothing, so the "…" ends where bash ends it. bash 5.2 and zsh 5.9
   // read the file; `next` allowed it, as did this PR before its tag readers took the

@@ -1474,7 +1474,35 @@ let spanSeen = false;
 // `command-too-complex` (unfinishedBy), as scanBashByGrammar does. V8 reports some
 // overflows as a SyntaxError from a regular expression; that one is rethrown as the
 // RangeError the readings know, so it is never filed as a reading's bug.
+// A heredoc still waiting for its body when the span closes joins #5515's queue
+// (orphanHeredocs), so tokenize reads its body at the next newline
+// (`echo "$(case x in x) cat <<A;; esac)"`, then the body lines). The readers
+// list a nested span's heredocs before the span around it, so they join the
+// queue in the order their tags end. scanByGrammar reads the command once more
+// without the hand-over when one happened (grammarHanded).
+let grammarHandover = true;
+let grammarHanded = false;
+
 function readSpanClose(str, i, reading) {
+  const ctx = { orphans: [], depth: 0, reading };
+  let at;
+  try {
+    at = readParenClose(str, i, ctx);
+  } catch (err) {
+    if (stackRanOut(err) && !(err instanceof RangeError)) throw new RangeError(err.message);
+    throw err;
+  }
+  if (grammarHandover && orphanBodies && ctx.orphans.length > 0) {
+    grammarHanded = true;
+    for (const tag of ctx.orphans.sort((a, b) => a.end - b.end)) orphanHeredocs.push(tag);
+  }
+  return at;
+}
+
+// readSpanClose for a span inside a heredoc delimiter word (readDelimiterWord):
+// the word is taken literally, so a heredoc opened in it joins no queue, as
+// findTagSpanClose keeps it out of the counting scans' one.
+function readTagSpanClose(str, i, reading) {
   try {
     return readParenClose(str, i, { orphans: [], depth: 0, reading });
   } catch (err) {
@@ -2196,7 +2224,7 @@ function readDelimiterWord(str, i, reading) {
         spanStep(1);
         if (str[end] === '"') { end++; break; }
         if (str[end] === '$' && str[end + 1] === '{') end = findBraceClose(str, end + 2, ctx) + 1;
-        else if (str[end] === '$' && str[end + 1] === '(') end = readSpanClose(str, end + 2, reading) + 1;
+        else if (str[end] === '$' && str[end + 1] === '(') end = readTagSpanClose(str, end + 2, reading) + 1;
         else if (str[end] === '`') end = skipQuoted(str, end, ctx);
         else end += str[end] === '\\' ? 2 : 1;
       }
@@ -2207,7 +2235,7 @@ function readDelimiterWord(str, i, reading) {
     }
     let close = -1;
     if (ch === '`') close = skipQuoted(str, i, ctx) - 1;
-    else if ((ch === '$' || ch === '<' || ch === '>') && str[i + 1] === '(') close = readSpanClose(str, i + 2, reading);
+    else if ((ch === '$' || ch === '<' || ch === '>') && str[i + 1] === '(') close = readTagSpanClose(str, i + 2, reading);
     else if (ch === '$' && str[i + 1] === '{') close = findBraceClose(str, i + 2, ctx);
     if (close !== -1) {
       word += str.slice(i, close + 1);
@@ -3886,12 +3914,21 @@ function findSecretRead(command, depth) {
 // limit or a stack overflow, ends as `command-too-complex`, as in any other pass, never
 // as an allow. The one bound refilled here, per scan, is probeBudget, which decides only
 // how far a `((` reads ahead.
+// When a pass handed a waiting heredoc to the queue (readSpanClose) and found nothing,
+// the scan runs once more with the hand-over off, on what is left of the same budgets,
+// and a hit there is a deny too.
 function scanByGrammar(scan, command) {
   closeByCount = false;
   probeBudget = MAX_COMMAND_LENGTH;
+  grammarHanded = false;
   try {
+    const hit = scan(command);
+    if (hit !== null || !grammarHanded) return hit;
+    grammarHandover = false;
+    probeBudget = MAX_COMMAND_LENGTH;
     return scan(command);
   } finally {
+    grammarHandover = true;
     closeByCount = true;
   }
 }
