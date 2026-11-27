@@ -866,9 +866,7 @@ For the full audit, harness reference, and the composition note with `model_prof
 
 ### Using Non-Claude Runtimes (Codex, OpenCode, Antigravity CLI, Kilo)
 
-> **Codex CLI minimum supported version: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
-
-If you installed GSD for a non-Claude runtime, the installer already configured model resolution. No manual setup is needed — `resolve_model_ids: "omit"` is set automatically as a Claude protection, and your install's recorded runtime identity tells GSD to skip Anthropic model ID resolution and resolve from the runtime's own model tiers instead.
+If you installed GSD for a non-Claude runtime, the installer already configured model resolution. No manual setup is needed: `resolve_model_ids: "omit"` is set automatically as a Claude protection, and your install's recorded runtime identity tells GSD to skip Anthropic model ID resolution and resolve from the runtime's own model tiers instead.
 
 To assign different models on a non-Claude runtime:
 
@@ -883,48 +881,13 @@ To assign different models on a non-Claude runtime:
 }
 ```
 
-#### OpenCode 1.x and 2.x (#5337)
+To switch a project from Claude to Codex with one config change, set `"runtime": "codex"` as described in [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
 
-OpenCode 1.x and 2.x use the same `opencode` command and the same config directories, so GSD tells them apart by running `opencode --version` (5-second limit, no shell). The GSD plugin at `plugins/gsd-core.js` serves both: OpenCode 1.x loads its `server` export and OpenCode 2.x loads its `setup` export, and both run the same GSD guards (secret-read, injection scan, workflow, worktree, write).
+Everything else about a runtime has an owner:
 
-Differences GSD handles for you on 2.x: worktree dispatch sets the working directory of the spawned `opencode run` instead of passing `--dir`, and the reviewer lane carries a configured reasoning effort as a `#variant` suffix on the model (for example `provider/model#high`) instead of `--variant`. If the version cannot be read, set `GSD_OPENCODE_GENERATION=1` or `2` to choose explicitly. Kilo is unaffected and stays on the OpenCode 1.x behavior.
-
-**Moving from OpenCode 1.x to 2.x.** OpenCode 1.x is bug-fix-only for GSD until **2026-12-31** and the installer says so; see [How to move GSD from OpenCode 1.x to OpenCode 2.x](how-to/upgrade-opencode-1-to-2.md). `opencode upgrade --major` (OpenCode 1.19 and newer) replaces 1.x with 2.x (they share the `opencode` command and cannot be installed side by side); older 1.x installs reinstall OpenCode 2 instead. Your GSD files stay where they are, but the plugin installed by an older GSD is rejected by 2.x, so run `npx @opengsd/gsd-core@latest --opencode --global` (or `/gsd-update`) once afterwards; that installs the plugin that serves both generations and converges the `gsd` MCP entry in your config, keeping any comments in `opencode.jsonc`. OpenCode 2.x adds its own session tables to the data directory beside the 1.x ones, so 1.x keeps working there; a data directory that 2.x created from scratch cannot be opened by 1.x, and the installer warns when it sees that combination. Going back to 1.x after using 2.x means reinstalling 1.x, then re-running the GSD installer.
-
-**Uninstalling** (`--opencode --uninstall`, either generation) removes everything GSD installed — commands, agents, skills, the plugin, every hook helper, the install state and journal records, the `gsd` MCP entry, and the `~/.gsd/defaults.json` keys the install set once no other runtime needs them — and leaves your own files, comments and settings exactly as they were. Backups of files you had modified are kept.
-
-**Hooks and statusline on OpenCode.** Besides the guards, the plugin runs the opt-in community hooks (`hooks.community`: commit validation, phase boundary, session state) and the graphify auto-update hook (`graphify.auto_update`) on both generations; advisories from every hook are appended to the tool result the model reads. On 2.x the terminal client also shows GSD's statusline and update banner in the footer (installed as `plugins/gsd-statusline/`, shown inside GSD projects only). Not available on OpenCode: the agent-isolation guard (it enforces harness-managed worktrees, and OpenCode uses orchestrator-managed ones) and LSP-backed features (2.x keeps the `lsp` setting but runs no language servers).
-
-The plugin now starts its hook scripts with Node from `PATH` (override with `GSD_HOOK_RUNTIME`) instead of the OpenCode executable, which ran OpenCode rather than the script and left the guards silently inactive (#4849).
-
-#### Codex skill picker and agent scheduling (#774)
-
-GSD enriches each Codex install with an additional artifact:
-
-- **Flex-tier scheduling** — light-tier agents (haiku-equivalent) emit `service_tier = "flex"` and `model_verbosity = "low"` in their agent TOML. The Codex scheduler routes these agents to the flex tier (lower cost, background processing) and suppresses verbose token output.
-
-GSD skills appear in the Codex `/skills` picker via their `SKILL.md` file, which Codex discovers automatically. No `agents/openai.yaml` sidecar is emitted — doing so caused duplicate autocomplete entries (#1326).
-
-This enrichment is written automatically at install time and requires no manual configuration. Requires Codex CLI ≥ 0.130.0.
-
-#### Switching from Claude to Codex with one config change (#2517)
-
-```json
-{
-  "runtime": "codex",
-  "model_profile": "balanced"
-}
-```
-
-See [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
-
-#### Per-runtime command enrichment
-
-When generating artifacts, the installer adapts GSD commands to each runtime's native command schema:
-
-- **Qwen Code** — main-loop skills carry Qwen's numeric `priority` field so the most-used workflows (e.g. `new-project`, `plan-phase`, `execute-phase`) sort first in the `/skills` list; utility skills are left unset. Higher values sort earlier; the field affects only the `/skills` list order.
-
-See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md) for the full per-runtime details.
+- Per-runtime install steps, the Codex minimum version (0.130.0), Codex agent scheduling and the Qwen skill priority: [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md).
+- Moving from OpenCode 1.x to 2.x, and what changes on 2.x: [How to move GSD from OpenCode 1.x to OpenCode 2.x](how-to/upgrade-opencode-1-to-2.md).
+- How GSD detects the OpenCode generation, the plugin's two entrypoints, hooks and uninstall: [OpenCode 1.x and 2.x](ARCHITECTURE.md#opencode-1x-and-2x).
 
 ### Manual install / no-Node.js setup
 
