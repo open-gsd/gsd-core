@@ -1433,6 +1433,7 @@ node gsd-tools.cjs requirements mark-complete <ids>
 | `<version>` | Milestone version label to archive (e.g. `v1.0`). |
 | `--confirm` | **Required to mutate (#3726).** The archive is irreversible — ROADMAP.md/REQUIREMENTS.md archived, phase directories MOVED, STATE.md rewritten — so without this flag the command refuses and changes nothing (exit 1, with a message naming both `--confirm` and `--dry-run`). Not implied by `--force`, which only overrides the guards below. |
 | `--name <name>` | Display name for the MILESTONES.md entry. Defaults to `<version>`. |
+| `--archive-phases` | Move phase directories into `.planning/milestones/<version>-phases/`. This is the default, so the flag only states it explicitly; `--no-archive-phases` is the inverse. |
 | `--no-archive-phases` | Leave phase directories in place instead of moving them into `.planning/milestones/<version>-phases/`. |
 | `--archive-quick` | Opt-in (default OFF, #2142): also move every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)write that archive directory's `README.md` index, and clear STATE.md's `### Quick Tasks Completed` table rows. See "`milestone archive-quick`" below for the narrower standalone form and the full behavior. |
 | `--release-map <file>` | Opt-in (#5706): archive a per-repository release map. `<file>` is a JSON array of `{ repo, release, reference, environment, status, tag }` entries (fields and limits in [Per-repository release mapping](CONFIGURATION.md#per-repository-release-mapping)). The map is validated before anything is written; any problem fails the command with every error listed and changes nothing. On success the map is written to `.planning/milestones/<version>-RELEASE-MAP.json`, a `**Release mapping:**` table is added to the MILESTONES.md entry, and the JSON result carries `release_map: { path, entries }`. The file must be a regular file of at most 1 MiB. A later run for the same version never overwrites an archived map that differs. Without the flag, output and files are unchanged. |
@@ -1478,6 +1479,9 @@ node gsd-tools.cjs agent-skills <agent-type>
 
 # Emit typed JSON surface (#455) — { agent_type, block, skills_count, warnings, configured, reason, source, degraded }
 node gsd-tools.cjs agent-skills <agent-type> --json
+
+# Configured skills only (#5122): the agent's own self-load, never the persona fallback served to orchestrator-side injection
+node gsd-tools.cjs agent-skills <agent-type> --skills-only
 ```
 
 The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on.
@@ -1606,6 +1610,159 @@ Prints project statistics as JSON; bare `stats` does the same, and `stats table`
 | `phase_scope` | `complete` when every phase was enumerated; any other value means the phase list could not be fully read |
 
 `percent` and `plan_percent` are `null` unless `phase_scope` is `complete`, so an unreadable phase directory is never reported as `0%`.
+
+## Dispatch, Isolation, Review Lane and Workstream Verbs
+
+These verbs are called by the workflows (and by hooks and health checks) rather than typed by hand, but each is a stable surface: its flags and output are what the callers depend on. Run a verb as `gsd_run query <verb>` or `gsd-tools <verb>`.
+
+### Dispatch
+
+```bash
+# Parallel dispatch capacity of the current runtime
+gsd-tools dispatch-capacity [--json]
+
+# Whether the current runtime runs a subagent inline instead of dispatching it
+gsd-tools dispatch-should-flatten [--json]
+
+# Isolation to use for an executor dispatch; records the decision (see below)
+gsd-tools dispatch-isolation [--phase <n>] [--plan <id>] [--force-isolation <mode>] [--renew-held <ms>] [--cwd-target <path>] [--prompt <text>] [--json]
+
+# The same resolution without recording it
+gsd-tools inspect-dispatch-isolation [--cwd-target <path>] [--prompt <text>] [--json]
+
+# Record an isolation decision directly
+gsd-tools record-dispatch-isolation --isolation <mode> [--harness-flag <flag>] [--phase <n>] [--plan <id>] [--executor-type <agent>] [--json]
+
+# The type an Agent() call should use for a GSD subagent on the current runtime
+gsd-tools resolve-dispatch-type --requested <name> [--json]
+```
+
+The current runtime is resolved in this order: `GSD_RUNTIME`, `runtime` in the config, the install's `.gsd-runtime` marker, then `claude`.
+
+**`dispatch-capacity`** prints a positive integer. Its value comes from `GSD_DISPATCH_MAX_CONCURRENCY` when that is a positive integer, otherwise from the runtime's declared `dispatch.maxConcurrency`, otherwise `1`. With `--json` it prints `{ runtime, capacity, declared, source, reason }`: `source` is `live`, `descriptor` or `fallback`, and `reason` is `ok` or the reason the fallback applied (`missing`, `undocumented`, `non_integer`, `unsafe_integer`, `non_positive`, `non_numeric`, `unknown_runtime`).
+
+**`dispatch-should-flatten`** prints `true` or `false`. It fails closed: an unknown runtime, a missing `dispatch` declaration or an error gives `true` (inline). With `--json` it prints `{ runtime, shouldFlatten, dispatch }`.
+
+**`dispatch-isolation`** prints the isolation mode for the dispatch: `harness-worktree`, `orchestrator-worktree` or `none`. An unknown runtime, a missing or out-of-vocabulary declaration, or an error gives `none` (sequential execution). It also records the decision, with the harness flag and the phase and plan identifiers, in `.gsd/dispatch-isolation-sentinel.json`, which the isolation guard hooks read; a failed write never fails the call. With `--json` it prints `{ runtime, executorRuntime, isolation, exec, harnessFlag, fallback, held, decidedAt }`. `held` is `true` when a recorded degrade is being held, and `decidedAt` is then that decision's time in epoch milliseconds (otherwise `null`).
+
+| Flag | Description |
+|------|-------------|
+| `--phase <n>`, `--plan <id>` | Identifiers recorded with the decision. |
+| `--force-isolation <mode>` | Override the resolved mode with context the resolver cannot see (for example a per-plan submodule check). A value outside the closed mode list is ignored. `none` clears the harness flag and `exec`. |
+| `--renew-held <ms>` | With `--force-isolation none`, marks the write as a dispatch following a held degrade and carries that decision's own `decidedAt`. |
+| `--cwd-target <path>` | The worktree path the orchestrator will run in. `exec` (the resolved `{ command, args, cwd }`) is returned only for `orchestrator-worktree`, and only when this is given. |
+| `--prompt <text>` | Prompt bound into `exec` when `--cwd-target` is given. |
+| `--json` | Print the object above instead of the bare mode. |
+
+**`inspect-dispatch-isolation`** resolves the same answer without writing the sentinel, for diagnostics such as `/gsd-health` and `/gsd-settings`. It accepts `--cwd-target`, `--prompt` and `--json`; `--force-isolation`, `--phase` and `--plan` are recording-only and are refused with a usage error.
+
+**`record-dispatch-isolation`** writes the same sentinel from the caller's own decision and prints `{ recorded, path }`; `path` is `.gsd/dispatch-isolation-sentinel.json`. `--isolation` is required and must be one of the three modes. `--harness-flag` takes the flag in `--harness-flag=<flag>` form when the flag itself starts with `--` (for example `--harness-flag=--worktree`). A GSD role other than the executor passed as `--executor-type` is refused with a warning and recorded as no executor type. The CLI surface registry also declares a boolean `--worktree`; the handler does not read it.
+
+**`resolve-dispatch-type`** prints the subagent type to use for `--requested <name>`: the name unchanged on runtimes with named dispatch (Claude Code, OpenCode and others), and on a runtime with built-in types only (Kimi Code) the closest built-in (`coder`, `explore` or `plan`) chosen by the name's role suffix.
+
+### Execution settings
+
+```bash
+gsd-tools resolve-execution <agent-type> [--effort <level>] [--fast-mode true|false] [--attempt <n>] [--failure-class <class>] [--host <name>]
+```
+
+Resolves the model, effort and fast-mode settings for an agent type and prints them as JSON:
+
+`{ model, profile, effort, effort_rendered, effort_param, effort_propagation, effort_requested, effort_clamped, effort_clamp_reason, effort_effective, effort_effective_source, fast_mode, fast_mode_supported }`
+
+`effort_effective_source` is `frontmatter` or `frontmatter-absent` when the installed agent file decides (Claude Code), and `resolved` when no file evidence exists. An agent type that is not in the model catalog adds `unknown_agent: true`.
+
+| Flag | Description |
+|------|-------------|
+| `--effort <level>` | Override the effort from the configuration cascade. |
+| `--fast-mode true\|false` | Override fast mode. Any other value leaves the resolved setting. |
+| `--attempt <n>` | A non-negative integer: resolve the model and effort for retry `n`, so dynamic routing can escalate both. |
+| `--failure-class <class>` | Why the previous attempt failed: `quota-exceeded`, `classify-handoff-bug` or `unknown-failure`. Only `quota-exceeded` consults the provider-escalation ladder, and the result adds an `escalation` object. |
+| `--host <name>` | Also render the invocation-time effort argument for that host. Adds `host`, `effort_surface`, `effort_argv`, `effort_argv_string` and `effort_argv_value`. |
+
+Exactly one agent type is required.
+
+### Prompt budget
+
+```bash
+gsd-tools prompt-budget --budget <tokens> --instructions-file <f> --roadmap-file <f> --plan-file <f> [--plan-file <f> ...] --output-prompt <f> --output-metadata <f> [--project-file <f>] [--context-file <f>] [--research-file <f>] [--requirements-file <f>] [--safety-margin-pct <n>] [--project-md-head-lines <n>]
+```
+
+Assembles a reviewer prompt from the given sections within a token budget, writes the prompt to `--output-prompt` and the budget metadata (JSON) to `--output-metadata`. `--budget`, `--instructions-file`, `--roadmap-file`, at least one `--plan-file`, `--output-prompt` and `--output-metadata` are required; the other files are optional and a missing optional file is skipped. `--budget` must be a positive integer. A missing required file exits `1` with the path; a prompt that cannot be brought within the budget exits `2` after writing both outputs, with `hardFailed` set in the metadata.
+
+### Review lanes
+
+```bash
+gsd-tools review-lane plan [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane sections [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane invoke --slug <lane> [--as <name>] [--agent <name>] [--model <id>] [--prompt-file <f>] [--explicit] [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] [--json]
+```
+
+The lane roster is the first-party lanes plus installed third-party lanes. Without `--selected` every lane is used; `--run-dir` (default `.`) is where prompts and results are written; `--repo-root` defaults to the working directory.
+
+- **`plan`** prints a JSON array with one entry per lane: `{ slug, ok, section, transport, promptBudget, promptCapSource, contextWindowTokens, promptPath }`. A lane that cannot run has `ok: false` with a `reason`.
+- **`sections`** prints one `<slug><TAB><reviews section>` line per lane.
+- **`invoke`** runs the lane named by `--slug` and prints its result as JSON; an unknown or not-ok lane prints `{ slug, ok: false, reason, detail }`. `--as <name>` runs the lane as a [reviewer instance](CONFIGURATION.md#review-settings) of that name, writing `gsd-review-<name>.md` under `--run-dir`, with `--model` and `--agent` supplying the instance's model and agent. `--prompt-file` substitutes a different prompt. `--explicit` marks the lane as explicitly requested. A prompt over the lane's cap is refused, never trimmed.
+
+### Loop hooks
+
+```bash
+gsd-tools loop render-hooks <point> [--config-dir <path>] [--runtime <runtime>] [--active-cap <id>] [--after-fingerprint <phase-dir>]
+```
+
+Renders the active loop extension-point hooks for `<point>` (for example `plan:pre`) and prints `{ point, activeHooks, rendered }`, plus `warnings` and `skippedHooks` when there are any. `--config-dir` selects the runtime config directory; `--runtime` names the runtime explicitly instead of using the persisted one; `--active-cap <id>` makes the command print only `true` or `false`, whether that capability has an active hook at the point; `--after-fingerprint` drops `verify:post` steps whose declared artifact already exists in that phase directory, and errors when the directory cannot be read. Any other `loop` subcommand is an error.
+
+### Assumption delta
+
+```bash
+gsd-tools assumption-delta scan <phase> [--terms <csv>] [--json]
+```
+
+Reads the phase section the way `roadmap get-phase` does and runs the deterministic assumption-delta detector for the advisory architecture checkpoint, printing its result as JSON. `--terms` replaces the default pluralization cues with a comma-separated list; the list is lower-cased, de-duplicated and reduced to alphanumerics, and an empty or flag-shaped value restores the defaults. A missing or flag-shaped `<phase>` is a usage error.
+
+### Commit guard
+
+```bash
+gsd-tools check-commit
+gsd-tools commit-docs-guard enable
+gsd-tools commit-docs-guard disable
+```
+
+`check-commit` inspects the staged files and, when `.planning/` files are staged, allows the commit only if `commit_docs` resolves to `true` (phase-level or project-level); otherwise it exits with an error that lists the files and how to unstage them. It prints `{ allowed: true, reason }` with `reason` one of `phase_commit_docs_true`, `commit_docs_enabled` or `no_planning_files_staged`; `--raw` prints `allowed`.
+
+`commit-docs-guard enable` installs a GSD-marked `pre-commit` hook and prints `{ enabled: true, action, path }` with `action` `written` or `already_enabled`. It refuses outside a git repository and when `core.hooksPath` is set (the hook would never run). `commit-docs-guard disable` removes that hook and prints `{ disabled: true, action, path }` with `action` `removed` or `noop`; it refuses to remove a `pre-commit` hook that does not carry the GSD marker.
+
+### Workstreams
+
+```bash
+gsd-tools workstream create <name> [--migrate-name <name>] [--no-migrate]
+gsd-tools workstream list
+gsd-tools workstream get
+gsd-tools workstream set <name>
+gsd-tools workstream progress
+```
+
+- **`create`** makes `.planning/workstreams/<name>/` with its `STATE.md` and `phases/` and prints `{ created, workstream, path, state_path, phases_path, migration, active }`. When the project is still in flat mode (no `workstreams/` directory) and already has a `ROADMAP.md`, `STATE.md` or `phases/`, the existing work is first migrated into a workstream named after the current milestone (or `default`): `--migrate-name` chooses that name and `--no-migrate` skips the migration. An existing workstream prints `{ created: false, error: "already_exists" }`.
+- **`list`** prints `{ mode, workstreams }`; each entry has `name`, `path`, `has_roadmap`, `has_state`, `status`, `milestone_shipped_unverified`, `current_phase`, `phase_count` and `completed_phases`.
+- **`get`** prints `{ active, mode }`; `active` is `null` when no workstream is active.
+- **`set <name>`** makes the workstream active and prints `{ active, set: true }`; an unknown name prints `{ active: null, error: "not_found", workstream }`.
+- **`progress`** prints `{ mode, active, workstreams }`; each entry has `name`, `active`, `status`, `milestone_shipped_unverified`, `current_phase`, `phases` and `plans` as completed-over-total strings such as `0/1`, and `progress_percent`.
+
+### Environment and codebase-map helpers
+
+```bash
+gsd-tools config-path
+gsd-tools skills-root <runtime>
+gsd-tools update-context [--runtime <runtime>] [--config-dir <path>] [--json]
+gsd-tools normalize-test-command <command> [--cwd <dir>]
+gsd-tools stamp-codebase-map [--files <names>]
+```
+
+- **`config-path`** prints the resolved `config.json` path as plain text; it is the workstream's config when a workstream is active.
+- **`skills-root <runtime>`** prints `{ "skills_root": "<path>" }`, the global skills directory of the runtime. An unregistered runtime id is an error, and a missing argument is a usage error.
+- **`update-context`** probes the runtime config directories for an installed GSD and prints `{ installedVersion, scope, runtime, gsdDir }`; `scope` is `LOCAL` or `GLOBAL`, and with no install found it prints version `0.0.0`, scope `UNKNOWN` and empty `runtime` and `gsdDir`. `--config-dir` names a preferred install directory, probed first, and `--runtime` names the preferred runtime.
+- **`normalize-test-command <command>`** prints the command rewritten to a one-shot form so a watch-mode runner cannot hang a verification gate: `vitest` becomes `vitest run`, `jest --watch` becomes `jest --watchAll=false`, a package-manager `test` script whose `package.json` runs vitest or jest in watch mode gets a `CI=true` prefix, and any other command is printed unchanged. `--cwd` locates `package.json`.
+- **`stamp-codebase-map`** stamps the codebase map documents under `.planning/codebase/` with the current `HEAD` commit and date. It never fails the caller: with no `.planning/codebase/`, outside a git repository or with no map documents it prints `{ stamped: [], commit: null, stamped_at: null, skipped: true, reason }`. `--files <names>` restricts the stamp to the named map documents; an unknown name or an empty value is skipped with a reason.
 
 ## Utility Commands
 

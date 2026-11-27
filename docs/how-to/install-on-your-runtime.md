@@ -2,7 +2,7 @@
 
 Install GSD Core (`@opengsd/gsd-core`) into the AI coding runtime you use every day. This guide gives you the standard installer path for each supported runtime, then covers the manual path for machines without Node.js.
 
-**What you need:** Node.js 18+ and npm (or npx). If you do not have Node.js, jump to [Installing without Node.js](#installing-without-nodejs).
+**What you need:** Node.js 24+ and npm 10+ (or npx). If you do not have Node.js, jump to [Installing without Node.js](#installing-without-nodejs).
 
 ---
 
