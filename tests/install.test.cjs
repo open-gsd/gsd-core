@@ -7958,8 +7958,9 @@ describe('#3026: installer --help documents every accepted runtime flag', () => 
       '--claude', '--opencode', '--kilo', '--codex', '--kimi',
       '--copilot', '--antigravity', '--cursor', '--windsurf', '--augment',
       '--trae', '--qwen', '--hermes', '--cline', '--codebuddy',
-      '--zcode', '--pi', '--gemini',
+      '--zcode', '--pi',
     ];
+    // --gemini is retired (#1928, #6743): the installer refuses it, so --help must not list it.
 
     const missing = acceptedRuntimeFlags.filter(
       f => !EXCLUDED_FLAGS.has(f) && !helpText.includes(f),
