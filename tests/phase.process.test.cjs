@@ -14,8 +14,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { createFixture, seedPhase } = require('./fixtures/index.cjs');
+const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runGsdTools, createTempProject, cleanup, absPlanningPath } = require('./helpers.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // phase number allocation across sibling git worktrees (#3849)
@@ -790,5 +792,174 @@ describe('phase add --ws workstream-scoped allocation vs sibling git worktrees (
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.next, '02.1', 'next-decimal was never sibling-widened; the fix must not change it');
+  });
+});
+
+describe('planning threat-ID revision issues from fresh plans', () => {
+  let root;
+  const fragment = path.join(__dirname, '..', 'gsd-core/workflows/plan-phase/steps/threat-id-check.md');
+  const importWorkflow = path.join(__dirname, '..', 'gsd-core/workflows/import.md');
+  const tools = path.join(__dirname, '..', 'gsd-core/bin/gsd-tools.cjs');
+  function extractScanBlock() {
+    const content = fs.existsSync(fragment) ? fs.readFileSync(fragment, 'utf8') : '';
+    const after = content.split('## After planning')[1] || '';
+    return after.split('```bash')[1]?.split('```')[0] || '';
+  }
+  function extractImportCommitBlock() {
+    const finalize = fs.readFileSync(importWorkflow, 'utf8').split('<step name="plan_finalize">')[1] || '';
+    return finalize.split('```bash')[1]?.split('```')[0] || '';
+  }
+  function runScan({ workstream = '', phase = '47', cli = 'node "$GSD_TEST_TOOLS" "$@"', importCommit = false, unset = '' } = {}) {
+    const script = [
+      'set -u',
+      `gsd_run() { if [[ "$*" == 'query commit '* ]]; then echo 'commit reached'; else ${cli}; fi; }`,
+      unset,
+      importCommit ? extractImportCommitBlock() : `${extractScanBlock()}\nprintf "%s" "$THREAT_ID_ISSUES"`,
+    ].join('\n');
+    const scriptPath = path.join(root, 'threat-scan.sh');
+    fs.writeFileSync(scriptPath, script);
+    const result = runHook(scriptPath, [], {
+      interpreter: 'bash',
+      cwd: root,
+      env: { ...process.env, GSD_TEST_TOOLS: tools, PHASE: phase, GSD_WS: workstream },
+      // Bash launches the CLI and the issue projection as separate Node processes.
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    assert.equal(result.outcome, OUTCOME.EXITED, result.stderr);
+    return result;
+  }
+  beforeEach(() => { root = fs.realpathSync(createFixture()); });
+  afterEach(() => cleanup(root));
+  function plan(id) {
+    return `---\nphase: 47\nplan: 01\n---\n<threat_model>\n| Threat ID | Category |\n|---|---|\n| ${id} | Tampering |\n| T-47-SC | Tampering |\n</threat_model>\n`;
+  }
+  function scan(options) {
+    const result = runScan(options);
+    assert.equal(result.exitCode, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  }
+  test('zero register claimants produces no revision issues', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': '# No register' });
+    assert.deepEqual(scan(), []);
+  });
+  test('one claimant produces no revision issues', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01') });
+    assert.deepEqual(scan(), []);
+  });
+  test('fresh scan catches a second claimant written after initialization', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01') });
+    assert.deepEqual(scan(), []);
+    seedPhase(root, '47-security', { '47-02-PLAN.md': plan('T-47-01') });
+    const issues = scan();
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].severity, 'blocker');
+    assert.equal(issues[0].dimension, 'threat_id_uniqueness');
+    assert.equal(issues[0].plan, '47-01-PLAN.md, 47-02-PLAN.md');
+    assert.match(issues[0].description, /T-47-01/);
+  });
+  test('distinct rows and shared reserved SC produce no revision issues', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01'), '47-02-PLAN.md': plan('T-47-02') });
+    assert.deepEqual(scan(), []);
+  });
+  test('a workstream collision blocks revision even when the root phase is clear', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01') });
+    const stream = absPlanningPath(root, 'workstreams', 'feature', 'phases', '47-security');
+    fs.mkdirSync(stream, { recursive: true });
+    for (const number of ['01', '02']) {
+      fs.writeFileSync(path.join(stream, `47-${number}-PLAN.md`), plan('T-47-01'));
+    }
+
+    assert.deepEqual(scan(), []);
+    const issues = scan({ workstream: '--ws feature' });
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].dimension, 'threat_id_uniqueness');
+    assert.match(issues[0].required_property, /at most one live plan/);
+    assert.match(issues[0].description, /T-47-01.*47-01-PLAN.*47-02-PLAN/);
+  });
+  test('an unresolved phase reports the missing phase and blocks planning', () => {
+    const result = runScan({ phase: '99' });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /threat-ID scan phase not found/);
+    assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
+    assert.equal(result.stdout, '');
+  });
+  test('a failed scan blocks planning', () => {
+    const result = runScan({ cli: 'return 3' });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /BLOCKED: threat-ID scan failed/);
+    assert.equal(result.stdout, '');
+  });
+  test('missing scan fields block planning', () => {
+    const result = runScan({ cli: "printf '%s' '{}'" });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
+    assert.equal(result.stdout, '');
+  });
+  test('an imported colliding plan cannot reach the commit boundary', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01') });
+    const clear = runScan({ importCommit: true });
+    assert.equal(clear.exitCode, 0, clear.stderr);
+    assert.match(clear.stdout, /^commit reached/m);
+    seedPhase(root, '47-security', { '47-02-PLAN.md': plan('T-47-01') });
+
+    const result = runScan({ importCommit: true });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /BLOCKED: imported plan threat-ID scan did not clear.*T-47-01/);
+    assert.equal(result.stdout, '');
+  });
+  for (const [variable, message] of [
+    ['PHASE', /needs a phase/],
+    ['GSD_WS', /needs explicit workstream scope/],
+  ]) {
+    test(`a missing ${variable} binding blocks the scan`, () => {
+      const result = runScan({ unset: `unset ${variable}`, cli: `printf '%s' '{"phase_found":true,"threat_id_duplicates":[],"threat_id_duplicate_count":0}'` });
+      assert.notEqual(result.exitCode, 0);
+      assert.match(result.stderr, message);
+      assert.equal(result.stdout, '');
+    });
+  }
+  for (const [name, duplicates, count] of [
+    ['a mismatched count', [], 1],
+    ['an invalid ID', [{ id: 47, plans: ['01', '02'] }], 1],
+    ['a single reported claimant', [{ id: 'T-47-01', plans: ['01'] }], 1],
+  ]) {
+    test(`scan validation rejects ${name}`, () => {
+      const payload = JSON.stringify({ phase_found: true, threat_id_duplicates: duplicates, threat_id_duplicate_count: count });
+      const result = runScan({ cli: `printf '%s' '${payload}'` });
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
+    });
+  }
+  test('import commit fence embeds the same threat-ID scan block as threat-id-check.md', () => {
+    const scanBlock = extractScanBlock().trim();
+    const commitBlock = extractImportCommitBlock();
+    assert.ok(scanBlock.length > 0, 'threat-id-check.md scan block must be present');
+    assert.ok(commitBlock.includes(scanBlock), 'import.md plan_finalize commit fence must embed the canonical scan block');
+  });
+  test('collision threshold preserves every claimant across generated plan sets', () => {
+    const fc = require('fast-check');
+    fc.assert(fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 9 }), { minLength: 3, maxLength: 3 }), planIds => {
+      for (const [index, planId] of planIds.entries()) {
+        seedPhase(root, '47-security', { [`47-0${planId}-PLAN.md`]: plan('T-47-01') });
+        const issues = scan();
+        if (index === 0) assert.deepEqual(issues, []);
+        else {
+          assert.equal(issues.length, 1);
+          assert.equal(issues[0].plan, planIds.slice(0, index + 1).map(id => `47-0${id}-PLAN.md`).sort().join(', '));
+        }
+      }
+      for (const id of planIds) fs.unlinkSync(absPlanningPath(root, 'phases', '47-security', `47-0${id}-PLAN.md`));
+    }), { numRuns: 10, seed: 5995 });
+  });
+  test('file-backed scan data uses the same validation as inline data', () => {
+    const payload = '{"phase_found":true,"threat_id_duplicates":[],"threat_id_duplicate_count":0}';
+    fs.writeFileSync(path.join(root, 'scan.json'), payload);
+    const options = { cli: "printf '%s' '@file:scan.json'" };
+    assert.deepEqual(scan(options), []);
+
+    fs.unlinkSync(path.join(root, 'scan.json'));
+    const result = runScan(options);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /BLOCKED: cannot read threat-ID scan payload/);
   });
 });

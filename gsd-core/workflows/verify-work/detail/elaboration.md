@@ -104,6 +104,7 @@ Agent(
 <planning_context>
 
 **Phase:** {phase_number}
+**Workstream option:** {GSD_WS} (empty for root)
 **Mode:** gap_closure
 
 <required_reading>
@@ -167,6 +168,7 @@ Agent(
 <verification_context>
 
 **Phase:** {phase_number}
+**Workstream option:** {GSD_WS} (empty for root)
 **Phase Goal:** Close diagnosed gaps from UAT
 
 <required_reading>
@@ -207,6 +209,7 @@ Agent(
 <revision_context>
 
 **Phase:** {phase_number}
+**Workstream option:** {GSD_WS} (empty for root)
 **Mode:** revision
 
 <required_reading>

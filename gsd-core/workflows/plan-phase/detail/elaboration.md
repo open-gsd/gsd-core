@@ -240,12 +240,12 @@ After the script returns, check that the bounced file still has valid YAML front
 
 **After all plans are bounced:**
 
-5. **Re-run plan checker on bounced plans:** Spawn gsd-plan-checker (same as step 10) on all modified plans. If a bounced plan fails the checker, restore original from its pre-bounce.md backup:
+5. **Re-run plan checker on bounced plans (conditional):** If the plan checker is enabled and verification was not skipped (`--skip-verify` not set), spawn gsd-plan-checker (same as step 10) on all modified plans. If a bounced plan fails the checker, restore original from its pre-bounce.md backup:
 ```
 ⚠ Bounced plan ${PLAN_FILE} failed checker validation — restoring original from pre-bounce backup.
 ```
 
-6. **Commit surviving bounced plans:** If at least one plan survived both the frontmatter validation and the checker re-run, commit the changes:
+6. **Scan threat IDs and commit surviving bounced plans:** If at least one plan survived both the frontmatter validation and any checker re-run, run `plan-phase/steps/threat-id-check.md` § After planning using `PHASE` and the normalized `GSD_WS` before committing. If `THREAT_ID_ISSUES` is non-empty, restore the pre-bounce.md backups for the colliding plans and rescan; if collisions still remain (or the scan fails), display `THREAT_ID_ISSUES` and STOP without committing. Only when `THREAT_ID_ISSUES` is `[]` and at least one bounced plan still survives, commit the changes:
 ```bash
 gsd_run query commit "refactor(${padded_phase}): bounce plans through external refinement" --files "${PHASE_DIR}/*-PLAN.md"
 ```

@@ -873,6 +873,42 @@ describe('#3771 preserves everything that legitimately binds', () => {
     assert.match(UI_PHASE, /## 9\. Revision Loop \(Max 2 Iterations\)/);
   });
 
+  test('phase threat-ID collisions stop before offering a revision override', () => {
+    const revision = PLAN_PHASE.split('## 12. Revision Loop')[1].split('## 12.5. Plan Bounce')[0];
+    const limit = revision.split('**If iteration_count >= 3:**')[1];
+    const threatCheck = read('gsd-core', 'workflows', 'plan-phase', 'steps', 'threat-id-check.md');
+    const stallSection = threatCheck.split('### Revision stall')[1];
+    assert.match(revision, /Stall detection:[^\n]*`issue_count >= prev_issue_count`:[^\n]*THREAT_ID_ISSUES[^\n]*STOP without committing; otherwise apply/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(stallSection, /When stalled \(`issue_count >= prev_issue_count`\)[^\n]*threat-ID issues remain[^\n]*STOP without committing/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(limit, /THREAT_ID_ISSUES[^\n]*STOP without committing[\s\S]*Only if `THREAT_ID_ISSUES` is `\[\]`, offer/); // allow-test-rule: source-text-is-the-product (#5995)
+  });
+
+  test('every plan-committing path scans threat IDs before commit and states the non-empty disposition', () => {
+    const elaboration = read('gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md');
+    const bounceDetail = elaboration.split('## 12.5.')[1] || elaboration.split('5. **Re-run plan checker')[1];
+    const step13d = PLAN_PHASE.split('## 13d. Commit Plans')[1].split('## 13e.')[0];
+    const chunked = read('gsd-core', 'workflows', 'plan-phase', 'steps', 'chunked-planning-mode.md');
+    const perEntry = chunked.split('7. **Commit, per entry')[1];
+    const plannerCommit = PLANNER.split('<step name="git_commit">')[1].split('</step>')[0];
+    const importWorkflow = read('gsd-core', 'workflows', 'import.md');
+    const importValidate = importWorkflow.split('<step name="plan_validate">')[1].split('</step>')[0];
+    const importFinalize = importWorkflow.split('<step name="plan_finalize">')[1].split('</step>')[0];
+
+    assert.match(bounceDetail, /plan checker is enabled and verification was not skipped[\s\S]*threat-id-check\.md[\s\S]*THREAT_ID_ISSUES` is non-empty[^\n]*restore[^\n]*STOP without committing[\s\S]*gsd_run query commit/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(step13d, /threat-id-check\.md[^\n]*THREAT_ID_ISSUES` is non-empty, do not run the commit block below[\s\S]*gsd_run query commit/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(perEntry, /threat-id-check\.md[^\n]*`PHASE` and the normalized `GSD_WS`[\s\S]*stop\s+before committing[\s\S]*gsd_run query commit/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(plannerCommit, /Quick and quick-batch[^\n]*Skip this entire step[\s\S]*For phase-scoped plans[^\n]*threat-id-check\.md[^\n]*THREAT_ID_ISSUES` is non-empty, do not run the commit block below[\s\S]*gsd_run query commit/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(importValidate, /threat-id-check\.md[^\n]*`PHASE` and `GSD_WS`/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(importFinalize, /THREAT_ID_ISSUES=\$\([\s\S]*if \[\[ "\$\{THREAT_ID_ISSUES:-\}" != "\[\]" \]\]; then[\s\S]*exit 1[\s\S]*gsd_run query commit/); // allow-test-rule: source-text-is-the-product (#5995)
+  });
+
+  test('plan-checker skips threat-ID uniqueness in quick modes', () => {
+    const threatDim = PLAN_CHECKER.split('## Threat-ID uniqueness')[1].split('## Dimension 1:')[0];
+    const checkerUse = read('gsd-core', 'workflows', 'plan-phase', 'steps', 'threat-id-check.md').split('### Plan-checker use')[1];
+    assert.match(threatDim, /Skip in `quick`, `quick-full`, and `quick-batch-item` modes[^\n]*threat-id-check\.md § Plan-checker use/); // allow-test-rule: source-text-is-the-product (#5995)
+    assert.match(checkerUse, /Skip this dimension for `quick`, `quick-full`, and `quick-batch-item` modes/); // allow-test-rule: source-text-is-the-product (#5995)
+  });
+
   test('required task fields and decision coverage still hold', () => {
     assert.match(PLAN_CHECKER, /\*\*FAIL the verification\*\* if any requirement ID from the roadmap is absent/);
     assert.match(PLANNER_REVISION, /\*\*DO NOT:\*\* Rewrite entire plans for minor issues/);

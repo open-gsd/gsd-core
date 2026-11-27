@@ -103,19 +103,18 @@ Goal-backward verification works backwards from outcome:
 
 Then verify each level against the actual plan files.
 
-**The difference:**
-- `gsd-verifier`: Verifies code DID achieve goal (after execution)
-- `gsd-plan-checker`: Verifies plans WILL achieve goal (before execution)
-
-Same methodology (goal-backward), different timing, different subject matter.
+**The difference:** `gsd-verifier` checks code after execution; `gsd-plan-checker` checks plans before execution.
 </core_principle>
 
 <verification_dimensions>
 
+## Threat-ID uniqueness
+Skip in `quick`, `quick-full`, and `quick-batch-item` modes. Else apply @__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/plan-phase/steps/threat-id-check.md § Plan-checker use.
+
 At decision points during plan verification, apply structured reasoning:
 @__GSD_PI_ENGINE_ROOT__/gsd-core/references/thinking-models-planning.md
 
-For calibration on scoring and issue identification, reference these examples:
+Calibration examples:
 @__GSD_PI_ENGINE_ROOT__/gsd-core/references/few-shot-examples/plan-checker.md
 
 ## Dimension 1: Requirement Coverage

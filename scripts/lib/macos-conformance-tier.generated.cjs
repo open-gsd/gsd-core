@@ -202,6 +202,7 @@ module.exports = {
   "tests/phase-id.test.cjs",
   "tests/phase-status.test.cjs",
   "tests/phase.platform.test.cjs",
+  "tests/phase.process.test.cjs",
   "tests/phase.test.cjs",
   "tests/pi-dispatch.test.cjs",
   "tests/pi-package.test.cjs",
