@@ -2,25 +2,18 @@
 'use strict';
 
 /**
- * gen-coverage-matrix.cjs — #6771 (documentation audit #6723).
+ * gen-coverage-matrix.cjs (#6771): generates docs/reference/coverage-matrix.md, one row per slash command,
+ * `gsd-tools` verb, config key, agent, hook, template and installer flag: where it is documented, whether each
+ * option is documented there, and the Diataxis type of that page. Each item list is read from the surface's own
+ * source and each verdict is a mechanical check of the docs text, so `--check` fails when the page is stale.
  *
- * Generates docs/reference/coverage-matrix.md: one row per shipped slash command,
- * `gsd-tools` verb, config key, agent, hook, template and installer flag, with
- * where it is documented, whether each of its options is documented there, and the
- * Diataxis type of the page that documents it. Every item list is read from the
- * surface's own source of truth (never from the docs), and every "documented"
- * verdict is a mechanical check on the docs text, so the committed page cannot rot:
- * `--check` fails when it differs from a fresh run.
- *
- * Usage:
  *   node scripts/gen-coverage-matrix.cjs            # print to stdout
  *   node scripts/gen-coverage-matrix.cjs --write    # write the committed file
  *   node scripts/gen-coverage-matrix.cjs --check    # exit 1 if the committed file is stale
  *   node scripts/gen-coverage-matrix.cjs --strict   # exit 1 if any item or option is undocumented
  *
- * The pure functions (parseSections, githubAnchor, flagsOf, sectionsMentioning,
- * buildModel, renderMatrix) take their inputs as arguments so tests drive them with
- * fixtures; `collectInputs` is the only function that reads the repository.
+ * The pure functions take their inputs as arguments so tests drive them with fixtures; `collectInputs` is the
+ * only function that reads the repository.
  */
 
 const fs = require('fs');
@@ -92,8 +85,11 @@ function flagsOf(text) {
   return [...new Set(String(text || '').match(FLAG_RE) || [])];
 }
 
+let escapeRegexImpl = null;
+/** The repo's own escaper (`src/pattern.cts`), loaded on first use: it is compiled output, built by `collectInputs`. */
 function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (escapeRegexImpl === null) escapeRegexImpl = require('../gsd-core/bin/lib/pattern.cjs').escapeRegex;
+  return escapeRegexImpl(s);
 }
 
 /** True when `flag` occurs in `text` as a whole token (so `--ws` does not match `--wsx`). */
@@ -367,7 +363,7 @@ function installerFlagsFromHelp() {
     env: { ...process.env, NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0' },
   });
   if (r.status !== 0) throw new ExitError(1, `node bin/install.js --help exited with status ${r.status}`);
-  const text = r.stdout.replace(/\x1b\[[0-9;]*m/g, '');
+  const text = r.stdout.replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
   const flags = new Set();
   for (const line of text.split('\n')) {
     if (!/^\s+(-[a-z]\b|--[a-z])/.test(line)) continue;

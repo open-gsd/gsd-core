@@ -11,8 +11,8 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | Surface | Items | Documented | Fully documented | Missing items | Missing options |
 |---------|------:|-----------:|-----------------:|--------------:|----------------:|
 | [Slash commands](#slash-commands) | 72 | 72 | 72 | 0 | 0 |
-| [`gsd-tools` verbs](#gsd-tools-verbs) | 96 | 74 | 68 | 22 | 10 |
-| [Config keys](#config-keys) | 129 | 129 | 125 | 0 | 12 |
+| [`gsd-tools` verbs](#gsd-tools-verbs) | 96 | 96 | 96 | 0 | 0 |
+| [Config keys](#config-keys) | 129 | 129 | 129 | 0 | 0 |
 | [Agents](#agents) | 36 | 36 | 36 | 0 | 0 |
 | [Hooks](#hooks) | 29 | 29 | 29 | 0 | 0 |
 | [Templates](#templates) | 39 | 39 | 39 | 0 | 0 |
@@ -107,25 +107,25 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
-| `agent-skills` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/2 | `--skills-only` |
-| `assumption-delta.scan` | — | — | 0/2 | `--json`, `--terms` |
-| `check-commit` | — | — | n/a | — |
+| `agent-skills` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
+| `assumption-delta.scan` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
+| `check-commit` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `classify-confidence` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
 | `commit` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
-| `commit-docs-guard.disable` | — | — | n/a | — |
-| `commit-docs-guard.enable` | — | — | n/a | — |
+| `commit-docs-guard.disable` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
+| `commit-docs-guard.enable` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `commit-to-subrepo` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `config-ensure-section` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `config-new-project` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `config-path` | — | — | n/a | — |
+| `config-path` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `config-set` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `config-set-model-profile` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `context-predicates` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
 | `current-timestamp` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `detect-custom-files` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `dispatch-capacity` | — | — | 0/1 | `--json` |
-| `dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/7 | `--cwd-target`, `--prompt`, `--renew-held` |
-| `dispatch-should-flatten` | — | — | 0/1 | `--json` |
+| `dispatch-capacity` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
+| `dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 7/7 | — |
+| `dispatch-should-flatten` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `drift-guard.authority` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `drift-guard.phase-status` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `drift-guard.severity` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
@@ -135,7 +135,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `frontmatter.set` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
 | `frontmatter.validate` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `history-digest` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `inspect-dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/6 | `--cwd-target`, `--prompt` |
+| `inspect-dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 6/6 | — |
 | `learnings.copy` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `learnings.delete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `learnings.list` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
@@ -143,27 +143,27 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `learnings.query` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `list-seeds` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `list-todos` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `loop.render-hooks` | — | — | 0/4 | `--active-cap`, `--after-fingerprint`, `--config-dir`, `--runtime` |
+| `loop.render-hooks` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
 | `migrate-config` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `milestone.archive-quick` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `milestone.complete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 7/8 | `--archive-phases` |
-| `normalize-test-command` | — | — | n/a | — |
+| `milestone.complete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 8/8 | — |
+| `normalize-test-command` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `package-legitimacy.check` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 1/1 | — |
 | `phase-plan-index` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `pr-subrepo` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
 | `progress.bar` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `project-context` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
 | `project-instruction-file` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `prompt-budget` | — | — | 0/12 | `--budget`, `--context-file`, `--instructions-file`, `--output-metadata`, `--output-prompt`, `--plan-file`, `--project-file`, `--project-md-head-lines`, `--requirements-file`, `--research-file`, `--roadmap-file`, `--safety-margin-pct` |
+| `prompt-budget` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 12/12 | — |
 | `quick-tasks-append` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 5/5 | — |
 | `quick-tasks-migrate` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `record-dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 6/7 | `--worktree` |
+| `record-dispatch-isolation` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 7/7 | — |
 | `research-plan` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `research-store.get` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `research-store.put` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 5/5 | — |
 | `resolve-agent` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 4/4 | — |
-| `resolve-dispatch-type` | — | — | 0/2 | `--json`, `--requested` |
-| `resolve-execution` | — | — | 0/5 | `--attempt`, `--effort`, `--failure-class`, `--fast-mode`, `--host` |
+| `resolve-dispatch-type` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
+| `resolve-execution` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 5/5 | — |
 | `resolve-granularity` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `resolve-model` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `resolve-package-manager` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
@@ -172,14 +172,14 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `review-lane.dispatch-step` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 8/8 | — |
 | `review-lane.explicit-from-argv` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
 | `review-lane.flags` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 3/3 | — |
-| `review-lane.invoke` | — | — | 0/10 | `--agent`, `--as`, `--explicit`, `--json`, `--model`, `--prompt-file`, `--repo-root`, `--run-dir`, `--selected`, `--slug` |
-| `review-lane.plan` | — | — | 0/3 | `--repo-root`, `--run-dir`, `--selected` |
-| `review-lane.sections` | — | — | 0/3 | `--repo-root`, `--run-dir`, `--selected` |
+| `review-lane.invoke` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 10/10 | — |
+| `review-lane.plan` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
+| `review-lane.sections` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
 | `runtime-identity` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | n/a | — |
 | `scaffold` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
 | `select-revert-commits` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
-| `skills-root` | — | — | n/a | — |
-| `stamp-codebase-map` | — | — | 0/1 | `--files` |
+| `skills-root` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
+| `stamp-codebase-map` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `state-snapshot` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `stats.json` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `summary-extract` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
@@ -191,17 +191,17 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `uat.classify-coverage` | [COMMANDS.md#gsd-core-command-reference](../COMMANDS.md#gsd-core-command-reference) | Reference | 2/2 | — |
 | `uat.complete-session` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `uat.render-checkpoint` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
-| `update-context` | — | — | 0/3 | `--config-dir`, `--json`, `--runtime` |
+| `update-context` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 3/3 | — |
 | `user-story.validate` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `verify-path-exists` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `verify-summary` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 1/1 | — |
 | `websearch` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
 | `workstream.complete` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
-| `workstream.create` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 0/2 | `--migrate-name`, `--no-migrate` |
-| `workstream.get` | — | — | n/a | — |
-| `workstream.list` | — | — | n/a | — |
-| `workstream.progress` | — | — | n/a | — |
-| `workstream.set` | — | — | n/a | — |
+| `workstream.create` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | 2/2 | — |
+| `workstream.get` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
+| `workstream.list` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
+| `workstream.progress` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
+| `workstream.set` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 | `workstream.status` | [CLI-TOOLS.md#gsd-cli-tools-reference](../CLI-TOOLS.md#gsd-cli-tools-reference) | Reference | n/a | — |
 
 ## Config keys
@@ -213,7 +213,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | Item | Documented in | Type | Options | Missing |
 |------|---------------|------|--------:|---------|
 | `agent_skills_security.trusted_global_roots` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `agent_tools` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (prose) | Reference | 0/3 | `type`, `default`, `effect` |
+| `agent_tools` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `audit.enabled` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `brave_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `capabilities.auto_update` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
@@ -224,7 +224,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `code_quality.fallow.mcp` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `code_quality.fallow.profile` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `code_quality.fallow.scope` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `commit_docs` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (prose) | Reference | 0/3 | `type`, `default`, `effect` |
+| `commit_docs` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `context` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `context_window` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `effort.default` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
@@ -286,7 +286,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `planning.sub_repos` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `project_code` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `ref_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `resolve_model_ids` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (prose) | Reference | 0/3 | `type`, `default`, `effect` |
+| `resolve_model_ids` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `response_language` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `review.default_reviewers` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `review.max_prompt_tokens` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
@@ -296,7 +296,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `search_gitignored` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `security.injection_blocking` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `serply_search` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
-| `ship.pr_body_sections` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (prose) | Reference | 0/3 | `type`, `default`, `effect` |
+| `ship.pr_body_sections` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `statusline.context_position` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `statusline.show_context_tokens` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
 | `statusline.show_git` | [CONFIGURATION.md#gsd-configuration-reference](../CONFIGURATION.md#gsd-configuration-reference) (table) | Reference | 3/3 | — |
