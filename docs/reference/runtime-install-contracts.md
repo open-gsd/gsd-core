@@ -10,7 +10,7 @@ A global install on Claude Code lands here; the per-runtime roots are the `Globa
 ~/.claude/                          # Claude Code (global install)
 ├── skills/gsd-ns-*/SKILL.md        # Global skills — nesting runtimes: 6 namespace routers (authoritative roster: docs/INVENTORY.md)
 │   └── skills/<name>/SKILL.md     #   concrete skills nested under each router
-│   (flat runtimes: skills/gsd-*/SKILL.md — all ~67 skills at top level)
+│   (flat runtimes: skills/gsd-*/SKILL.md — all 72 skills at top level)
 ├── commands/gsd/*.md               # Local Claude installs use slash commands instead of global skills
 ├── gsd-core/
 │   ├── bin/gsd-tools.cjs           # CLI utility

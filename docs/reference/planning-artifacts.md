@@ -25,8 +25,8 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 │   ├── FEATURES.md
 │   ├── ARCHITECTURE.md
 │   └── PITFALLS.md
-├── codebase/                           # Codebase maps (from /gsd-map-codebase or /gsd-onboard, optional)
-│   ├── STACK.md                        # YAML frontmatter carries last_mapped_commit (#2003)
+├── codebase/                           # Codebase maps (from /gsd-map-codebase or /gsd-onboard, optional); YAML frontmatter in each carries last_mapped_commit (#2003)
+│   ├── STACK.md
 │   ├── INTEGRATIONS.md
 │   ├── ARCHITECTURE.md
 │   ├── STRUCTURE.md                    # The post-execute drift gate compares new structure against this map
@@ -47,12 +47,14 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 │       ├── <NN>-<PP>-PLAN.md           # Executable plan (plan-phase, one per plan)
 │       ├── <NN>-<PP>-SUMMARY.md        # Execution record (execute-phase, one per plan)
 │       ├── <NN>-VERIFICATION.md        # Phase goal verification report (verify-phase)
+│       ├── <NN>-UI-SPEC.md             # UI design contract (ui-phase)
+│       ├── <NN>-UI-REVIEW.md           # Visual audit scores (ui-review)
 │       ├── <NN>-UAT.md                 # Persistent UAT session state (execute-phase)
 │       └── .continue-here.md           # Resume instructions after pause (pause-work, phase scope)
 ├── quick/                              # Quick tasks (from /gsd-quick)
 │   └── YYMMDD-xxx-slug/
-│       ├── PLAN.md
-│       └── SUMMARY.md
+│       ├── <quick_id>-PLAN.md
+│       └── <quick_id>-SUMMARY.md
 ├── todos/                              # Captured todos (from /gsd-capture, default mode)
 │   ├── pending/                        # Open captures
 │   └── completed/                      # Completed todos
@@ -64,8 +66,8 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 │   └── knowledge-base.md               # Persistent debug learnings
 ├── spikes/                             # Spike artifacts (from /gsd-spike)
 ├── sketches/                           # Sketch artifacts (from /gsd-sketch)
-├── deliberations/                      # Deliberation records (discuss-phase scope)
-├── async-jobs/                         # Background job manifests (transient)
+├── deliberations/                      # Deliberation records (pause-work scope)
+├── async-jobs/                         # Durable background job manifests (from the scheduler-adapter capability; core never writes them)
 ├── ui-reviews/                         # Screenshots from /gsd-ui-review (gitignored)
 └── .continue-here.md                   # pause-work handoff for research or default scope
 ```

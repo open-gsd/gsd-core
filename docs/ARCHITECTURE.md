@@ -13,7 +13,7 @@
 - [Data Flow](#data-flow)
 - [Installer Architecture](#installer-architecture)
 - [Hook System](#hook-system)
-- [CLI Tools Layer](#cli-tools-layer)
+- [CLI Tools](#cli-tools-gsd-corebin)
 - [Runtime Abstraction](#runtime-abstraction)
 
 ---
@@ -872,7 +872,6 @@ The two fire-points are defaults. `hooks.context_warning_threshold` and
 project; see [How to tune the context monitor's fire-points](how-to/tune-the-context-monitor.md)
 for the steps and [context-monitor.md](context-monitor.md) for the threshold
 table, the measurement scale, and the fallback rules.
-
 
 ### Safety Properties
 
