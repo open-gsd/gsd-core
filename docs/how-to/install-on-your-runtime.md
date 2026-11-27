@@ -482,6 +482,30 @@ GSD's hook-automation and native-MCP-registration integrations are not yet wired
 
 ---
 
+### Hermes Agent
+
+```bash
+npx @opengsd/gsd-core@latest --hermes --global
+```
+
+GSD installs under `~/.hermes/` (`./.hermes/` with `--local`):
+
+- **Skills** → `~/.hermes/skills/gsd/`: the six namespace routers (`gsd-ns-workflow`, `gsd-ns-project`, `gsd-ns-review`, `gsd-ns-context`, `gsd-ns-ideate`, `gsd-ns-manage`), each with its concrete skills nested inside. Hermes has a non-recursive skill loader, so only the routers are listed at the top level.
+- **Agents** → `~/.hermes/agents/gsd-<name>.md`
+- **Hooks** → `~/.hermes/hooks/`, registered in `~/.hermes/settings.json`
+
+**Override the install directory:** set `HERMES_HOME`, or pass `--config-dir <path>` (which takes priority):
+
+```bash
+HERMES_HOME=~/.hermes-alt npx @opengsd/gsd-core@latest --hermes --global
+```
+
+The context monitor hook is not registered on Hermes: nothing there writes the context metrics it reads, so the agent-facing context warnings do not appear. The installer sets `resolve_model_ids: "omit"` and `runtime: "hermes"` in `~/.gsd/defaults.json`.
+
+Open a blank directory in Hermes Agent and run `/gsd-new-project`.
+
+---
+
 ### pi
 
 ```bash
