@@ -312,17 +312,14 @@ const { resolveProjectContext, legacyDispatchCwd } = require('./lib/project-cont
 // from process.cwd() at module load).
 function warnOnCliSkew(ctx) {
   try {
-    const _skew = require('./lib/cli-skew-check.cjs');
-    const _skewRoot = ctx.projectRoot;
-    if (_skewRoot) {
-      const _skewLocal = path.join(_skewRoot, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
-      const _skewWarn = _skew.checkCliSkew({
-        resolvedPath: path.resolve(__filename),
-        projectRoot: _skewRoot,
-        projectLocalExists: fs.existsSync(_skewLocal),
-      });
-      if (_skewWarn) process.stderr.write(_skewWarn + '\n');
-    }
+    const skew = require('./lib/cli-skew-check.cjs');
+    const projectLocal = path.join(ctx.projectRoot, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const warning = skew.checkCliSkew({
+      resolvedPath: path.resolve(__filename),
+      projectRoot: ctx.projectRoot,
+      projectLocalExists: fs.existsSync(projectLocal),
+    });
+    if (warning) process.stderr.write(warning + '\n');
   } catch { /* advisory — never block */ }
 }
 

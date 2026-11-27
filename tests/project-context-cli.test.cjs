@@ -8,6 +8,11 @@
  * project-context` prints the resolved context.
  *
  * Failing-first: RED until the seam, the commit refusal and the verb exist.
+ *
+ * #6820 (Phase 2a of #6044): the second half of this file, from the block
+ * marked `#6820` down, covers the resolver consumers: `uat render-checkpoint`
+ * under a symlinked planning store, verification reading `ctx.projectRoot`, and
+ * the retired `--project-dir` global.
  */
 
 const { describe, test, after } = require('node:test');
@@ -376,6 +381,14 @@ describe('project-context CLI: workspace and verb', () => {
       assert.match(r.output, /Login/);
     });
 
+    test('renderCheckpointAcceptsAChildWhoseNameStartsWithTwoDots', (t) => {
+      const { repo, store } = mkSymlinkedPlanning(t);
+      write(path.join(store, 'phases', PHASE, '..odd-UAT.md'), UAT_BODY);
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/..odd-UAT.md`], repo);
+      assert.equal(r.success, true, r.error);
+      assert.match(r.output, /Login/);
+    });
+
     test('renderCheckpointStillWorksWithARealPlanningDirectory', (t) => {
       const repo = path.join(mkTmp(t), 'repo');
       write(path.join(repo, '.planning', 'phases', PHASE, `${PHASE}-UAT.md`), UAT_BODY);
@@ -390,7 +403,7 @@ describe('project-context CLI: workspace and verb', () => {
       write(evil, UAT_BODY);
       const r = runGsdTools(['uat', 'render-checkpoint', '--file', evil], repo);
       assert.equal(r.success, false);
-      assert.match(r.error, /validation failed|escapes/i);
+      assert.match(r.error, /UAT file validation failed: Path escapes allowed directory/);
     });
 
     test('renderCheckpointRefusesTraversalOutOfTheProject', (t) => {
@@ -398,7 +411,7 @@ describe('project-context CLI: workspace and verb', () => {
       write(path.join(base, 'outside', 'UAT.md'), UAT_BODY);
       const r = runGsdTools(['uat', 'render-checkpoint', '--file', '../outside/UAT.md'], repo);
       assert.equal(r.success, false);
-      assert.match(r.error, /validation failed|escapes/i);
+      assert.match(r.error, /UAT file validation failed: Path escapes allowed directory/);
     });
 
     test('renderCheckpointRefusesSymlinkLeavingBothRoots', (t) => {
@@ -408,7 +421,7 @@ describe('project-context CLI: workspace and verb', () => {
       fs.symlinkSync(target, path.join(store, 'phases', PHASE, 'link-UAT.md'), 'file');
       const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/link-UAT.md`], repo);
       assert.equal(r.success, false);
-      assert.match(r.error, /validation failed|escapes/i);
+      assert.match(r.error, /UAT file validation failed: Path escapes allowed directory/);
     });
   });
 
@@ -451,9 +464,12 @@ describe('project-context CLI: workspace and verb', () => {
 
     test('verificationWithoutContextResolvesThroughTheSeam', (t) => {
       const { a, phaseDir } = mkTwoProjects(t, { aHasFile: true });
+      // Project A holds the same file content, so the digest matches whichever root is chosen:
+      // the bare call (what the interior callers pass) must reach `passed` through the walk-up.
       const viaSeam = verification.readVerificationStatus(phaseDir, { ctx: resolveProjectContext(a) });
       const bare = verification.readVerificationStatus(phaseDir);
-      assert.equal(bare.status, viaSeam.status);
+      assert.equal(viaSeam.status, 'passed');
+      assert.equal(bare.status, 'passed');
     });
 
     test('fingerprintHonorsProjectDirFromAnyCwd', (t) => {
@@ -464,15 +480,23 @@ describe('project-context CLI: workspace and verb', () => {
       fs.mkdirSync(elsewhere, { recursive: true });
       const phaseDir = path.join(p, '.planning', 'phases', PHASE);
       fs.mkdirSync(phaseDir, { recursive: true });
+      // `elsewhere` is itself a project holding a DIFFERENT src/a.txt, so a digest taken over the
+      // wrong root is distinguishable from one taken over `p`.
+      mkProject(elsewhere, false);
+      write(path.join(elsewhere, 'src', 'a.txt'), 'different content\n');
       const args = ['verification', 'fingerprint', phaseDir, 'src/a.txt'];
       const fromElsewhere = runGsdTools([...args, '--project-dir', p], elsewhere);
       const fromInside = runGsdTools(args, p);
       assert.equal(fromElsewhere.success, true, fromElsewhere.error);
       assert.equal(fromInside.success, true, fromInside.error);
-      assert.deepEqual(JSON.parse(fromElsewhere.output), JSON.parse(fromInside.output));
+      const expected = verification.computeCoveredDigest(p, ['src/a.txt'], 4, { phaseDir });
+      const wrongRoot = verification.computeCoveredDigest(elsewhere, ['src/a.txt'], 4, { phaseDir });
+      assert.notEqual(expected, wrongRoot);
+      assert.equal(JSON.parse(fromElsewhere.output).covered_digest, expected);
+      assert.equal(JSON.parse(fromInside.output).covered_digest, expected);
     });
 
-    test('noExplicitRootLeaksBetweenResolutions', (t) => {
+    test('explicitSourceLivesOnTheContextAndNeverCarriesToTheNextResolution', (t) => {
       const base = mkTmp(t);
       const p = path.join(base, 'p');
       const q = path.join(base, 'q');

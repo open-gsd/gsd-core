@@ -972,7 +972,7 @@ function deriveCoveredDigest(
   // Canonicalize the roots ONCE — every candidate's realpath is checked
   // against these, not the possibly-symlinked `projectRoot`/`.planning`
   // arguments themselves. Always via the REAL fs, never fsImpl: `projectRoot`
-  // is a trusted anchor the CALLER derived (resolveProjectRoot), not
+  // is a trusted anchor the CALLER derived (ctx.projectRoot), not
   // attacker-influenced covered-input data — routing it through a
   // caller-scoped containment seam (e.g. #4155's
   // containmentEnforcingVerificationFs, confined to `.planning/`, a proper

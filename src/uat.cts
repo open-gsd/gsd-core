@@ -46,7 +46,7 @@ const { reportStatusOf, isReportContained, VERIFICATION_STATUS } = verificationM
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
-import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, PathAcceptance, tryWithinRootLexical } from './security.cjs';
 import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
@@ -443,30 +443,34 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
  * Both checks go through `requireSafePath`, so a traversal or a symlink that
  * leaves the chosen root is still refused.
  */
-function resolveUatArtifactPath(ctx: ProjectContext, filePath: string): string {
+/** `candidate` relative to `root` when it sits strictly inside it, else null. A child named `..x` is inside. */
+function relativeInside(root: string, candidate: string): string | null {
+  const inside = tryWithinRootLexical(candidate, root);
+  if (inside === null) return null;
+  const rel = path.relative(root, inside);
+  return rel === '' ? null : rel;
+}
+
+/** The contained path and how it is shown back to the caller (project-relative, `.planning/...` for the store). */
+function resolveUatArtifactPath(ctx: ProjectContext, filePath: string): { resolved: string; display: string } {
   const lexical = path.resolve(ctx.projectRoot, filePath);
-  const under = (root: string, candidate: string): string | null => {
-    const rel = path.relative(root, candidate);
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : null;
-  };
-  const viaEntry = under(path.join(ctx.projectRoot, '.planning'), lexical);
-  const viaStore = under(ctx.planningRoot, lexical);
-  const rel = viaEntry ?? viaStore;
+  const rel = relativeInside(path.join(ctx.projectRoot, '.planning'), lexical) ?? relativeInside(ctx.planningRoot, lexical);
   if (rel !== null) {
-    return requireSafePath(rel, ctx.planningRoot, 'UAT file', PathAcceptance.RelativeOnly);
+    const resolved = requireSafePath(rel, ctx.planningRoot, 'UAT file', PathAcceptance.RelativeOnly);
+    return { resolved, display: path.join('.planning', path.relative(ctx.planningRoot, resolved)) };
   }
-  return requireSafePath(filePath, ctx.projectRoot, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  const resolved = requireSafePath(filePath, ctx.projectRoot, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  return { resolved, display: path.relative(ctx.projectRoot, resolved) };
 }
 
 function cmdRenderCheckpoint(ctx: ProjectContext, options: { file?: string } = {}, raw: boolean): void {
-  const cwd = ctx.projectRoot;
   const filePath = options.file;
   if (!filePath) {
     error('UAT file required: use uat render-checkpoint --file <path>');
     return;
   }
 
-  const resolvedPath = resolveUatArtifactPath(ctx, filePath);
+  const { resolved: resolvedPath, display } = resolveUatArtifactPath(ctx, filePath);
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${filePath}`);
   }
@@ -478,13 +482,11 @@ function cmdRenderCheckpoint(ctx: ProjectContext, options: { file?: string } = {
     error('UAT session is already complete; no pending checkpoint to render');
   }
 
-  const config = loadConfig(cwd);
+  const config = loadConfig(ctx.projectRoot);
   const responseLanguage = typeof config.response_language === 'string' ? config.response_language : undefined;
   const checkpoint = buildCheckpoint(currentTest as Required<Omit<CurrentTest, 'complete'>> & { complete: false }, responseLanguage);
   output({
-    file_path: toPosixPath(path.relative(cwd, resolvedPath).startsWith('..')
-      ? path.join('.planning', path.relative(ctx.planningRoot, resolvedPath))
-      : path.relative(cwd, resolvedPath)),
+    file_path: toPosixPath(display),
     test_number: currentTest.number,
     test_name: currentTest.name,
     checkpoint,
