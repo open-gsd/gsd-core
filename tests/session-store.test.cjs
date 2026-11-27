@@ -97,8 +97,8 @@ describe('resolveSessionId', () => {
 
   test('resolveSessionIdFromEnvInOrder takes the first set key in the declared order', () => {
     assert.deepEqual(store.SESSION_ENV_KEYS, [
-      'GSD_SESSION_KEY', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'OPENCODE_SESSION_ID',
-      'GEMINI_SESSION_ID', 'CURSOR_SESSION_ID', 'WINDSURF_SESSION_ID',
+      'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID',
+      'OPENCODE_SESSION_ID', 'GEMINI_SESSION_ID', 'CURSOR_SESSION_ID', 'WINDSURF_SESSION_ID',
     ]);
     store.SESSION_ENV_KEYS.forEach((key, i) => {
       const env = { ...NO_KEYS, [key]: `id-${i}` };
@@ -108,7 +108,15 @@ describe('resolveSessionId', () => {
 
   test('resolveSessionIdKeyOrder: an earlier key wins when two are set', () => {
     const env = { ...NO_KEYS, WINDSURF_SESSION_ID: 'w', CODEX_THREAD_ID: 'c', CLAUDE_CODE_SESSION_ID: 'cc' };
-    assert.equal(store.resolveSessionId({ env }), 'cc');
+    assert.equal(store.resolveSessionId({ env }), 'c');
+  });
+
+  test('sessionEnvKeysParityWithWorkstreamStore: the same session never gets two ids — the list is the workstream list minus terminal identity, in its order', () => {
+    const workstream = require('../gsd-core/bin/lib/active-workstream-store.cjs').WORKSTREAM_SESSION_ENV_KEYS;
+    const terminal = new Set(['CLAUDE_CODE_SSE_PORT', 'TERM_SESSION_ID', 'WT_SESSION', 'TMUX_PANE', 'ZELLIJ_SESSION_NAME']);
+    assert.deepEqual(store.SESSION_ENV_KEYS, workstream.filter((k) => !terminal.has(k)));
+    for (const key of store.SESSION_ENV_KEYS) assert.ok(workstream.includes(key), key);
+    for (const key of terminal) assert.ok(!store.SESSION_ENV_KEYS.includes(key), key);
   });
 
   test('resolveSessionIdNeverUsesTerminal: terminal identity keys never produce an id', () => {

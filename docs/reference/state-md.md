@@ -126,6 +126,8 @@ paused_at: null
 | `paused` | contains `paused` or `stopped`, or `paused_at` is present |
 | `unknown` | none of the above |
 
+A frontmatter `status: paused` that nothing clears can be repaired with `state session-resume`: when no `Paused At:` line (and no frontmatter `paused_at`) claims the pause and the body `Status:` line names a non-paused status, it rewrites the frontmatter `status` to that status through the ordinary write path. It reports `status: { before, after, cleared }` and leaves a project with a `Paused At:` line untouched. See [CLI-TOOLS.md](../CLI-TOOLS.md) for the per-session pause verbs.
+
 When an orchestrator command is in flight, the convention (issue #2833) is to write the lifecycle stage directly to `status`:
 
 | Command | `status` while in flight |

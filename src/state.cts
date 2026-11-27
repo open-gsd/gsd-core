@@ -55,7 +55,7 @@ const { planningDir, planningPaths, planningRoot, resolvePhaseIdConvention } = p
 import { realClock } from './clock.cjs';
 // #6796: leaf module; it imports nothing from state.cts, so there is no cycle.
 import {
-  sanitizeRoleId,
+  roleIdFromFlags,
   writeRecord as writeSessionRecord,
   resolveIdentity as resolveSessionIdentity,
   listSessions as listSessionHandoffs,
@@ -400,13 +400,16 @@ interface StateAddRoadmapEvolutionOptions {
   urgent?: boolean;
 }
 
-interface StateRecordSessionOptions {
-  stopped_at?: string;
-  resume_file?: string | null;
-  /** #6796: an explicit `--session` also writes `.planning/sessions/<id>.json`. */
+/** #6796: who is calling — an explicit `--session` (never a terminal), and an optional role label. */
+interface StateSessionIdentityOptions {
   session?: string | null;
   role?: string | null;
   role_id?: string | null;
+}
+
+interface StateRecordSessionOptions extends StateSessionIdentityOptions {
+  stopped_at?: string;
+  resume_file?: string | null;
   /** `state session-resume` reuses this transaction and prints its own payload. */
   silent?: boolean;
 }
@@ -2190,7 +2193,7 @@ function writeSessionRecordForOptions(cwd: string, options: StateRecordSessionOp
     last_session: now,
     ...(options.resume_file !== undefined && options.resume_file !== null ? { resume_file: options.resume_file } : {}),
     ...(role !== undefined ? { role } : {}),
-    ...(role !== undefined || roleIdGiven ? { role_id: sanitizeRoleId(options.role_id) ?? sanitizeRoleId(role) } : {}),
+    ...(role !== undefined || roleIdGiven ? { role_id: roleIdFromFlags(options.role_id, role) } : {}),
   });
 }
 
@@ -2212,9 +2215,7 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
   // would forge sibling lines (U+2028/U+2029 included — the readers' `m`-flag
   // anchors match there too), so it is refused before anything is touched.
   // #6796: the session flags land in the per-session record, so they get the same single-line rule.
-  for (const [flag, value] of [['--stopped-at', options.stopped_at], ['--resume-file', options.resume_file], ['--session', options.session], ['--role', options.role], ['--role-id', options.role_id]] as const) {
-    if (typeof value === 'string' && FIELD_LINE_BREAK_RE.test(value)) error(`state record-session: ${flag} must be a single line`);
-  }
+  assertSingleLineSessionFlags('record-session', [['--stopped-at', options.stopped_at], ['--resume-file', options.resume_file], ['--session', options.session], ['--role', options.role], ['--role-id', options.role_id]]);
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) {
     if (!options.silent) output({ error: 'STATE.md not found' }, raw, undefined);
@@ -2700,12 +2701,6 @@ function repairLegacyPausedStatus(cwd: string, statePath: string): LegacyStatusR
   const written = extractFrontmatter(platformReadSync(statePath) || '') as Record<string, unknown>;
   const finalStatus = typeof written['status'] === 'string' ? written['status'] : null;
   return { before, after: finalStatus, cleared: finalStatus !== null && finalStatus !== 'paused' };
-}
-
-interface StateSessionIdentityOptions {
-  session?: string | null;
-  role?: string | null;
-  role_id?: string | null;
 }
 
 interface StateSessionResumeOptions extends StateSessionIdentityOptions {

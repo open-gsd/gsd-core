@@ -279,6 +279,22 @@ describe('session verbs', () => {
       assert.equal(exists('HANDOFF.s3.json'), true);
     });
 
+    test('sessionResumeHandoffAdoptsAnotherSessionsFile: a role-less session after /clear takes over the old session file', () => {
+      put('HANDOFF.old-session.json', {});
+      const out = resume(['--session', 'new-session', '--handoff', 'HANDOFF.old-session.json']);
+      assert.deepEqual(out.handoff.removed, ['HANDOFF.old-session.json']);
+    });
+
+    test('sessionResumeHandoffRefusesAnotherSessionsClaim: a claimed file held by a different session is a resume in progress and is kept', () => {
+      put('HANDOFF.claimed.coordinator.s2.json', {});
+      const refused = resume(['--session', 's1', '--handoff', 'HANDOFF.claimed.coordinator.s2.json']);
+      assert.deepEqual(refused.handoff.removed, []);
+      assert.equal(refused.handoff.refused, 'claimed by another session');
+      assert.equal(exists('HANDOFF.claimed.coordinator.s2.json'), true);
+      const own = resume(['--session', 's2', '--handoff', 'HANDOFF.claimed.coordinator.s2.json']);
+      assert.deepEqual(own.handoff.removed, ['HANDOFF.claimed.coordinator.s2.json']);
+    });
+
     test('sessionResumeKeepHandoff: nothing deleted, record still written', () => {
       put('HANDOFF.s1.json', {});
       const out = resume(['--session', 's1', '--keep-handoff', '--action', 'plan 2']);

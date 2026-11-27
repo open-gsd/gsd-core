@@ -19,6 +19,8 @@ import { platformWriteSync } from './shell-command-projection.cjs';
 import coreUtils = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6796: capability-ledger.cjs is an export= CommonJS module
 import capabilityLedger = require('./capability-ledger.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6796: active-workstream-store.cjs is an export= CommonJS module
+import activeWorkstreamStore = require('./active-workstream-store.cjs');
 
 const { readSmallRegularFile } = capabilityLedger;
 
@@ -28,19 +30,25 @@ export const SESSION_ID_MAX = 160;
 export const ROLE_ID_MAX = 80;
 
 /**
- * Runtime-issued session-id keys, in precedence order. A strict subset of
- * `WORKSTREAM_SESSION_ENV_KEYS` (active-workstream-store.cts) without the
- * terminal-identity keys, which survive `/clear` and name a pane, not a session.
+ * Terminal-identity keys: they name a pane or a terminal, survive `/clear`, and so
+ * never identify a session (ADR-4962 Decision 4).
  */
-export const SESSION_ENV_KEYS: readonly string[] = Object.freeze([
-  'GSD_SESSION_KEY',
-  'CLAUDE_CODE_SESSION_ID',
-  'CODEX_THREAD_ID',
-  'OPENCODE_SESSION_ID',
-  'GEMINI_SESSION_ID',
-  'CURSOR_SESSION_ID',
-  'WINDSURF_SESSION_ID',
+const TERMINAL_IDENTITY_KEYS: ReadonlySet<string> = new Set([
+  'CLAUDE_CODE_SSE_PORT',
+  'TERM_SESSION_ID',
+  'WT_SESSION',
+  'TMUX_PANE',
+  'ZELLIJ_SESSION_NAME',
 ]);
+
+/**
+ * Runtime-issued session-id keys, in the workstream store's own precedence order:
+ * `WORKSTREAM_SESSION_ENV_KEYS` minus the terminal-identity keys. Derived, not
+ * copied, so the two lists cannot drift and one session never gets two ids.
+ */
+export const SESSION_ENV_KEYS: readonly string[] = Object.freeze(
+  activeWorkstreamStore.WORKSTREAM_SESSION_ENV_KEYS.filter((key) => !TERMINAL_IDENTITY_KEYS.has(key)),
+);
 
 const RESERVED_FIRST_SEGMENTS: ReadonlySet<string> = new Set(['latest', 'claimed', 'json']);
 const ROLE_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -83,6 +91,14 @@ export interface SkippedEntry {
 }
 
 // ─── Sanitizers ───────────────────────────────────────────────────────────────
+
+/**
+ * The role slug a `--role-id` / `--role` pair names: the explicit slug wins, else the
+ * slug of the free text. The one place that rule lives; null when neither slugs to anything.
+ */
+export function roleIdFromFlags(roleId: unknown, role: unknown): string | null {
+  return sanitizeRoleId(roleId) ?? sanitizeRoleId(role);
+}
 
 /**
  * A session id safe to use inside a filename: `[A-Za-z0-9._-]`, starting with
@@ -309,7 +325,7 @@ export function resolveIdentity(planningDir: string, input: IdentityInput = {}):
   const prior = readRecord(planningDir, session_id);
   const role = typeof input.role === 'string' && input.role !== '' ? input.role : null;
   const priorRoleId = prior && typeof prior['role_id'] === 'string' ? sanitizeRoleId(prior['role_id']) : null;
-  const role_id = sanitizeRoleId(input.role_id) ?? sanitizeRoleId(role) ?? priorRoleId;
+  const role_id = roleIdFromFlags(input.role_id, role) ?? priorRoleId;
   return { session_id, role_id, role };
 }
 
@@ -338,7 +354,7 @@ export function listSessions(planningDir: string, identity: Identity, displayDir
   const { handoffs, skipped } = listHandoffs(planningDir);
   const records = listRecords(planningDir);
   const listed: ListedHandoff[] = handoffs.map((h) => {
-    const companion = h.kind === 'latest' ? continueHereName(h.role_id) : h.kind === 'legacy' ? LEGACY_CONTINUE_HERE : null;
+    const companion = companionOf(h);
     return {
       file: h.file,
       kind: h.kind,
@@ -405,6 +421,13 @@ export function consumeHandoffs(
     const parsed = /[\\/]/.test(opts.adopt) ? null : classifyHandoffName(opts.adopt);
     if (parsed === null) {
       result.refused = 'not a handoff file name';
+      return result;
+    }
+    // Adopting another session's handoff is the point of --handoff (a role-less session after
+    // /clear takes over the old session's file), but a `claimed` file held by a DIFFERENT session
+    // is a resume in progress: removing it would pull the handoff out from under that session.
+    if (parsed.kind === 'claimed' && parsed.session_id !== identity.session_id) {
+      result.refused = 'claimed by another session';
       return result;
     }
     removeFile(planningDir, opts.adopt, result);
