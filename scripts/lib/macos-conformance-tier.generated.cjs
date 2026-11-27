@@ -265,6 +265,7 @@ module.exports = {
   "tests/session-handoff-readers.test.cjs",
   "tests/session-store.test.cjs",
   "tests/session-verbs.test.cjs",
+  "tests/session-workflow-fences.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
   "tests/shared-install-fixture.test.cjs",
