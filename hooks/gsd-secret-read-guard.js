@@ -162,7 +162,6 @@
 //   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); some arithmetic the
 //   scan reads differently from the shell, given here by example with the
 //   shells that run each, not as a whole class:
-//   `echo $(( ' $(cat .env >&2) ' ))` (bash, dash, zsh),
 //   `if((' $(cat .env >&2) '));then :;fi` (bash),
 //   `{((' $(cat .env >&2) '));}` (bash, zsh),
 //   `echo $[ \[ ' $(cat .env >&2) ' ]` (bash, zsh),
@@ -172,8 +171,11 @@
 //   a `#` comment in a
 //   `$( )`, whose `(` or `)` the scan counts
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
-//   continuation that opens a `$(` inside "…" or a heredoc body
-//   (`echo "$\<newline>(cat .env)"`). The tests
+//   continuation that opens a `$(` inside "…"
+//   (`echo "$\<newline>(cat .env)"`). #5523's readings scan with the plain
+//   reading alone, so a command that needs one of them and #5255's
+//   reading of a `$'…'` span at once is not reached: `zsh -c $'{cat .env}'`
+//   (zsh) and `\r#;cat $'\''; cat .env #'` (bash). The tests
 //   pin each as allowed, and #5945 and #6132 track them with the further
 //   shapes found while closing #5255. The promise is "no looser than
 //   the retired rules on plain commands, without arming the compound-`cd`
@@ -1304,6 +1306,77 @@ let envSReading = ENV_S_READINGS[1];
 let splitSeen = false;
 let splitTooDeep = false;
 
+// #5523: the flags below are set, alone and together, by the readings in SHELL_READINGS for
+// constructs the plain reading takes differently from a shell. The readings run after the plain
+// reading and #5513's passes, each under its own catch, so they can add a denial and never remove
+// one; every flag is at its default in the plain reading.
+//  - crIsWhitespace false: a CR is a word character, as in the shells (`<CR>#;cat x` runs a
+//    command named CR-`#`, not a comment).
+//  - heredocLinesJoined true: an unquoted heredoc body line ending in an odd number of
+//    backslashes is joined to the next one before the terminator is looked for.
+//  - zshGrouping true: zsh's `#` straight after `(` (no comment starts) and its brace group: at
+//    command position (zshAtCommandPosition) `{` opens one with no blank after it (`{cat x}`),
+//    and a `}` ending a word closes it.
+//  - shellSpans (with dollarDollarIsAWord) true: scans the `$( )` and backtick spans bash and
+//    dash run inside `$((…))`, where `#` starts no comment, and an unquoted heredoc body's spans
+//    with `\`` read as a literal backtick; reads `$$` (the PID) as one unit, so a `{` after it
+//    opens no `${` (`$${x; cat y` runs `cat y`).
+const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', 'time', 'coproc', 'always']);
+// zsh command position for the token about to start: the start of the input, after a
+// separator other than a group's own `}`, or after a run of unquoted reserved words,
+// redirections and heredoc bodies that itself starts there (`then ! {cat x}`,
+// `time {cat x}`, `2>&1 {cat x}`, `</dev/null {cat x}`, and the line after a heredoc,
+// whose body token follows the newline ending its terminator line). `always` follows a
+// group's `}` (`{ a } always {cat x}`). A reserved word or redirection after an ordinary
+// word belongs to that command (`echo then {cat x}`, `echo >&2 {cat x}`).
+// A redirection is an fd duplication (`2>&1`, one token) or an operator and its target
+// word. The walk stays linear over a command: a `{` straight after an operator stops at
+// once, and any other `{` either opens a group (a separator) or ends in an ordinary word,
+// and the next walk stops at either.
+function zshAtCommandPosition(tokens) {
+  let j = tokens.length - 1;
+  for (;;) {
+    if (j < 0) return true;
+    const t = tokens[j];
+    if (t.kind === 'heredoc' || (t.kind === 'op' && t.dup)
+      || (t.kind === 'word' && t.quoted === 'none' && ZSH_GROUP_AFTER.has(t.text))) {
+      j--;
+    } else if (t.kind === 'word' && j > 0 && tokens[j - 1].kind === 'op' && !tokens[j - 1].dup) {
+      j -= 2;
+    } else if (t.kind === 'sep' && t.text === '}') {
+      const next = tokens[j + 1];
+      return next !== undefined && next.text === 'always';
+    } else {
+      return t.kind === 'sep';
+    }
+  }
+}
+// zsh's reading of the brace at str[i]: true when it opens or closes a group (tokenize emits
+// it as a separator), false when it is a word character. A `{` opens one only at command
+// position; a `}` closes one only while a group is open, and only where it ends a word or
+// stands alone: before a blank, `;`, `&`, `|`, `)`, a redirection's `<` or `>`, or the end. The open-group count rides on the token array so that tokenize, which the
+// plain reading runs, keeps next's locals and stack frame.
+function zshBraceIsSeparator(str, i, tokens, hasWord) {
+  const depth = tokens.zshBraceDepth || 0;
+  if (str[i] === '{') {
+    if (hasWord || !zshAtCommandPosition(tokens)) return false;
+    tokens.zshBraceDepth = depth + 1;
+    return true;
+  }
+  if (depth === 0 || !(i + 1 >= str.length || /[\s;&|)<>]/.test(str[i + 1]))) return false;
+  tokens.zshBraceDepth = depth - 1;
+  return true;
+}
+// Set while a #5523 reading runs: scanEachWay then scans with the plain reading alone, as before
+// #5255, on the one budget (see SHELL_READINGS). The exemption's read-only check (lineIsReadOnly)
+// still reads the line under #5255's readings too, so a `$'…'` span cannot hide a command from it.
+let inShellReading = false;
+let crIsWhitespace = true;
+let heredocLinesJoined = false;
+let zshGrouping = false;
+let shellSpans = false;
+let dollarDollarIsAWord = false;
+
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early.
@@ -1368,7 +1441,7 @@ function findParenClose(str, i, reading) {
       // differ from the earlier reading here, so the no-queue pass must run.
       if (orphanHeredocs.length > ownPending) orphanQueued = true;
       ownPending = 0;
-      i = consumeHeredocBodies(str, i + 1, orphanHeredocs.splice(0)).end;
+      i = (heredocLinesJoined ? consumeHeredocBodiesJoined : consumeHeredocBodies)(str, i + 1, orphanHeredocs.splice(0)).end;
       continue;
     }
     if (ch === '\n' && localTags.length) {
@@ -1460,7 +1533,7 @@ function dqElement(str, i, reading, inTag, nested, keepOnClose) {
     const e = findParenClose(str, i + 2, reading);
     if (nested) {
       const inner = str.slice(i + 2, e);
-      nested.push(inner);
+      pushParenSpan(nested, inner);
       // `"$(( `cat \".env\"` ))"`: dash and zsh read the backtick as inside the double quotes, so `\"` loses its backslash (#6433)
       if (inner.startsWith('(') && inner.includes('`') && inner.includes('\\"')) nested.push(inner.replace(/\\"/g, '"'));
     }
@@ -1622,7 +1695,74 @@ function consumeHeredocBodies(str, i, tags) {
   return { bodies, end: i };
 }
 
-// `$( )` and backtick spans inside an unquoted heredoc body.
+// #5523 K (heredocLinesJoined only): consumeHeredocBodies as the shell reads an unquoted
+// body, which removes a backslash-newline before it compares a line with the tag, so
+// `x\` + newline + `E` is the line `xE`. A separate function keeps consumeHeredocBodies,
+// which the plain reading runs, next's code. The joined line's trailing backslash run is
+// counted as each segment is added, never re-walked, so a body of backslash lines costs
+// time linear in its length.
+function consumeHeredocBodiesJoined(str, i, tags) {
+  const bodies = [];
+  for (const t of tags) {
+    let body = '';
+    let terminated = false;
+    while (i < str.length) {
+      const nl = str.indexOf('\n', i);
+      const lineEnd = nl === -1 ? str.length : nl;
+      let line = str.slice(i, lineEnd);
+      i = nl === -1 ? str.length : nl + 1;
+      if (!t.quoted && i < str.length) {
+        let trail = trailingBackslashes(line);
+        if (trail % 2 === 1) {
+          const parts = [];
+          let seg = line;
+          while (trail % 2 === 1 && i < str.length) {
+            parts.push(seg.slice(0, -1));
+            const nl2 = str.indexOf('\n', i);
+            const end2 = nl2 === -1 ? str.length : nl2;
+            seg = str.slice(i, end2);
+            i = nl2 === -1 ? str.length : nl2 + 1;
+            const segTrail = trailingBackslashes(seg);
+            trail = segTrail === seg.length ? trail - 1 + seg.length : segTrail;
+          }
+          parts.push(seg);
+          line = parts.join('');
+        }
+      }
+      const probe = t.stripTabs ? line.replace(/^\t+/, '') : line;
+      if (probe === t.tag) { terminated = true; break; }
+      body += line + '\n';
+    }
+    bodies.push({ body, quoted: t.quoted, seg: t.seg });
+    if (!terminated) break;
+  }
+  return { bodies, end: i };
+}
+
+// The backslashes ending `s`, charged to the reader budget as they are counted: the joined-line
+// count above reads each line's run once, so a count that re-read the run at every join would
+// spend the budget and be denied as too complex rather than run in quadratic time.
+function trailingBackslashes(s) {
+  let n = 0;
+  while (n < s.length && s[s.length - 1 - n] === '\\') n++;
+  chargeReader(n);
+  return n;
+}
+
+// #5523 I (shellSpans only): the inner text of `$((…))` is arithmetic, where `#` starts no
+// comment. It is always scanned as a command; under shellSpans its own `$( )` and backtick
+// spans are also scanned directly, as the shell runs them before it evaluates the arithmetic.
+// Only one level is collected here: each collected span is scanned by findSecretRead, whose
+// recursion is bounded by MAX_NESTING_DEPTH, and that scan collects the next level.
+// The #5523 readings scan with the plain reading alone (readsEachWay), so these span helpers
+// take no reading.
+function pushParenSpan(nested, inner, collectArithmetic = true) {
+  nested.push(inner);
+  if (shellSpans && collectArithmetic && inner[0] === '(') collectShellSpans(inner, nested, false);
+}
+
+// `$( )` and backtick spans inside an unquoted heredoc body. next's, unchanged: the
+// shellSpans reading uses collectShellSpans below.
 function collectSubstitutions(body, nested, reading) {
   let i = 0;
   while (i < body.length) {
@@ -1652,6 +1792,49 @@ function collectSubstitutions(body, nested, reading) {
       // so a read hidden behind `\"` is seen under any shell (#6433)
       const quoted = backtickBody(body.slice(i + 1, e), true);
       if (quoted !== plain) nested.push(quoted);
+      i = e + 1;
+      continue;
+    }
+    i++;
+  }
+}
+
+// The shellSpans reading's version (and the arithmetic collection above). #5523 D: the shell
+// reads `\`` in an unquoted body as a literal backtick, which opens no span, so the spans found
+// with backslash pairs skipped are scanned as well as those found without.
+function collectShellSpans(body, nested, collectArithmetic = true) {
+  const spans = [];
+  collectSubstitutionSpans(body, spans, false, collectArithmetic);
+  if (body.includes('\\')) {
+    const seen = new Set(spans);
+    const escaped = [];
+    collectSubstitutionSpans(body, escaped, true, collectArithmetic);
+    for (const s of escaped) if (!seen.has(s)) spans.push(s);
+  }
+  for (const s of spans) nested.push(s);
+}
+
+// collectSubstitutions with the #5523 readings' changes: the escaped-backtick pass, the
+// arithmetic spans of pushParenSpan, and a `$` run paired as bash, zsh and dash pair one in a
+// body (#5255), so a joined `$$\` + newline + `(…)` is the PID and text, not a `$(`.
+function collectSubstitutionSpans(body, nested, skipEscapes, collectArithmetic) {
+  let i = 0;
+  while (i < body.length) {
+    if (skipEscapes && body[i] === '\\') { i += 2; continue; }
+    if (body[i] === '$') {
+      const run = dollarRun(body, i);
+      if (run.dollars > 1) { i = run.dollars % 2 === 1 ? run.last : run.end; continue; }
+    }
+    if (body[i] === '$' && body[i + 1] === '(') {
+      const e = findParenClose(body, i + 2);
+      pushParenSpan(nested, body.slice(i + 2, e), collectArithmetic);
+      i = e + 1;
+      continue;
+    }
+    if (body[i] === '`') {
+      const j = backtickEnd(body, i + 1);
+      const e = j === -1 ? body.length : j;
+      nested.push(backtickBody(body.slice(i + 1, e)));
       i = e + 1;
       continue;
     }
@@ -1742,7 +1925,7 @@ function tokenize(str, reading) {
     for (const b of r.bodies) {
       tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
       if (!b.quoted) {
-        collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
+        if (shellSpans || heredocLinesJoined) collectShellSpans(b.body, nested); else collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
         orphanHeredocs = [];
       }
     }
@@ -1886,10 +2069,17 @@ function tokenize(str, reading) {
       continue;
     }
 
+    if (dollarDollarIsAWord && ch === '$' && str[i + 1] === '$') {
+      hasWord = true;
+      buf += '$$';
+      i += 2;
+      continue;
+    }
+
     if (ch === '$' && str[i + 1] === '(') {
       hasWord = true;
       const e = expectTag ? findTagSpanClose(str, i + 2, reading) : findParenClose(str, i + 2, reading);
-      nested.push(str.slice(i + 2, e));
+      pushParenSpan(nested, str.slice(i + 2, e));
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
@@ -1950,7 +2140,7 @@ function tokenize(str, reading) {
         const pending = heredocs.filter((h) => !h.done);
         heredocs = [];
         orphanQueue = [];
-        i = emitHeredocBodies(consumeHeredocBodies(str, i, pending));
+        i = emitHeredocBodies((heredocLinesJoined ? consumeHeredocBodiesJoined : consumeHeredocBodies)(str, i, pending));
       }
       continue;
     }
@@ -1963,13 +2153,13 @@ function tokenize(str, reading) {
       continue;
     }
 
-    if (ch === ' ' || ch === '\t' || ch === '\r') {
+    if (ch === ' ' || ch === '\t' || (ch === '\r' && crIsWhitespace)) {
       flush();
       i++;
       continue;
     }
 
-    if (ch === '#' && !hasWord) {
+    if (ch === '#' && !hasWord && !(zshGrouping && str[i - 1] === '(')) {
       const j = str.indexOf('\n', i);
       i = j === -1 ? str.length : j;
       continue;
@@ -2049,6 +2239,17 @@ function tokenize(str, reading) {
       i++;
       continue;
     }
+    if (zshGrouping && !expectTag && (ch === '{' || ch === '}')) {
+      if (zshBraceIsSeparator(str, i, tokens, hasWord)) {
+        sep(ch); // a `}` flushes the word it ends
+      } else {
+        hasWord = true;
+        buf += ch;
+      }
+      i++;
+      continue;
+    }
+
     // A brace where a heredoc tag is due is the tag (`<<}; cat .env` is tag `}`,
     // then the read), never a group: every shell takes a `{` there, and bash
     // and dash a `}`.
@@ -3146,8 +3347,84 @@ function findSecretReadUnderOtherReadings(command) {
   const hit = (compat !== null && compat.code !== 'nesting-too-deep' ? compat : null) ||
     (command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null);
   if (hit) return hit;
-  if (!braceTagRead) return compat;
-  return scanUnder(true, true, false) || scanUnder(false, true, false) || compat;
+  return (braceTagRead ? scanUnder(true, true, false) || scanUnder(false, true, false) : null) ||
+    findSecretReadUnderShellReadings(command) || compat;
+}
+
+// #5523: the readings declared beside crIsWhitespace. They run after every earlier
+// reading, which have already answered, and each scans with the plain reading alone
+// (inShellReading): #5255's readings of `$'…'` are not composed with their scan (see
+// Documented gaps). Each is skipped only for a command lacking a character it needs.
+const dollarCount = (c) => { let n = 0; for (const ch of c) if (ch === '$' && ++n === 2) break; return n; };
+const needsCr = (c) => c.includes('\r');
+const needsJoin = (c) => c.includes('<') && c.includes('\\') && c.includes('\n');
+const needsZsh = (c) => c.includes('{') || c.includes('}') || (c.includes('(') && c.includes('#'));
+// `$$` reads as one unit only where it changes what follows: before `{` (`$${`) or `(` (`$$(`).
+const needsSpans = (c) => c.includes('`') || (c.includes('$') && c.includes('(')) || (dollarCount(c) === 2 && c.includes('{'));
+const setCr = (on) => { crIsWhitespace = !on; };
+const setJoin = (on) => { heredocLinesJoined = on; };
+const setZsh = (on) => { zshGrouping = on; };
+const setSpans = (on) => { shellSpans = on; dollarDollarIsAWord = on; };
+const setBash32Spans = (on) => { heredocBodiesSkippedInSpans = !on; };
+const countTrue = (...xs) => xs.filter(Boolean).length;
+// Each construct is read on its own, then in three composed readings for a command mixing
+// several. A composed reading runs only when two or more of its parts apply; otherwise it
+// would read exactly as one of the single readings, or as #5513's.
+//  - bash and dash read a CR, a joined heredoc line and these spans in one script, so
+//    `<CR>#;echo $${x; cat y` needs CR and `$$` at once.
+//  - zsh reads its grouping with the CR and join readings and the spans, but without the
+//    `$$` rule: its lexer reads `$$((` as `$` and an arithmetic `$((…))`, whose spans it
+//    runs. So this reading also runs, with no grouping character, for a command holding two
+//    `$` and a span, where it differs from the spans reading only by that rule.
+//  - bash 3.2 reads the bash readings together with #5513's heredoc span, where a `)` in a
+//    heredoc body inside `$( )` closes the substitution. Its gate is a `<`, not `<<`: eval
+//    and `bash -c` assemble `<<` from `<''<` or `<\<`, and a single `<` is never assembled.
+const SHELL_READINGS = [
+  { applies: needsCr, set: setCr },
+  { applies: needsJoin, set: setJoin },
+  { applies: needsZsh, set: setZsh },
+  { applies: needsSpans, set: setSpans },
+  {
+    applies: (c) => countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 2,
+    set: (on) => { setCr(on); setJoin(on); setSpans(on); },
+  },
+  {
+    applies: (c) => (needsZsh(c) ? countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 1
+      : dollarCount(c) === 2 && needsSpans(c)),
+    set: (on) => { setCr(on); setJoin(on); setZsh(on); shellSpans = on; },
+  },
+  {
+    applies: (c) => c.includes('<') && (needsCr(c) || needsJoin(c) || needsSpans(c)),
+    set: (on) => { setBash32Spans(on); setCr(on); setJoin(on); setSpans(on); },
+  },
+];
+
+// Each reading is a findSecretRead pass, with the plain reading alone, on the command's one
+// budget (scanBashCommand), so a reading that finds it spent is `command-too-complex`, as
+// #5513's passes are. An error that is not a limit is a bug: like one in #5255's readings
+// (scanEachWay) it is kept for main's `reading-failed` diagnostic and the next reading runs,
+// so it never changes the verdict.
+function findSecretReadUnderShellReadings(command) {
+  for (const reading of SHELL_READINGS) {
+    if (!reading.applies(command)) continue;
+    // #4432's exemption holds only on a read-only line, and `isExemptSecret` caches that verdict from
+    // the first reading to meet a secret. A reading can see a command an earlier one did not (the `mv`
+    // in `{cat P};cat $${x; mv a b; cat P }` is hidden from the zsh reading, not from the spans one), so
+    // each reading judges the line again under its own flags.
+    exemption.bashReadOnly = null;
+    reading.set(true);
+    inShellReading = true;
+    try {
+      const hit = findSecretRead(command, 0);
+      if (hit) return hit;
+    } catch (e) {
+      if (readingBug === null) readingBug = e;
+    } finally {
+      inShellReading = false;
+      reading.set(false);
+    }
+  }
+  return null;
 }
 
 // The debugger-spawn scan, under the earlier reading of a brace tag as well.
@@ -3390,10 +3667,16 @@ let scanSpent = false;
 // nested body is read again at each outer pass, so the charge on a script a
 // shell reads from a heredoc is a fixed multiple of its length, set by its
 // nesting. With a reading trigger in it, each character of a `bash <<'EOF'`
-// script is scanned about 120 times and charged up to about 33 separators,
-// and such scripts are denied from about 16,000-70,000 characters by shape;
-// inside `$( )` or a second heredoc each is scanned about 500 times and
-// charged up to about 130, and they are denied from about 4,000-17,000. The
+// script is scanned about 120-135 times and charged up to about 49
+// separators (bare `:` lines), so such scripts are denied at a
+// size set by their shape: measured, from about 10,700 characters (`:` lines)
+// to 69,900. Inside `$( )` or a second heredoc each is scanned about 370-520
+// times and charged up to about 190, and they are denied from about 2,700 to
+// 16,400. #5523's readings (SHELL_READINGS) add a pass each to a command
+// holding the characters it needs, so with no trigger a heredoc commit message
+// of plain lines is scanned about 10 times and denied from about 840,000
+// characters, one of `{a, b}` lines from about 600,000 and, with a backslash
+// or a CR in each line, from about 466,000. The
 // most any of the 1,384,856 real agent commands above needs is 20,043 (a
 // 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;
@@ -3503,7 +3786,7 @@ function readEachWay(command, depth) {
 // A secret read outranks a word with no value to check, so which block a
 // command gets does not hang on which reading reported first.
 function scanEachWay(command, depth) {
-  if (!readsEachWay(command)) return scanCommand(command, depth, false);
+  if (inShellReading || !readsEachWay(command)) return scanCommand(command, depth, false);
   readingsRan = true;
   let unreadable = null;
   for (const shell of READINGS) {
