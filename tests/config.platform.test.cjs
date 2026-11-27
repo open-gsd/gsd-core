@@ -56,6 +56,13 @@
  *   a real key file from leaking in (windows-env-var)
  * - "detects Serply Search from file-based key" — reads serply_api_key from the
  *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
+ * - "detects Keenable Search from env var" — asserts KEENABLE_API_KEY detection
+ *   resolved against the sandboxed home directory (windows-env-var)
+ * - "keenable_search is false when env var absent and no key file" — asserts the
+ *   opt-in default against the sandboxed home — on Windows only USERPROFILE keeps
+ *   a real key file from leaking in (windows-env-var)
+ * - "detects Keenable Search from file-based key" — reads keenable_api_key from the
+ *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
  * - "merges user defaults from defaults.json" — reads defaults.json from the
  *   sandboxed home directory, resolved via USERPROFILE on Windows (windows-env-var)
  * - "merges nested workflow keys from defaults.json preserving unset keys" — same
@@ -106,6 +113,7 @@ describe('#4976: config-new-project resolves the global-defaults store through G
     { file: 'perplexity_api_key', key: 'perplexity', env: 'PERPLEXITY_API_KEY' },
     { file: 'jina_api_key', key: 'jina', env: 'JINA_API_KEY' },
     { file: 'serply_api_key', key: 'serply_search', env: 'SERPLY_API_KEY' },
+    { file: 'keenable_api_key', key: 'keenable_search', env: 'KEENABLE_API_KEY' },
   ];
 
   function writeStoreFile(home, name, content) {
@@ -565,6 +573,34 @@ describe('config-ensure-section command', () => {
 
     const config = readConfig(tmpDir);
     assert.strictEqual(config.serply_search, true);
+  });
+
+  test('detects Keenable Search from env var', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { KEENABLE_API_KEY: 'test-key' } }));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.keenable_search, true);
+  });
+
+  test('keenable_search is false when env var absent and no key file', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { KEENABLE_API_KEY: '' } }));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.keenable_search, false);
+  });
+
+  test('detects Keenable Search from file-based key', () => {
+    const gsdDir = path.join(tmpDir, '.gsd');
+    fs.mkdirSync(gsdDir, { recursive: true });
+    fs.writeFileSync(path.join(gsdDir, 'keenable_api_key'), 'test-key', 'utf-8');
+
+    const result = runGsdTools('config-ensure-section', tmpDir, isolatedEnv({ home: tmpDir, override: { KEENABLE_API_KEY: '' } }));
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.keenable_search, true);
   });
 
   test('merges user defaults from defaults.json', () => {

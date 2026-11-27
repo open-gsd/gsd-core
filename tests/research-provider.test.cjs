@@ -282,11 +282,12 @@ describe('research-provider: serply is opt-in (#4942)', () => {
     return result.items[0].fetch.provider;
   }
 
-  test('serply sits after brave and before the websearch terminal', () => {
+  test('serply sits after brave and before keenable in the web leg', () => {
     const web = PROVIDER_WATERFALL.web;
     assert.ok(web.includes('serply'));
     assert.ok(web.indexOf('brave') < web.indexOf('serply'));
-    assert.ok(web.indexOf('serply') < web.indexOf('websearch'));
+    assert.ok(web.indexOf('serply') < web.indexOf('keenable'));
+    assert.ok(web.indexOf('keenable') < web.indexOf('websearch'));
   });
 
   test('serply is unavailable unless serply_search is truthy', () => {
@@ -320,6 +321,65 @@ describe('research-provider: serply is opt-in (#4942)', () => {
     const config = { ...NO_PREMIUM, serply_search: true };
     assert.notEqual(await pickWeb(config, 'docs'), 'serply');
     assert.notEqual(await pickWeb(config, 'scrape'), 'serply');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6563: Keenable is an opt-in web-discovery provider
+// ---------------------------------------------------------------------------
+
+describe('research-provider: keenable is opt-in (#6563)', () => {
+  const NO_PREMIUM = {
+    exa_search: false,
+    tavily_search: false,
+    brave_search: false,
+    firecrawl: false,
+    ref_search: false,
+    perplexity: false,
+    serply_search: false,
+  };
+
+  async function pickWeb(config, kind = 'web') {
+    const result = await planResearch({
+      questions: [{ text: 'current js bundler comparison', kind }],
+      ecosystem: 'npm',
+      cwd: '/tmp',
+      config,
+      store: makeFakeStore({ hit: false, stale: false }),
+    });
+    return result.items[0].fetch.provider;
+  }
+
+  test('keenable sits after serply and before the websearch terminal', () => {
+    const web = PROVIDER_WATERFALL.web;
+    assert.ok(web.includes('keenable'));
+    assert.ok(web.indexOf('serply') < web.indexOf('keenable'));
+    assert.ok(web.indexOf('keenable') < web.indexOf('websearch'));
+  });
+
+  test('keenable is unavailable unless keenable_search is set', () => {
+    assert.equal(providerAvailability(NO_PREMIUM).keenable, false);
+    assert.equal(providerAvailability({}).keenable, false);
+    assert.equal(providerAvailability({ keenable_search: true }).keenable, true);
+  });
+
+  test('unset keenable_search falls through to websearch (nothing sent to Keenable)', async () => {
+    assert.equal(await pickWeb(NO_PREMIUM), 'websearch');
+  });
+
+  test('only keenable_search enabled picks keenable for web questions', async () => {
+    assert.equal(await pickWeb({ ...NO_PREMIUM, keenable_search: true }), 'keenable');
+  });
+
+  test('serply still wins over keenable when both are enabled', async () => {
+    assert.equal(
+      await pickWeb({ ...NO_PREMIUM, serply_search: true, keenable_search: true }),
+      'serply'
+    );
+  });
+
+  test('brave still wins over keenable when both are enabled', async () => {
+    assert.equal(await pickWeb({ ...NO_PREMIUM, brave_search: true, keenable_search: true }), 'brave');
   });
 });
 

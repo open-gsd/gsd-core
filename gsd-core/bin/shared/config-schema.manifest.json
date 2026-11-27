@@ -17,6 +17,7 @@
     "ref_search",
     "perplexity",
     "jina",
+    "keenable_search",
     "serply_search",
     "workflow.plan_check",
     "workflow.verifier",
