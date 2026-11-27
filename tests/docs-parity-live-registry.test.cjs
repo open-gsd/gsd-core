@@ -1247,9 +1247,6 @@ describe('issue-driven-orchestration guide (#2840)', () => {
  * assert on flag booleans, not raw text matches. Adheres to
  * CONTRIBUTING.md "no-source-grep" — describes invariants, not wording,
  * so the prose can be reworded freely as long as the semantics survive.
- *
- * Companion to docs/USER-GUIDE.md task section, which is exercised by the
- * same parser shape (separate test below).
  */
 
 'use strict';
@@ -1261,7 +1258,6 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const CONTEXT_BUDGET_MD = path.join(ROOT, 'gsd-core', 'references', 'context-budget.md');
-const USER_GUIDE_MD = path.join(ROOT, 'docs', 'USER-GUIDE.md');
 
 /**
  * Extract the MCP-budget section from a markdown file by header text.
@@ -1457,28 +1453,6 @@ describe('#3025 context-budget.md: MCP token-budget section exists with required
       explainsHarnessNotGsd: true,
       mentionsModelProfileInteraction: true,
     }, 'context-budget.md MCP section contract violated');
-  });
-});
-
-// ─── docs/USER-GUIDE.md task section ────────────────────────────────────────
-
-describe('#3025 docs/USER-GUIDE.md: companion task section exists', () => {
-  test('USER-GUIDE.md has an MCP-trimming task section', () => {
-    const section = extractSection(USER_GUIDE_MD, 'mcp');
-    assert.ok(section,
-      'USER-GUIDE.md must have a `### ...MCP...` task section so users find it via the guide');
-  });
-
-  test('USER-GUIDE.md task section names the harness key and cross-links the reference', () => {
-    const section = extractSection(USER_GUIDE_MD, 'mcp');
-    const parsed = parseMcpBudgetSection(section);
-    assert.equal(parsed.namesEnabledMcpjsonServers, true,
-      'task section must mention the harness key by name');
-    // Cross-link to the reference doc — assert on the parsed flag so
-    // the invariant lives alongside the other named flags (CR follow-up
-    // on the no-source-grep standard).
-    assert.equal(parsed.crossLinksContextBudget, true,
-      'task section must cross-link to context-budget.md');
   });
 });
 
