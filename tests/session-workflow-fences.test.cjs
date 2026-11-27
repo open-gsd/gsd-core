@@ -261,6 +261,21 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
       assert.equal(fs.readdirSync(planning).filter((f) => f.startsWith('HANDOFF.claimed.coordinator.')).length, 1);
     });
 
+    // #6873: on Windows a losing session's `mv` was seen to exit 0 with no claimed file, and the fence took that
+    // exit status as proof of the claim, announced HANDOFF_FILE= and then died in `cat`. The shim reproduces the
+    // symptom on any platform: `mv` reports success and moves nothing.
+    test('aClaimWhoseFileIsNotThereIsLostNotAnnounced', () => {
+      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'must not be announced' });
+      const shim = path.join(tmp, 'shim');
+      fs.mkdirSync(shim);
+      fs.writeFileSync(path.join(shim, 'mv'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      const shimmed = `PATH="${shim.split(path.sep).join('/')}:$PATH"\n${script([claim()], '--role coordinator')}`;
+      const r = runBash(tmp, shimmed, 's2');
+      assert.equal(r.status, 0, r.err);
+      assert.doesNotMatch(r.out, /HANDOFF_FILE=/);
+      assert.match(r.out, /NO_UNCLAIMED_HANDOFF role_id=coordinator/);
+    });
+
     test('theSecondSessionIsToldNoUnclaimedHandoffExists', () => {
       put('HANDOFF.claimed.coordinator.s1.json', { role_id: 'coordinator', next_action: 'held by s1' });
       const r = runBash(tmp, script([claim()], '--role coordinator'), 's2');
