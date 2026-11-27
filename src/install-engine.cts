@@ -223,10 +223,10 @@ function executingPackageRoot(): string { return path.dirname(path.dirname(runti
  * The path prefix an OpenCode-family install emits into its converted artifacts. One owner for the
  * skills/commands/agents pass and for the corpus pass below (#4779), so the two cannot disagree.
  */
-function opencodeFamilyPathPrefix(runtime: string, configDir: string, isGlobal: boolean, behaviors: any): string {
+function opencodeFamilyPathPrefix(runtime: string, configDir: string, isGlobal: boolean): string {
   return (runtimeArtifactConversion as any)._computePathPrefix({
     isGlobal,
-    isOpencode: behaviors.skipHomePrefixSubstitution === true,
+    isOpencode: hostBehaviorsFor(runtime).skipHomePrefixSubstitution === true,
     isWindowsHost: process.platform === 'win32',
     resolvedTarget: posixNormalize(path.resolve(configDir)),
     homeDir: posixNormalize(os.homedir()),
@@ -246,7 +246,7 @@ function opencodeFamilyPathPrefix(runtime: string, configDir: string, isGlobal: 
 function rewriteProvisionedCorpusForRuntime(runtime: string, configDir: string, scope: string): void {
   const behaviors = hostBehaviorsFor(runtime);
   if (behaviors.rewritesClaudeOnlyForms !== true) return;
-  const pathPrefix = opencodeFamilyPathPrefix(runtime, configDir, isGlobalScope(scope as InstallScope), behaviors);
+  const pathPrefix = opencodeFamilyPathPrefix(runtime, configDir, isGlobalScope(scope as InstallScope));
   const rewriteTree = (dir: string, kind: 'commands' | 'agents'): void => {
     if (!installFs().existsSync(dir)) return;
     for (const entry of installFs().readdirSync(dir, { withFileTypes: true })) {
@@ -2304,7 +2304,7 @@ function installOpencodeFamilyArtifacts(
   const src = packageRoot ?? executingPackageRoot();
   const rawCommandsDir = installProfiles.stageSkillsForProfile(commandsGsdDir, resolvedProfile);
 
-  const pathPrefix = opencodeFamilyPathPrefix(runtime, configDir, isGlobal, behaviors);
+  const pathPrefix = opencodeFamilyPathPrefix(runtime, configDir, isGlobal);
 
   // #2329: destDir is derived from the SAME hostBehaviors.flatCommandDir
   // descriptor value read by writeManifest's manifest-key prefix and by

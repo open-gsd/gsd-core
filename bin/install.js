@@ -7902,8 +7902,7 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
   // Replace /gsd-command colon variant with /gsd-command for opencode (flat command structure)
   convertedContent = convertedContent.replace(/\/gsd:/g, '/gsd-');
   // Replace ~/.claude and $HOME/.claude with OpenCode's config location
-  convertedContent = convertedContent.replace(/~\/\.claude\b/g, '~/.config/opencode');
-  convertedContent = convertedContent.replace(/\$HOME\/\.claude\b/g, '$HOME/.config/opencode');
+  convertedContent = runtimeArtifactConversion.rewriteOpencodeHomeForms(convertedContent);
   // #4779: project-skills locator and launcher reinstall hint (single owner in the conversion module)
   convertedContent = runtimeArtifactConversion.rewriteOpencodeClaudeOnlyForms(convertedContent);
   // Replace general-purpose subagent type with OpenCode's equivalent "general"
@@ -11003,7 +11002,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 function claudeLeakPatternsFor(runtime) {
   const patterns = [/(?:~|\$HOME)\/\.claude\b/g];
   if (hostBehaviorsFor(runtime).rewritesClaudeOnlyForms === true) {
-    patterns.push(...runtimeArtifactConversion.OPENCODE_CLAUDE_ONLY_FORM_PATTERNS);
+    patterns.push(...runtimeArtifactConversion.opencodeClaudeOnlyFormPatterns());
   }
   return patterns;
 }
@@ -11016,10 +11015,10 @@ function claudeLeakPatternsFor(runtime) {
 function collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }) {
   const leaked = [];
   const patterns = claudeLeakPatternsFor(runtime);
-  // #4779: a runtime that rewrites its corpus (rewritesClaudeOnlyForms) has no byte-identical corpus left
-  // to exclude: its text is converted too, so it stays in the scan like Windsurf's delegated bodies.
+  // The corpus is scanned when something reads it as converted text: Windsurf's workflow wrappers delegate
+  // to it (#1629), and a runtime that rewrites its corpus (rewritesClaudeOnlyForms, #4779) converts it.
   const behaviors = hostBehaviorsFor(runtime);
-  const bodiesDelegated = behaviors.installsCommandBodiesForWorkflowDelegation || behaviors.rewritesClaudeOnlyForms === true;
+  const corpusIsConverted = behaviors.installsCommandBodiesForWorkflowDelegation || behaviors.rewritesClaudeOnlyForms === true;
   for (const relPath of manifestFiles) {
     const fileName = path.basename(relPath);
     if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
@@ -11033,7 +11032,7 @@ function collectInstalledClaudeLeaks({ targetDir, manifestFiles, runtime }) {
     // path-rewritten bodies at gsd-core/commands/gsd/ (#1629), so there they
     // ARE host-read artifacts and stay in the scan.
     const posixRelPath = relPath.replace(/\\/g, '/');
-    if (!bodiesDelegated
+    if (!corpusIsConverted
       && (posixRelPath.startsWith('gsd-core/commands/') || posixRelPath.startsWith('gsd-core/agents/'))) continue;
     const fullPath = path.join(targetDir, relPath);
     let content;

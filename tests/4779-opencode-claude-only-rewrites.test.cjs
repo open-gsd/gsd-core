@@ -16,7 +16,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { installRuntimeFixture } = require('./helpers/install-shared.cjs');
+const { installRuntimeFixture, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const installer = require('../bin/install.js');
 const conversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
@@ -293,6 +296,8 @@ describe('#4779: installed trees', () => {
     const { configDir } = installRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     const files = hostReadFiles(configDir);
     assert.ok(files.length > 50, `expected installed markdown, saw ${files.length}`);
+    // The compact variants (workflow.compact_content) are installed text too; the walk must reach them.
+    assert.ok(files.some((rel) => rel.endsWith('.compact.md')), 'expected installed .compact.md variants');
     const residue = [];
     for (const rel of files) {
       const text = fs.readFileSync(path.join(configDir, rel), 'utf8');
@@ -334,6 +339,47 @@ describe('#4779: installed trees', () => {
     // Tool names stay in source form so a refresh still converts the corpus.
     const mapper = fs.readFileSync(path.join(configDir, 'gsd-core', 'agents', 'gsd-pattern-mapper.md'), 'utf8');
     assert.match(mapper, /^tools: Read, Bash, Glob, Grep, Write$/m);
+  });
+
+  // A configuration no shared fixture covers: a config dir that is NOT the runtime's own global home
+  // (the fixtures install there). The installer runs twice into it, the second over the first.
+  test('a custom --config-dir survives a reinstall: corpus and converted artifacts are stable', (t) => {
+    const home = createTempDir('gsd-4779-custom-');
+    t.after(() => cleanup(home));
+    const configDir = path.join(home, 'custom-opencode-home');
+    const run = () => {
+      const result = runNode([INSTALL_SCRIPT, '--opencode', '--global', '--config-dir', configDir], {
+        env: installerEnv(isolatedEnv({ home, path: process.env.PATH })),
+        timeoutMs: INSTALL_TIMEOUT_MS,
+      });
+      assert.strictEqual(result.exitCode, 0, `installer failed\n${result.stdout}\n${result.stderr}`);
+    };
+    const snapshot = () => {
+      const out = new Map();
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (entry.name.endsWith('.md')) out.set(path.relative(configDir, full), fs.readFileSync(full, 'utf8'));
+        }
+      };
+      for (const sub of ['agents', path.join('gsd-core', 'agents'), path.join('gsd-core', 'commands', 'gsd')]) {
+        walk(path.join(configDir, sub));
+      }
+      return out;
+    };
+    run();
+    const first = snapshot();
+    const corpusRel = path.join('gsd-core', 'agents', 'gsd-pattern-mapper.md');
+    const include = /^\*\*Project skills:\*\* @(\S+)$/m.exec(first.get(corpusRel));
+    assert.ok(include, 'expected the corpus @-include line');
+    assert.ok(include[1].includes('custom-opencode-home'), include[1]);
+    assert.ok(include[1].endsWith('/gsd-core/references/project-skills-discovery.md'), include[1]);
+    run();
+    const second = snapshot();
+    assert.deepEqual([...second.keys()].sort(), [...first.keys()].sort());
+    const drifted = [...first.keys()].filter((rel) => first.get(rel) !== second.get(rel));
+    assert.deepEqual(drifted, []);
   });
 
   test('claude install keeps its own hint', () => {

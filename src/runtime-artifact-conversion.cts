@@ -2462,8 +2462,13 @@ function filterRuntimeNotesForTarget(content: string, targetRuntime: string): st
 const OPENCODE_SKILLS_LOCATOR_RE = /(?<![A-Za-z0-9_-])\.claude\/skills\//g;
 const OPENCODE_LAUNCHER_HINT_RE = /(?<![A-Za-z0-9_-])--claude --local(?![\w-])/g;
 
-/** The two patterns, shared with bin/install.js's leak scan so scan and rewrite cannot disagree. */
-const OPENCODE_CLAUDE_ONLY_FORM_PATTERNS = [OPENCODE_SKILLS_LOCATOR_RE, OPENCODE_LAUNCHER_HINT_RE];
+/**
+ * The two patterns, shared with bin/install.js's leak scan so scan and rewrite cannot disagree.
+ * Fresh instances per call: a `/g` RegExp carries `lastIndex`, so no caller shares one.
+ */
+function opencodeClaudeOnlyFormPatterns() {
+  return [new RegExp(OPENCODE_SKILLS_LOCATOR_RE.source, 'g'), new RegExp(OPENCODE_LAUNCHER_HINT_RE.source, 'g')];
+}
 
 function rewriteOpencodeClaudeOnlyForms(content) {
   return content
@@ -4849,8 +4854,9 @@ export = {
   convertClaudeToKiloFrontmatter,
   // #4779: the single owner of the OpenCode `.claude/skills/` + `--claude --local` rewrites
   rewriteOpencodeClaudeOnlyForms,
+  rewriteOpencodeHomeForms,
   rewriteOpencodeCorpusText,
-  OPENCODE_CLAUDE_ONLY_FORM_PATTERNS,
+  opencodeClaudeOnlyFormPatterns,
   _decodeToolScalar: decodeToolScalar,
   _buildOpencodeAgentPermissionBlock: buildOpencodeAgentPermissionBlock,
   _splitToolScalars: splitToolScalars,
