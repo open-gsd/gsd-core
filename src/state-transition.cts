@@ -2745,48 +2745,69 @@ function plannedPhaseCore(
 // whole `## Current Position` body with the four template lines. Anything else
 // an operator kept in that section (`Blocked on:`, `Carry-over:`, ...) used to
 // be deleted silently. These two helpers are the ONE shared treatment of those
-// lines, so the two intents cannot diverge: collect every line GSD does not
-// own before the reset, then re-home it under `## Accumulated Context`.
+// lines, so the two intents cannot diverge: collect every line the reset does
+// not rewrite before it runs, then re-home it under `## Accumulated Context`.
 
 /**
- * The fields the state commands own in `## Current Position`, lower-cased: every
- * body label `STATE_FIELD_SCHEMA` declares as a frontmatter source, plus the
- * labels `buildStateFrontmatter` (src/state.cts) reads with `stateExtractField`
- * outside the schema (`Total Phases`, `Total Plans in Phase`, `Progress`) and
- * the template's `Phase` and `Plan`. Matched as that reader matches them
- * (case-insensitive; `**Label:**`, `Label:` or a two-cell table row).
+ * The labels the reset itself rewrites in `## Current Position`, lower-cased:
+ * the four template lines (`Phase`, `Plan`, `Status`, `Last activity`) and the
+ * template's `Progress`. The first line outside a fence reading as one of these
+ * is replaced by the reset; nothing else is dropped.
  */
-const CURRENT_POSITION_OWNED_LABELS: readonly string[] = [...new Set([
+const CURRENT_POSITION_RESET_LABELS: readonly string[] = ['phase', 'plan', 'status', 'last activity', 'progress'];
+
+/**
+ * Every label the frontmatter sync may read from the body, lower-cased: each
+ * body label `STATE_FIELD_SCHEMA` declares as a frontmatter source, the labels
+ * `buildStateFrontmatter` (src/state.cts) reads with `stateExtractField`
+ * outside the schema (`Total Phases`, `Total Plans in Phase`, `Progress`) and
+ * the template's `Phase` and `Plan`. A moved line reading as one of these is
+ * written as a list item so the sync cannot read an old-milestone value back.
+ */
+const BODY_FIELD_LABELS: readonly string[] = [...new Set([
   ...Object.values(STATE_FIELD_SCHEMA).flatMap((row) => row.bodySource ?? []),
   'Total Phases', 'Total Plans in Phase', 'Progress', 'Phase', 'Plan',
 ].map((label) => label.toLowerCase()))];
 
-/** The owned label `line` reads as, lower-cased, or null. */
-function ownedLabelOf(line: string): string | null {
-  for (const label of CURRENT_POSITION_OWNED_LABELS) {
+/** The label of `labels` that `line` reads as (as `stateExtractField` reads it), or null. */
+function labelOf(line: string, labels: readonly string[]): string | null {
+  for (const label of labels) {
     if (stateExtractField(line, label) !== null) return label;
   }
   return null;
 }
 
 /**
- * Collect the lines of `## Current Position` GSD does not own, in order, as
- * they are to be written under `## Accumulated Context`. The first line outside
- * a fence reading as each owned field is that field (the reset replaces it); a
- * later line with the same label (a second `Status:`) is operator content. A
- * collected line `stateExtractField` would still read as an owned field (that
- * second `Status:`, or one inside a fence) is written as a list item: the
- * frontmatter sync reads those labels body-wide, so a verbatim move would bring
- * an old-milestone value back. Blank lines outside a fence are layout; a fenced
- * block moves whole, and one left unclosed gets a closing delimiter of the
- * opener's character and length so it cannot swallow what follows. Headings
- * are located fence-aware via `tokenizeHeadings`; a trailing `\r` is dropped
- * (CRLF input). Returns `[]` when the section is absent.
+ * How many indented lines directly below `lines[i]` wrap its value. Only an
+ * indented, non-list line counts: an unindented line below a field is operator
+ * content, and treating it as the field's continuation would delete it.
  */
-function collectNonTemplateCurrentPositionLines(body: string): string[] {
+function wrappedValueLines(lines: readonly string[], inFence: readonly boolean[], i: number): number {
+  let n = 0;
+  while (
+    i + 1 + n < lines.length && !inFence[i + 1 + n] &&
+    /^[ \t]+\S/.test(lines[i + 1 + n]) && !/^[ \t]*(?:[-*+]|\d+[.)])\s/.test(lines[i + 1 + n])
+  ) n++;
+  return n;
+}
+
+/**
+ * Collect the lines of `## Current Position` the reset does not rewrite, in
+ * order. `reported` holds each as the operator wrote it (the JSON result);
+ * `written` holds what goes under `## Accumulated Context`: a line that still
+ * reads as a field (the sync reads labels body-wide) becomes a list item
+ * (`- Status: ...`) so an old-milestone value cannot return. The first line
+ * outside a fence reading as each reset label is replaced by the reset and
+ * dropped with the indented lines that wrap its value; a later one is operator
+ * content. Blank lines outside a fence are layout; a fenced block moves whole,
+ * and an unclosed one gets a closing delimiter. A trailing `\r` is dropped.
+ * Both lists are empty when the section is absent.
+ */
+function collectNonTemplateCurrentPositionLines(body: string): { reported: string[]; written: string[] } {
+  const none = { reported: [], written: [] };
   const hs = tokenizeHeadings(body);
   const posIdx = hs.findIndex((h) => h.level === 2 && /^current\s+position$/i.test(h.text));
-  if (posIdx === -1) return [];
+  if (posIdx === -1) return none;
   const h = hs[posIdx];
   const headingLine = body.split('\n')[h.line - 1];
   const sectionStart = h.offset + headingLine.length + 1;
@@ -2794,7 +2815,7 @@ function collectNonTemplateCurrentPositionLines(body: string): string[] {
   for (let j = posIdx + 1; j < hs.length; j++) {
     if (STOP_H2_PLUS(hs[j].level)) { sectionEnd = hs[j].offset - 1; break; }
   }
-  if (sectionStart >= sectionEnd) return [];
+  if (sectionStart >= sectionEnd) return none;
 
   const lines = body.slice(sectionStart, sectionEnd).split('\n').map((l) => l.replace(/\r$/, ''));
   const inFence = new Array<boolean>(lines.length).fill(false);
@@ -2805,21 +2826,29 @@ function collectNonTemplateCurrentPositionLines(body: string): string[] {
     if (block.closeLineIdx === -1) unclosedFence = block.char.repeat(block.len);
   }
   const seen = new Set<string>();
-  const moved: string[] = [];
-  lines.forEach((line, i) => {
-    const label = ownedLabelOf(line);
+  const reported: string[] = [];
+  const written: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (!inFence[i]) {
-      if (line.trim() === '') return;
-      if (label !== null && !seen.has(label)) { seen.add(label); return; }
+      if (line.trim() === '') continue;
+      const resetLabel = labelOf(line, CURRENT_POSITION_RESET_LABELS);
+      if (resetLabel !== null && !seen.has(resetLabel)) {
+        seen.add(resetLabel);
+        i += wrappedValueLines(lines, inFence, i);
+        continue;
+      }
     }
-    moved.push(label === null ? line : `- ${line}`);
-  });
+    reported.push(line);
+    written.push(labelOf(line, BODY_FIELD_LABELS) === null ? line : `- ${line}`);
+  }
   if (unclosedFence !== '') {
     // Blank lines at the end of the section belong to the layout, not the block.
-    while (moved.length > 0 && moved[moved.length - 1].trim() === '') moved.pop();
-    moved.push(unclosedFence);
+    while (reported.length > 0 && reported[reported.length - 1].trim() === '') { reported.pop(); written.pop(); }
+    reported.push(unclosedFence);
+    written.push(unclosedFence);
   }
-  return moved;
+  return { reported, written };
 }
 
 /**
@@ -2837,9 +2866,9 @@ function placeUnderAccumulatedContext(body: string, lines: string[]): string {
   const eol = body.includes('\r\n') ? '\r\n' : '\n';
   const block = lines.map((l) => l + eol).join('');
   const hs = tokenizeHeadings(body);
-  const idx = hs.findIndex((h) => h.level === 2 && /^accumulated\s+context$/i.test(h.text));
+  const idx = hs.findIndex((h) => h.level === 2 && /^accumulated\s+context\b/i.test(h.text));
   if (idx === -1) {
-    const lead = body === '' ? '' : body.endsWith('\n') ? eol : eol + eol;
+    const lead = body.endsWith('\n') ? eol : eol + eol;
     return `${body}${lead}## Accumulated Context${eol}${eol}${block}`;
   }
   const h = hs[idx];
@@ -2900,7 +2929,7 @@ function milestoneSwitchCore(
     `Last activity: ${today} — Milestone ${intent.version} started\n\n`;
 
   // #6174: operator lines in the section the reset is about to replace.
-  const movedLines = collectNonTemplateCurrentPositionLines(body);
+  const moved = collectNonTemplateCurrentPositionLines(body);
 
   let newBody: string;
   const hs = tokenizeHeadings(body);
@@ -2923,8 +2952,8 @@ function milestoneSwitchCore(
     newBody = `${preface.trimEnd()}\n\n## Current Position\n${resetPositionBody}`;
   }
 
-  if (movedLines.length > 0) {
-    newBody = placeUnderAccumulatedContext(newBody, movedLines);
+  if (moved.written.length > 0) {
+    newBody = placeUnderAccumulatedContext(newBody, moved.written);
     updated.push('Accumulated Context');
   }
 
@@ -2948,7 +2977,10 @@ function milestoneSwitchCore(
     },
   };
   for (const [key, value] of Object.entries(existingFm)) {
-    if (!(key in fm) && getFieldClassification(key) === null) fm[key] = value;
+    if (!Object.prototype.hasOwnProperty.call(fm, key) && getFieldClassification(key) === null) {
+      // defineProperty, not `fm[key] =`: a `__proto__` key must be data, not a prototype swap.
+      Object.defineProperty(fm, key, { value, enumerable: true, writable: true, configurable: true });
+    }
   }
   // Splice, not rebuild: a key the switch carries keeps its original lines
   // byte for byte, so its full-line and inline comments survive (#6174), and
@@ -2964,9 +2996,11 @@ function milestoneSwitchCore(
     propagateCommentChannel(existingFm as unknown as Frontmatter, fm as unknown as Frontmatter);
     fmBlock = `---\n${reconstructFrontmatter(fm as unknown as Frontmatter)}\n---`;
   }
-  const assembled = `${fmBlock}\n\n${newBody.replace(/^\n+/, '')}`;
-  return movedLines.length > 0
-    ? { content: assembled, updated, data: { moved_current_position_lines: movedLines } }
+  // One line ending across the seam: the document's, for the block and the gap alike.
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
+  const assembled = `${fmBlock.replace(/\r?\n/g, eol)}${eol}${eol}${newBody.replace(/^\n+/, '')}`;
+  return moved.reported.length > 0
+    ? { content: assembled, updated, data: { moved_current_position_lines: moved.reported } }
     : { content: assembled, updated };
 }
 
@@ -3076,6 +3110,13 @@ function milestoneCompleteCore(
   const { body: initialBody, reassemble } = beginFrontmatterReassembly(content, deps.sourcePath);
   let body = initialBody;
 
+  // #6174: operator lines in the section the reset is about to replace, read
+  // BEFORE the field replacements below: their first-match `Status:` /
+  // `Last activity:` rewrite is not fence-aware, so a fenced example above the
+  // live line would be the one edited, and the two intents would move
+  // different text for the same input.
+  const moved = collectNonTemplateCurrentPositionLines(body);
+
   // Status — `<version> milestone complete`.
   const statusAfter = stateReplaceFieldWithFallback(body, 'Status', null, `${version} milestone complete`);
   if (statusAfter !== body) {
@@ -3109,8 +3150,6 @@ function milestoneCompleteCore(
     `Plan: —\n` +
     `Status: Awaiting next milestone\n` +
     `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
-  // #6174: operator lines in the section the reset is about to replace.
-  const movedLines = collectNonTemplateCurrentPositionLines(body);
   const positionReset = resetSectionVerbatim(
     body,
     (h) => h.level === 2 && /^current\s+position$/i.test(h.text),
@@ -3122,8 +3161,8 @@ function milestoneCompleteCore(
     body = `${body.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
   }
   updated.push('Current Position');
-  if (movedLines.length > 0) {
-    body = placeUnderAccumulatedContext(body, movedLines);
+  if (moved.written.length > 0) {
+    body = placeUnderAccumulatedContext(body, moved.written);
     updated.push('Accumulated Context');
   }
 
@@ -3140,8 +3179,8 @@ function milestoneCompleteCore(
   }
   updated.push('Operator Next Steps');
 
-  return movedLines.length > 0
-    ? { content: reassemble(body), updated, data: { moved_current_position_lines: movedLines } }
+  return moved.reported.length > 0
+    ? { content: reassemble(body), updated, data: { moved_current_position_lines: moved.reported } }
     : { content: reassemble(body), updated };
 }
 

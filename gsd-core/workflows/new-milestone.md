@@ -206,8 +206,8 @@ milestone version/name into the YAML frontmatter, resets `status` to
 section to the new-milestone template. Accumulated Context (decisions,
 blockers, todos) is preserved across the switch — symmetric with
 `milestone.complete`. Frontmatter keys STATE.md does not define (for example a
-custom `team_owner`) keep their values. A line in `## Current Position` that is
-not a field the state commands own (for example `Blocked on:` or `Carry-over:`)
+custom `team_owner`) keep their values. A line in `## Current Position` that the
+reset does not rewrite (for example `Blocked on:` or `Carry-over:`)
 is moved to the top of `## Accumulated Context` and listed in the command's
 JSON result under `moved_current_position_lines`; `milestone.complete` does the
 same (#6174).
