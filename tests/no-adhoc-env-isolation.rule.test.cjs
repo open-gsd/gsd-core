@@ -3,16 +3,12 @@
 /**
  * no-adhoc-env-isolation.rule.test.cjs
  *
- * #6035 (epic #4635 Phase 3): tests for the local/no-adhoc-env-isolation
- * ESLint rule and its allowlist: arm 1 (an inline PATH split or filter), arm 2
- * (a hand-built HOME / USERPROFILE env), the boundary the rule's reference
- * page documents (the rule header links it), the stale-entry
- * ratchet, a red demonstration through the repository's own eslint.config.mjs,
- * and the per-file site counts: every file under tests/ is linted with the
- * allowlist emptied, and its count must equal the one
- * eslint-rules/no-adhoc-env-isolation.allowlist.json records
- * (scripts/lib/allowlist-ratchet.cjs `assertFileBaseline`, #597). Structural
- * guards on the allowlist are each driven against a synthetic violation.
+ * #6035 (epic #4635 Phase 3): tests for the local/no-adhoc-env-isolation ESLint rule: arm 1
+ * (an inline PATH split or filter), arm 2 (a hand-built HOME / USERPROFILE env), the boundary the rule's reference page documents (the rule header links it), a red
+ * demonstration through the repository's own eslint.config.mjs, and the guards that the rule
+ * has no exemption surface (#3148's shape): no allowlist file, no rule option, and every file
+ * under tests/ lints to zero sites with inline config off, so an `eslint-disable` comment
+ * naming the rule cannot hide a site.
  */
 
 const { test, describe } = require('node:test');
@@ -20,7 +16,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { RuleTester, ESLint } = require('eslint');
-const { assertFileBaseline } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 const rule = require('../eslint-rules/no-adhoc-env-isolation.cjs');
 
@@ -448,44 +443,6 @@ describe('no-adhoc-env-isolation: the documented out-of-scope examples are not f
   });
 });
 
-// ─── allowlist ratchet ───────────────────────────────────────────────────────
-
-describe('no-adhoc-env-isolation: allowlist', () => {
-  const allowlisted = 'tests/legacy.test.cjs';
-
-  test('valid: an allowlisted file with copies reports nothing', () => {
-    run([
-      {
-        code: 'spawnSync(cmd, [], { env: { ...process.env, HOME: tmp } }); process.env.PATH.split(":");',
-        filename: allowlisted,
-        options: [{ allowlist: [allowlisted] }],
-      },
-    ], []);
-  });
-
-  test('invalid: an allowlisted file with no copy left reports its own entry stale', () => {
-    run([], [
-      {
-        code: 'const e = isolatedEnv({ home: tmp });',
-        filename: allowlisted,
-        options: [{ allowlist: [allowlisted] }],
-        errors: [{ messageId: 'staleAllowlistEntry', data: { file: allowlisted } }],
-      },
-    ]);
-  });
-
-  test('invalid: a site in a file the allowlist does not name is reported', () => {
-    run([], [
-      {
-        code: 'const e = { HOME: tmp };',
-        filename: 'tests/not-listed.test.cjs',
-        options: [{ allowlist: [allowlisted] }],
-        errors: [{ messageId: 'adhocHomeConstruction' }],
-      },
-    ]);
-  });
-});
-
 // ─── red demonstration through the repository's own config ──────────────────
 
 describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
@@ -505,7 +462,7 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
     return result.messages.filter((m) => m.ruleId === RULE_ID).map((m) => m.messageId);
   }
 
-  test('red demonstration: both copies fail lint in a file the allowlist does not name', async () => {
+  test('red demonstration: both copies fail lint in any new test file', async () => {
     const ids = await ruleMessages(COPIES, 'tests/adhoc-env-isolation-reintroduced.test.cjs');
     assert.deepStrictEqual(ids.sort(), ['adhocHomeConstruction', 'inlinePathFilter']);
   });
@@ -518,61 +475,44 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
     ]);
   });
 
-  test('a listed file is silent while it carries a copy and reports stale once it does not', async () => {
-    // A synthetic entry, so the row holds once the drain waves empty the real list.
-    const listed = 'tests/adhoc-env-isolation-listed-6035.test.cjs';
-    const listedEslint = new ESLint({
+  test('the rule takes no options: an allowlist cannot be wired back in through config', async () => {
+    const filePath = path.join(REPO_ROOT, 'tests/adhoc-env-isolation-option-6040.test.cjs');
+    const withRule = (options) => new ESLint({
       cwd: REPO_ROOT,
-      overrideConfig: { files: ['tests/**/*.cjs'], rules: { [RULE_ID]: ['error', { allowlist: [listed] }] } },
+      overrideConfig: { files: ['tests/**/*.cjs'], rules: { [RULE_ID]: ['error', ...options] } },
     });
-    async function listedMessages(text) {
-      const [result] = await listedEslint.lintText(text, { filePath: path.join(REPO_ROOT, listed) });
-      return result.messages.filter((m) => m.ruleId === RULE_ID).map((m) => m.messageId);
-    }
-    assert.deepStrictEqual(await listedMessages(COPIES), []);
-    assert.deepStrictEqual(await listedMessages(CLEAN), ['staleAllowlistEntry']);
+    // Control: the same config without the option lints, so the rejection below is the option's.
+    await withRule([]).lintText(CLEAN, { filePath });
+    await assert.rejects(() => withRule([{ allowlist: ['tests/legacy.test.cjs'] }]).lintText(CLEAN, { filePath }));
+  });
+
+  test('eslint.config.mjs wires the rule at error severity with no options', async () => {
+    eslint ??= new ESLint({ cwd: REPO_ROOT });
+    const config = await eslint.calculateConfigForFile(path.join(REPO_ROOT, 'tests/adhoc-env-isolation-config-6040.test.cjs'));
+    assert.deepStrictEqual(config.rules[RULE_ID], [2]);
+    // An unused `eslint-disable` for this rule is an error, so a rule-specific disable has no form
+    // that passes: a used one is counted below with inline config off, an unused one fails lint.
+    assert.strictEqual(config.linterOptions.reportUnusedDisableDirectives, 2);
   });
 });
 
-// ─── allowlist structure and per-file site counts ────────────────────────────
+// ─── no exemption surface, and zero sites under tests/ ───────────────────────
 
-function readAllowlistText() {
-  return fs.readFileSync(ALLOWLIST_PATH, 'utf8');
-}
-
-function readAllowlist() {
-  return JSON.parse(readAllowlistText());
-}
-
-/** The allowlist's one accepted spelling: a key-sorted map, two-space indent, trailing newline. */
-function canonicalText(map) {
-  const sorted = Object.fromEntries(Object.keys(map).sort().map((k) => [k, map[k]]));
-  return JSON.stringify(sorted, null, 2) + '\n';
-}
-
-function findDeadEntries(files, root) {
-  return files.filter((entry) => !fs.existsSync(path.join(root, entry)));
-}
-
-function findMisplacedEntries(files) {
-  return files.filter((entry) => entry.includes('\\') || !entry.startsWith('tests/') || !entry.endsWith('.cjs'));
-}
-
-function findBadCounts(map) {
-  return Object.keys(map).filter((k) => !Number.isInteger(map[k]) || map[k] < 1);
-}
+describe('no-adhoc-env-isolation: no allowlist', () => {
+  test('the allowlist file does not exist', () => {
+    assert.strictEqual(fs.existsSync(ALLOWLIST_PATH), false, `${ALLOWLIST_PATH} exists: the rule has no allowlist`);
+  });
+});
 
 function toRel(file) {
   return path.relative(REPO_ROOT, file).split(path.sep).join('/');
 }
 
 /**
- * The ESLint that counts sites: the rule runs with an empty allowlist, so it
- * reports every site rather than counting listed files silently, and with
- * inline config off, so an `eslint-disable` comment cannot hide a site from
- * the count. The exempt helper stays out, as it does in eslint.config.mjs.
- * `extraConfig` adds config objects after the repository's (a row's synthetic
- * global ignore); such a row also turns off the unmatched-pattern error.
+ * The ESLint that counts sites: the rule runs with no options and with inline config off, so an
+ * `eslint-disable` comment cannot hide a site from the count. The exempt helper stays out, as it
+ * does in eslint.config.mjs. `extraConfig` adds config objects after the repository's (a row's
+ * synthetic global ignore); such a row also turns off the unmatched-pattern error.
  */
 function siteCountEslint(extraConfig = []) {
   return new ESLint({
@@ -583,7 +523,7 @@ function siteCountEslint(extraConfig = []) {
       {
         files: ['tests/**/*.cjs'],
         ignores: [EXEMPT_FILE],
-        rules: { [RULE_ID]: ['error', { allowlist: [] }] },
+        rules: { [RULE_ID]: 'error' },
       },
       ...extraConfig,
     ],
@@ -652,74 +592,7 @@ async function measureSiteCounts() {
   return { ...countSites(results), unvisited: findUnvisited(onDisk, results) };
 }
 
-/** The four ways measured counts can differ from the recorded ones (#597's per-file form). */
-function ratchetDiff(current, baseline) {
-  const { grown, shrunk, added, removed } = assertFileBaseline({
-    label: 'no-adhoc-env-isolation',
-    current,
-    baseline,
-    fail: () => {},
-  });
-  return { grown, shrunk, added, removed };
-}
-
-const CLEAN_DIFF = { grown: [], shrunk: [], added: [], removed: [] };
-
-describe('no-adhoc-env-isolation allowlist: structure', () => {
-  test('is a key-sorted, duplicate-free map of tests/**/*.cjs paths to positive site counts', () => {
-    const text = readAllowlistText();
-    const map = JSON.parse(text);
-    assert.ok(map && typeof map === 'object' && !Array.isArray(map), 'the allowlist must parse to an object');
-    assert.strictEqual(text, canonicalText(map), 'keys must be sorted and unique, in canonical JSON: the drain waves take them in order');
-    assert.deepStrictEqual(findMisplacedEntries(Object.keys(map)), []);
-    assert.deepStrictEqual(findBadCounts(map), []);
-  });
-
-  test('every entry names a file that exists, and never the exempt helper', () => {
-    const files = Object.keys(readAllowlist());
-    assert.deepStrictEqual(findDeadEntries(files, REPO_ROOT), []);
-    assert.ok(!files.includes(EXEMPT_FILE), `${EXEMPT_FILE} is exempt in eslint.config.mjs, not allowlisted`);
-  });
-
-  test('each structural check flags a synthetic violation', () => {
-    assert.notStrictEqual(canonicalText({ 'tests/b.test.cjs': 1, 'tests/a.test.cjs': 1 }), '{\n  "tests/b.test.cjs": 1,\n  "tests/a.test.cjs": 1\n}\n');
-    const duplicated = '{\n  "tests/a.test.cjs": 1,\n  "tests/a.test.cjs": 2\n}\n';
-    assert.notStrictEqual(canonicalText(JSON.parse(duplicated)), duplicated);
-    assert.deepStrictEqual(
-      findMisplacedEntries(['tests\\a.test.cjs', 'src/a.cts', 'tests/a.md', 'tests/ok.test.cjs']),
-      ['tests\\a.test.cjs', 'src/a.cts', 'tests/a.md'],
-    );
-    assert.deepStrictEqual(
-      findDeadEntries(['tests/does-not-exist-6035.test.cjs', 'tests/no-adhoc-env-isolation.rule.test.cjs'], REPO_ROOT),
-      ['tests/does-not-exist-6035.test.cjs'],
-    );
-    assert.deepStrictEqual(findBadCounts({ 'tests/a.cjs': 0, 'tests/b.cjs': 1.5, 'tests/c.cjs': '2', 'tests/d.cjs': 2 }), [
-      'tests/a.cjs',
-      'tests/b.cjs',
-      'tests/c.cjs',
-    ]);
-  });
-
-  test('the count comparison flags each boundary: count-1, count, count+1, an added file and a removed file', () => {
-    const baseline = { 'tests/listed.test.cjs': 3 };
-    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 2 }, baseline), {
-      ...CLEAN_DIFF,
-      shrunk: [{ name: 'tests/listed.test.cjs', from: 3, to: 2, delta: 1 }],
-    });
-    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 3 }, baseline), CLEAN_DIFF);
-    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 4 }, baseline), {
-      ...CLEAN_DIFF,
-      grown: [{ name: 'tests/listed.test.cjs', from: 3, to: 4, delta: 1 }],
-    });
-    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 3, 'tests/new.test.cjs': 1 }, baseline), {
-      ...CLEAN_DIFF,
-      added: ['tests/new.test.cjs'],
-    });
-    assert.deepStrictEqual(ratchetDiff({}, baseline), { ...CLEAN_DIFF, removed: ['tests/listed.test.cjs'] });
-  });
-});
-
-describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
+describe('no-adhoc-env-isolation: zero sites under tests/', () => {
   test('an eslint-disable comment for the rule does not hide a copy from the count', async () => {
     const rel = 'tests/adhoc-env-isolation-disabled-6035.test.cjs';
     const text = [
@@ -735,8 +608,6 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
     assert.deepStrictEqual(linted.messages.filter((m) => m.ruleId === RULE_ID), []);
     const { counts } = countSites(await siteCountEslint().lintText(text, { filePath }));
     assert.deepStrictEqual(counts, { [rel]: 2 });
-    const recorded = readAllowlist();
-    assert.deepStrictEqual(ratchetDiff({ ...recorded, ...counts }, recorded), { ...CLEAN_DIFF, added: [rel] });
   });
 
   // #6570: tests/no-unbounded-spawn-allowlist.test.cjs writes tests/helpers/__probe_recursion_detect_3148.cjs into
@@ -780,7 +651,7 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
     assert.ok(unvisited.length > 0, 'the ignore must leave files unvisited, or the row proves nothing');
   });
 
-  test('every file under tests/ carries exactly the sites the allowlist records', async () => {
+  test('no file under tests/ carries a hand-written env-isolation copy, hidden or not', async () => {
     const { counts, unparsed, unvisited } = await measureSiteCounts();
     assert.deepStrictEqual(unparsed, [], 'a file ESLint cannot parse has no measured count');
     assert.deepStrictEqual(
@@ -790,14 +661,12 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
         'would go uncounted. Find the ignore that covers them (an ignores entry in eslint.config.mjs, or an ESLint ' +
         'default such as **/node_modules/) and lift it for these files.',
     );
-    const diff = ratchetDiff(counts, readAllowlist());
     assert.deepStrictEqual(
-      diff,
-      CLEAN_DIFF,
-      'The allowlist records each file\'s count of hand-written env-isolation copies. ' +
-        'grown/added: build the env with isolatedEnv() or the PATH with isolatedPath() from tests/helpers/isolated-env.cjs instead; if neither can, ' +
-        'CONTRIBUTING.md ("The lint rule that enforces child-env isolation") states the one way an entry grows. ' +
-        'shrunk/removed: lower the count in eslint-rules/no-adhoc-env-isolation.allowlist.json, or delete the entry at zero.',
+      counts,
+      {},
+      'There is no allowlist: tests/helpers/isolated-env.cjs is the only route. Build the env with isolatedEnv() or ' +
+        'homePair(), or the PATH with isolatedPath(). An eslint-disable naming the rule does not exempt a file: inline ' +
+        'config is off for this count.',
     );
   });
 });

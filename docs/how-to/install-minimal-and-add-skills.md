@@ -2,7 +2,7 @@
 
 Install GSD Core with a small skill footprint to keep cold-start context low, then grow the surface — live or on reinstall — only when you need more. Use this when context budget matters: large existing projects, constrained models, or runtimes where every description token counts.
 
-**What you need:** A supported runtime and the standard installer prerequisites (Node.js 18+ and npx). If you have not installed GSD at all yet, read [Install on your runtime](install-on-your-runtime.md) first — this guide covers the *profile* choice that layers on top of any runtime install.
+**What you need:** A supported runtime and the standard installer prerequisites (Node.js 24+ and npx). If you have not installed GSD at all yet, read [Install on your runtime](install-on-your-runtime.md) first — this guide covers the *profile* choice that layers on top of any runtime install.
 
 ---
 

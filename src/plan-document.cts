@@ -139,12 +139,24 @@ interface PlanDocument {
 
 // ─── Task grammar ─────────────────────────────────────────────────────────────
 
-// The legacy counting rule, preserved verbatim from cmdPhasePlanIndex. `g` is
-// required (we count every occurrence) and these are rebuilt per call rather
-// than hoisted to module scope: a global regex carries mutable `lastIndex`
-// state, and a shared instance is a cross-call contamination bug.
-function xmlTaskOpenings(content: string): RegExpMatchArray[] {
-  return [...content.matchAll(/<task(?=[\s>])[^>]*>/gi)];
+// The legacy counting rule, now a linear scan (#6420): unclosed `<task` runs
+// made the old `[^>]*>` rescan quadratic. The opener regex is rebuilt per call
+// rather than hoisted to module scope: a global regex carries mutable
+// `lastIndex` state, and a shared instance is a cross-call contamination bug.
+function xmlTaskOpenings(content: string): Array<{ index: number; 0: string }> {
+  const openings: Array<{ index: number; 0: string }> = [];
+  const opener = /<task(?=[\s>])/gi; // built per call — no shared lastIndex state
+  let match = opener.exec(content);
+  while (match !== null) {
+    const gt = content.indexOf('>', opener.lastIndex);
+    // A `<task` with no following `>` matches nothing today either ([^>]*>
+    // requires one), and no later `<task` can find one — stop.
+    if (gt === -1) break;
+    openings.push({ index: match.index, 0: content.slice(match.index, gt + 1) });
+    opener.lastIndex = gt + 1;
+    match = opener.exec(content);
+  }
+  return openings;
 }
 
 function markdownTaskHeadings(content: string): RegExpMatchArray[] {
@@ -212,9 +224,9 @@ function collapseWhitespace(value: string | null): string | null {
 function parseXmlTasks(content: string): PlanTask[] {
   const openings = xmlTaskOpenings(content);
   return openings.map((match, i) => {
-    const start = match.index ?? 0;
+    const start = match.index;
     const openTag = match[0];
-    const nextStart = i + 1 < openings.length ? (openings[i + 1].index ?? content.length) : content.length;
+    const nextStart = i + 1 < openings.length ? openings[i + 1].index : content.length;
     const window = content.slice(start, nextStart);
     const closeIdx = window.search(/<\/task\s*>/i);
     const block = closeIdx === -1 ? window : window.slice(0, closeIdx);
@@ -282,11 +294,26 @@ function parseMarkdownTasks(content: string): PlanTask[] {
  * Preserved verbatim from `cmdPhasePlanIndex`: the first line following an
  * `<objective>` tag. Deliberately NOT widened to the full element body — that
  * would change `phase.plan-index`'s existing output for any multi-line
- * objective.
+ * objective. The scan is linear (#6420); the RESULT is what is preserved
+ * verbatim.
  */
 function extractObjective(content: string): string | null {
-  const m = content.match(/<objective>\s*\n?\s*(.+)/);
-  return m ? m[1].trim() : null;
+  const tag = '<objective>';
+  const start = content.indexOf(tag);
+  if (start === -1) return null;
+  let i = start + tag.length;
+  while (i < content.length && /\s/.test(content[i])) i++;
+  // An all-whitespace tail: the old regex still matched with `(.+)` landing on
+  // a space, and `''` is what the caller's `extractObjective(content) || fm ||
+  // null` chain collapses to `null` anyway — null is publicly identical.
+  if (i >= content.length) return null;
+  // The old `(.+)` ran to the next LINE TERMINATOR, not just `\n`: JS `.` also
+  // excludes \r, U+2028 and U+2029. Stop the slice at any of them.
+  let end = i;
+  while (end < content.length && !/[\n\r\u2028\u2029]/.test(content[end])) end++;
+  // After the whitespace skip, content[i] is non-whitespace, so the slice can never
+  // trim to '' — the all-whitespace tail already returned above.
+  return content.slice(i, end).trim();
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────

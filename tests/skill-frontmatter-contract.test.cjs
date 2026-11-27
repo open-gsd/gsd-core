@@ -932,7 +932,10 @@ const DEFAULT_BUDGET = 60;
 // takes — the pinned response-language directive and its blank separator — are a
 // coverage contract every workflow carries, not content creep, which is what this
 // budget guards. The ratchet rule is unchanged: actualMax 846, slack 0.
-const FULL_BUDGET = 846;
+// Raised 846 → 847 for #6451: the --force-mvp-gate entry in the complete reference
+// is the docs-parity contract for a new user-facing flag (CONTRIBUTING.md "New
+// command or flag"), carried content, not content creep. actualMax 847, slack 0.
+const FULL_BUDGET = 847;
 
 // Grace bands:
 //   SMALL_GRACE — for the tiny brief/default/dispatcher files (≤ ~70 lines):
