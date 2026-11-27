@@ -120,8 +120,8 @@ treatment.
 | Render | Called from | Returns |
 |---|---|---|
 | `loop render-hooks <point>` (no `--context`) | phase hosts, unchanged | hooks with the field absent or listing `"phase"` |
-| `loop render-hooks <point> --context quick-legacy` | the v1.21.0 `/gsd-quick` call sites (`quick.md:303` `plan:pre` and `:583` Step 6.25 `execute:post`), and from increment 3 the quick-batch one (`quick-batch/steps/planner-wave.md:27` `plan:pre`) | unannotated hooks only |
-| `loop render-hooks plan:pre --context quick-batch-legacy` | `quick-batch/steps/planner-wave.md:27` in increments 1 and 2, and from increment 3 only for a batch started before it (transitional, below) | hooks with the field absent or listing `"quick"`; never a `["phase"]` hook |
+| `loop render-hooks <point> --context quick-legacy` | the v1.21.0 `/gsd-quick` call sites (`quick.md:303` `plan:pre` and `:583` Step 6.25 `execute:post`), and from increment 3 one of the two literal calls at the quick-batch legacy `plan:pre` site (`quick-batch/steps/planner-wave.md:27`), taken for every batch not marked as started before increment 3 (below) | unannotated hooks only |
+| `loop render-hooks plan:pre --context quick-batch-legacy` | `quick-batch/steps/planner-wave.md:27` in increments 1 and 2, and from increment 3 the other literal call at that site, taken only for a batch started before increment 3 (transitional, below) | hooks with the field absent or listing `"quick"`; never a `["phase"]` hook |
 | `loop render-hooks <point> --context quick --quick <id> --quick-modes <set>` | the new `/gsd-quick` D2 call sites | hooks listing `"quick"` only, plus the quick context (D3) |
 
 Any other `--context` value is refused. `--quick` and `--quick-modes` are accepted only with
@@ -138,13 +138,25 @@ only in increment 3. Had increment 1 moved that site to `quick-legacy`, a hook w
 transitional `quick-batch-legacy` render prevents that. The site's dispatch text stays as it is, so
 it injects the annotated contributions exactly as v1.21.0 does, without a `<quick_context>` block,
 and still runs no `plan:pre` step or gate. From increment 3 the site renders `quick-legacy`, next to
-its new per-invocation dispatch, for every batch with a frozen hook set of its own. A batch started
-before increment 3 keeps `quick-batch-legacy`, so its planners keep receiving what they received
-when it started (D4). `references/loop-hook-dispatch.md` documents the value as core-internal, for
-that one site. The alternative, a
-validation error for an annotated `plan:pre` contribution until increment 3, cannot be limited to
-quick-batch: validation is per shape and `"quick"` covers both hosts (D2), so it would also refuse
-the `/gsd-quick` contribution that increment 1 exists to deliver.
+its new per-invocation dispatch, for every batch not marked as started before increment 3. A batch
+started before increment 3 keeps `quick-batch-legacy`, so its planners keep receiving what they
+received when it started (D4). `references/loop-hook-dispatch.md` documents the value as
+core-internal, for that one site. The alternative, a validation error for an annotated `plan:pre`
+contribution until increment 3, cannot be limited to quick-batch: validation is per shape and
+`"quick"` covers both hosts (D2), so it would also refuse the `/gsd-quick` contribution that
+increment 1 exists to deliver.
+
+**From increment 3 the site picks its context with a branch, never a variable.** `planner-wave.md`
+step 3 holds two literal calls, `loop render-hooks plan:pre --context quick-legacy --raw` and `loop
+render-hooks plan:pre --context quick-batch-legacy --raw`, and runs exactly one of them per planning
+invocation. The branch reads `legacy_hooks` (working name), a boolean in the result of `quick-batch
+planning-start` (#6535), the call that persists the invocation before its hooks run (D4). It reports
+the batch's stored mark (D4): `true` exactly for a batch started before increment 3, `false`
+otherwise. An empty frozen hook set alone never sets it, since a batch created when no annotated
+hook existed has one too. A result without a boolean `legacy_hooks` is a coordinator error: the step
+stops the batch with a diagnostic and renders neither context. Both calls are legacy calls outside
+every `gsd:quick-cell` region, so D5's marker rules apply to them unchanged (D5). Passing the
+context in a variable is rejected as Alternative 10.
 
 **The filter sits in the resolver.** `loop render-hooks` is not the only reader of active hooks:
 `resolveActiveHooksForPoint` (`src/loop-resolver.cts:517`) also has in-process callers, the
@@ -261,20 +273,26 @@ with whatever that point has already produced left in place. The stop report doe
 `/gsd-quick resume <slug>`: a resumed run dispatches no annotated hook until #6530 lands (below), so it
 would continue past the gate without re-evaluating it.
 
-**A resumed `/gsd-quick` dispatches no annotated hook until #6530.** On `next` today `resume <slug>`
-runs `query init.quick` with no slug (`commands/gsd/quick.md:163-166`), which computes a fresh quick
-id from the clock, so the resumed run does not hold the task's own id. Giving hooks that id,
-re-evaluating a gate that stopped the task, and re-entering at the stopped point are the resume
-contract, which #6530 proposes. Its first part, PR #6652, gives the resumed run its signal: the
-RESUME subcommand hands the workflow `RESUME_SLUG`, and Step 2 then runs `query init.quick --resume
-<slug>`, which returns the task's own `quick_id`, `slug` and `task_dir` plus a `resume` object. A
-fresh run's `init.quick` result never carries `resume`. The rest of #6530 (`TASK.json` schema 2 and
-the re-entry) waits for this ADR and increment 1. Until it lands, a run whose Step 2 `init.quick`
-result carries `resume` skips every D2 call site and the `quick-tasks-task-json` call (D3), and keeps
-its v1.21.0 path, including the `--context quick-legacy` dispatch for unannotated hooks. That object
-is the one signal the rule keys on: core sets it, a process test of `query init.quick --resume` pins
-it, and each D2 call site's guard on it is a text contract (D3). Increment 1 relies on it, so it
-merges only after #6652 (Delivery).
+**A resumed `/gsd-quick` dispatches no annotated hook until #6530.** As of 2026-11-26, on `next`,
+`resume <slug>` runs `query init.quick` with no slug (`commands/gsd/quick.md:163-166`), which
+computes a fresh quick id from the clock, so the resumed run does not hold the task's own id. Giving
+hooks that id, re-evaluating a gate that stopped the task, and re-entering at the stopped point are
+the resume contract, which #6530 proposes. The rule below keys on one signal: the `resume` key in
+the result of the workflow's Step 2 `init.quick` (`gsd-core/workflows/quick.md:129`). #6530 item 1
+specifies the `--resume <slug>` flag of that query, whose result carries the task's own `quick_id`,
+`slug` and `task_dir` plus a `resume` object; a fresh run's result has no `resume` key. Two changes
+make a resumed run's Step 2 call it: the RESUME subcommand calls `init.quick --resume` (#6530 item
+3) and hands the workflow `RESUME_SLUG`, and Step 2 then runs `query init.quick --resume
+"$RESUME_SLUG"` in place of `init.quick "$DESCRIPTION"`. #6530 item 3 names only the first;
+increment 1 requires both (PR #6652 makes both). The rest of #6530 (`TASK.json` schema 2 and the
+re-entry) waits for this ADR and increment 1. Until it lands, a run whose Step 2 `init.quick` result
+carries the `resume` key skips every D2 call site and the `quick-tasks-task-json` call (D3), and
+keeps its v1.21.0 path, including the `--context quick-legacy` dispatch for unannotated hooks. The
+rule reads whether the key is present, not the fields inside it, so it needs the key present on
+every resumed run and absent, not `null`, on every fresh one. Core sets it; a process test of `query
+init.quick` pins its presence with `--resume` and its absence without; and each D2 call site's guard
+on it is a text contract (D3). Increment 1 relies on it, so it merges only after the flag and the
+Step 2 change are on `next` (Delivery).
 
 **The `gaps_found` re-run.** Today `quick/steps/quick-verification.md:52` defines only the menu line
 ("Re-run executor to fix gaps"), not what the re-run does. Increment 1 defines it as Step 6 again,
@@ -578,12 +596,13 @@ hook. Annotated steps and gates must be idempotent, and the capability how-to
 recorded; #6531's ancestry rule is what lets the batch resume from that HEAD.
 
 **Batches started before increment 3** have no frozen hook set. The first write a core with
-increment 3 makes to one gives it an empty set marked as started before increment 3 (#6535 stores
-the mark). So its hooks keep v1.21.0 dispatch: its legacy `plan:pre` site keeps rendering `--context
-quick-batch-legacy`, the context the coordinator reports for a batch with that mark (D1), completed
-items stay complete as [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) requires, and no
-annotated hook runs retroactively for any of its items. The hook contract applies from the next
-batch.
+increment 3 makes to one gives it an empty set and marks it as started before increment 3: a
+schema-3 boolean, `legacy_hooks` (working name, #6535 item 1), that this write alone sets to `true`
+and that `create` writes as `false`. So its hooks keep v1.21.0 dispatch: `planning-start` reports
+`legacy_hooks: true`, so the legacy `plan:pre` site takes its literal `--context quick-batch-legacy`
+call (D1), completed items stay complete as [ADR-1239](1239-gsd-embeddable-orchestration-engine.md)
+requires, and no annotated hook runs retroactively for any of its items, finished or not (Departure
+14). The hook contract applies from the next batch.
 
 ### D5 — Logical hosts and per-host coverage
 
@@ -647,6 +666,13 @@ own contract, and the existing one is left as it is:
   nothing for it (`:720`). A D2 cell has at most one target per point, so a call site needs at most
   one contribution marker, and a call that served two targets would carry one per target. A quick
   dispatch call in a quick host's files outside any marker's region fails generation too.
+- **Every `--context` is a literal.** The generator reads a call's context from its text, so in a
+  quick host's files a `loop render-hooks` call with no `--context`, or with a value other than the
+  literal `quick`, `quick-legacy` or `quick-batch-legacy` (a shell variable such as
+  `"$LEGACY_CONTEXT"`, say), fails generation. A call site that needs two contexts carries two
+  literal calls under a workflow branch, as the quick-batch legacy `plan:pre` site does from increment
+  3 (D1). Both of its calls are legacy calls: neither needs a marker, and each ends a region that
+  reaches it, like any other dispatch call.
 - **The gating mode is declared and checked.** The marker carries `mode=<always|discuss|validate>`,
   the flag D2 gates the cell on. The generator checks it against the version table's entry for the
   cell, which records the same mode, and checks that the marker sits in the step file D2 names for it
@@ -705,8 +731,9 @@ The phase hosts keep the existing union check. Converting them to per-host cover
 Three increments, each its own PR, each tracked by its own issue, which needs its own approval before
 code. They merge in this order:
 
-- **Increment 1** after PR #6652 (#6530's first part), whose `init.quick` `resume` object is the
-  signal of the resume rule (D2).
+- **Increment 1** after `query init.quick --resume` and the workflow's Step 2 call of it on a
+  resumed run are on `next` (#6530's first part; PR #6652 implements both), because the `resume`
+  key that call returns is the signal of the resume rule (D2).
 - **Increment 2** after increment 1. It uses the field, the render contexts, the version table and
   the quick host contract that increment 1 adds.
 - **Increment 3** after increment 1, #6531 and #6532. It does not wait for increment 2.
@@ -773,9 +800,12 @@ suite afterwards.
    text contracts for `--discuss`, `--validate` and `--full` (D5).
 3. **quick-batch** (#6535; after increment 1, #6531 and #6532).
    - The logical `quick-batch` host, with the section-loading test for `init.quick-batch --validate`.
-   - Per-invocation `plan:pre` in `planner-wave.md` step 3, with the legacy site there rendering
-     `--context quick-legacy`, or `quick-batch-legacy` for a batch started before increment 3 (D1,
-     D4). Per-item
+   - Per-invocation `plan:pre` in `planner-wave.md` step 3. The legacy site there holds two literal
+     calls, `--context quick-legacy` and `--context quick-batch-legacy`, and a branch on the
+     `legacy_hooks` field of `planning-start`'s result takes the second only for a batch started
+     before increment 3 (D1, D4, D5). A coordinator test pins `legacy_hooks: true` for a batch
+     upgraded from v1 or v2 and `false` for one `create` wrote, an empty hook set included, and a
+     text contract asserts the two literal calls and the branch on that field. Per-item
      `execute:post` in `merge-wave.md` after step 5, and with `ISOLATION=none` in
      `worktree-dispatch.md`. Per-item `verify:*` in `verification-wave.md`. The completion check in
      `completion.md`. Resume of hook outcomes in `resume-mode.md`.
@@ -842,8 +872,9 @@ maintainer's acceptance:
    issue's breaking-changes assessment says none.
 7. **A resumed `/gsd-quick` runs no annotated hook until #6530.** The issue does not address resume.
    Its motivating case is met for a task that runs to completion in one pass, not for one stopped
-   and resumed before #6530 lands. The rule keys on the `resume` object of #6530's first part
-   (PR #6652), so increment 1 also waits for that PR, which the issue's first increment does not.
+   and resumed before #6530 lands. The rule keys on the `resume` key `init.quick --resume` returns
+   (#6530's first part; PR #6652 implements it), so increment 1 also waits for that flag to be on
+   `next`, which the issue's first increment does not.
 8. **`verify:post` runs only after a `passed` verdict.** The issue's matrix runs it "after the
    verifier returns", and its criterion has no passed-only condition. D2 runs it only after
    `passed`, on both hosts, so a hook at `verify:post` never acts on a failed or unresolved
@@ -873,6 +904,18 @@ maintainer's acceptance:
     `worktree-dispatch.md` step 4, which checks each item's `SUMMARY.md` only after every item of the
     round has returned, because that is where the coordinator first learns that the item succeeded.
     By then the later items of its round have executed too.
+14. **A batch started before increment 3 never runs an annotated hook.** The issue's
+    breaking-changes assessment says: "A batch started before the upgrade has none, and resume
+    treats it as having no recorded outcomes." Read that way, a resumed batch would schedule the
+    annotated hooks of its remaining items, none of them recorded yet. D4 instead gives such a batch
+    an empty frozen hook set, marked as started before increment 3, so no annotated hook runs for
+    any of its items, finished or not, and its hooks keep v1.21.0 dispatch, the transitional
+    `quick-batch-legacy` `plan:pre` delivery included (D1). Resolving a hook set on resume would
+    freeze it after the batch began, so a capability enabled in between would join a running batch,
+    which D4's freeze-at-start rule forbids, and a batch created before #6532 has no stored modes to
+    say which cells apply to its items. Annotated `plan:pre` contributions still reach its planners
+    through that legacy delivery, as they did in v1.21.0; no annotated step or gate runs. The hook
+    contract applies from the next batch.
 
 Earlier revisions of this ADR also departed from the issue with frozen batch modes, schema 2 for
 every batch, the HEAD ancestry rule, the "planned once the update persisted" rule and the re-read of
@@ -908,6 +951,13 @@ proposals.
    never silently drops one. Rejected: validation is per shape and `"quick"` covers both hosts, so the
    error would also refuse the `/gsd-quick` contribution increment 1 delivers. The transitional
    `quick-batch-legacy` render keeps the v1.21.0 delivery instead (D1).
+10. **Pass the legacy context in a variable** at the quick-batch `plan:pre` site: one call,
+    `--context "$LEGACY_CONTEXT"`, with the value taken from a coordinator field. Rejected: the
+    generator and the text contracts read a call's context from its text (D5). A variable hides
+    which context the call renders from the text contract that pins the site, and the generator's
+    literal-`--context` rule for quick host files (D5) would need an exception for a value it cannot
+    see. Two literal calls under a branch on `legacy_hooks` keep every context visible and D5's
+    marker rules as they are (D1).
 
 ## Open questions
 
@@ -915,8 +965,10 @@ proposals.
   `--quick`, `--quick-modes`, `--quick-batch`, `--planning`), the render contexts (`quick`,
   `quick-legacy`), the `quickContext` envelope key and the quick context object's keys, the
   `gsd:quick-cell` marker and the `QUICK_HOST_CONTRACT` export (D5), and the `quick-tasks-task-json`
-  verb (D3) are contract surface too. `quick-batch-legacy` is the exception: it is core-internal and
-  used at `planner-wave.md:27` only (D1). Each should be settled before the increment that introduces
-  it merges, since each one is a stability contract. The quick-batch verb names are #6535's.
+  verb (D3) are contract surface too. `quick-batch-legacy` and the `legacy_hooks` mark, stored in
+  `BATCH.json` and returned by `planning-start`, are the exceptions: they are core-internal and used
+  only at the quick-batch legacy `plan:pre` site (`planner-wave.md:27`, D1). Each of the others
+  should be settled before the increment that introduces it merges, since each one is a stability
+  contract. The quick-batch verb names are #6535's.
 - **`fast`.** `/gsd-fast` runs inline with no hooks at all. Whether it becomes a third context is left
   to a later issue.
