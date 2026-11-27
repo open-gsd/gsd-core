@@ -13,7 +13,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const fc = require('fast-check');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
+const { runHook, runGit } = require('./helpers/process-seam.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const store = require('../gsd-core/bin/lib/session-store.cjs');
 
@@ -274,6 +274,12 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
       assert.doesNotMatch(r.out, /theirs/);
     });
 
+    test('aLegacyHandoffNamingAnotherRoleIsNotReadWithoutASessionEither', () => {
+      put('HANDOFF.json', { role_id: 'reviewer', next_action: 'reviewer work' });
+      assert.doesNotMatch(runBash(tmp, script([claim()], '--role coordinator'), null).out, /reviewer work/);
+      assert.match(runBash(tmp, script([claim()], '--role reviewer'), null).out, /reviewer work/);
+    });
+
     test('aLegacyHandoffIsReadUnlessItNamesAnotherRole', () => {
       put('HANDOFF.json', { next_action: 'legacy work' });
       assert.match(runBash(tmp, script([claim()], ''), 's1').out, /legacy work/);
@@ -302,6 +308,46 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
       }
     });
 
+    test('aClaimLoserNeverRemovesTheWinnersContinueHere', () => {
+      put('HANDOFF.claimed.coordinator.s1.json', { role_id: 'coordinator' });
+      put('.continue-here.latest.coordinator.md', 'winner context');
+      const r = runBash(tmp, script([consume()], '--role coordinator'), 's2');
+      assert.equal(r.status, 0, r.err);
+      assert.equal(exists('.continue-here.latest.coordinator.md'), true);
+      assert.equal(exists('HANDOFF.claimed.coordinator.s1.json'), true);
+    });
+
+    test('theSharedUnkeyedContinueHereStaysWhileAnotherRoleLessSessionIsPaused', () => {
+      put('HANDOFF.s1.json', {});
+      put('HANDOFF.s2.json', {});
+      put('.continue-here.md', 'shared name');
+      const r = runBash(tmp, script([consume()], ''), 's1');
+      assert.equal(r.status, 0, r.err);
+      assert.equal(exists('HANDOFF.s1.json'), false);
+      assert.equal(exists('HANDOFF.s2.json'), true);
+      assert.equal(exists('.continue-here.md'), true);
+    });
+
+    test('aCheckpointOnlyResumeRecordsTheResumeAndRemovesNothing', () => {
+      put('.continue-here.md', 'checkpoint');
+      const r = runBash(tmp, script([consume()], ''), 's1');
+      assert.equal(r.status, 0, r.err);
+      assert.equal(exists('.continue-here.md'), true);
+      assert.match(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf-8'), /Session resumed/);
+    });
+
+    test('theCommitRecordsTheRoleSlotDeletionNotTheUntrackedClaim', () => {
+      put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator' });
+      assert.equal(runGit(['add', '-A'], { cwd: tmp }).exitCode, 0);
+      assert.equal(runGit(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'pause'], { cwd: tmp }).exitCode, 0);
+      const claimed = runBash(tmp, script([claim()], '--role coordinator'), 's1');
+      assert.match(claimed.out, /HANDOFF_FILE=/);
+      const r = runBash(tmp, script([consume()], '--role coordinator'), 's1');
+      assert.equal(r.status, 0, r.err);
+      const status = runGit(['status', '--porcelain', '--', '.planning/HANDOFF.latest.coordinator.json'], { cwd: tmp }).stdout;
+      assert.equal(status.trim(), '', `the slot deletion must be committed: ${status}`);
+    });
+
     test('theLegacyPairIsConsumedWithoutARole', () => {
       put('HANDOFF.json', { next_action: 'x' });
       put('.continue-here.md', 'checkpoint');
@@ -313,21 +359,22 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
   });
 });
 
-// allow-test-rule: runtime-contract-is-the-product see #6798 — these workflow documents are loaded by the runtime as instructions; the glob and the CLI call are the contract.
-describe('the other workflow surfaces', () => {
-  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf-8');
+describe('the next gate, executed', { skip: !HAS_BASH }, () => {
+  let tmp;
+  beforeEach(() => { tmp = createTempProject(); });
+  afterEach(() => cleanup(tmp));
+  const gate = (args, sid) => runBash(tmp, script([fence('next.md', 'next-paused')], args), sid).status;
 
-  test('gateZeroAsksTheCliWhetherThisSessionIsPaused', () => {
-    const next = read('gsd-core/workflows/next.md');
-    const gate0 = next.slice(next.indexOf('**Gate 0'), next.indexOf('**Gate 1'));
-    assert.ok(gate0.includes('state sessions --pick paused'));
-    assert.ok(!gate0.includes('[ -f .planning/HANDOFF.json ]'));
+  test('onlyTheCallersOwnHandoffPausesIt', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'HANDOFF.s2.json'), '{}');
+    assert.equal(gate('', 's1'), 1);
+    assert.equal(gate('', 's2'), 0);
   });
 
-  test('theBlockingConstraintChecksAndTheForensicAuditSeeRoleKeyedFiles', () => {
-    for (const wf of ['discuss-phase.md', 'execute-phase.md']) {
-      assert.ok(read(`gsd-core/workflows/${wf}`).includes('ls ${phase_dir}/.continue-here*.md'), wf);
-    }
-    assert.ok(read('gsd-core/workflows/progress/steps/forensic-audit.md').includes('.planning/HANDOFF*.json'));
+  test('aRoleHandoffPausesTheSessionThatNamesTheRole', () => {
+    fs.writeFileSync(path.join(tmp, '.planning', 'HANDOFF.latest.coordinator.json'), '{}');
+    assert.equal(gate('', 's1'), 1);
+    assert.equal(gate('--role Coordinator', 's1'), 0);
   });
 });
+

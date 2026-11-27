@@ -48,7 +48,7 @@ If phase is detected, proceed with phase handoff path. Otherwise use the first m
 <step name="identify">
 ## Session Identity and File Names
 
-A pause belongs to the session that wrote it (ADR-4962). The CLI decides who this session is and which two files the pause writes; this workflow never composes those names. `--role <text>` in the arguments names the role, as the last argument; the text is free-form and is handled only as data: captured once, passed only as `"$ROLE"`, never placed in a command line unquoted or inside a commit message.
+A pause belongs to the session that wrote it (ADR-4962). If `$ARGUMENTS` contains a newline, or any line equal to `GSD_ARGS_END`, do not run the fences below: the text would end the heredoc early and the lines after it would run as shell. Tell the user the role must be one line. The CLI decides who this session is and which two files the pause writes; this workflow never composes those names. `--role <text>` in the arguments names the role, as the last argument; the text is free-form and is handled only as data: captured once, passed only as `"$ROLE"`, never placed in a command line unquoted or inside a commit message.
 
 ```bash
 # gsd:pause-identify
@@ -281,7 +281,7 @@ fi
 echo "state_file=${STATE_FILE:-none}"
 ```
 
-With no STATE.md (a spike or sketch with no project state) the record step is skipped and the pause still writes its files.
+With no STATE.md (a spike or sketch with no project state) the record step is skipped and the pause still writes its files; no session record exists then, so `/gsd:next` and `/gsd:resume-work` need the same `--role <text>` to find a role pause.
 </step>
 
 <step name="commit">

@@ -76,6 +76,8 @@ cat "${PROJECT_PATH}"
 <step name="check_incomplete_work">
 Look for incomplete work that needs attention.
 
+If `$ARGUMENTS` contains a newline, or any line equal to `GSD_ARGS_END`, do not run the fences below: the text would end the heredoc early and the lines after it would run as shell. Tell the user the role must be one line.
+
 **Claim this session's handoff first (ADR-4962 Decision 3).** A pause belongs to the session that wrote it. With a role (`--role <text>` as the last argument; free text, handled only as data through `"$ROLE"`), the unclaimed `.planning/HANDOFF.latest.<role_id>.json` is claimed by an atomic rename to `.planning/HANDOFF.claimed.<role_id>.<session_id>.json` BEFORE it is read: of two sessions resuming the same role, one rename succeeds and the other finds no unclaimed file. A session without a role reads its own `.planning/HANDOFF.<session_id>.json`; a legacy `.planning/HANDOFF.json` is read unless its `role_id` names another role. Another session's `HANDOFF.claimed.*` file is never read.
 
 ```bash
@@ -96,7 +98,10 @@ case "$OWN" in
       HANDOFF=".planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json"
     fi ;;
   '')
-    if [ -z "$SESSION_ID" ] && [ -f .planning/HANDOFF.json ]; then HANDOFF=".planning/HANDOFF.json"; fi ;;
+    if [ -z "$SESSION_ID" ] && [ -f .planning/HANDOFF.json ]; then
+      BODY_ROLE=$(sed -nE 's/.*"role_id" *: *"([a-z0-9-]+)".*/\1/p' .planning/HANDOFF.json | head -1)
+      if [ -z "$BODY_ROLE" ] || [ -z "$ROLE_ID" ] || [ "$BODY_ROLE" = "$ROLE_ID" ]; then HANDOFF=".planning/HANDOFF.json"; fi
+    fi ;;
   *) HANDOFF=".planning/$OWN" ;;
 esac
 if [ -n "$HANDOFF" ]; then
@@ -321,21 +326,50 @@ ROLE_ID=$(_gsd_sess role_id)
 OWN=$(_gsd_sess own_handoff)
 CONTINUE_NAME=$(_gsd_sess pause_files.continue_here)
 CONSUMED=()
+OWNED=""
 if [ -n "$OWN" ]; then
+  OWNED=1
   if [ -n "$ROLE_ID" ]; then
     gsd_run state session-resume --handoff "$OWN" --session "$SESSION_ID" --role-id "$ROLE_ID" --action "resume" >/dev/null
   else
     gsd_run state session-resume --handoff "$OWN" --session "$SESSION_ID" --action "resume" >/dev/null
   fi
-  [ -e ".planning/$OWN" ] || CONSUMED+=(".planning/$OWN")
+  if [ ! -e ".planning/$OWN" ]; then
+    # A claimed file was only ever a rename of the committed role slot: record the slot's deletion, not the untracked claim.
+    case "$OWN" in HANDOFF.claimed.*) CONSUMED+=(".planning/HANDOFF.latest.${ROLE_ID}.json") ;; *) CONSUMED+=(".planning/$OWN") ;; esac
+  fi
 elif [ -z "$SESSION_ID" ] && [ -f .planning/HANDOFF.json ]; then
+  OWNED=1
   rm -f .planning/HANDOFF.json && CONSUMED+=(".planning/HANDOFF.json")
+elif [ -n "$SESSION_ID" ]; then
+  # Nothing of this session's to consume (a checkpoint-only resume): record the resume, remove nothing.
+  if [ -n "$ROLE_ID" ]; then
+    gsd_run state session-resume --keep-handoff --session "$SESSION_ID" --role-id "$ROLE_ID" --action "resume" >/dev/null
+  else
+    gsd_run state session-resume --keep-handoff --session "$SESSION_ID" --action "resume" >/dev/null
+  fi
 fi
-for f in ".planning/${CONTINUE_NAME}" "${PLANNING_ROOT}"/*/"${CONTINUE_NAME}" "${PLANNING_ROOT}"/*/*/"${CONTINUE_NAME}"; do
-  [ -e "$f" ] || continue
-  rm -f "$f" && CONSUMED+=("${f#"$PWD"/}")
-done
-[ "${#CONSUMED[@]}" -eq 0 ] || gsd_run query commit "docs(resume): consume the pause handoff" --files "${CONSUMED[@]}"
+# The unkeyed continue-here name is shared by every session without a role: keep it while another such session's handoff remains.
+SHARED_IN_USE=""
+if [ -z "$ROLE_ID" ]; then
+  for o in .planning/HANDOFF.*.json .planning/HANDOFF.json; do
+    [ -e "$o" ] || continue
+    case "${o#.planning/}" in HANDOFF.latest.*|HANDOFF.claimed.*) continue ;; esac
+    SHARED_IN_USE=1
+  done
+fi
+# Only a session that owned a handoff removes continue-here files, and never one another session still needs.
+if [ -n "$OWNED" ] && [ -z "$SHARED_IN_USE" ]; then
+  for d in .planning "${PLANNING_ROOT}"/*/ "${PLANNING_ROOT}"/*/*/; do
+    f="${d%/}/${CONTINUE_NAME}"
+    [ -e "$f" ] || continue
+    rm -f "$f" && CONSUMED+=("${f#"$PWD"/}")
+  done
+fi
+# `--files` skips a path that is gone from disk (#2014), so each removal is also declared with `--files-removed`.
+COMMIT_FILES=("${CONSUMED[@]}")
+[ -e "${PLANNING_ROOT}/STATE.md" ] && COMMIT_FILES+=("${PLANNING_ROOT#"$PWD"/}/STATE.md")
+[ "${#CONSUMED[@]}" -eq 0 ] || gsd_run query commit "docs(resume): consume the pause handoff" --files "${COMMIT_FILES[@]}" --files-removed "${CONSUMED[@]}"
 ```
 </step>
 

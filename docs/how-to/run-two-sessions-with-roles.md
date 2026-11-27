@@ -4,7 +4,7 @@ Pause one session and resume its work in another, without a second session picki
 
 ## Before you start
 
-- `.planning/` exists and a runtime session key is set (the runtime sets one; see [session identity](../CLI-TOOLS.md#per-session-pause)).
+- `.planning/` exists and a runtime session key is set (the runtime sets one; see [session identity](../CLI-TOOLS.md)).
 - Each session you run is a separate runtime session, such as two terminal tabs.
 
 ## Pause a session under a role
