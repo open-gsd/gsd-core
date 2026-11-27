@@ -831,7 +831,7 @@ Full listing: `hooks/`.
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt-injection patterns (advisory) |
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on unread files |
-| `gsd-read-injection-scanner.js` | `PostToolUse` | Scans tool Read results for prompt-injection patterns (v1.36+, PR #2201) |
+| `gsd-read-injection-scanner.js` | `PostToolUse` | Scans tool Read, WebFetch and WebSearch results for prompt-injection patterns (advisory; v1.36+, PR #2201) |
 | `gsd-worktree-path-guard.js` | `PreToolUse` | Hard-blocks Edit/Write/MultiEdit with absolute paths outside the worktree root (PR #579, #260) |
 | `gsd-agent-isolation-guard.js` | `PreToolUse` | Hard-blocks an executor `Agent()` dispatch missing its harness isolation parameter when the project's resolved dispatch isolation is `harness-worktree` (#3045) |
 | `gsd-write-guard.js` | `PreToolUse` | Hard-blocks a whole-file `Write` that catastrophically shrinks a curated `.planning/` artifact (ROADMAP.md, milestone roadmaps, STATE.md); override via the single-use sentinel `.planning/.gsd-allow-shrink` (workflow steps) or `GSD_ALLOW_PLANNING_SHRINK=1` (interactive) (#2255, fix 3 of #973) |
@@ -839,9 +839,9 @@ Full listing: `hooks/`.
 | `gsd-config-reload.js` | `FileChanged` | Hot-reloads GSD config context when `.planning/config.json` changes mid-session (#770) |
 | `gsd-path-export.js` | `SessionStart` | Appends the installed `gsd-core/bin` directory to `$CLAUDE_ENV_FILE` so a later Bash call resolves `gsd_run` from PATH (#5465); no-op when the variable is unset |
 | `gsd-ensure-canonical-path.js` | `SessionStart` | Symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve in marketplace plugin installs; no-op in classic installs, self-heals after `claude plugin update` (#997) |
-| `gsd-session-state.sh` | `SessionStart` | Session-state tracking for shell-based runtimes |
-| `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional-commit enforcement |
-| `gsd-phase-boundary.sh` | `PostToolUse` | Phase-boundary detection for workflow transitions |
+| `gsd-session-state.sh` | `SessionStart` | Session-state tracking for shell-based runtimes; opt-in, a no-op unless `hooks.community` is `true` |
+| `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional-commit enforcement; blocks a non-conforming `git commit` (exit 2); opt-in, a no-op unless `hooks.community` is `true` |
+| `gsd-phase-boundary.sh` | `PostToolUse` | Phase-boundary detection for workflow transitions; opt-in, a no-op unless `hooks.community` is `true` |
 | `gsd-graphify-update.sh` | `PostToolUse` | Auto-rebuild knowledge graph after main HEAD advances (opt-in, default off — #3347) |
 | `gsd-node-runner.sh` | (helper) | Portable node resolver managed JS hook commands route through under `--portable-hooks`: install-time node path first, then `command -v node`, then well-known layouts — resolves at hook-fire time so a shared config root works in every environment (#3662) |
 
