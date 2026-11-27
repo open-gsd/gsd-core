@@ -229,13 +229,18 @@ function toSeamResult(result, timing) {
   let outcome;
   if (!error) {
     outcome = signal === null ? OUTCOME.EXITED : OUTCOME.KILLED;
+  } else if (BUFFER_OVERFLOW_CODES.has(errorCode)) {
+    // An overflow is a fact about the output, not about how the child ended, so it outranks `status`:
+    // a child that writes its last byte and exits can finish before spawnSync's SIGTERM lands, and
+    // the result then carries ENOBUFS together with status 0 and no signal (#4696, measured at
+    // about 1 in 900 spawns of a child writing maxBuffer + 1 bytes). Reading that as EXITED hands a
+    // caller truncated output under a clean exit.
+    outcome = OUTCOME.BUFFER_OVERFLOW;
   } else if (status !== null) {
     // Evidence over classification: `status` is only ever populated by a
     // real exit, so it outranks an attached `error` — see the header
     // comment's at-the-timeout-boundary case.
     outcome = OUTCOME.EXITED;
-  } else if (BUFFER_OVERFLOW_CODES.has(errorCode)) {
-    outcome = OUTCOME.BUFFER_OVERFLOW;
   } else if (errorCode === 'ETIMEDOUT' || signal !== null) {
     outcome = OUTCOME.TIMED_OUT;
   } else {

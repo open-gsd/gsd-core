@@ -304,6 +304,7 @@ describe('descriptor-declared install behaviors replaced the name tests', () => 
 
   test('single-host behaviors are declared by their one host', () => {
     assert.deepEqual(declares('opencodePathPrefix'), ['opencode']);
+    assert.deepEqual(declares('rewritesClaudeOnlyForms'), ['opencode']);
     assert.deepEqual(declares('requiresSubagentPair'), ['kimi']);
     assert.deepEqual(declares('reclaimsKimiLegacyHooksRoot'), ['kimi-code']);
     assert.deepEqual(declares('rewriteClaudeAtIncludes'), ['codex']);

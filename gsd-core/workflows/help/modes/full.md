@@ -445,7 +445,7 @@ List and audit captured seeds (read-only).
 
 - Lists all seeds with ID, status, scope, trigger, and title
 - Optional status filter (e.g., `/gsd:capture --list-seeds dormant`)
-- Does not modify any seed — enrich with `/gsd:capture --seed --enrich SEED-YYMMDD-XXX`
+- Does not modify any seed — enrich with `/gsd:capture --seed --enrich SEED-YYMMDD-XXX`, or close one whose idea was acted on with `/gsd:capture --seed --close SEED-ID (--promoted REQ-ID | --built PHASE | --dropped "why")`
 
 Usage: `/gsd:capture --list-seeds`
 Usage: `/gsd:capture --list-seeds dormant`

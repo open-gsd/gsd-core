@@ -63,6 +63,8 @@ The CLI handles:
 - Creating the phase directory (`{planning_root}/phases/{NN}-{slug}/`) (`{planning_root}`: the active scope's root, from `planning.inspect`)
 - Inserting the phase entry into ROADMAP.md with Goal, Depends on, and Plans sections
 
+The `**Depends on**` line is machine-read: write either `Nothing` with no phase references, or a plain list such as `Phase 4, Phase 5` — rationale belongs in `**Goal:**` or the Overview, not on that line.
+
 Extract from result: `phase_number`, `padded`, `name`, `slug`, `directory`.
 
 **If result includes a `warning` field:** the description read as goal-shaped (long and/or multi-sentence) rather than title-shaped, and was written verbatim as the `### Phase N:` header. The phase was still created — surface the warning to the user and suggest a short title with the detail moved to `**Goal:**` in ROADMAP.md.

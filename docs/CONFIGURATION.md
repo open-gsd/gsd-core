@@ -243,6 +243,7 @@ derived from the shipped agent declaration.
 |---------|------|---------|---------|-------------|
 | `mode` | enum | `interactive`, `yolo` | `interactive` | `yolo` auto-approves decisions; `interactive` confirms at each step |
 | `granularity` | enum | `coarse`, `standard`, `fine` | `standard` | Controls phase count: `coarse` (2-4), `standard` (4-6), `fine` (6-10) |
+| `agent_tools` | object | selector → tool array | `{}` | The container for the opt-in, install-time [agent tool grants](#agent-tool-grants); set one selector at a time with `agent_tools.<selector>`. |
 | `agent_tools.<selector>` | string[] | tool names meeting the [agent tool grant validation rules](#agent-tool-grants) | (none) | Additive install-time grants for `"*"` or a named agent. A project selector replaces the corresponding global selector; wildcard grants precede named grants. Re-run `gsd install <runtime>` after changing it. |
 | `model_profile` | enum | `quality`, `balanced`, `budget`, `adaptive`, `inherit` | `balanced` | Model tier for each agent (see [Model Profiles](#model-profiles)). `adaptive` was added per [#1713](https://github.com/open-gsd/gsd-core/issues/1713) / [#1806](https://github.com/open-gsd/gsd-core/issues/1806) and resolves the same way as the other tiers under runtime-aware profiles. |
 | `runtime` | string | `claude`, `codex`, or any string | (none) | Active runtime for [runtime-aware profile resolution](#runtime-aware-profiles-2517). When set, profile tiers (opus/sonnet/haiku) resolve to runtime-native model IDs. The resolved ID is embedded into each agent's static frontmatter at install time on `opencode` (whose `spawn_agent` interface does not accept an inline `model` parameter, so editing `model_overrides` requires re-running `gsd install <runtime>` to take effect — see [Per-Agent Overrides](#per-agent-overrides)); other runtimes consume the resolver at spawn time. **Codex keeps profile-resolved models out of static TOML and transports them conditionally at spawn time.** A Codex skill passes the resolved `model` and `reasoning_effort` only when the visible `spawn_agent` schema advertises each field; otherwise it omits that field and inherits the session/static agent configuration. Explicit real-Codex IDs in `model_overrides` (for example `"gpt-5.6-sol"`) are still written into `.toml` as a fallback. When unset (default), model resolution is unchanged from prior versions — but the runtime GSD *reports* (`agent_runtime`) then falls through to [host detection](how-to/control-the-reported-host-runtime.md), which can resolve `codex` from Codex's own session environment. Detection affects reporting and the agent-installation check only; it never feeds tier resolution, which still reads this key alone. Added in v1.39; Codex static posture changed in v1.11; reporting-only host detection added in v1.11 |
@@ -277,6 +278,8 @@ derived from the shipped agent declaration.
 | `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `$GSD_HOME/.gsd/perplexity_api_key` file |
 | `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `$GSD_HOME/.gsd/jina_api_key` file when an explicit override is needed |
 | `serply_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Serply search availability. When unset, GSD checks for `SERPLY_API_KEY` env var or `$GSD_HOME/.gsd/serply_api_key` file. Off unless a key is present or you set it to `true`, so nothing is sent to Serply by default. Research calls go through the Serply MCP server registered as `serply` (`mcp__serply__google_search`; [setup](https://github.com/serply-inc/mcp)) |
+| `commit_docs` | boolean | `true`/`false` | `true` | Whether `.planning/` files are committed to git. The flat form of `planning.commit_docs`: an explicit flat `commit_docs` in the effective config applies even when `planning` is `null`. Treated as `false` when `.planning/` is in `.gitignore`. |
+| `resolve_model_ids` | string | `omit` | (unset) | `omit` keeps GSD from resolving Claude-tier model IDs, so a Claude session sharing a machine with a defaults file written for another runtime does not pick up that runtime's models. The installer sets it to `omit` in `~/.gsd/defaults.json` when GSD is installed for a non-Claude runtime; see [Non-Claude runtimes](#non-claude-runtimes-codex-opencode-antigravity-cli-kilo). |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
 ### Custom phase directories
@@ -569,6 +572,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.ui_phase` | boolean | `true` | Generate UI design contracts for frontend phases |
 | `workflow.ui_safety_gate` | boolean | `true` | Prompt to run /gsd-ui-phase for frontend phases during plan-phase |
 | `workflow.assumption_delta` | boolean | `true` | Advisory architecture checkpoint during planning. When a phase makes something **plural, optional, or chosen** that used to be **singular, required, or derived** (e.g. a second auth method, a required field becoming optional, a constant becoming a parameter), the planner is prompted to re-ask whether the primary key / identity model still names the right thing (promote the new general representation vs. add it alongside). Non-blocking; fires only on a detected signal. Bare "or" is intentionally excluded (prose false-positives). Inspect a phase with `gsd_run query assumption-delta scan <phase>`. Added in #1561. A phase section that cannot be resolved returns `{"skipped":true,"reason":"phase_unresolved"}` rather than a fabricated `detected:false` (#3909) |
+| `workflow.advisor_prefilter` | boolean | `false` | **Default-off.** Enable the advisor pre-filter (#4795): at `verify:post` and `ship:pre` the orchestrator consults the Claude Code session advisor once to ask whether the output is final and consistent before the next review gate. Advisory only, silent no-op when no advisor tool is present. A string `"false"`, `"0"`, `"no"` or `"off"` counts as off. Each consult sends the full transcript to the advisor model. See [how to enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) |
 | `workflow.ui_review` | boolean | `true` | Run visual quality audit (`/gsd-ui-review`) after phase execution in autonomous mode. When `false`, the UI audit step is skipped. |
 | `workflow.live_dom_uat` | boolean | `false` | **Default-off.** Enable live-DOM verification (#2856). When `true`, a `gsd-dom-verifier` step runs after each execution wave and writes `{phase}-DOM-VERIFY.md`, and the orchestrator's automated UI verification will additionally consider `mcp__chrome-devtools__*` / `mcp__claude-in-chrome__*` when present. Browser reach is confined to `gsd-dom-verifier` — `gsd-executor`'s tool surface is unchanged in every configuration. Presence of a browser MCP server is **not** sufficient on its own: a server configured for unrelated work is never driven unless this key is on. The pre-existing `mcp__playwright__*` path is unaffected by this key. Note `chrome-devtools-mcp` holds an exclusive browser-profile lock, so concurrent waves need `--isolated` on **your** MCP server registration — GSD cannot pass it. See [Enable live-DOM verification](how-to/enable-live-dom-verification.md). |
 | `workflow.deep_verify` | boolean | `false` | **Default-off.** Enable agent-driven deep verification (#3858). When `true`, a `gsd-behavior-verifier` step runs at `verify:pre` on UI phases (phases with a `{phase}-UI-SPEC.md`): it enumerates interaction-level behaviors from the plan's `must_haves` / acceptance criteria, the SUMMARY "Files Changed" list and the files it names, executes each one it can through a browser MCP server, writes the full run to `{phase}-DEEP-VERIFY.md`, and hands verify-work only judgment items, failed behaviors and anything it could not run in `DEEP-VERIFY-CHECKPOINTS.md`. `mcp__playwright__*` is driven whenever it responds; the Chrome-family servers only while `workflow.live_dom_uat` is also `true` (an instruction the agent follows, not a runtime-enforced permission). With no browser MCP the step prints the enumerated list and routes every item to the human. See [Enable deep verification](how-to/enable-deep-verification.md). |
@@ -600,6 +604,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.plan_chunked` | boolean | `false` | Enable chunked planning mode. When `true` (or when `--chunked` flag is passed to `/gsd-plan-phase`), the orchestrator splits the single long-lived planner Task into a short outline Task followed by N short per-plan Tasks (~3-5 min each). Each plan is committed individually for crash resilience. If a Task hangs and the terminal is force-killed, rerunning with `--chunked` resumes from the last completed plan. Particularly useful on Windows where long-lived Tasks may hang on stdio. See [`planning.chunked_parallel`](#planning-settings) to dispatch the per-plan Tasks concurrently instead of one at a time. Added in v1.38 |
 | `workflow.code_review_command` | string | (none) | Shell command for external code review integration in `/gsd-ship`. Receives changed file paths via stdin. Non-zero exit blocks the ship workflow. Added in v1.36 |
 | `workflow.tdd_mode` | boolean | `false` | Enable TDD pipeline as a first-class execution mode. When `true`, the planner aggressively applies `type: tdd` to eligible tasks (business logic, APIs, validations, algorithms) and the executor enforces RED/GREEN/REFACTOR gate sequence. An end-of-phase collaborative review checkpoint verifies gate compliance. Added in v1.36 |
+| `workflow.specless_probe_fallback` | boolean | `true` | Gate the SPEC-less probe fallback in `plan-phase`. When `true`, a phase whose SPEC lacks a `## Edge Coverage` or `## Prohibitions` section (absent or empty) runs the probe protocol for that section (the deterministic edge probe for edges, an in-planner recall pass for prohibitions) and authors the resulting predicates into PLAN.md `must_haves`; a section the SPEC supplies is never re-run or overwritten. When `false`, the fallback is skipped and `plan-phase` prints a "probe fallback disabled" marker, never a silent skip. See [ADR-1820](adr/1820-spec-optional-predicate-rail.md) |
 | `workflow.mvp_mode` | boolean | `false` | Persist the MVP-mode flag in config so every phase defaults to MVP framing without requiring `--mvp` on the CLI. Resolved via the precedence chain: `--mvp` CLI flag → ROADMAP.md `**Mode:** mvp` field → this config value → `false`. When `true`, the planner, executor, verifier, and discovery surfaces treat the phase as an MVP vertical slice (UI → API → DB) of one user-visible capability instead of a horizontal layer. |
 | `workflow.human_verify_mode` | string | `'end-of-phase'` | Controls human verification checkpoints. `'end-of-phase'` (default since #3309) suppresses `checkpoint:human-verify` tasks and embeds checks into `<verify><human-check>` blocks for end-of-phase review. `'mid-flight'` restores blocking checkpoint tasks. `checkpoint:decision` and `checkpoint:human-action` are unaffected. See [Checkpoints Reference](../gsd-core/references/checkpoints.md#checkpoint_types). |
 | `workflow.context_guard_mode` | string | `'warn'` | Context exhaustion guard for `execute-phase`. Before each wave, the orchestrator self-assesses context pressure using the degradation signals defined in `context-budget.md`. `'warn'` (default) emits a warning and recommends `/gsd-pause-work` when POOR tier (70%+) is detected. `'auto'` automatically invokes `/gsd-pause-work` before the next wave. `'off'` disables the guard. Set via: `gsd config-set workflow.context_guard_mode auto`. Added in #1452. |
@@ -668,6 +673,10 @@ The `code_quality.*` namespace gates optional structural-analysis tooling that a
 | `code_quality.fallow.mcp` | boolean | `false` | **Reserved — not yet implemented.** When `true`, enables MCP-backed structural findings mode for runtimes that support MCP server routing. Setting this to `true` is currently a no-op and emits a runtime warning. |
 
 ## Ship Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `ship.pr_body_sections` | array of objects | (none) | Extra PR body sections for `/gsd-ship`, appended after the core sections. Each entry's fields are listed below. |
 
 `ship.pr_body_sections` adds additional PR body sections for project-specific PRD/PR body content in `/gsd-ship` without editing `gsd-core/workflows/ship.md`.
 
@@ -884,6 +893,8 @@ for a worked example.
 | `hooks.context_warning_threshold` | number | `35` | Percent of context window REMAINING at or below which the monitor emits CONTEXT WARNING. Must be greater than 0 and at most 100, and strictly greater than `hooks.context_critical_threshold` — `config-set` refuses 0, which no critical value can pair with. An out-of-domain value falls back **per key**; both keys revert to their defaults only when the RESOLVED pair violates `critical < warning`. Read from the root project config — a workstream-scoped `config-set` does not reach this hook. Inert on a runtime with no context-monitor hook installed, Codex among them (#2586); see [context-monitor.md](context-monitor.md) (#4285) |
 | `hooks.context_critical_threshold` | number | `25` | Percent of context window REMAINING at or below which the monitor escalates to CONTEXT CRITICAL. Must be at least 0 and less than 100, and strictly less than `hooks.context_warning_threshold` — `config-set` refuses 100, which no warning value can pair with. Setting only one of the pair is checked against the other's default, so tune both when moving either past the other. Same root-config scope, and the same installed-monitor prerequisite, as the key above (#4285) |
 | `hooks.workflow_guard` | boolean | `false` | Warn when file edits happen outside GSD workflow context (advises using `/gsd-quick` or `/gsd-fast`). When enabled, the hook's one hard block — `git add -f` on `agent-*`/`worktree-agent-*` branches — also fails closed on internal error (see `docs/explanation/security-model.md`, #3504) |
+| `hooks.community` | boolean | `false` | Enable the opt-in community hooks: `gsd-session-state.sh` (injects the head of `STATE.md` at session start), `gsd-validate-commit.sh` (blocks a `git commit` whose message is not a Conventional Commit) and `gsd-phase-boundary.sh` (reminds the agent when a `.planning/` file is written outside the normal workflow). Each is a no-op unless this key is `true` in `.planning/config.json` |
+| `hooks.commit_types` | array of strings | `[]` | Extra commit types accepted by `gsd-validate-commit.sh` (active when `hooks.community` is `true`), added to the ten built-in types `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, never replacing them. An entry must match `^[a-z][a-z0-9-]*$`; a non-string or non-conforming entry is dropped, and a value that is not an array is ignored |
 | `hooks.secret_read_exempt` | array of strings | `[]` | Repo-relative paths of files the secret-read guard (`gsd-secret-read-guard.js`) lets agents read even though their names match a protected pattern — for example a committed placeholder template named `.env.production`. An exemption takes effect only while the file is committed in `HEAD` as a regular file and is a regular file (not a symlink) in the working tree; an untracked, staged-only or symlinked file stays blocked. Paths are exact: no globs, no absolute paths, no `..`; backslashes are read as `/` and a leading `./` is dropped. `config-set` refuses any other value. Read and Grep (`path`) resolve a relative path against the session directory; in Bash the file must be named by its absolute path, because a relative name can mean a different file after `cd` or inside `find -name`, and only when every command in the line is one of `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `wc`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `nl` or `od` (any other command, or a `$( )` / backtick body, withdraws the exemption for the whole line). A file inside a submodule cannot be exempted. A Grep `glob` is not widened. Read from the root project `.planning/config.json`. An unconfigured project blocks exactly as before. See [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) (#4432) |
 | `statusline.show_last_command` | boolean | `false` | Append `last: /<cmd>` suffix to the statusline showing the most recently invoked slash command. Opt-in; reads the active session transcript to extract the latest `<command-name>` tag (closes #2538) |
 | `statusline.context_position` | string | `"end"` | Position of the context-window meter. `"end"` (default) renders at line tail; `"front"` renders immediately after the model name so the meter stays visible in narrow terminals. Closes #2937 |
@@ -1059,6 +1070,30 @@ gsd-tools query config-set agent_skills.gsd-executor '["skills/my-skill"]'
 
 See [How to attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) for a step-by-step walkthrough of the `global:plugin:skill` form.
 
+### Project skills discovery (no configuration)
+
+Separately from `agent_skills`, skills in `.claude/skills/` or `.agents/skills/` are found without any setting. The 21 agents that read project skills, and their compact variants, all `@`-include one instruction, [`gsd-core/references/project-skills-discovery.md`](../gsd-core/references/project-skills-discovery.md), and add one line of their own saying how they apply the rules. The rule is stated once instead of in 36 copies.
+
+The read is scoped (#4649), and the listing is produced by code (#6719):
+
+1. For each of `.claude/skills/` and `.agents/skills/` that exists, the agent runs `gsd_run skill-manifest --skills-dir <dir>`. The [`skill-manifest`](CLI-TOOLS.md#skill-manifest) command lists each skill's `name`, `description` and `file_path` from its `SKILL.md` frontmatter, and does not emit the skill body, so the size of the listing does not depend on how long the skill bodies are (it grows with each `description` and any `TRIGGER when:` lines). A skill directory that is a symlink is listed too; a dangling link or a link to a file is skipped.
+2. The agent reads the whole `SKILL.md` only when its `description` fits the task, or when the skill has no `description` (the command reports it as an empty string, which is also what a missing, unparseable or unterminated frontmatter block gives).
+3. If the command cannot run or fails, the agent lists the subdirectories and reads only each `SKILL.md` frontmatter (`name`, `description`).
+4. A skill it did not read in full stays available. The agent reads it if the task turns to that skill's topic.
+5. Files a `SKILL.md` references (for example under `references/`, `scripts/`, or `rules/`) are loaded only as the task needs them. The instruction names no pack-specific layout, so a skill's resources are reachable through its own `SKILL.md`.
+
+For skill authors: write a `description` that says when the skill applies. A `SKILL.md` without one is read in full on every spawn.
+
+To see what an agent sees, run the same command in the project root:
+
+```bash
+node gsd-tools.cjs skill-manifest --skills-dir .claude/skills
+```
+
+An empty `skills` array with `present: true` means the directory has no skill subdirectories; `present: false` means the directory does not exist.
+
+Known limits. A skill that is both listed in `agent_skills` and sits in a discovery directory is read by both paths, as before. The project-skills lines in the `execute-phase`, `plan-phase` and `quick` spawn prompts and in the research `plan-pre` fragment state the same frontmatter-first read, so the saving reaches those paths too (#5248); each line is self-contained for runtimes where the agent's `@`-include does not resolve. The spawn-prompt lines read the frontmatter themselves and do not run `skill-manifest`; only the shared reference does. A size warning for large skills is tracked in #5249.
+
 ---
 
 ## Trusted Global Skill Roots (`agent_skills_security.trusted_global_roots`)
@@ -1151,6 +1186,8 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 ### MemPalace Settings
 
 MemPalace is an opt-in, default-resilient memory capability. Every hook is `onError: skip` — a missing or unreachable MemPalace installation never halts or fails the loop. Enable with `mempalace.enabled: true` after installing MemPalace (`pip install mempalace`).
+
+The shipped `gsd-mempalace-curator` agent carries the tool grant `mcp__mempalace__*`: MemPalace's MCP server registers under the name `mempalace`, and the grant follows that registration, so on tool-allowlist runtimes the curator can call the `mempalace_*` MCP tools its instructions name. When the server is unreachable the agent falls back to the `mempalace` CLI, and every capability hook stays `onError: skip` — a missing MemPalace never fails `ship:post`. The `agent_tools` override path (above) keeps working for per-host adjustments.
 
 `mempalace.enabled` is the **master gate**: all five loop hooks (discuss, plan, execute-wave, verify, ship) and both curator contributions are gated on this key. When it is `false` (the default), nothing fires and the GSD loop is byte-for-byte unchanged. The remaining keys only refine behavior when `mempalace.enabled` is `true`; they are honored at runtime by the skills, curator, and fragments — they do not add independent hook gating.
 
@@ -1314,6 +1351,8 @@ Config keys declared in an overlay capability's `.config` slice federate into th
 | `parallelization.skip_checkpoints` | boolean | `true` | Skip checkpoints during parallel execution |
 | `parallelization.max_concurrent_agents` | number | `3` | Maximum simultaneous agents |
 | `parallelization.min_plans_for_parallel` | number | `2` | Minimum plans to trigger parallel execution |
+
+`config-set` accepts only the flat `parallelization` shorthand. A sub-key such as `parallelization.max_concurrent_agents` is refused with `Unknown config key`; set it by editing `.planning/config.json` (`"parallelization": { "max_concurrent_agents": 5 }`), and read it back with `gsd-tools config-get parallelization.max_concurrent_agents`.
 
 > **Pre-commit hooks and parallel execution**: When parallelization is enabled, executor agents commit with `--no-verify` to avoid build lock contention (e.g., cargo lock fights in Rust projects). The orchestrator validates hooks once after each wave completes. STATE.md writes are protected by file-level locking to prevent concurrent write corruption. If you need hooks to run per-commit, set `parallelization.enabled: false`.
 
@@ -1697,7 +1736,7 @@ Invalid flag tokens are sanitized and logged as warnings. Only recognized GSD fl
 | gsd-doc-writer | Opus | Sonnet | Haiku | Sonnet | Inherit |
 | gsd-doc-verifier | Sonnet | Sonnet | Haiku | Haiku | Inherit |
 
-> **All 33 shipped agents have explicit per-profile tier assignments** in the catalog (`gsd-core/bin/shared/model-catalog.json`). The table above shows a representative subset of the most-used agents. For agents not listed here, `model_overrides` accepts any shipped agent name. The authoritative profile data is derived from `gsd-core/bin/shared/model-catalog.json` via `src/model-catalog.cts`.
+> **All 36 shipped agents have explicit per-profile tier assignments** in the catalog (`gsd-core/bin/shared/model-catalog.json`). The table above shows a representative subset of the most-used agents. For agents not listed here, `model_overrides` accepts any shipped agent name. The authoritative profile data is derived from `gsd-core/bin/shared/model-catalog.json` via `src/model-catalog.cts`.
 
 ### Per-Agent Overrides
 
@@ -1728,6 +1767,60 @@ into each agent's static config at install time — `spawn_agent` and
 OpenCode's `task` interface do not accept an inline `model` parameter, so
 running `gsd install <runtime>` after editing `model_overrides` is required
 for the change to take effect. See issue #2256.
+
+#### Runtime-keyed entries (one config, two hosts)
+
+`.planning/config.json` is committed, so it is the same file for every host working the repository. A per-agent model id is a claim only one runtime can be right about: a Codex id handed to Claude Code fails at spawn, not at resolution. An entry may therefore be an object keyed by runtime, the same shape `model_profile_overrides.<runtime>.<tier>` uses ([#4669](https://github.com/open-gsd/gsd-core/issues/4669)):
+
+```json
+{
+  "model_overrides": {
+    "gsd-planner":  { "claude": "opus", "codex": "gpt-6-astra" },
+    "gsd-debugger": { "codex": "gpt-6-astra" },
+    "gsd-verifier": "gpt-5.6-sol"
+  }
+}
+```
+
+| Entry | Result for the runtime that is resolving or being installed |
+|---|---|
+| a string | That string, on every runtime. Unchanged from before. |
+| an object with a non-empty string under the runtime's key | That value. On Claude it is mapped exactly like the string form (full Claude ids collapse to a tier alias, `fable` passes through). |
+| an object with no key for the runtime, or an unusable value under it (empty string, number, `null`, object, array) | No override for this agent on this runtime. It resolves by tier, exactly as if it had no entry. Above, `gsd-debugger` keeps its Codex pin and routes by tier on Claude. |
+
+The runtime that selects the key is the one that is actually resolving, in the order `GSD_RUNTIME`, then the `runtime` config key, then the per-install marker, then `claude`. It is not the raw `runtime` key alone, which is usually absent. At install time (`gsd install <runtime>`) the key is the runtime being installed, so the same file bakes a Codex id into the Codex agent files and an OpenCode id into the OpenCode ones. Keys are the exact runtime ids (`claude`, `codex`, `opencode`, `kilo`, ...), compared case-sensitively.
+
+Global and project files merge per runtime key: a project object replaces a global string, a project string replaces a global object, and two objects merge key by key with the project winning a conflict. Set an object with `config-set model_overrides.<agent> '{"codex":"gpt-6-astra"}'`. A per-runtime dotted path such as `model_overrides.<agent>.codex` is not an addressable key, so write the whole object. A runtime whose dispatch surface cannot carry a per-agent model at all ignores the entry; that is a no-op, not an error.
+
+#### TDD gate models (`<executor>:tdd-red`, `<executor>:tdd-green-refactor`)
+
+A `type: tdd` plan normally runs RED, GREEN and REFACTOR in one executor dispatch on one model. Two optional `model_overrides` keys give the RED gate and the GREEN/REFACTOR gates their own models ([#4696](https://github.com/open-gsd/gsd-core/issues/4696)):
+
+```json
+{
+  "workflow": { "tdd_mode": true },
+  "model_overrides": {
+    "gsd-executor:tdd-red": "opus",
+    "gsd-executor": "sonnet"
+  }
+}
+```
+
+| Key | Gate it governs | When unset |
+|---|---|---|
+| `<executor-type>:tdd-red` | The RED dispatch: the failing test and its RED evidence | The routed executor's own model |
+| `<executor-type>:tdd-green-refactor` | The GREEN/REFACTOR dispatch | The routed executor's own model |
+
+`<executor-type>` is `gsd-executor`, or the specialist a plan names with `agent_hint`. Each entry takes every form an agent entry takes: a model string, or an object keyed by runtime. A blank string, a non-string value, or an object without the active runtime's key counts as no entry, so that gate uses the routed executor's own model. `inherit` is a real value: that gate runs on the session's model.
+
+`execute-phase` splits a plan into a RED dispatch and a GREEN/REFACTOR dispatch only when all of these hold:
+
+- `workflow.tdd_mode` is `true`
+- the plan's frontmatter says `type: tdd`
+- the two gate models resolve to different models (`inherit` and an empty model count as the same)
+- the plan declares no `executor_runtime`, and the phase does not use the `orchestrator-worktree` backend
+
+With neither key set the two models are equal and dispatch is unchanged. A split plan runs in the orchestrator's own working tree in sequential mode, one dispatch after the other, instead of in a worktree, so that GREEN starts from the RED commit. Like any sequential-mode plan it is serialized against the other plans of its wave. Reasoning effort is not switched per gate: effort still comes from the agent's own configuration. See [How to run the TDD RED gate on a stronger model](how-to/run-the-tdd-red-gate-on-a-stronger-model.md).
 
 ### Per-Phase-Type Models (`models`) — added in v1.41
 
@@ -2271,7 +2364,7 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 | `pi` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (not used) |
 | Group B (`cline`, `cursor`, `windsurf` (alias: `devin-desktop`), `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | | |
 
-> **How these model IDs are sourced.** The catalog (`bin/shared/model-catalog.json`) pins each runtime's tier defaults to that provider's current frontier IDs, and may intentionally carry forward-dated IDs ahead of a provider's public docs. To verify an ID is live before changing it, check the provider's own source/API — e.g. Codex: `codex debug models` or the OpenAI Codex models page; Qwen: Alibaba Model Studio model list. Only change an ID that the provider actually rejects — absence from documentation alone is not proof of invalidity.
+> **How these model IDs are sourced.** The catalog (`gsd-core/bin/shared/model-catalog.json`) pins each runtime's tier defaults to that provider's current frontier IDs, and may intentionally carry forward-dated IDs ahead of a provider's public docs. To verify an ID is live before changing it, check the provider's own source/API — e.g. Codex: `codex debug models` or the OpenAI Codex models page; Qwen: Alibaba Model Studio model list. Only change an ID that the provider actually rejects — absence from documentation alone is not proof of invalidity.
 
 **Codex example** — one config, tiered models, no large `model_overrides` block:
 
