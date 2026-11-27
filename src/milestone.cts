@@ -194,7 +194,9 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // Complete" gate is folded into the newValue callback so one
     // updateTableCell call both probes the current value and writes.
     let tableHit = false;
+    let statusCell = '';
     const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
+      statusCell = current;
       // #2788: accept `Gaps Found` as a forward input too — `revert-phase` (the
       // documented gaps_found response) leaves a row stranded at Gaps Found with
       // no inverse; a genuinely-satisfied requirement must be able to reach
@@ -216,8 +218,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // silently diverge. The checkbox and the row are two representations of the
     // same fact; flipping one while the other rejects the write is the lie.
     let checkboxHit = checkboxFlipped;
-    const rowExistsProbe = tableUpdate;  // ok === a row matched (probes existence)
-    if (checkboxFlipped && rowExistsProbe.ok && !tableHit) {
+    const hasRow = tableUpdate.ok;
+    if (checkboxFlipped && hasRow && !tableHit) {
       reqContent = beforeCheckbox;
       checkboxHit = false;
     }
@@ -232,42 +234,25 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       writeSet.push({ requirement: reqId, surface: 'traceability', applied: tableHit });
     }
 
-    // Coverage of the traceability surface for this ID (computed after any flip).
-    // hasRow keys on the ID's FIRST cell (the requirement-ID column, by position —
-    // see rowMatch above) so a bare mention of the ID in a non-traceability table
-    // does not masquerade as a real row.
-    // Ragged-tolerant (#2245 Blocker 2): same reasoning as the write above — a
-    // sibling row's raggedness must not blind this classification to a row
-    // that genuinely exists. Probe via a no-op updateTableCell write (its own
-    // tolerant scan) instead of findTableWithColumns (whole-table parse gate).
-    let currentStatusCell = '';
-    const statusProbe = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
-      currentStatusCell = current;
-      return current;
-    });
-    const hasRow = statusProbe.ok;
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
-    const doneTable = Boolean(hasRow && leadingRequirementStatus(currentStatusCell, ['complete']) !== null);
-
-    // #2788 defect 2: when a traceability table exists AND this ID has a row in
-    // it, `updated`/`marked_complete` must reflect the ROW moving, not a
-    // checkbox-only flip. Otherwise (`table_unmatched` — no row for this ID, or
-    // no table at all) the checkbox flip is a legitimate partial reconcile / the
-    // sole completion surface, so the #2140 OR semantics are preserved.
-    const rowExists = hasTable && hasRow;
-    const idUpdated = rowExists ? tableHit : (checkboxHit || tableHit);
+    const doneTable = hasRow && leadingRequirementStatus(statusCell, ['complete']) !== null;
+    // Preserve the #2140 summary and write-set rules for files without a
+    // recognized traceability header. A matched Status cell still controls
+    // refusal reporting, just as it controls the checkbox rollback above.
+    const idUpdated = hasTable && hasRow ? tableHit : (checkboxHit || tableHit);
     if (idUpdated) {
       updated.push(reqId);
-    } else if (doneTable || (doneCheckbox && !hasTable)) {
-      // Fully reconciled: the table row is Complete, OR the checkbox is done and
-      // there is no table to reconcile against. (A [x] checkbox with a Pending or
-      // absent row is NOT fully reconciled when a table exists — #2140.)
+    } else if (doneTable) {
       alreadyComplete.push(reqId);
-    } else if (rowExists) {
-      statusRefused.push({ requirement: reqId, status: currentStatusCell.trim() });
+    } else if (hasRow) {
+      statusRefused.push({ requirement: reqId, status: statusCell.trim() });
+    } else if (doneCheckbox && !hasTable) {
+      alreadyComplete.push(reqId);
     } else if (!doneCheckbox) {
       notFound.push(reqId);
     }
+    // A checked box with an unmatched row on a recognized table is reported
+    // via table_unmatched, not in a main bucket.
 
     // Surface traceability drift: checkbox reconciled (this run or before) but the
     // table has no row for this ID. This is what makes a partial reconcile

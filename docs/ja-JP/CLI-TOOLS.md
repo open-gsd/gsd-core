@@ -335,9 +335,10 @@ node gsd-tools.cjs requirements mark-complete <ids>
 # 受け付ける形式: REQ-01,REQ-02 または REQ-01 REQ-02 または [REQ-01, REQ-02]
 ```
 
-トレーサビリティ表に該当行があり、ステータスを完了に進められない場合、JSON の
-`status_refused` に `requirement` と `status` が出力され、要件は変更されません。
-該当する項目がない ID は `not_found` に出力されます。
+トレーサビリティ表の該当する Status セルが完了済みではなく、完了にも進められない場合、要件は変更されません。
+このような要件がある場合に限り、JSON に `status_refused` が含まれます。各項目には
+`requirement` ID と、前後の空白を除いた `status` の値（空の場合もあります）が入ります。
+該当する Status セルも認識できる要件のチェックボックスもない ID は `not_found` に出力されます。
 
 ---
 
