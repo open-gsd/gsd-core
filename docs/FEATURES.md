@@ -4072,7 +4072,7 @@ See [Archiving quick tasks](how-to/handle-quick-and-fast-tasks.md#archiving-quic
 
 **It never executes command text.** PLAN.md is model-authored, so running it from the checker would be arbitrary code execution — and would trigger the real lint/build as a side effect. The probe only resolves paths and stats directories; a `package.json` it finds is read for script names only.
 
-**Why a recognizer, not a shell parser.** Interpreting shell would mean maintaining a bad shell. Exactly two forms are grounded — a leading `cd <literal>` chain and `npm --prefix <literal>` — and any path carrying a variable, glob, substitution, or `~` returns `unresolvable`, which is a warning and never a blocker. The parser's incompleteness is the specification: it degrades to "cannot prove" rather than growing features. Refusing to guess is the fix, not a limitation of it.
+The reason this is a recognizer and not a shell parser is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md).
 
 **It reports, it never prescribes.** The payload carries the target that failed and what was missing; there is deliberately no `suggestion` field. Choosing the replacement is the planner's job — and the planner now has the prior phase's proven command to reach for.
 
@@ -4218,7 +4218,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 `gsd-planner` emits it; `gsd-tools check verify-failure-directions <N>` verifies it deterministically; `/gsd-plan-phase` runs the probe before the plan-check pass and hands the JSON to `gsd-plan-checker`, whose check 8f blocks on `severity`.
 
-**Why this shape and not the two obvious alternatives.** *Validating command shape* — teaching the checker Cargo's `--lib`/`--bin` target resolution, then pytest's node-ids, then the next one — always trails the newest toolchain. *Executing each command at plan time* is the strongest signal but means running planner-invented commands, with whatever side effects they carry, during planning. Requiring a stated failing direction needs no toolchain knowledge at all, and it is the only one of the three that catches the dangerous case: the motivating command exited non-zero, so it failed loudly, but the same class of error with a command that exits 0 on a no-op passes green and silently. Naming the failure signal is what makes that visible.
+The reason for this shape, rather than validating command shape or executing commands at plan time, is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md#why-a-stated-failing-direction-and-not-the-two-obvious-alternatives).
 
 **Presence, not quality — deliberately split.** The probe is deterministic and owns the blockers: a statement is missing, blank, or a whole-value placeholder (`TBD`, `TODO`, `N/A`, `NA`, `none`, `unknown`, `TBA`, `?`, `-`). Whether the statement names the *right* signal is prose judgment, so `gsd-plan-checker` raises a vacuous statement (*"the command fails"*) as a WARNING only. Every BLOCKER stays reproducible; judgment stays advisory.
 
