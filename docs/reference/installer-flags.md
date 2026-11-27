@@ -61,7 +61,8 @@ Combine any number of runtime flags; with none, the installer asks.
 | `--portable-hooks` | Write `$HOME`-relative hook paths in `settings.json` and resolve the node runner when a hook fires, through `hooks/gsd-node-runner.sh`, for WSL and Docker bind-mount setups. Also enabled by `GSD_PORTABLE_HOOKS=1` |
 | `--relative-includes` | With `--local`: write project-relative `@` includes (`.claude/gsd-core/...`) instead of this checkout's absolute path, so each git worktree of one repository reads its own copy. Also enabled by `GSD_RELATIVE_INCLUDES=1`; with `--global` it has no effect |
 | `--reclaim-kimi-legacy` | With `--kimi-code`: also remove the GSD hooks that a Kimi Code install before 1.10.0 left in `~/.kimi`. Opt-in, because those files cannot be told apart from Kimi CLI's own |
-| `-h`, `--help` | Print the option summary |
+| `--skills-root <runtime>` | Print the skills root directory for a registered runtime id and exit without installing. An unknown runtime id exits with status 1. Used by `/gsd-sync-skills` |
+| `-h`, `--help` | Print the option summary. It lists every option on this page, and it does not list the retired `--gemini` |
 
 ## See also
 
