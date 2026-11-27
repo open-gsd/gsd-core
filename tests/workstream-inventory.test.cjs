@@ -9,7 +9,8 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempProject } = require('./helpers.cjs');
+const { runGateWithStatFailure } = require('./helpers/fs-failure.cjs');
 const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
 const { buildWorkstreamInventory, isCompletedInventory, pickRollupWinners } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');
 const { inspectWorkstream } = require('../gsd-core/bin/lib/workstream-inventory.cjs');
@@ -1967,5 +1968,49 @@ describe('#3057 B3: inspectWorkstream — verification staleness-check indetermi
     assert.ok(inv);
     assert.equal(inv.completed_phases, 1);
     assert.strictEqual(calls.length, 0, 'a completed, non-stale check must not write any diagnostic');
+  });
+});
+
+// The alias cases live here, not in decisions.test.cjs. This file is already in
+// the Windows and macOS conformance tiers; adding the same signal to
+// decisions.test.cjs pushed the Windows tier over its 33% ceiling.
+describe('#5798: decision-coverage stat injection follows an alias of the phase directory', () => {
+  function runAliasedGate(t, subcommand) {
+    const tmpDir = createTempProject('gsd-5798-alias-');
+    t.after(() => cleanup(tmpDir));
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '- **D-02: Contacts render as cards.** One pair, one card.',
+      '',
+      '</decisions>',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\n## Objective\nImplement D-01 and D-02.\n');
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const alias = path.join(tmpDir, 'phase-alias');
+    fs.symlinkSync(phaseDir, alias, 'junction');
+
+    return runGateWithStatFailure(t, alias, subcommand, 'EACCES', { cwd: tmpDir, contextPath });
+  }
+
+  test('#5798: decision-coverage-plan reports stat errors through an aliased phase directory', (t) => {
+    const parsed = runAliasedGate(t, 'decision-coverage-plan');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable');
+    assert.strictEqual(parsed.passed, false);
+    assert.strictEqual(parsed.covered, null);
+  });
+
+  test('#5798: decision-coverage-verify reports stat errors through an aliased phase directory', (t) => {
+    const parsed = runAliasedGate(t, 'decision-coverage-verify');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable');
+    assert.strictEqual(parsed.blocking, false);
+    assert.strictEqual(parsed.honored, null);
+    assert.strictEqual(parsed.total, null);
   });
 });

@@ -454,7 +454,9 @@ const ALWAYS_REAL_OS = new Map([
  * `symlink-keyword` ARE deliberately duplicated verbatim from CATEGORIES:
  * both are genuinely Unix-relevant (chmod bits and symlink semantics differ
  * materially on macOS), not Windows-motivated the way the rest of CATEGORIES
- * is. A standalone CRLF/`autocrlf` signal was considered and rejected: even
+ * is. Later additions: `realpath` (#6002) and `canonical-tmpdir` (#5798) cover
+ * tests that normalize the macOS `/var` -> `/private/var` tmpdir symlink
+ * directly or via the shared canonicalizing test helpers. A standalone CRLF/`autocrlf` signal was considered and rejected: even
  * narrowed to `/\bCRLF\b|autocrlf/i` it still hit 143/930 files (15%) — CRLF
  * is primarily a Windows checkout concern in this codebase (ADR-1703's
  * `no-crlf-fragile-split` files it under DEFECT.WINDOWS-TEST-PORTABILITY),
@@ -469,6 +471,13 @@ const MACOS_CATEGORIES = [
   { name: 'symlink-keyword', test: (content) => /\bsymlink/i.test(content) },
   // #6002: realpath calls normalize the macOS /var -> /private/var tmpdir symlink.
   { name: 'realpath', test: (content) => /\brealpath(Sync)?\b/.test(content) },
+  // #5798: tests/helpers.cjs wraps that normalization in canonicalizePath / createCanonicalTempDir,
+  // and tests/helpers/fs-failure.cjs's runGateWithStatFailure canonicalizes the phase directory it
+  // mocks. A test that calls any of them needs the real macOS tmpdir symlink without naming realpath.
+  {
+    name: 'canonical-tmpdir',
+    test: (content) => /\b(?:canonicalizePath|createCanonicalTempDir|runGateWithStatFailure)\s*\(/.test(content),
+  },
 ];
 
 /** Keywords after which a `/` begins a regex literal rather than a division. */
