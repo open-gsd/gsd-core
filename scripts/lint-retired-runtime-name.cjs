@@ -185,7 +185,7 @@ const ALLOWLIST_OCCURRENCES = new Map([
   // `~/.gemini/antigravity-cli` in a table cell, or "runtime files" in the
   // same sentence), so each is pinned explicitly instead of loosening the
   // veto for everyone.
-  ['docs/ARCHITECTURE.md', [
+  ['docs/reference/runtime-install-contracts.md', [
     { snippet: 'Gemini-style `settings.json` hook entries', reason: 'hook dialect Antigravity inherits' },
   ]],
   ['docs/ja-JP/ARCHITECTURE.md', [

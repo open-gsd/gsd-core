@@ -193,6 +193,22 @@ export const STATE_COMMAND_ALIASES: CommandAlias[] = [
     ],
     "subcommand": "add-roadmap-evolution",
     "mutation": true
+  },
+  {
+    "canonical": "state.session-resume",
+    "aliases": [
+      "state session-resume"
+    ],
+    "subcommand": "session-resume",
+    "mutation": true
+  },
+  {
+    "canonical": "state.sessions",
+    "aliases": [
+      "state sessions"
+    ],
+    "subcommand": "sessions",
+    "mutation": false
   }
 ];
 
