@@ -459,6 +459,35 @@ describe('capability-writer: setCapabilityState', () => {
     }
   });
 
+  // ── #6331: a layout module that fails to load is a materialize error, not a throw ──
+  test('#6331: a runtime-artifact-layout load failure is a materialize error, not an uncaught throw', (t) => {
+    const Module = require('node:module');
+    const { rcd, cwd } = makeTempDirs();
+    t.after(() => { cleanup(rcd); cleanup(cwd); });
+    const realLoad = Module._load;
+    let injected = 0;
+    t.mock.method(Module, '_load', function load(request, parent, isMain) {
+      if (request === './runtime-artifact-layout.cjs' && /capability-writer\.cjs$/.test(parent?.filename ?? '')) {
+        injected += 1;
+        throw new Error('injected: runtime-artifact-layout failed to load');
+      }
+      return realLoad.call(this, request, parent, isMain);
+    });
+    // A gate-only change: nothing but the materialization can produce an error, and the
+    // gate is written before materialization starts.
+    let result;
+    assert.doesNotThrow(() => {
+      result = setCapabilityState(
+        cwd, rcd,
+        [{ id: 'code-review', gates: { 'workflow.code_review': false } }],
+        { materialize: { runtime: 'claude', scope: 'global' } },
+      );
+    }, 'the load failure must not escape setCapabilityState after the config writes');
+    assert.equal(injected, 1, 'precondition: the layout module load was attempted and failed');
+    assert.equal(readConfig(cwd).workflow?.code_review, false, 'precondition: the gate was written first');
+    assert.equal(result.errors.length, 1, `exactly the failed materialization is reported, got: ${JSON.stringify(result.errors)}`);
+  });
+
   // ── Test 16 (Fix D): malformed config.json → error, surface NOT written ───
   test('Fix D: malformed config.json pre-check blocks write and surface not created', () => {
     const { rcd, cwd } = makeTempDirs();

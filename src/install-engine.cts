@@ -506,6 +506,88 @@ function hasExistingSymlinkBetween(
 }
 
 // ---------------------------------------------------------------------------
+// Install manifest key resolution (#6331)
+// ---------------------------------------------------------------------------
+
+/**
+ * A `gsd-file-manifest.json` key normalized to forward slashes, or null when
+ * it is not a plain relative path (empty, NUL, absolute, `.`/`..`/empty segment).
+ */
+function normalizeInstallRelativePath(relPath: unknown): string | null {
+  if (typeof relPath !== 'string' || relPath.trim() === '' || relPath.includes('\0')) {
+    return null;
+  }
+  if (path.isAbsolute(relPath) || path.win32.isAbsolute(relPath)) {
+    return null;
+  }
+  const normalized = relPath.replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return null;
+  }
+  return segments.join('/');
+}
+
+/** `relPath` under `baseDir`, or null when it is hostile, escapes `baseDir` or crosses a symlink. */
+function resolveInstallRelativePath(baseDir: string, relPath: unknown): { relPath: string; fullPath: string } | null {
+  const normalized = normalizeInstallRelativePath(relPath);
+  if (!normalized) return null;
+  const root = path.resolve(baseDir);
+  const fullPath = path.resolve(root, normalized);
+  if (tryWithinRootLexical(fullPath, root) === null) return null;
+  if (hasExistingSymlinkBetween(root, fullPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+    return null;
+  }
+  return { relPath: normalized, fullPath };
+}
+
+/** Where `skills/` manifest keys live when the runtime's skills root is outside the config dir. */
+interface ManifestSkillsRedirect {
+  root: string;
+  prefix: string;
+}
+
+/**
+ * #4086/#6331: the skills root a layout installs to, when it is outside
+ * `configDir` (Codex global, `$HOME/.agents/skills`), with the runtime's
+ * skills manifest prefix. Null when skills live under `configDir` or the
+ * layout has no skills kind. The first skills kind wins, as in the installer.
+ */
+function manifestSkillsRedirect(
+  runtime: string,
+  layout: { kinds: readonly { kind: string; home?: string; destSubpath: string }[] } | null,
+  configDir: string,
+): ManifestSkillsRedirect | null {
+  const kind = layout?.kinds.find((k) => k.kind === 'skills');
+  if (!kind) return null;
+  const root = path.resolve(kind.home || configDir, kind.destSubpath);
+  if (tryWithinRootLexical(root, path.resolve(configDir)) !== null) return null;
+  const prefix: string = (hostBehaviorsFor(runtime).skillsManifestPrefix as string | undefined) || 'skills/';
+  return { root, prefix };
+}
+
+/**
+ * #6331: the installed file a manifest key names, the one resolution both the
+ * installer's local-patch scan (saveLocalPatches) and surface apply use. The
+ * key resolves against `configDir` first; a key under the redirect prefix
+ * whose file is not there resolves against the redirect root, when that file
+ * exists. Null for a hostile key or one that crosses a symlink.
+ */
+function resolveManifestKeyPath(
+  configDir: string,
+  key: unknown,
+  redirect: ManifestSkillsRedirect | null,
+): { relPath: string; fullPath: string } | null {
+  const ref = resolveInstallRelativePath(configDir, key);
+  if (!ref) return null;
+  if (!fs.existsSync(ref.fullPath) && redirect && ref.relPath.startsWith(redirect.prefix)) {
+    const alt = resolveInstallRelativePath(redirect.root, ref.relPath.slice(redirect.prefix.length));
+    if (alt && fs.existsSync(alt.fullPath)) return { relPath: ref.relPath, fullPath: alt.fullPath };
+  }
+  return ref;
+}
+
+// ---------------------------------------------------------------------------
 // User-artifact staging root
 // ---------------------------------------------------------------------------
 
@@ -2464,6 +2546,10 @@ export = {
   _copyStaged,
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
+  normalizeInstallRelativePath,
+  resolveInstallRelativePath,
+  manifestSkillsRedirect,
+  resolveManifestKeyPath,
   _resolveUserArtifactStagingRoot,
   _tryResolveUserArtifactStagingRoot,
   migrateLegacyDevPreferencesToSkill,

@@ -10698,33 +10698,13 @@ function generateManifest(dir, baseDir) {
   return manifest;
 }
 
+// #6331: one implementation, shared with surface apply (src/install-engine.cts).
 function normalizeInstallRelativePath(relPath) {
-  if (typeof relPath !== 'string' || relPath.trim() === '' || relPath.includes('\0')) {
-    return null;
-  }
-  if (path.isAbsolute(relPath) || path.win32.isAbsolute(relPath)) {
-    return null;
-  }
-  const normalized = relPath.replace(/\\/g, '/');
-  const segments = normalized.split('/');
-  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
-    return null;
-  }
-  return segments.join('/');
+  return installEngine.normalizeInstallRelativePath(relPath);
 }
 
 function resolveInstallRelativePath(baseDir, relPath) {
-  const normalized = normalizeInstallRelativePath(relPath);
-  if (!normalized) return null;
-  const root = path.resolve(baseDir);
-  const fullPath = path.resolve(root, normalized);
-  if (fullPath !== root && !fullPath.startsWith(root + path.sep)) {
-    return null;
-  }
-  if (hasExistingSymlinkBetween(root, fullPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
-    return null;
-  }
-  return { relPath: normalized, fullPath };
+  return installEngine.resolveInstallRelativePath(baseDir, relPath);
 }
 
 // hasExistingSymlinkBetween: moved to src/install-engine.cts (ADR-1239 Phase B).
@@ -11342,32 +11322,16 @@ function saveLocalPatches(configDir, pristineCtx) {
   const patchScope = manifest.scope === 'local' ? 'local' : 'global';
   let skillsRedirect = null;
   if (patchRuntime) {
-    const skillsRoot = _resolveSkillsRootDir(patchRuntime, configDir, patchScope);
-    const resolvedConfig = path.resolve(configDir);
-    if (
-      skillsRoot &&
-      skillsRoot !== resolvedConfig &&
-      !skillsRoot.startsWith(resolvedConfig + path.sep)
-    ) {
-      const prefix = hostBehaviorsFor(patchRuntime).skillsManifestPrefix || 'skills/';
-      skillsRedirect = { root: skillsRoot, prefix };
-    }
+    let patchLayout = null;
+    try { patchLayout = resolveRuntimeArtifactLayout(patchRuntime, configDir, patchScope); } catch { /* skills stay under configDir */ }
+    skillsRedirect = installEngine.manifestSkillsRedirect(patchRuntime, patchLayout, configDir);
   }
 
   for (const [relPath, originalHash] of Object.entries(manifest.files || {})) {
-    const safeRef = resolveInstallRelativePath(configDir, relPath);
+    // #6331: the same key resolution surface apply uses to re-record hashes.
+    const safeRef = installEngine.resolveManifestKeyPath(configDir, relPath, skillsRedirect);
     if (!safeRef) continue;
-    const { relPath: safeRelPath, fullPath } = safeRef;
-    let installedPath = fullPath;
-    if (!fs.existsSync(installedPath) && skillsRedirect && safeRelPath.startsWith(skillsRedirect.prefix)) {
-      const altRef = resolveInstallRelativePath(
-        skillsRedirect.root,
-        safeRelPath.slice(skillsRedirect.prefix.length)
-      );
-      if (altRef && fs.existsSync(altRef.fullPath)) {
-        installedPath = altRef.fullPath;
-      }
-    }
+    const { relPath: safeRelPath, fullPath: installedPath } = safeRef;
     if (!fs.existsSync(installedPath)) continue;
     const currentHash = fileHash(installedPath);
     if (currentHash !== originalHash) {

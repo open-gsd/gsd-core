@@ -277,6 +277,42 @@ function installedManifestIsComplete(
   }
 }
 
+/**
+ * The error `resolveSourceProvider` throws carries this `code` and a `reason` (#6331).
+ * `MANIFEST_UNREADABLE`: global scope, the installed corpus directories are present and
+ * readable, but gsd-file-manifest.json is missing or not a JSON object, so nothing can vouch
+ * for that corpus. `SOURCE_UNAVAILABLE`: any other case, a missing corpus included.
+ */
+const RUNTIME_SURFACE_SOURCE_UNAVAILABLE = Object.freeze({
+  CODE: 'ERR_RUNTIME_SURFACE_SOURCE_UNAVAILABLE',
+  MANIFEST_UNREADABLE: 'installed_manifest_unreadable',
+  SOURCE_UNAVAILABLE: 'source_unavailable',
+} as const);
+
+/** The `reason` of a Runtime Surface source-unavailable error, or null for any other value. */
+function runtimeSurfaceSourceUnavailableReason(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const tagged = error as Error & { code?: unknown; reason?: unknown };
+  if (tagged.code !== RUNTIME_SURFACE_SOURCE_UNAVAILABLE.CODE) return null;
+  return typeof tagged.reason === 'string' ? tagged.reason : null;
+}
+
+/**
+ * True when the manifest is missing or cannot be read as a JSON object (#6331). A symlink out
+ * of the config dir is not taken for a missing manifest.
+ */
+function installedManifestUnreadable(runtimeConfigDir: string): boolean {
+  const manifestPath = path.join(runtimeConfigDir, 'gsd-file-manifest.json');
+  let stat: ReturnType<ReturnType<typeof installFs>['lstatSync']>;
+  try {
+    stat = installFs().lstatSync(manifestPath);
+  } catch {
+    return true; // absent, or not even reachable: nothing vouches for the corpus
+  }
+  if (stat.isSymbolicLink() && !isPhysicallyConfinedTo(runtimeConfigDir, manifestPath)) return false;
+  return installerMigrations.readInstallManifest(runtimeConfigDir).manifestVersion === null;
+}
+
 function providerHasRequiredClasses(
   provider: RuntimeSurfaceSourceProvider,
   required: ReadonlySet<RuntimeSurfaceSourceClass>,
@@ -383,6 +419,9 @@ function resolveSourceProvider(
 ): RuntimeSurfaceSourceProvider {
   const required = new Set(requiredClasses);
   let rejectedInstalled: RuntimeSurfaceSourceProvider | null = null;
+  // #6331: global scope only — without a readable manifest the installed corpus is unverified,
+  // not missing, when its directories pass the structural check the marker and package pass.
+  let installedUnverified = (): boolean => false;
   if (required.size === 0) {
     return { kind: 'package', commandsRoot: '', agentsRoot: '' };
   }
@@ -395,6 +434,8 @@ function resolveSourceProvider(
     };
     if (providerHasRequiredClasses(installed, required, true, runtimeConfigDir)) return installed;
     rejectedInstalled = installed;
+    installedUnverified = () => installedManifestUnreadable(runtimeConfigDir) &&
+      providerHasRequiredClasses(installed, required, true);
 
     const marker = markerProvider(runtimeConfigDir);
     if (marker && !providersShareRequiredRoots(marker, installed, required) && providerHasRequiredClasses(marker, required, marker.kind !== 'package')) {
@@ -415,9 +456,17 @@ function resolveSourceProvider(
     }
   }
 
-  throw new Error(
-    `Runtime Surface source is unavailable or incomplete for ${[...required].sort().join('+')}; ` +
-    'install or upgrade gsd-core before materializing this surface.',
+  throw Object.assign(
+    new Error(
+      `Runtime Surface source is unavailable or incomplete for ${[...required].sort().join('+')}; ` +
+      'install or upgrade gsd-core before materializing this surface.',
+    ),
+    {
+      code: RUNTIME_SURFACE_SOURCE_UNAVAILABLE.CODE,
+      reason: installedUnverified()
+        ? RUNTIME_SURFACE_SOURCE_UNAVAILABLE.MANIFEST_UNREADABLE
+        : RUNTIME_SURFACE_SOURCE_UNAVAILABLE.SOURCE_UNAVAILABLE,
+    },
   );
 }
 
@@ -1417,4 +1466,4 @@ function resolveAdvertisedNewProject(runtime: string, scope: InstallScope): Adve
 }
 
 // getInstallExports removed in ADR-1508 / #1511 Phase 2 (last upward .cts→install.js dep).
-export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, resolveTriggerSurface, resolveAdvertisedNewProject, isNamespacedByDir, composeCommandFilename };
+export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, RUNTIME_SURFACE_SOURCE_UNAVAILABLE, runtimeSurfaceSourceUnavailableReason, resolveTriggerSurface, resolveAdvertisedNewProject, isNamespacedByDir, composeCommandFilename };

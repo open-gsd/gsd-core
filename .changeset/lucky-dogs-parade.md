@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 6353
+---
+**`capability set --runtime` and `/gsd-surface` keep the install manifest in step with the skills they re-stage** — after a capability update, the next gsd-core install hashed the new skill text against the entry it had recorded for the old text, reported the skill as locally modified and backed it up to `gsd-local-patches/`. A re-stage now re-records only the files GSD still owned, keeping the manifest's file mode; an entry for a file that no longer matched its record is left as it was, and so is one that names anything but a regular file (a FIFO no longer blocks the re-stage). Behavior change: on a global install whose `gsd-file-manifest.json` is missing or unparseable while the installed gsd-core source is present (and no `.gsd-source` marker names another source), `capability set --runtime` now exits 0 instead of 1: nothing can vouch for that source, so it saves the capability state, re-stages nothing, and reports a `materialize skipped: …` warning (with `errors` empty under `--raw`) saying the next install will re-stage. A `--raw` consumer keyed on the exit code should check `warnings`. A missing source still fails. (#6331)
