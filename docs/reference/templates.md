@@ -78,5 +78,5 @@ These are not `.planning/` artifacts.
 | Template | Produces | Referenced by |
 |----------|----------|-----------|
 | `user-profile.md` | the developer profile (`USER-PROFILE.md`) | `/gsd-profile-user`; the `gsd-user-profiler` agent; the profile-pipeline capability |
-| `dev-preferences.md` | the `/gsd-dev-preferences` command file that `/gsd-profile-user` generates | `/gsd-profile-user`; the installer; the profile-pipeline capability |
+| `dev-preferences.md` | the `dev-preferences` command file that `/gsd-profile-user` generates | `/gsd-profile-user`; the installer; the profile-pipeline capability |
 | `copilot-instructions.md` | the GSD block merged into `copilot-instructions.md` between GSD markers (the file is created when absent) | the installer for the Copilot runtime |
