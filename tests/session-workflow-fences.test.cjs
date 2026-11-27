@@ -262,14 +262,11 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
     });
 
     // #6873: on Windows a losing session's `mv` was seen to exit 0 with no claimed file, and the fence took that
-    // exit status as proof of the claim, announced HANDOFF_FILE= and then died in `cat`. The shim reproduces the
-    // symptom on any platform: `mv` reports success and moves nothing.
+    // exit status as proof of the claim, announced HANDOFF_FILE= and then died in `cat`. A shell function named mv
+    // reproduces the symptom on any platform without a file or a mode bit: `mv` reports success and moves nothing.
     test('aClaimWhoseFileIsNotThereIsLostNotAnnounced', () => {
       put('HANDOFF.latest.coordinator.json', { role_id: 'coordinator', next_action: 'must not be announced' });
-      const shim = path.join(tmp, 'shim');
-      fs.mkdirSync(shim);
-      fs.writeFileSync(path.join(shim, 'mv'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-      const shimmed = `PATH="${shim.split(path.sep).join('/')}:$PATH"\n${script([claim()], '--role coordinator')}`;
+      const shimmed = `mv() { return 0; }\n${script([claim()], '--role coordinator')}`;
       const r = runBash(tmp, shimmed, 's2');
       assert.equal(r.status, 0, r.err);
       assert.doesNotMatch(r.out, /HANDOFF_FILE=/);
