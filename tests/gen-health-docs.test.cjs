@@ -155,12 +155,14 @@ describe('gen-health-docs.cjs row content (representative codes)', () => {
   // #5118: W030 (a verification report status outside the closed set) is the 34th rule.
   // #5830: W031 (STATE.md far over its line target) is the 35th.
   // #6430: W032 (the plugin's context monitor has no statusline feeding it) is the 36th.
-  test('produces a 39-row <error_codes> table: 36 rules + 3 pre-checks (E001, E010, I010)', () => {
+  // #5249: W033 (a project skill with no description or over 500 lines) is the 37th.
+  test('produces a 40-row <error_codes> table: 37 rules + 3 pre-checks (E001, E010, I010)', () => {
     const rows = buildErrorCodeRows(rules);
-    assert.equal(rows.length, 39);
+    assert.equal(rows.length, 40);
     assert.ok(rows.some((r) => r.code === 'W030'), 'W030 has a generated row');
     assert.ok(rows.some((r) => r.code === 'W031'), 'W031 has a generated row');
     assert.ok(rows.some((r) => r.code === 'W032'), 'W032 has a generated row');
+    assert.ok(rows.some((r) => r.code === 'W033'), 'W033 has a generated row');
     const codes = rows.map((r) => r.code);
     for (const precheck of PRECHECK_CODES) {
       assert.ok(codes.includes(precheck.code), `missing pre-check code ${precheck.code}`);

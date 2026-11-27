@@ -238,8 +238,8 @@ node gsd-tools.cjs phase complete <phase>
 # Exit 0 when passed, 1 when not (#5170); a phase it cannot read is error() with empty stdout
 node gsd-tools.cjs phase uat-passed <phase> [--require-verification]
 
-# Index plans with waves and status
-node gsd-tools.cjs phase-plan-index <phase>
+# Index plans with waves and status (the output is always JSON; --json is accepted and changes nothing)
+node gsd-tools.cjs phase-plan-index <phase> [--json]
 
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
@@ -711,7 +711,7 @@ Read and write `.planning/config.json`.
 node gsd-tools.cjs config-ensure-section
 
 # Set a config value (dot notation)
-node gsd-tools.cjs config-set <key> <value>
+node gsd-tools.cjs config-set <key> <value> [--dry-run]
 
 # Get a config value
 node gsd-tools.cjs config-get <key> [--default <value>] [--raw]
@@ -725,6 +725,8 @@ node gsd-tools.cjs migrate-config
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 ```
+
+`config-set --dry-run` validates the key and value and prints what would change (`dry_run: true`, the key, its new value and its previous value, masked for secrets) without writing `config.json`.
 
 `config-get` prints the key's value as JSON. A key absent from the config falls back to the
 project root config (when a workstream is active), then to `--default`, then to the key's
@@ -1433,6 +1435,7 @@ node gsd-tools.cjs requirements mark-complete <ids>
 | `<version>` | Milestone version label to archive (e.g. `v1.0`). |
 | `--confirm` | **Required to mutate (#3726).** The archive is irreversible — ROADMAP.md/REQUIREMENTS.md archived, phase directories MOVED, STATE.md rewritten — so without this flag the command refuses and changes nothing (exit 1, with a message naming both `--confirm` and `--dry-run`). Not implied by `--force`, which only overrides the guards below. |
 | `--name <name>` | Display name for the MILESTONES.md entry. Defaults to `<version>`. |
+| `--archive-phases` | Move phase directories into `.planning/milestones/<version>-phases/`. This is the default, so the flag only states it explicitly; `--no-archive-phases` is the inverse. |
 | `--no-archive-phases` | Leave phase directories in place instead of moving them into `.planning/milestones/<version>-phases/`. |
 | `--archive-quick` | Opt-in (default OFF, #2142): also move every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)write that archive directory's `README.md` index, and clear STATE.md's `### Quick Tasks Completed` table rows. See "`milestone archive-quick`" below for the narrower standalone form and the full behavior. |
 | `--release-map <file>` | Opt-in (#5706): archive a per-repository release map. `<file>` is a JSON array of `{ repo, release, reference, environment, status, tag }` entries (fields and limits in [Per-repository release mapping](CONFIGURATION.md#per-repository-release-mapping)). The map is validated before anything is written; any problem fails the command with every error listed and changes nothing. On success the map is written to `.planning/milestones/<version>-RELEASE-MAP.json`, a `**Release mapping:**` table is added to the MILESTONES.md entry, and the JSON result carries `release_map: { path, entries }`. The file must be a regular file of at most 1 MiB. A later run for the same version never overwrites an archived map that differs. Without the flag, output and files are unchanged. |
@@ -1478,6 +1481,9 @@ node gsd-tools.cjs agent-skills <agent-type>
 
 # Emit typed JSON surface (#455) — { agent_type, block, skills_count, warnings, configured, reason, source, degraded }
 node gsd-tools.cjs agent-skills <agent-type> --json
+
+# Configured skills only (#5122): the agent's own self-load, never the persona fallback served to orchestrator-side injection
+node gsd-tools.cjs agent-skills <agent-type> --skills-only
 ```
 
 The `--json` flag returns a typed IR object suitable for structured consumption and test assertions, while the default (no flag) preserves the raw XML output that workflow shell expansions rely on.
@@ -1519,6 +1525,260 @@ Each entry carries the skill's `name`, `description`, `triggers`, `path` and `fi
 Returns JSON mapping of all available GSD skills with their metadata (name, description, file path, argument hints). Used by the installer and session-start hooks to avoid repeated filesystem scans.
 
 ---
+
+## Drift Guard, Workstream, UAT, Todo and Stats Verbs
+
+These verbs run as `node gsd-tools.cjs <verb>` or `node gsd-tools.cjs query <verb>`; the dotted manifest name (`workstream.status`) and the spaced form (`workstream status`) are interchangeable where both are listed. Output is JSON unless stated; the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `drift-guard authority`
+
+Prints the effective source-grounding authority for plan review, one of `grep`, `intel`, `treesitter`, `lsp`, `scip`. The configured value is `plan_review.source_grounding_authority` in `config.json` (default `grep`; an unknown value is an error naming the valid ones). A configured `grep` is upgraded to `intel` when `intel.enabled` is `true`; every other configured value is returned unchanged. Takes no flags.
+
+### `drift-guard severity --status <status> [--authority <authority>]`
+
+Classifies one source-grounding verdict. `--status` is required and is one of `VERIFIED`, `MISSING`, `AMBIGUOUS`, `UNCHECKABLE`; `--authority` defaults to the effective authority above. Output: `{severity, hardBlock}`.
+
+| Status | Authority | Severity | `hardBlock` |
+|--------|-----------|----------|-------------|
+| `VERIFIED` | any | `none` | `false` |
+| `MISSING` | `lsp` or `scip` | `HIGH` | `true` |
+| `MISSING` | `grep`, `intel` or `treesitter` | `needs-acknowledgement` | `false` |
+| `AMBIGUOUS` | any | `MEDIUM` | `false` |
+| `UNCHECKABLE` | any | `INFO` | `false` |
+
+### `drift-guard phase-status [--phase <N>]`
+
+Compares the `Status:` line in STATE.md's `## Current Position` section with the Status cell of that phase's row in ROADMAP.md's `## Progress` table. `--phase` defaults to the phase named by `Phase:` in the same section. Output: `{verdict, phase, stateStatus, roadmapStatus, stateRank, roadmapRank, authority}` with `authority` always `STATE.md`.
+
+| `verdict` | Meaning |
+|-----------|---------|
+| `consistent` | Both statuses sit on the same lifecycle rung |
+| `lag` | The two statuses are one rung apart |
+| `drifted` | Two or more rungs apart; or exactly one side is terminal; or exactly one side is `deferred` and the other is past rung 0 |
+| `uncheckable` | A status was not recognised, or a source is missing (see `reason`) |
+
+An `uncheckable` verdict caused by a missing source also carries `reason`: `missing_state` (no STATE.md), `no_current_position` (STATE.md has no Current Position section; the verb never guesses from the rest of the file), `missing_roadmap` (no ROADMAP.md) or `phase_not_in_roadmap` (no Progress row for the phase).
+
+### `workstream status <name>`
+
+Reports one workstream. Output when it exists: `{found: true, workstream, path, files: {roadmap, state, requirements}, phases, phase_count, completed_phases, status, milestone_shipped_unverified, current_phase, last_activity}`; otherwise `{found: false, workstream}`. `<name>` is required and must be a valid workstream name.
+
+### `workstream complete <name>`
+
+Archives a workstream: every entry of `.planning/workstreams/<name>/` moves to `.planning/milestones/ws-<name>-<YYYY-MM-DD>/` (a numeric suffix `-1`, `-2`, … is appended when that directory exists), and the workstream is cleared as the active one if it was. Output: `{completed: true, workstream, archived_to, remaining_workstreams, reverted_to_flat}`; `reverted_to_flat` is `true` when no workstream remains, in which case the empty `workstreams/` directory is removed. A name with no directory returns `{completed: false, error: "not_found", workstream}`. If a move fails, moved entries are put back and the result is `{completed: false, error: "archive_failed", message, workstream}`.
+
+### `uat render-checkpoint --file <path>`
+
+Renders the pending checkpoint of a UAT file as the text a verifier presents. `--file` is required and must resolve inside the project root. Output: `{file_path, test_number, test_name, checkpoint}`, where `checkpoint` is a Markdown block (`### CHECKPOINT: Verification Required`, the test name, its expected behavior, and the prompt `Type pass or describe what's wrong.`); the banner and prompt follow the configured `response_language`. A UAT file whose `## Current Test` section reads `[testing complete]` is an error: `UAT session is already complete; no pending checkpoint to render`.
+
+### `uat complete-session <uat-file> [--message <text>]`
+
+Closes a UAT session. The file must resolve inside the project root. The verb sets the frontmatter `status` to `complete`, or to `partial` when the `## Tests` section holds a test with result `pending`, result `blocked`, result `skipped` with no reason, or a `###` test heading with no `result:` line; and replaces the `## Current Test` body with `[testing complete]`. Output:
+
+| Case | Output |
+|------|--------|
+| Nothing material changed (ignoring the `updated:` line) | `{changed: false, status}`; with `restored: true` when the live file differed from its committed form and was reset to it. Nothing is committed |
+| The file changed | The file is written and committed alone, with `--message` or `test: complete UAT session (<path>)`: `{changed: true, status, committed}`, plus `reason` when `committed` is `false` |
+
+A frontmatter block that cannot be parsed is refused: nothing is written or committed.
+
+### `todo match-phase <phase>`
+
+Ranks the pending todos in `.planning/todos/pending/*.md` by relevance to a phase. Each todo's `title:` (default `Untitled`), `area:` (default `general`) and `files:` lines are read; the rest of the body contributes its first 200 characters. Output: `{phase, matches, todo_count}`, where `matches` is `[{file, title, area, score, reasons}]` for every todo scoring above zero, highest score first, and `todo_count` is the number of pending todos read. The score is the sum of:
+
+| Signal | Score |
+|--------|-------|
+| Words of more than two letters shared between the todo's title and body and the phase's name, goal and ROADMAP section (stop words excluded): 0.2 each | up to 0.6 |
+| The todo's `area` (when not `general`) appears in the phase text | 0.3 |
+| A path in the todo's `files:` overlaps a path in a phase plan's `files_modified` | 0.4 |
+
+`<phase>` is required.
+
+### `stats json`
+
+Prints project statistics as JSON; bare `stats` does the same, and `stats table` prints a Markdown summary instead (`{rendered}`). Output fields:
+
+| Field | Meaning |
+|-------|---------|
+| `milestone_version`, `milestone_name` | The current milestone; `null` when none |
+| `phases` | `[{number, display_id?, name, plans, summaries, status}]`; `status` is a display label such as `Not Started`, `Planned`, `Complete` |
+| `phases_completed`, `phases_total` | Phases at the `Complete` rung, and all phases |
+| `total_plans`, `total_summaries` | Plan and summary counts across the phases |
+| `percent` | `phases_completed` as a percentage of `phases_total` |
+| `plan_percent` | `total_summaries` as a percentage of `total_plans` |
+| `requirements_total`, `requirements_complete` | Count of `- [x] **` and `- [ ] **` lines in REQUIREMENTS.md |
+| `git_commits`, `git_first_commit_date` | Commits reachable from `HEAD`, and the date of the root commit (`YYYY-MM-DD`) |
+| `last_activity` | The last-activity line of STATE.md; `null` when absent |
+| `phase_scope` | `complete` when every phase was enumerated; any other value means the phase list could not be fully read |
+
+`percent` and `plan_percent` are `null` unless `phase_scope` is `complete`, so an unreadable phase directory is never reported as `0%`.
+
+## Dispatch, Isolation, Review Lane and Workstream Verbs
+
+These verbs are called by the workflows (and by hooks and health checks) rather than typed by hand, but each is a stable surface: its flags and output are what the callers depend on. Run a verb as `gsd_run query <verb>` or `gsd-tools <verb>`.
+
+### Dispatch
+
+```bash
+# Parallel dispatch capacity of the current runtime
+gsd-tools dispatch-capacity [--json]
+
+# Whether the current runtime runs a subagent inline instead of dispatching it
+gsd-tools dispatch-should-flatten [--json]
+
+# Isolation to use for an executor dispatch; records the decision (see below)
+gsd-tools dispatch-isolation [--phase <n>] [--plan <id>] [--force-isolation <mode>] [--renew-held <ms>] [--cwd-target <path>] [--prompt <text>] [--json]
+
+# The same resolution without recording it
+gsd-tools inspect-dispatch-isolation [--cwd-target <path>] [--prompt <text>] [--json]
+
+# Record an isolation decision directly
+gsd-tools record-dispatch-isolation --isolation <mode> [--harness-flag <flag>] [--phase <n>] [--plan <id>] [--executor-type <agent>] [--json]
+
+# The type an Agent() call should use for a GSD subagent on the current runtime
+gsd-tools resolve-dispatch-type --requested <name> [--json]
+```
+
+The current runtime is resolved in this order: `GSD_RUNTIME`, `runtime` in the config, the install's `.gsd-runtime` marker, then `claude`.
+
+**`dispatch-capacity`** prints a positive integer. Its value comes from `GSD_DISPATCH_MAX_CONCURRENCY` when that is a positive integer, otherwise from the runtime's declared `dispatch.maxConcurrency`, otherwise `1`. With `--json` it prints `{ runtime, capacity, declared, source, reason }`: `source` is `live`, `descriptor` or `fallback`, and `reason` is `ok` or the reason the fallback applied (`missing`, `undocumented`, `non_integer`, `unsafe_integer`, `non_positive`, `non_numeric`, `unknown_runtime`).
+
+**`dispatch-should-flatten`** prints `true` or `false`. It fails closed: an unknown runtime, a missing `dispatch` declaration or an error gives `true` (inline). With `--json` it prints `{ runtime, shouldFlatten, dispatch }`.
+
+**`dispatch-isolation`** prints the isolation mode for the dispatch: `harness-worktree`, `orchestrator-worktree` or `none`. An unknown runtime, a missing or out-of-vocabulary declaration, or an error gives `none` (sequential execution). It also records the decision, with the harness flag and the phase and plan identifiers, in `.gsd/dispatch-isolation-sentinel.json`, which the isolation guard hooks read; a failed write never fails the call. With `--json` it prints `{ runtime, executorRuntime, isolation, exec, harnessFlag, fallback, held, decidedAt }`. `held` is `true` when a recorded degrade is being held, and `decidedAt` is then that decision's time in epoch milliseconds (otherwise `null`).
+
+| Flag | Description |
+|------|-------------|
+| `--phase <n>`, `--plan <id>` | Identifiers recorded with the decision. |
+| `--force-isolation <mode>` | Override the resolved mode with context the resolver cannot see (for example a per-plan submodule check). A value outside the closed mode list is ignored. `none` clears the harness flag and `exec`. |
+| `--renew-held <ms>` | With `--force-isolation none`, marks the write as a dispatch following a held degrade and carries that decision's own `decidedAt`. |
+| `--cwd-target <path>` | The worktree path the orchestrator will run in. `exec` (the resolved `{ command, args, cwd }`) is returned only for `orchestrator-worktree`, and only when this is given. |
+| `--prompt <text>` | Prompt bound into `exec` when `--cwd-target` is given. |
+| `--json` | Print the object above instead of the bare mode. |
+
+**`inspect-dispatch-isolation`** resolves the same answer without writing the sentinel, for diagnostics such as `/gsd-health` and `/gsd-settings`. It accepts `--cwd-target`, `--prompt` and `--json`; `--force-isolation`, `--phase` and `--plan` are recording-only and are refused with a usage error.
+
+**`record-dispatch-isolation`** writes the same sentinel from the caller's own decision and prints `{ recorded, path }`; `path` is `.gsd/dispatch-isolation-sentinel.json`. `--isolation` is required and must be one of the three modes. `--harness-flag` takes the flag in `--harness-flag=<flag>` form when the flag itself starts with `--` (for example `--harness-flag=--worktree`). A GSD role other than the executor passed as `--executor-type` is refused with a warning and recorded as no executor type. The CLI surface registry also declares a boolean `--worktree`; the handler does not read it.
+
+**`resolve-dispatch-type`** prints the subagent type to use for `--requested <name>`: the name unchanged on runtimes with named dispatch (Claude Code, OpenCode and others), and on a runtime with built-in types only (Kimi Code) the closest built-in (`coder`, `explore` or `plan`) chosen by the name's role suffix.
+
+### Execution settings
+
+```bash
+gsd-tools resolve-execution <agent-type> [--effort <level>] [--fast-mode true|false] [--attempt <n>] [--failure-class <class>] [--host <name>]
+```
+
+Resolves the model, effort and fast-mode settings for an agent type and prints them as JSON:
+
+`{ model, profile, effort, effort_rendered, effort_param, effort_propagation, effort_requested, effort_clamped, effort_clamp_reason, effort_effective, effort_effective_source, fast_mode, fast_mode_supported }`
+
+`effort_effective_source` is `frontmatter` or `frontmatter-absent` when the installed agent file decides (Claude Code), and `resolved` when no file evidence exists. An agent type that is not in the model catalog adds `unknown_agent: true`.
+
+| Flag | Description |
+|------|-------------|
+| `--effort <level>` | Override the effort from the configuration cascade. |
+| `--fast-mode true\|false` | Override fast mode. Any other value leaves the resolved setting. |
+| `--attempt <n>` | A non-negative integer: resolve the model and effort for retry `n`, so dynamic routing can escalate both. |
+| `--failure-class <class>` | Why the previous attempt failed: `quota-exceeded`, `classify-handoff-bug` or `unknown-failure`. Only `quota-exceeded` consults the provider-escalation ladder, and the result adds an `escalation` object. |
+| `--host <name>` | Also render the invocation-time effort argument for that host. Adds `host`, `effort_surface`, `effort_argv`, `effort_argv_string` and `effort_argv_value`. |
+
+Exactly one agent type is required.
+
+### Prompt budget
+
+```bash
+gsd-tools prompt-budget --budget <tokens> --instructions-file <f> --roadmap-file <f> --plan-file <f> [--plan-file <f> ...] --output-prompt <f> --output-metadata <f> [--project-file <f>] [--context-file <f>] [--research-file <f>] [--requirements-file <f>] [--safety-margin-pct <n>] [--project-md-head-lines <n>]
+```
+
+Assembles a reviewer prompt from the given sections within a token budget, writes the prompt to `--output-prompt` and the budget metadata (JSON) to `--output-metadata`. `--budget`, `--instructions-file`, `--roadmap-file`, at least one `--plan-file`, `--output-prompt` and `--output-metadata` are required; the other files are optional and a missing optional file is skipped. `--budget` must be a positive integer. A missing required file exits `1` with the path; a prompt that cannot be brought within the budget exits `2` after writing both outputs, with `hardFailed` set in the metadata.
+
+### Review lanes
+
+```bash
+gsd-tools review-lane plan [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane sections [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane invoke --slug <lane> [--as <name>] [--agent <name>] [--model <id>] [--prompt-file <f>] [--explicit] [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] [--json]
+gsd-tools review-lane flags [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane availability [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>]
+gsd-tools review-lane dispatch-step [--explicit <flags>] [--depth <n>] [--base-sha <sha>] [--cap-id <id> --point <point>] [--run-dir <dir>] [--repo-root <dir>]
+```
+
+The lane roster is the first-party lanes plus installed third-party lanes. Without `--selected` every lane is used (`dispatch-step` always uses the whole roster and does not take it); `--run-dir` (default `.`) is where prompts and results are written; `--repo-root` defaults to the working directory.
+
+- **`plan`** prints a JSON array with one entry per lane: `{ slug, ok, section, transport, promptBudget, promptCapSource, contextWindowTokens, promptPath }`. A lane that cannot run has `ok: false` with a `reason`.
+- **`sections`** prints one `<slug><TAB><reviews section>` line per lane.
+- **`flags`** prints the reviewer flags the roster declares, one per line in roster order, for the first-party and installed lanes (a lane can declare more than one, for example `--antigravity` and `--agy`). Only flags of the form `--` followed by lowercase letters, digits and hyphens are printed, so the output is safe to word-split in a shell loop; with no flag there is no output and no trailing newline.
+- **`availability`** prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`), in roster order. The probe is a bounded GET of `/v1/models` on the host `review.<lane>_host` names, or the lane's built-in default host when that key is unset. A host left at the built-in default counts as `available` only when the listing answers with a 2xx OpenAI-style `/v1/models` response, and warnings go to stderr.
+- **`dispatch-step`** is what a capability step calls to run the reviewer lanes a caller asked for. `--explicit` is a comma-separated list of lane flags; `--depth` and `--base-sha` are passed through to the dispatch. `--cap-id` and `--point` together name the capability and loop point whose `supportsReviewerLanes` trait is resolved; giving only one of them prints a warning and leaves the trait off. The changed file paths are read from stdin, one per line (none when stdin is a terminal).
+- **`invoke`** runs the lane named by `--slug` and prints its result as JSON; an unknown or not-ok lane prints `{ slug, ok: false, reason, detail }`. `--as <name>` runs the lane as a [reviewer instance](CONFIGURATION.md#review-settings) of that name, writing `gsd-review-<name>.md` under `--run-dir`, with `--model` and `--agent` supplying the instance's model and agent. `--prompt-file` substitutes a different prompt. `--explicit` marks the lane as explicitly requested. A prompt over the lane's cap is refused, never trimmed.
+
+### Loop hooks
+
+```bash
+gsd-tools loop render-hooks <point> [--config-dir <path>] [--runtime <runtime>] [--active-cap <id>] [--after-fingerprint <phase-dir>]
+```
+
+Renders the active loop extension-point hooks for `<point>` (for example `plan:pre`) and prints `{ point, activeHooks, rendered }`, plus `warnings` and `skippedHooks` when there are any. `--config-dir` selects the runtime config directory; `--runtime` names the runtime explicitly instead of using the persisted one; `--active-cap <id>` makes the command print only `true` or `false`, whether that capability has an active hook at the point; `--after-fingerprint` drops `verify:post` steps whose declared artifact already exists in that phase directory, and errors when the directory cannot be read. Any other `loop` subcommand is an error.
+
+### Package legitimacy
+
+```bash
+gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <package> [<package> ...]
+```
+
+Looks each package up in the registry API of its ecosystem (npm, PyPI or crates.io) and prints the results as JSON, one entry per package, each with a `verdict`. `--ecosystem` is required and must be `npm`, `pypi` or `crates`; at least one package name is required; either missing is a usage error. A registry or network failure does not fail the command: that package gets a degraded verdict with the failed lookups noted in its `signals` and `reasons`. The command needs network access. How `gsd-phase-researcher` uses the verdicts is described under [`/gsd-plan-phase`](COMMANDS.md#gsd-plan-phase).
+
+### Assumption delta
+
+```bash
+gsd-tools assumption-delta scan <phase> [--terms <csv>] [--json]
+```
+
+Reads the phase section the way `roadmap get-phase` does and runs the deterministic assumption-delta detector for the advisory architecture checkpoint, printing its result as JSON. `--terms` replaces the default pluralization cues with a comma-separated list; the list is lower-cased, de-duplicated and reduced to alphanumerics, and an empty or flag-shaped value restores the defaults. A missing or flag-shaped `<phase>` is a usage error.
+
+### Commit guard
+
+```bash
+gsd-tools check-commit
+gsd-tools commit-docs-guard enable
+gsd-tools commit-docs-guard disable
+```
+
+`check-commit` inspects the staged files and, when `.planning/` files are staged, allows the commit only if `commit_docs` resolves to `true` (phase-level or project-level); otherwise it exits with an error that lists the files and how to unstage them. It prints `{ allowed: true, reason }` with `reason` one of `phase_commit_docs_true`, `commit_docs_enabled` or `no_planning_files_staged`; `--raw` prints `allowed`.
+
+`commit-docs-guard enable` installs a GSD-marked `pre-commit` hook and prints `{ enabled: true, action, path }` with `action` `written` or `already_enabled`. It refuses outside a git repository and when `core.hooksPath` is set (the hook would never run). `commit-docs-guard disable` removes that hook and prints `{ disabled: true, action, path }` with `action` `removed` or `noop`; it refuses to remove a `pre-commit` hook that does not carry the GSD marker.
+
+### Workstreams
+
+```bash
+gsd-tools workstream create <name> [--migrate-name <name>] [--no-migrate]
+gsd-tools workstream list
+gsd-tools workstream get
+gsd-tools workstream set <name>
+gsd-tools workstream progress
+```
+
+- **`create`** makes `.planning/workstreams/<name>/` with its `STATE.md` and `phases/` and prints `{ created, workstream, path, state_path, phases_path, migration, active }`. When the project is still in flat mode (no `workstreams/` directory) and already has a `ROADMAP.md`, `STATE.md` or `phases/`, the existing work is first migrated into a workstream named after the current milestone (or `default`): `--migrate-name` chooses that name and `--no-migrate` skips the migration. An existing workstream prints `{ created: false, error: "already_exists" }`.
+- **`list`** prints `{ mode, workstreams }`; each entry has `name`, `path`, `has_roadmap`, `has_state`, `status`, `milestone_shipped_unverified`, `current_phase`, `phase_count` and `completed_phases`.
+- **`get`** prints `{ active, mode }`; `active` is `null` when no workstream is active.
+- **`set <name>`** makes the workstream active and prints `{ active, set: true }`; an unknown name prints `{ active: null, error: "not_found", workstream }`.
+- **`progress`** prints `{ mode, active, workstreams }`; each entry has `name`, `active`, `status`, `milestone_shipped_unverified`, `current_phase`, `phases` and `plans` as completed-over-total strings such as `0/1`, and `progress_percent`.
+
+### Environment and codebase-map helpers
+
+```bash
+gsd-tools config-path
+gsd-tools skills-root <runtime>
+gsd-tools update-context [--runtime <runtime>] [--config-dir <path>] [--json]
+gsd-tools normalize-test-command <command> [--cwd <dir>]
+gsd-tools stamp-codebase-map [--files <names>]
+```
+
+- **`config-path`** prints the resolved `config.json` path as plain text; it is the workstream's config when a workstream is active.
+- **`skills-root <runtime>`** prints `{ "skills_root": "<path>" }`, the global skills directory of the runtime. An unregistered runtime id is an error, and a missing argument is a usage error.
+- **`update-context`** probes the runtime config directories for an installed GSD and prints `{ installedVersion, scope, runtime, gsdDir }`; `scope` is `LOCAL` or `GLOBAL`, and with no install found it prints version `0.0.0`, scope `UNKNOWN` and empty `runtime` and `gsdDir`. `--config-dir` names a preferred install directory, probed first, and `--runtime` names the preferred runtime.
+- **`normalize-test-command <command>`** prints the command rewritten to a one-shot form so a watch-mode runner cannot hang a verification gate: `vitest` becomes `vitest run`, `jest --watch` becomes `jest --watchAll=false`, a package-manager `test` script whose `package.json` runs vitest or jest in watch mode gets a `CI=true` prefix, and any other command is printed unchanged. `--cwd` locates `package.json`.
+- **`stamp-codebase-map`** stamps the codebase map documents under `.planning/codebase/` with the current `HEAD` commit and date. It never fails the caller: with no `.planning/codebase/`, outside a git repository or with no map documents it prints `{ stamped: [], commit: null, stamped_at: null, skipped: true, reason }`. `--files <names>` restricts the stamp to the named map documents; an unknown name or an empty value is skipped with a reason.
 
 ## Utility Commands
 
@@ -1578,6 +1838,10 @@ node gsd-tools.cjs stats [json|table]
 
 # Progress rendering (human-readable)
 node gsd-tools.cjs progress [json|table|bar]
+
+# Progress as one bar: { bar, percent, completed, total }, and with --raw only the bar text,
+# e.g. [░░░░░░░░░░░░░░░░░░░░] 0/0 plans
+node gsd-tools.cjs progress bar
 
 # Progress as typed JSON surface (#455)
 node gsd-tools.cjs progress --json
@@ -1653,6 +1917,58 @@ node gsd-tools.cjs websearch <query> [--limit N] [--freshness day|week|month]
 ```
 
 ---
+
+## Commit Selection, Sub-repo and Reviewer-flag Verbs
+
+These verbs run as `node gsd-tools.cjs <verb>` (or `node gsd-tools.cjs query <verb>`); the [global flags](#command-flags-and-the-cli-surface-manifest) apply.
+
+### `select-revert-commits --range <git-range> (--phase <id> | --plan <id>)`
+
+Selects, from a git range, the commits that belong to one phase or one plan, for `/gsd-undo`. Exactly one of `--phase` and `--plan` is required, and `--range` is required and must not start with `-`; each failure is a usage error. The verb runs `git log --no-merges` over `--range` in the directory it was invoked from (not the main worktree) and reads each subject's declared scope: the `scope` of a `type(scope):` header, with a leading `fixup! ` or `squash! ` or a `Revert "…"` wrapper removed first. A subject with no scope, or no `type:` header, has no declared scope and is never selected.
+
+| Flag | Selects a commit when its declared scope is |
+|------|---------------------------------------------|
+| `--phase <id>` | the phase id, or starts with `<id>-` (so `3` selects `03` and `03-01`; an all-digit id is zero-padded first; a bracket-style id such as `PROJ-42` is used as given) |
+| `--plan <id>` | exactly the plan id, in the two-segment form `NN-MM` (`3-1` is padded to `03-01`). A three-segment id, or a bracket-style phase segment, is refused |
+
+Output: `{selected: [{sha, subject}], classified: [{sha, subject, parsedScope, matched}]}`, `classified` holding every commit in the range with its parsed scope. With `--raw` the output is one `<sha> <subject>` line per selected commit. A `git log` failure (an invalid range, or one that takes more than 15 seconds) is a usage error naming the range.
+
+```bash
+node gsd-tools.cjs select-revert-commits --range main..HEAD --plan 03-01
+node gsd-tools.cjs select-revert-commits --range HEAD~20..HEAD --phase 3 --raw
+```
+
+### `commit-to-subrepo "<message>" --files <path>...`
+
+Commits files in the sub-repositories listed in `sub_repos` of `.planning/config.json`, one commit per sub-repository. The message is required, `sub_repos` must be non-empty, and `--files` is required, each a usage error. Each path is assigned to the sub-repository whose name is the longest prefix of the path (`sub_repos: ["packages", "packages/core"]` sends `packages/core/x.ts` to `packages/core`); a path matching none is reported on stderr and listed in `unmatched`. Within each sub-repository the verb stages the named paths (relative to it) and commits only those, never the rest of the index. A path that fails to stage unstages what this call staged and records `staging_failed` (or `staging_timeout`) for that sub-repository.
+
+Output: `{committed, repos: {<repo>: {committed, hash, files, reason?, error?}}, unmatched?}`. `committed` is `true` when any sub-repository committed. A sub-repository that did not commit carries `reason`: `nothing_to_commit`, `staging_failed`, `staging_timeout`, `commit_timeout` or `error`. With `--raw` the output is `<repo>:<hash>` pairs, `skip` standing for a missing hash.
+
+### `pr-subrepo "<message>" --repo <path> --branch <name>`
+
+Puts a sub-repository's tracked changes on a new branch and pushes it, ready for a pull request. The message, `--repo` and `--branch` are required; `--branch` must not start with `-`; `--repo` must resolve inside the project root (an escaping path is refused). The verb collects the tracked changes of the sub-repository (untracked files are excluded; a rename counts both paths), refuses when the branch already exists, creates the branch, stages exactly those files, commits them with the message, and runs `git push --set-upstream origin <branch>`. It does not open the pull request.
+
+| Result | Output |
+|--------|--------|
+| No tracked changes | `{ok: true, repo, branch, committed: false, reason: "nothing_to_commit", files: []}`; no branch is created |
+| Pushed | `{ok: true, repo, branch, committed: true, files, commit_hash, remote_url, remote_slug}`; `remote_slug` is the `owner/repo` of a GitHub `origin`, else `null` |
+| Staging or commit fails | The branch is deleted and the previous branch restored; the verb exits with an error |
+| Push fails | The error names the retry command; the local branch and its commit are kept |
+
+### `quick-tasks-migrate`
+
+Rewrites the `### Quick Tasks Completed` table of STATE.md into the canonical column set `# | Description | Date | Commit | Status | Directory`. Each legacy column is mapped onto its canonical column; a column with no canonical counterpart, or a second column mapping to an already-filled one, is folded into `Description` as `<column>: <value>`, so no value is dropped. Empty canonical cells are written as `—`. The write goes through the STATE.md writer, which also refreshes the file's frontmatter.
+
+Output: `{ok: true, migrated: true, from: [<legacy columns>], rows: <count>}` after a migration; `{ok: true, migrated: false}` when the table is absent or already canonical; `{ok: true, migrated: false, reason}` when STATE.md is missing (`reason` names the path). The verb is idempotent.
+
+### `review-lane explicit-from-argv [--selected <a,b>] [--run-dir <dir>] [--repo-root <dir>] -- <argument>...`
+
+Tells the review workflows which reviewer lanes the user named. Every token after `--` is compared with the flags each lane declares (the first-party lanes plus installed third-party reviewer lanes; `antigravity` declares both `--antigravity` and `--agy`), and the slugs of the matching lanes are printed as plain text, sorted and comma-joined, with no trailing newline. Output is empty when no token matches. `--selected`, `--run-dir` and `--repo-root` are accepted for parity with the other `review-lane` subcommands and do not affect this one.
+
+```bash
+node gsd-tools.cjs review-lane explicit-from-argv -- --claude --agy --all
+# antigravity,claude
+```
 
 ## Update Backup and Restore
 

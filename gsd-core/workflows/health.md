@@ -257,6 +257,7 @@ Report final status.
 | W030 | warning | Phase verification report status is outside the closed set | Yes (known legacy statuses only) |
 | W031 | warning | STATE.md is more than 3x its 100-line target | No |
 | W032 | warning | The gsd-core Claude Code plugin is enabled but no statusline feeds the context monitor, so context warnings are inactive | No |
+| W033 | warning | A project skill has no frontmatter description or a SKILL.md over 500 lines, so project-skills discovery reads it in full | No |
 | I001 | info | Plan without SUMMARY (may be in progress) | No |
 | I010 | info | Resolved CWD reported alongside the E010 home-directory guard | No |
 

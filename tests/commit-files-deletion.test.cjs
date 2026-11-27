@@ -890,7 +890,7 @@ describe('commit --files-removed: index states absent by design are never remova
       tmpDir,
       { GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_NOSYSTEM: '1' },
     );
-    killRecordedStalls(stallPids);
+    killRecordedStalls(stallPids, HOOK_STALL_COMMAND);
     assertNoLeftoverStall(assert, HOOK_STALL_COMMAND, 'the post-index-change hook stalls');
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.committed, false, result.output);

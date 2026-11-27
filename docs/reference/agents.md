@@ -897,14 +897,14 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 | Agent | Read | Write | Edit | Bash | Grep | Glob | WebSearch | WebFetch | MCP |
 |-------|------|-------|------|------|------|------|-----------|----------|-----|
 | project-researcher | ✓ | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| phase-researcher | ✓ | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| ui-researcher | ✓ | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| phase-researcher | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ui-researcher | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | assumptions-analyzer | ✓ | | | ✓ | ✓ | ✓ | | | |
 | advisor-researcher | ✓ | | | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | research-synthesizer | ✓ | ✓ | | ✓ | | | | | |
-| planner | ✓ | ✓ | | ✓ | ✓ | ✓ | | ✓ | ✓ |
+| planner | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | roadmapper | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
+| executor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | ✓ |
 | plan-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | integration-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
 | ui-checker | ✓ | | | ✓ | ✓ | ✓ | | | |
@@ -914,10 +914,11 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 | codebase-mapper | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | debugger | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | |
 | user-profiler | ✓ | | | | | | | | |
-| doc-writer | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
+| doc-writer | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
 | doc-verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
-| security-auditor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
+| security-auditor | ✓ | | | ✓ | ✓ | ✓ | | | |
 | behavior-verifier | ✓ | ✓ | | | ✓ | ✓ | | | ✓ |
+| dom-verifier | ✓ | ✓ | | | ✓ | ✓ | | | ✓ |
 
 **Principle of Least Privilege:**
 - Checkers are read-only (no Write/Edit) — they evaluate, never modify

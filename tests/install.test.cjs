@@ -1425,6 +1425,34 @@ describe('install — --devin-desktop CLI flag routes to windsurf runtime (#792)
     assert.deepStrictEqual(selectRuntimesFromArgs(['--devin-desktop']), ['windsurf']);
   });
 });
+
+// #6743: the usage text is a literal that must track the flag parser. It listed the
+// retired --gemini (the parser refuses it) and omitted flags the parser accepts.
+describe('install — --help matches the accepted flags (#6743)', () => {
+  const helpText = () => {
+    const r = runNode([path.join(__dirname, '..', 'bin', 'install.js'), '--help'], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, `--help must exit 0, got ${r.exitCode}: ${r.stderr}`);
+    return r.stdout;
+  };
+  const lists = (text, flag) => new RegExp(`${flag}(?![\\w-])`).test(text);
+
+  test('lists --dry-run, --both, --devin-desktop and --skills-root', () => {
+    const text = helpText();
+    for (const flag of ['--dry-run', '--both', '--devin-desktop', '--skills-root']) {
+      assert.ok(lists(text, flag), `${flag} is accepted by the installer but missing from --help`);
+    }
+  });
+
+  test('does not advertise the retired --gemini runtime', () => {
+    assert.ok(!lists(helpText(), '--gemini'), '--gemini is refused by the installer (#1928) and must not be listed in --help');
+  });
+
+  test('lists every runtime flag the parser selects', () => {
+    const text = helpText();
+    const missing = selectRuntimesFromArgs(['--all']).map((id) => `--${id}`).filter((flag) => !lists(text, flag));
+    assert.deepEqual(missing, [], 'runtime flags accepted by --all but absent from --help');
+  });
+});
 // ─── Section N: Windsurf workflow slash-command install (#1615) ─────────────
 // Reads deployed workflow .md files whose text IS the product surface the
 // Windsurf runtime loads at startup (path references, command names).
@@ -7930,8 +7958,9 @@ describe('#3026: installer --help documents every accepted runtime flag', () => 
       '--claude', '--opencode', '--kilo', '--codex', '--kimi',
       '--copilot', '--antigravity', '--cursor', '--windsurf', '--augment',
       '--trae', '--qwen', '--hermes', '--cline', '--codebuddy',
-      '--zcode', '--pi', '--gemini',
+      '--zcode', '--pi',
     ];
+    // --gemini is retired (#1928, #6743): the installer refuses it, so --help must not list it.
 
     const missing = acceptedRuntimeFlags.filter(
       f => !EXCLUDED_FLAGS.has(f) && !helpText.includes(f),

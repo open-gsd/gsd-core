@@ -1037,7 +1037,7 @@ against the mapping point, not HEAD.
 treats a directory as mapped when its path appears in any of the seven
 documents, flags modified and deleted files inside mapped directories as well
 as new structure outside them, and withholds paths that are unsafe to pass to
-the mapper. See [Post-Execute Codebase Drift Detection](post-execute-codebase-drift-detection.md).
+the mapper. See [Post-Execute Codebase Drift Detection](FEATURES.md#27a-post-execute-codebase-drift-detection).
 
 ---
 
@@ -1513,7 +1513,7 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 - Set `review.default_reviewers` in `.planning/config.json` (or via `gsd config-set`) to control no-flag `/gsd-review` fan-out.
 - `review.default_reviewers` may include configured `review.reviewer_instances` names; each instance runs as an independent reviewer identity backed by its configured adapter/model. Instance names are not CLI flags.
 - Use `--all` for a full pre-merge sweep without changing project defaults.
-- Every prompt-fed lane has a prompt cap: an explicit `review.max_prompt_tokens*` value, or else 65% of the lane's context window. `claude`, `codex`, `qwen` and `kimi-code` declare a window; set `review.context_window_tokens.<slug>` for the others or for a larger pinned model. A lane whose prompt is over its cap is **refused** with reason `prompt_exceeds_context`, never trimmed. See [Prompt budgets for reviewer lanes](docs/CONFIGURATION.md#prompt-budgets-for-reviewer-lanes) in CONFIGURATION.md.
+- Every prompt-fed lane has a prompt cap: an explicit `review.max_prompt_tokens*` value, or else 65% of the lane's context window. `claude`, `codex`, `qwen` and `kimi-code` declare a window; set `review.context_window_tokens.<slug>` for the others or for a larger pinned model. A lane whose prompt is over its cap is **refused** with reason `prompt_exceeds_context`, never trimmed. See [Prompt budgets for reviewer lanes](CONFIGURATION.md#prompt-budgets-for-reviewer-lanes) in CONFIGURATION.md.
 
 **Why a lane refuses instead of trimming (#4559):** past a model's context window nothing errors. The model compacts and answers confidently about material it never read, so the lane returns a review that reads exactly like one with no concerns. Trimming to a cap swapped that silent overflow for a silent truncation, and the trim note told the model to treat missing context as out of scope. A refused lane is reported as a lane that did not run, naming its cap and the key to raise, so you can split the review or pick a larger model. Defaults come from a window each lane declares, not from a model catalog: GSD carries no network lookup or per-model table to maintain, and a lane whose model GSD cannot know stays uncapped rather than guessed.
 
@@ -3571,7 +3571,7 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 - REQ-HUMAN-VERIFY-02: Human-needed verification MUST remain pending until the end-of-phase review resolves it.
 - REQ-HUMAN-VERIFY-03: Configs without the key MUST use `"end-of-phase"`.
 
-**Reference:** [Checkpoints Reference](gsd-core/references/checkpoints.md)
+**Reference:** [Checkpoints Reference](../gsd-core/references/checkpoints.md)
 
 ---
 
@@ -3703,7 +3703,7 @@ The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolve
 
 The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation. A `backstop` edge is lifted as a **structured non-inferable marker** (`{ statement, verification: backstop }`, a flat scalar — not a prose note), which the **honest verifier** then consumes (see below) — closing the loop the edge-probe opened.
 
-**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](gsd-core/references/honest-verifier.md).
+**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](../gsd-core/references/honest-verifier.md).
 
 **Requirements:**
 - REQ-EDGE-01: The edge pass MUST run after the ambiguity gate and emit a `## Edge Coverage` SPEC section.
@@ -3716,7 +3716,7 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-08: `plan-phase` MUST lift a `backstop` edge into `must_haves.truths` as a structured flat-scalar marker (`{ statement, verification: backstop }`), never a prose parenthetical.
 - REQ-HONEST-01: At verify time a `backstop` truth that cannot be confirmed with explicit evidence MUST abstain → `human_needed` (reason `insufficient_spec`), never `passed`; an inferable truth MUST never be abstained (over-abstention guard); abstention MUST be exogenous (driven by the `backstop` tag, not self-judgment).
 
-**Reference:** [Edge Probe](gsd-core/references/edge-probe.md)
+**Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
 
 ---
 
@@ -3836,7 +3836,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 - REQ-PROHIB-06: A well-formed but unwired `test`-tier prohibition MUST fail closed at verify time — never a silent pass.
 - REQ-PROHIB-07: A `test`-tier prohibition with a **machine-proven-fail-first**, genuinely-passing (non-vacuous) wired mechanical check (a `node --test` negative test OR a lint/AST rule) MUST dispose green and be satisfiable; a missing, un-provable, or non-passing check MUST hard-gate (flagged, non-green) in both interactive and autonomous modes. Fail-first is **machine-proven, not caller-attested** (#1279, ADR-550 D5d): before a clean pass greens, the producer independently runs the wired check against a known violation (the descriptor's `violationFixture`) and confirms it goes RED — a lint rule via the violating fixture, a node test via the violating subject injected through the `GSD_PROHIB_SUBJECT` convention; absent a violation source it fails closed, never falling back to attestation. (Enforcement half shipped #1259; deterministic descriptor auto-locate in #1278.)
 
-**Reference:** [Prohibition Probe](gsd-core/references/prohibition-probe.md)
+**Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)
 
 ---
 
