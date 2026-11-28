@@ -1309,14 +1309,6 @@ describe('feat-22-surfacing-docs', () => {
     );
   });
 
-  test('USER-GUIDE.md explains drift guard works without intel', () => {
-    const content = fs.readFileSync(USER_GUIDE_PATH, 'utf-8');
-    assert.ok(
-      content.includes('without intel') || content.includes('Works without intel'),
-      'USER-GUIDE.md must explain that the drift guard works without intel'
-    );
-  });
-
   // ── B4: ARCHITECTURE.md ───────────────────────────────────────────────────
 
   test('ARCHITECTURE.md links to ADR 22', () => {

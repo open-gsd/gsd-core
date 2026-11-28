@@ -17,7 +17,7 @@ group: v1.7.0 Features
 
 **Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateRoadmapProgress` (Roadmap Progress Module), the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
 
-**Why it does not reuse `planning inspect`'s schema.** The two surfaces answer different questions and have opposite shapes. `planning inspect` is a rich, diagnostic-carrying **pull** query a consumer runs; this is a small **push** artifact a consumer watches. Publishing `planning inspect`'s payload at every `phase add` would mean opening every plan, summary and requirements document on a hot path, and freezing a much larger surface as a contract.
+The reason the contract does not reuse `planning inspect`'s schema is in [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md#why-the-state-contract-does-not-reuse-planning-inspects-schema).
 
 **It costs up to three bounded git calls per boundary.** Deriving `next` from the smart-entry classifier means inheriting its git signals — `git status --porcelain`, and `git log @{u}..HEAD`. Each is timeout-bounded and swallows every error, so nothing can hang or fail because of it, but a command like `phase add` did not previously touch git at all. "Invisible to the parent command" is exact about exit code and output; it is not a claim about latency.
 

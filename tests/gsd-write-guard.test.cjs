@@ -738,7 +738,8 @@ describe('the shipped claim matches the shipped guarantee (round 10 Major 2)', (
   const RETIRED = 'the only defense independent of per-agent tool config';
   const surfaces = [
     ['hooks/gsd-write-guard.js', path.join(__dirname, '..', 'hooks', 'gsd-write-guard.js')],
-    ['docs/USER-GUIDE.md', path.join(__dirname, '..', 'docs', 'USER-GUIDE.md')],
+    // The write guard's specification moved from the user guide to the security hooks reference (#6837).
+    ['docs/reference/security-hooks.md', path.join(__dirname, '..', 'docs', 'reference', 'security-hooks.md')],
   ];
 
   for (const [label, file] of surfaces) {

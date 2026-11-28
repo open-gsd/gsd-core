@@ -14,7 +14,7 @@ const BASELINE_MIGRATION_ID = '2026-05-11-first-time-baseline-scan';
 
 // Runtime install surfaces must stay aligned with:
 // - docs/installer-migrations.md#runtime-configuration-contract-registry
-// - docs/ARCHITECTURE.md#runtime-install-contract-matrix
+// - docs/reference/runtime-install-contracts.md#install-contract-matrix
 const RUNTIME_SURFACES: Record<string, string[]> = {
   claude: ['gsd-core', 'commands/gsd', 'skills', 'agents', 'hooks', 'settings.json'],
   codex: ['gsd-core', 'skills', 'agents', 'hooks', 'config.toml', 'hooks.json'],

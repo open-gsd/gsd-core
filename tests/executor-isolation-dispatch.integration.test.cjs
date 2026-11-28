@@ -126,7 +126,9 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
         assert.ok(Buffer.from(r.stdout, 'base64').equals(prompt), 'the bytes must reach the executor unchanged');
         assert.ok(!fs.existsSync(marker), 'no command ran');
       }),
-      { numRuns: 20, examples: [[[Buffer.from('a'), Buffer.from([0xff]), Buffer.from('b')]], [[Buffer.from([0xc3])]]] },
+      // includeErrorInReport: fast-check 4 keeps the failed assertion in the thrown error's `cause`, which the run's
+      // event serializer drops, so a red run named the counterexample and not the exit code, stderr or byte mismatch.
+      { numRuns: 20, includeErrorInReport: true, examples: [[[Buffer.from('a'), Buffer.from([0xff]), Buffer.from('b')]], [[Buffer.from([0xc3])]]] },
     );
   });
 

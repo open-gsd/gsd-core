@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
 const { readSubdirectories } = coreUtilsMod;
@@ -672,7 +673,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
     // so `buildWorkstreamInventory` — a pure, I/O-free projection that
     // cannot call the owner itself — consumes the owner's verdict rather
     // than re-deriving a second one from summary/plan counts.
-    const completionResult = isPhaseComplete(phaseDir);
+    const completionResult = isPhaseComplete(phaseDir, { ctx: resolveProjectContext(phaseDir) });
     const verificationResult = completionResult.value.verification;
     // #3057 B3: routing is UNCHANGED — `liveVerificationStatus` below is still
     // `.status`, exactly as before, so the ledger/rollup logic that consumes

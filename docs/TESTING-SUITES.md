@@ -145,49 +145,7 @@ extraction-evidence threshold on `gsd-planner` enforced by
 the `planner-decomposition` text contract — that one proves mode sections were
 extracted; this one bounds total agent bytes.)
 
-### How-to: a workflow or agent grew and CI is red
-
-The differential attribution check reports the file and the byte delta. To resolve:
-
-1. **Justify the growth in your PR** (a sentence in the description is enough) —
-   the acknowledgment entry (below) is the review record that the larger size
-   was a deliberate, seen decision, not silent drift.
-2. **Add an acknowledgment trailer** to one of your own commits (ADR-3942),
-   naming the file and the reason, per `CONTRIBUTING.md`'s "Editing shipped
-   content" section and `CONTEXT.md`'s `### Emitted Artifact Provenance` entry:
-
-   ```
-   Emitted-Drift-Ack-Growth: explore.md — new dispatch section, reasoning ships with the block
-   ```
-
-   Growth keys on the **bare filename** as it appears under `gsd-core/workflows/`
-   or `agents/`; an unattributable **hash** ripple uses
-   `Emitted-Drift-Ack-Hash:` and keys on the emitted path (which always contains
-   a `/`). The two are separate namespaces — a growth trailer will not excuse a
-   hash ripple, and the failure output says which one applies. The trailer is the
-   review record that the larger size was a deliberate, seen decision.
-
-   If you need to change an acknowledgment, amend the commit carrying it. That is
-   deliberate: the trailer cannot drift out of sync with the diff it explains,
-   because changing either changes the sha and re-runs the gate.
-3. **There is nothing to clean up afterwards.** The trailer is read from
-   `git log $(git merge-base <base> HEAD)..HEAD` — your commits and no others —
-   so once your PR merges it is out of range by construction. It never becomes
-   "spent", it owns no shared key space, it cannot conflict with anyone else's,
-   and no sweeper has to delete it. That is the whole reason ADR-3942 moved the
-   acknowledgment off the working tree.
-4. **Or shrink it instead of acknowledging.** Prefer extraction when the growth
-   is incidental: for a workflow, move per-mode bodies to
-   `workflows/<name>/modes/`, templates to `workflows/<name>/templates/`, and
-   shared prose to `gsd-core/references/`; for an agent, lift shared boilerplate
-   into `gsd-core/references/` and `@`-reference it — then load it **LAZILY**. Do
-   *not* convert them to eager `@-required_reading` includes: that shrinks the
-   file's bytes without shrinking loaded context, so it games the guard while
-   making the real cost worse. See `workflows/discuss-phase/` for the
-   progressive-disclosure pattern.
-
-If a hard cap (not the ratchet) is what failed, an acknowledgment will **not**
-help — that is the signal to extract, per step 3.
+To resolve a red size check, follow [How to fix a workflow or agent size failure](how-to/fix-a-workflow-or-agent-size-failure.md): justify the growth, add an `Emitted-Drift-Ack-Growth:` trailer to one of your own commits, or shrink the file by extraction. A failed hard cap is not excused by a trailer.
 
 ### Reference
 
@@ -344,16 +302,7 @@ module has a **positive control**: a test that drives the gate, through its real
   cannot read, or a source the parser cannot read, is a violation: an inert scan
   does not report a clean tree.
 
-### How-to: you added a gate and `lint:ci` reports `no-control`
-
-1. Add a `gateControl({...})` call to `tests/gate-positive-control.test.cjs`
-   naming your gate, its module and its `evaluate*` function.
-   `expectRed` names the arm the red scenario reaches.
-2. Take `red` from the lint's message (`wrong-red` states what the gate reaches).
-3. Write the red scenario from the input that makes the gate fail, and the green
-   scenario from the nearest input that does not. Reuse the cases in your gate's
-   own unit test; the control asserts the pair through one harness.
-4. Run `npm run lint:gate-positive-control`.
+If `lint:ci` reports `no-control` for a gate you added, follow [How to add a positive control for a new gate](how-to/add-a-gate-positive-control.md).
 
 ## Running suites locally
 
@@ -727,20 +676,7 @@ the accumulated history, not something either mechanism decides on its own.
 
 ### How-to: regenerate the timing table
 
-Regenerate when the suite's cost profile has visibly drifted — after adding or
-removing expensive tests, not on a schedule. The input is a `node:test` reporter
-event stream from a `gsd-test` run:
-
-```bash
-node scripts/gen-test-timings.cjs \
-  ~/.local/state/gsd-test/runs/<run-id>/test-events-linux-node24.jsonl \
-  ~/.local/state/gsd-test/runs/<run-id>/test-events-macos-node24.jsonl
-```
-
-Pass every lane you have. A file's recorded time is the **max** across the
-supplied streams, not the mean: the packer exists to keep the *slowest* lane's
-slowest chunk away from the timeout, so the conservative bound is the right one.
-Keys are sorted so a regeneration diff shows only the files whose cost moved.
+See [Regenerate the timing table](how-to/regenerate-the-timing-table.md).
 
 ### How-to: regenerate the win32 timing table
 
@@ -757,134 +693,4 @@ See [Regenerate the win32 timing table](how-to/regenerate-the-win32-timing-table
 
 ## Test strategy: #443 effort + fast_mode engine
 
-> Feature: unified cross-provider effort and fast_mode knobs (issue #443).
-> Test files: `tests/model-resolver.test.cjs` (unit),
-> `tests/model-resolver.test.cjs` (integration).
-
-### Testing pyramid
-
-| Layer | File | What it covers |
-|---|---|---|
-| **Unit** | `feat-443-effort-fast-mode.test.cjs` | Pure logic: cascade rules, clamping, escalation math, malformed config handling, schema key validation. No CLI subprocess. |
-| **Integration** | `feat-443-effort-fast-mode.integration.test.cjs` | Architecture-level invariants: cross-provider validity, totality across the 33-agent registry, CLI JSON contract, config round-trip, fast-mode honesty. Real subprocesses via `runGsdTools`. |
-| **E2E** *(pending)* | *(not yet wired)* | Propagation layer: effort frontmatter / `CLAUDE_CODE_EFFORT_LEVEL` env actually reaching a spawned Claude Code subagent. See "Gaps" below. |
-
-### Architectural invariants
-
-Each invariant exists to prevent a specific class of production failure.
-
-#### (a) Cross-provider validity
-
-**What:** `renderEffortForRuntime(runtime, universalEffort).value` must always
-be a member of the runtime's real provider enum. Ground-truth enums are defined
-as local constants in the test — not sourced from the implementation.
-
-```
-PROVIDER_EFFORT_ENUMS = {
-  claude: Set { 'low', 'medium', 'high', 'xhigh', 'max' }   // Anthropic output_config.effort
-  codex:  Set { 'minimal', 'low', 'medium', 'high', 'xhigh' } // OpenAI model_reasoning_effort
-}
-```
-
-**Why:** Passing a value outside these sets results in a 400 from the real API.
-The clamping logic (`max -> xhigh` for codex; `minimal -> low` for claude) must
-hold for every cell of the VALID_EFFORTS × runtimes matrix.
-
-#### (b) Param/channel contract
-
-**What:** Each runtime exposes a stable `param` string (the native API field
-name) and `channel` (how the value is propagated). Unknown runtimes return
-`param: null, channel: null` and pass the effort value through unchanged.
-
-**Why:** Callers read `.param` to construct the dispatch payload. A regression
-here would silently drop effort from subagent invocations.
-
-#### (c) Resolve-execution JSON contract
-
-**What:** The `gsd-tools resolve-execution <agent>` command emits a JSON object
-with all eight keys present and typed correctly: `model` (string), `profile`
-(string), `effort` (VALID_EFFORTS member), `effort_rendered` (string),
-`effort_param` (string|null), `effort_propagation` (string|null), `fast_mode`
-(boolean), `fast_mode_supported` (boolean).
-
-**Why:** Orchestrators and workflow dispatchers parse this JSON. A missing or
-mistyped field silently breaks downstream consumers.
-
-#### (d) Totality across the real registry
-
-**What:** For every agent in the 33-agent registry, `resolveEffortInternal`
-returns a VALID_EFFORTS member (never undefined/null), `resolveFastModeInternal`
-returns a strict boolean, and `renderEffortForRuntime('claude', effort)` stays
-within the claude provider enum.
-
-**Why:** A catalog addition that introduces a missing `routingTier` mapping
-would otherwise produce `undefined` and propagate silently.
-
-#### (e) Fast-mode honesty invariant
-
-**What:** When the runtime is `claude`, `fast_mode_supported` in
-resolve-execution output is always `false`, regardless of the fast_mode config.
-`RUNTIMES_WITH_FAST_MODE` contains only `'api'`.
-
-**Why:** Claude Code's `/fast` toggle is session-level only. Emitting
-`fast_mode: true` as frontmatter on a Claude subagent is a silent no-op.
-Advertising `fast_mode_supported: true` for claude would cause orchestrators to
-believe the knob was wired when it is not.
-
-#### (f) Precedence first-valid-wins
-
-**What:** Both effort and fast_mode use a layered cascade. The test table covers
-all four effort layers (invocation override → agent_overrides →
-routing_tier_defaults → default) and all five fast_mode layers, including the
-case where an invalid value at a higher layer correctly falls through.
-
-**Why:** Silent precedence bugs (e.g., a numeric value in agent_overrides not
-being rejected) would override intentional user config.
-
-#### (g) Dynamic-routing composition
-
-**What:** `resolveEffortForTier` escalates effort by attempt number
-independently of the model tier mapping. The test verifies the effort ladder
-(`low -> medium -> high -> xhigh -> max`), the `max` clamp, the
-`max_escalations` cap, and that `escalate_on_failure: false` suppresses
-escalation entirely.
-
-**Why:** Effort escalation and model escalation share configuration
-(`dynamic_routing`) but must operate independently; coupling them would cause
-over-escalation or under-escalation.
-
-#### (h) Config-tooling round-trip
-
-**What:** `gsd-tools config-set` accepts all new key namespaces
-(`effort.default`, `effort.routing_tier_defaults.<tier>`,
-`effort.agent_overrides.<agent>`, `fast_mode.enabled`,
-`fast_mode.routing_tier_defaults.<tier>`, `fast_mode.agent_overrides.<agent>`)
-without an "Unknown config key" error, and values set via `config-set` are
-reflected in `resolve-execution` output.
-
-**Why:** The schema validation gate (`VALID_CONFIG_KEYS` + `DYNAMIC_KEY_PATTERNS`)
-is separate from the resolver logic. A key missing from the schema would produce
-a silent write failure and appear as a bug only at runtime.
-
-### Coverage targets
-
-| Suite | Target |
-|---|---|
-| Unit | Every cascade rule, every fallthrough, every clamp. All function branches in `resolveEffortInternal`, `resolveFastModeInternal`, `resolveEffortForTier`, `renderEffortForRuntime`. |
-| Integration | All 8 architectural invariants. All 33 registered agents. All 6 provider × effort combinations for the valid-enum check. Full config-set key namespace. |
-
-### Gaps / not yet covered
-
-**E2E orchestrator-spawn-propagation layer (pending follow-up wiring):**
-The integration tests verify that GSD resolves and renders effort values
-correctly. They do NOT verify that the rendered values actually reach a spawned
-Claude Code or Codex subagent at runtime. Specifically uncovered:
-
-- `CLAUDE_CODE_EFFORT_LEVEL` env var being set and read by a spawned claude subprocess
-- `output_config.effort` frontmatter key surviving the AGENTS.md template substitution
-- `model_reasoning_effort` field surviving serialization into a Codex API request body
-- Fast-mode `speed: "fast"` field reaching an `api`-runtime request when `fast_mode_supported: true`
-
-These require spawning real subagents (or stubs thereof) and asserting on the
-process environment / request payload — a scope that belongs in a future E2E
-suite under `*.slow.test.cjs` or dedicated fixture-driven integration work.
+The testing pyramid, the architectural invariants, the coverage targets and the known gaps for the effort and fast_mode engine are in [Effort and fast_mode test strategy](explanation/effort-fast-mode-test-strategy.md).

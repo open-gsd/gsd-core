@@ -171,6 +171,8 @@ Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written as standalon
 
 **Minimum supported version:** Codex CLI 0.130.0. Earlier versions had additional skill-root scanning that can produce duplicate listings.
 
+**Agent scheduling and the skill picker.** Light-tier agents (haiku-equivalent) are written with `service_tier = "flex"` and `model_verbosity = "low"` in their agent TOML, so the Codex scheduler routes them to the flex tier (lower cost, background processing) and suppresses verbose output. GSD skills appear in the `/skills` picker through their `SKILL.md`, which Codex discovers on its own; no `agents/openai.yaml` sidecar is written, because that produced duplicate autocomplete entries (#1326). Both are done at install time and need no configuration.
+
 **Hook coverage**
 
 GSD registers the following Codex hook event automatically on install (requires Codex CLI 0.137.0+ for the stable hook-event schema):

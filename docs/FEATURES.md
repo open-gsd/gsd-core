@@ -569,12 +569,9 @@
 - REQ-AUTO-06: Smart discuss MUST classify each gray-area question before presenting it: reversible technical questions are decided without a prompt, hard-to-reverse technical questions are asked with a recommendation, and product / UX / preference questions are asked neutrally (#5069)
 
 #### Why smart discuss classifies questions
+#### Why smart discuss classifies questions
 
-Most discuss questions in an autonomous run are cheap technical choices — where a helper lives, what an internal field is called — that users accept almost every time. Prompting for each one added latency without adding judgment, while preference questions arrived already biased by a "Recommended" label. Smart discuss therefore interrupts only where the user's input changes the outcome: decisions that are hard to undo (they reuse the `costly` / `one-way` ratings of the planner's reversibility taxonomy) and questions with no objectively better answer.
-
-The tie-breaks deliberately lean toward asking. A question that might be hard to reverse is asked, because a wrongly auto-decided one-way door is far more expensive than one extra prompt. For the same reason, the planner does not treat `### Decided autonomously` entries as human-settled: if one turns out to be `one-way`, the planner still inserts a checkpoint before implementing it.
-
-Nothing is decided silently. Every autonomous decision is listed on screen, recorded in `CONTEXT.md` under `### Decided autonomously` and in `DISCUSSION-LOG.md` as an `[auto]` line, and can be reversed before planning. There is no confirmation gate, because a gate would bring back the prompt this removes.
+The reasoning — why most questions stop being prompts, why the tie-breaks lean toward asking, and why there is no confirmation gate — is in [About autonomous decision classification](explanation/autonomous-decision-classification.md).
 
 ---
 
@@ -875,12 +872,12 @@ phase of the same epic.
 **Purpose:** Maintain project continuity across context resets and sessions.
 
 **Requirements:**
-- REQ-SESSION-01: Pause MUST save current position and next steps to `continue-here.md` and structured `HANDOFF.json`
-- REQ-SESSION-02: Resume MUST restore full project context from HANDOFF.json (preferred) or state files (fallback)
+- REQ-SESSION-01: Pause MUST save current position and next steps to a `.continue-here` file and a structured handoff that belongs to the pausing session: `HANDOFF.latest.<role_id>.json` with a role, `HANDOFF.<session_id>.json` without one, legacy `HANDOFF.json` when the session has no id. Pause MUST NOT write `paused_at` or `status: paused` to STATE.md
+- REQ-SESSION-02: Resume MUST claim a role handoff by an exclusive claim marker (`.handoff-claim.<role_id>`) and then a rename to `HANDOFF.claimed.<role_id>.<session_id>.json`, before reading it, restore the role, and remove the consumed files; a second session resuming the same role MUST find no unclaimed handoff and be told so. Resume MUST restore full project context from the handoff (preferred) or state files (fallback); a legacy `HANDOFF.json` remains readable
 - REQ-SESSION-03: Progress MUST show current position, next action, and overall completion
 - REQ-SESSION-04: Progress MUST read all state files (STATE.md, ROADMAP.md, phase directories)
 - REQ-SESSION-05: All session operations MUST work after `/clear` (context reset)
-- REQ-SESSION-06: HANDOFF.json MUST include blockers, human actions pending, and in-progress task state
+- REQ-SESSION-06: The handoff MUST include blockers, human actions pending, and in-progress task state, plus the `session_id`, `role` and `role_id` it was written under
 - REQ-SESSION-07: Resume MUST surface human actions and blockers immediately on session start
 
 ---
@@ -1515,9 +1512,9 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 - Use `--all` for a full pre-merge sweep without changing project defaults.
 - Every prompt-fed lane has a prompt cap: an explicit `review.max_prompt_tokens*` value, or else 65% of the lane's context window. `claude`, `codex`, `qwen` and `kimi-code` declare a window; set `review.context_window_tokens.<slug>` for the others or for a larger pinned model. A lane whose prompt is over its cap is **refused** with reason `prompt_exceeds_context`, never trimmed. See [Prompt budgets for reviewer lanes](CONFIGURATION.md#prompt-budgets-for-reviewer-lanes) in CONFIGURATION.md.
 
-**Why a lane refuses instead of trimming (#4559):** past a model's context window nothing errors. The model compacts and answers confidently about material it never read, so the lane returns a review that reads exactly like one with no concerns. Trimming to a cap swapped that silent overflow for a silent truncation, and the trim note told the model to treat missing context as out of scope. A refused lane is reported as a lane that did not run, naming its cap and the key to raise, so you can split the review or pick a larger model. Defaults come from a window each lane declares, not from a model catalog: GSD carries no network lookup or per-model table to maintain, and a lane whose model GSD cannot know stays uncapped rather than guessed.
+The reason a lane refuses an over-window prompt instead of trimming it (#4559) is in [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md#why-a-lane-refuses-instead-of-trimming-4559).
 
-**Why record which model produced a review (#2295):** `reviewers:` in the frontmatter recorded which CLIs ran, but not which model each one resolved to. Without a pin, the model is whatever the CLI's own config or internal default happens to pick, so a "Codex vs Antigravity" comparison could quietly be a frontier model against a cheap-tier default with nothing in the record to say so — and a CLI update, or an unrelated config edit, could silently make past and future reviews incomparable.
+The reason each review records the model that produced it (#2295) is in [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md#why-the-review-records-which-model-produced-it-2295).
 
 The fix records the model *and its provenance*. Provenance is what makes the value trustworthy: `pinned` (from `review.models.<slug>`) is certain, while `banner` and `transcript` are recovered from third-party CLI output this project does not own — a startup banner or an undocumented session log.
 
@@ -2495,9 +2492,9 @@ flows — the same way every other wave-scoped capability step already behaves f
 
 `workflow.code_review_depth_overrides` matches rules against the review's changed-file set by whole-segment directory-path prefix — `src/auth` matches `src/auth/token.ts` and `src/auth` itself, never `src/authfoo/x.ts` or `docs/src/auth/x.ts` — and is case-sensitive, following git.
 
-Escalation is **whole-review, not per-file**: depth is a single scalar handed to the reviewer agent, not a per-file setting, so the strongest matching tier across the whole rule set applies to every file in the review — a sensitive file is never reviewed shallowly because it shared a review with an unrelated one.
+Escalation is **whole-review, not per-file**: depth is a single scalar handed to the reviewer agent, not a per-file setting, so the strongest matching tier across the whole rule set applies to every file in the review (see [the design record](explanation/review-pipeline-design.md)).
 
-v1 supports **directory-prefix matching only, not glob syntax**: no glob engine (`minimatch`, `picomatch`, `fast-glob`) exists in this project and none was added for this feature. A path containing `*` or `?` (e.g. `src/auth/**`) is a configuration error rather than a silent near-miss, because accepting it as sugar for a prefix would make unsupported patterns look armed when they match nothing. Every use case in the issue is expressible as a directory prefix. See [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) for the resolution order, error table, and a worked example.
+v1 supports **directory-prefix matching only, not glob syntax**. A path containing `*` or `?` (e.g. `src/auth/**`) is a configuration error rather than a silent near-miss (see [why no globs](explanation/review-pipeline-design.md)). See [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) for the resolution order, error table, and a worked example.
 
 **Optional external reviewer lanes (#4209):** `/gsd-code-review` accepts the same reviewer-lane flags as `/gsd-review` — any flag the roster declares (run `gsd_run review-lane flags` to list them for your installation, e.g. `--codex`, `--agy`). No reviewer-lane flag is the default and is byte-for-byte unchanged from before #4209: zero lane selection, plan, or invoke calls, and only the internal `gsd-code-reviewer` agent runs. Passing one or more flags asks those lanes to independently review the same already-resolved file scope alongside the internal agent, through the same shared capability-trait interpreter and `review-lane plan`/`invoke` machinery `/gsd-review` uses — no second implementation. Each lane's prompt carries only the repository root, canonical file paths, review depth, and base SHA, never source file contents, under four fixed prohibitions (no source mutation, no test execution, no background processes, no polling). External findings are unverified corroborating evidence: `gsd-code-reviewer` independently re-verifies every claim against the actual source before writing it to `REVIEW.md`, so there remains exactly one `REVIEW.md` schema regardless of how many lanes ran. An explicitly requested lane that is unavailable or fails is reported as a warning, never silently dropped and never a raw-CLI fallback. This is separate from `/gsd-review`, which reviews `PLAN.md` files before execution, not source code.
 **In-phase review reporting and disposition**
@@ -2558,11 +2555,9 @@ the ledger keys rows on the finding ID, and two rows under one ID is an ambiguit
 drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
 on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
 row carried only by a fix report (#5802).
-A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
-decided anything, so there is no decision to lose. Preserving a recorded decision in the file
-was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
-three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
-why the console reports the drop rather than pointing at a commit that may not exist.
+A prior row still sitting at `open` is replaced silently (see [why the replacement is silent](explanation/review-pipeline-design.md)).
+Recovery is the ledger's own git history where `commit_docs` is on — which is why the console
+reports the drop rather than pointing at a commit that may not exist.
 
 **Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
 `<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
@@ -2619,9 +2614,7 @@ already withholds the severity breakdown. Counts that are merely absent, partial
 are not a disagreement, and the shortfall is still reported from `total` alone. `deferred` is the one disposition the gate never writes: it is recorded by hand, and the
 reason recorded beside it in the Source cell is preserved across re-runs, a literal `|` included
 once escaped. One exception, because it cannot be resolved: a reason ending in the literal phrase
-*(not in the current review)* loses that trailing phrase, since it is indistinguishable from the
-carried marker the gate appends. The alternative is worse — a stored marker never leaves, so a
-carried finding that later reappears would keep claiming it is absent from the review reporting it.
+*(not in the current review)* loses that trailing phrase (see [the carried-marker exception](explanation/review-pipeline-design.md)).
 
 Re-running the gate keeps every row it can, so a decision recorded here is not
 overwritten by a later pass. A finding the current review no longer reports — `--auto` re-reviews
@@ -2647,11 +2640,8 @@ that one is a `## Review Dispositions Ledger` section inside `PLAN.md`, append-o
 with rows carried. Same word, different inputs, writers, files and durability rules; neither governs
 the other.
 
-The record is a sibling artifact rather than a section inside REVIEW.md because `--auto`'s
-re-review loop rewrites REVIEW.md on every iteration — a ledger kept inside it would not survive
-the next pass — and because REVIEW.md has a single writer (`gsd-code-reviewer`) that the gate is
-not. The gate remains advisory throughout: it reports and records, and never blocks phase
-completion.
+The record is a sibling artifact rather than a section inside REVIEW.md (see [why a sibling file](explanation/review-pipeline-design.md)).
+The gate remains advisory throughout: it reports and records, and never blocks phase completion.
 
 **Necessity findings (#4100):** at `standard` and `deep` depth the reviewer also asks whether the
 problem a piece of code addresses can occur in this stack at all. Code that is correct and reachable
@@ -4056,11 +4046,7 @@ A notation the checker cannot parse or evaluate is a status in `baseline_statuse
 
 **Behavior:** `.planning/quick/` otherwise accumulates one directory per `/gsd-quick` task forever. `/gsd-complete-milestone` now offers a Yes/Skip prompt — when accepted, it moves every directory under `.planning/quick/` into `.planning/milestones/<version>-quick/`, (re)writes that archive directory's `README.md` (an index built by scanning the archive directory, one entry per task, linked to its `SUMMARY.md` when one exists), and clears the data rows of `STATE.md`'s `### Quick Tasks Completed` table while preserving its header and detected column variant. `/gsd-cleanup` offers the same archival retroactively, for milestones that were already closed before their quick tasks were swept, via the narrower `milestone archive-quick <version>` command — identical move/index/reset behavior, but without touching `ROADMAP.md`, `REQUIREMENTS.md`, `MILESTONES.md`, or milestone-completion guards, so it can be re-run safely against an already-completed milestone.
 
-**Why opt-in.** Phase-directory archival is default-ON (#1871) — omitting a phase directory from an archive would silently leave stale execution history in the way of the next milestone's roadmap. Quick tasks carry no such downstream conflict, so archival here defaults OFF: a user who never passes `--archive-quick` sees zero behavior change. This is a deliberate asymmetry with phase archival, not an oversight.
-
-**Why bucket-all, not per-milestone.** `.planning/quick/` is a flat directory with no on-disk record of which milestone a given task belongs to. Splitting tasks per milestone was considered and rejected — inferring provenance from dates (creation time vs. a milestone's shipped date) is a proxy, not a fact, and a wrong inference on a one-way `mv` is silently irreversible. Archival instead buckets everything currently in `.planning/quick/` into the one milestone being completed (or, on the retroactive path, the one milestone chosen), and says so in the confirmation prompt.
-
-**Why the index is built from disk, not from `STATE.md`'s table.** The `### Quick Tasks Completed` table is a running log a workflow step appends to — it demonstrably drifts from what's actually in `.planning/quick/` (the motivating case: 53 rows against 49 directories, ~22 rows pointing at directories that no longer existed, 18 directories with no row at all). Building the archive's `README.md` index by scanning the archive directory itself, rather than trusting the table, means the index can never inherit that drift; a re-run's index also naturally includes entries a prior run already archived, since it's re-derived from what's physically present.
+The reasoning for each choice (opt-in by default, one bucket per milestone, an index built from disk rather than from `STATE.md`) is in [Quick-task archival explained](explanation/archive-quick-tasks.md).
 
 **Known limits:**
 - No per-milestone provenance — bucket-all is the only option (see above).
@@ -4082,7 +4068,7 @@ See [Archiving quick tasks](how-to/handle-quick-and-fast-tasks.md#archiving-quic
 
 **It never executes command text.** PLAN.md is model-authored, so running it from the checker would be arbitrary code execution — and would trigger the real lint/build as a side effect. The probe only resolves paths and stats directories; a `package.json` it finds is read for script names only.
 
-**Why a recognizer, not a shell parser.** Interpreting shell would mean maintaining a bad shell. Exactly two forms are grounded — a leading `cd <literal>` chain and `npm --prefix <literal>` — and any path carrying a variable, glob, substitution, or `~` returns `unresolvable`, which is a warning and never a blocker. The parser's incompleteness is the specification: it degrades to "cannot prove" rather than growing features. Refusing to guess is the fix, not a limitation of it.
+The reason this is a recognizer and not a shell parser is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md).
 
 **It reports, it never prescribes.** The payload carries the target that failed and what was missing; there is deliberately no `suggestion` field. Choosing the replacement is the planner's job — and the planner now has the prior phase's proven command to reach for.
 
@@ -4132,7 +4118,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 - REQ-INSP-06: `accepted_phases` and `completed_plans` are independent fractions. `percent` is `null` whenever the scope is not `complete`, per the same rule the roadmap and progress surfaces follow.
 - REQ-INSP-07: Payloads over ~50 KB use the existing `@file:` spill channel, resolved transparently before stdout.
 
-**Why it does not simply serialize the internal snapshot.** `PlanningSnapshot` (the diagnostic-rule subject introduced by ADR-3180 §8.1) is deliberately additive and still growing — four fields at Phase 10, twenty-plus by Phase 12. Handing that shape to external consumers would freeze an internal contract by accident. `planning inspect` declares its own flat schema and maps into it, so a field added to `PlanningSnapshot` never changes what this command emits.
+The reason `planning inspect` maps into its own flat schema rather than serializing the internal snapshot is in [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md).
 
 **Composed, never re-derived.** Milestone identity and phase enumeration arrive via `buildPlanningSnapshot`; completion from `isPhaseComplete` (disk-strict); live-plan counting from `scanPhasePlans`; the percentage arithmetic from `clampPercent`; STATE fields from `stateFieldValue`; plan bodies from the Plan Document Module; requirement IDs from `parseRequirements`; UAT items from `parseUatItems`. Markdown structure is read through the Markdown Sectionizer and Markdown Table Model seams, so the Traceability table is resolved by column name against its registered schema rather than by a position-anchored regex.
 
@@ -4203,7 +4189,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 **Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateRoadmapProgress` (Roadmap Progress Module), the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
 
-**Why it does not reuse `planning inspect`'s schema.** The two surfaces answer different questions and have opposite shapes. `planning inspect` is a rich, diagnostic-carrying **pull** query a consumer runs; this is a small **push** artifact a consumer watches. Publishing `planning inspect`'s payload at every `phase add` would mean opening every plan, summary and requirements document on a hot path, and freezing a much larger surface as a contract.
+The reason the contract does not reuse `planning inspect`'s schema is in [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md#why-the-state-contract-does-not-reuse-planning-inspects-schema).
 
 **It costs up to three bounded git calls per boundary.** Deriving `next` from the smart-entry classifier means inheriting its git signals — `git status --porcelain`, and `git log @{u}..HEAD`. Each is timeout-bounded and swallows every error, so nothing can hang or fail because of it, but a command like `phase add` did not previously touch git at all. "Invisible to the parent command" is exact about exit code and output; it is not a claim about latency.
 
@@ -4228,7 +4214,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 `gsd-planner` emits it; `gsd-tools check verify-failure-directions <N>` verifies it deterministically; `/gsd-plan-phase` runs the probe before the plan-check pass and hands the JSON to `gsd-plan-checker`, whose check 8f blocks on `severity`.
 
-**Why this shape and not the two obvious alternatives.** *Validating command shape* — teaching the checker Cargo's `--lib`/`--bin` target resolution, then pytest's node-ids, then the next one — always trails the newest toolchain. *Executing each command at plan time* is the strongest signal but means running planner-invented commands, with whatever side effects they carry, during planning. Requiring a stated failing direction needs no toolchain knowledge at all, and it is the only one of the three that catches the dangerous case: the motivating command exited non-zero, so it failed loudly, but the same class of error with a command that exits 0 on a no-op passes green and silently. Naming the failure signal is what makes that visible.
+The reason for this shape, rather than validating command shape or executing commands at plan time, is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md#why-a-stated-failing-direction-and-not-the-two-obvious-alternatives).
 
 **Presence, not quality — deliberately split.** The probe is deterministic and owns the blockers: a statement is missing, blank, or a whole-value placeholder (`TBD`, `TODO`, `N/A`, `NA`, `none`, `unknown`, `TBA`, `?`, `-`). Whether the statement names the *right* signal is prose judgment, so `gsd-plan-checker` raises a vacuous statement (*"the command fails"*) as a WARNING only. Every BLOCKER stays reproducible; judgment stays advisory.
 

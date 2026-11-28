@@ -574,6 +574,15 @@ describe('#6431: next, pause-work and resume agree on the pause record', () => {
   const WORKFLOWS = path.join(__dirname, '..', 'gsd-core', 'workflows');
   const read = (name) => fs.readFileSync(path.join(WORKFLOWS, name), 'utf-8');
   const RECORD = '.planning/HANDOFF.json';
+  // `gsd_run` for the consume fence: the launcher is an earlier step. A session with no id and no own handoff:
+  // `state sessions --pick` prints the legacy continue-here name for that key and nothing for the others.
+  const GSD_RUN_STUB = [
+    'gsd_run() { case "$1:$2" in',
+    '  query:planning.inspect) printf %s "$PWD/.planning";;',
+    '  query:commit) shift 2; printf "%s\\n" "$*" >> "$CALLS";;',
+    '  state:sessions) case "$*" in *pause_files.continue_here*) printf %s .continue-here.md;; esac;;',
+    'esac; }',
+  ].join('\n');
 
   function consumeFence() {
     const text = read('resume-project.md');
@@ -589,7 +598,7 @@ describe('#6431: next, pause-work and resume agree on the pause record', () => {
   test('pause-work writes and commits the handoff record, whatever scope its .continue-here.md lands in', () => {
     const pause = read('pause-work.md');
     assert.ok(pause.includes(RECORD), 'pause-work must name the record');
-    assert.match(pause, /gsd_run query commit "docs\(pause\):[^\n]*--files \[handoff-path\] \.planning\/HANDOFF\.json/);
+    assert.match(pause, /gsd_run query commit "docs\(pause\):[^\n]*--files \[handoff-path\] "\.planning\/\$\{HANDOFF_FILE\}"/);
   });
 
   test('the consume step removes the handoff and every checkpoint it resumed from, commits the removal, and leaves other files', (t) => {
@@ -609,10 +618,7 @@ describe('#6431: next, pause-work and resume agree on the pause record', () => {
     }
     const calls = path.join(project, 'calls.log');
     const script = [
-      'gsd_run() { case "$2" in',
-      '  planning.inspect) printf %s "$PWD/.planning";;',
-      '  commit) shift 2; printf "%s\\n" "$*" >> "$CALLS";;',
-      'esac; }',
+      GSD_RUN_STUB,
       consumeFence(),
     ].join('\n');
     const res = runHook('-c', [script], { interpreter: 'bash', cwd: project, env: { ...process.env, CALLS: calls } });
@@ -636,7 +642,7 @@ describe('#6431: next, pause-work and resume agree on the pause record', () => {
     t.after(() => cleanup(project));
     fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
     const calls = path.join(project, 'calls.log');
-    const script = ['gsd_run() { case "$2" in planning.inspect) printf %s "$PWD/.planning";; commit) shift 2; printf "%s\\n" "$*" >> "$CALLS";; esac; }', consumeFence()].join('\n');
+    const script = [GSD_RUN_STUB, consumeFence()].join('\n');
     const res = runHook('-c', [script], { interpreter: 'bash', cwd: project, env: { ...process.env, CALLS: calls } });
     assert.equal(res.exitCode, 0, res.stderr);
     assert.ok(!fs.existsSync(calls), 'no commit call');
@@ -656,10 +662,10 @@ describe('#6431: next, pause-work and resume agree on the pause record', () => {
     assert.ok(gate0 !== -1 && gate1 !== -1, 'both gates exist');
     assert.ok(gate0 < gate1, 'Gate 0 comes first');
     const gate = next.slice(gate0, gate1);
-    assert.ok(gate.includes(RECORD), 'Gate 0 tests the same record pause-work writes');
+    assert.ok(gate.includes('state sessions --pick paused'), 'Gate 0 asks the CLI whether this session owns a pause record');
     assert.ok(gate.includes('paused_at'), 'the STATE.md field still counts');
     assert.ok(gate.includes('/gsd:resume-work'), 'and the action is resume-work');
-    assert.match(next, /\*\*Route 8: Paused → resume\*\*\nIf `\.planning\/HANDOFF\.json` exists or STATE\.md shows paused_at/);
+    assert.match(next, /\*\*Route 8: Paused → resume\*\*\nIf this session's own handoff exists \(`state sessions --pick paused` is `true`\) or STATE\.md shows paused_at/);
     assert.match(next, /a recorded pause, Gate 0, ends the chain at `\/gsd:resume-work`/, 'the --auto chain stops at resume');
   });
 });
