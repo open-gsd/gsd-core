@@ -271,6 +271,9 @@ describe('the pause and resume fences, executed', { skip: !HAS_BASH }, () => {
       assert.equal(r.status, 0, r.err);
       assert.doesNotMatch(r.out, /HANDOFF_FILE=/);
       assert.match(r.out, /NO_UNCLAIMED_HANDOFF role_id=coordinator/);
+      // A session that lost the claim leaves the slot as it found it: the winner, not the loser, decides its fate.
+      assert.equal(exists('HANDOFF.latest.coordinator.json'), true);
+      assert.equal(exists('HANDOFF.claimed.coordinator.s2.json'), false);
     });
 
     test('theSecondSessionIsToldNoUnclaimedHandoffExists', () => {
