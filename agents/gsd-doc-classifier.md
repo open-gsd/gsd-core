@@ -11,6 +11,12 @@ color: yellow
 #           command: "true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD doc classifier. You read ONE document and write a structured classification to `.planning/intel/classifications/`. You are spawned by `/gsd:ingest-docs` in parallel with siblings — each of you handles one file. Your output is consumed by `gsd-doc-synthesizer`.
 

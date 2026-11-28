@@ -2,6 +2,11 @@
 Execute a phase prompt (PLAN.md) and create the outcome summary (SUMMARY.md).
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read STATE.md before any operation to load project context.
 Read config.json for planning behavior settings.
@@ -96,12 +101,12 @@ PLAN_START_EPOCH=$(date +%s)
 <step name="parse_segments">
 ```bash
 # Count tasks — match <task tag at any indentation level
-TASK_COUNT=$(grep -cE '^\s*<task[[:space:]>]' "{phase_dir}/{phase}-{plan}-PLAN.md" 2>/dev/null || echo "0")
+TASK_COUNT=$(grep -cE '^\s*<task[[:space:]>]' "{plan_path}" 2>/dev/null || echo "0")
 INLINE_THRESHOLD=$(gsd_run query config-get workflow.inline_plan_threshold --raw 2>/dev/null || echo "2")
 USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 HUMAN_VERIFY_MODE=$(gsd_run query config-get workflow.human_verify_mode --default end-of-phase --raw 2>/dev/null || echo "end-of-phase")
-grep -n "type=\"checkpoint" "{phase_dir}/{phase}-{plan}-PLAN.md"
+grep -n "type=\"checkpoint" "{plan_path}"
 ```
 
 **Primary routing: task count threshold (#1979)**
@@ -210,7 +215,7 @@ Pattern B only (verify-only checkpoints). Skip for A/C.
 
 <step name="load_prompt">
 ```bash
-cat "{phase_dir}/{phase}-{plan}-PLAN.md"
+cat "{plan_path}"
 ```
 This IS the execution instructions. Follow exactly. If plan references CONTEXT.md: honor user's vision throughout.
 
@@ -409,7 +414,7 @@ fi
 
 <step name="generate_user_setup">
 ```bash
-grep -A 50 "^user_setup:" "{phase_dir}/{phase}-{plan}-PLAN.md" | head -50
+grep -A 50 "^user_setup:" "{plan_path}" | head -50
 ```
 
 If user_setup exists: create `{phase}-USER-SETUP.md` using the template at `~/.claude/gsd-core/templates/user-setup.md` (or its `~/.claude/gsd-core/templates/user-setup.compact.md` variant — resolve per `~/.claude/gsd-core/references/compact-content-gate.md` §"Streams 1b and 4"). Per service: env vars table, account setup checklist, dashboard config, local dev notes, verification commands. Status "Incomplete". Set `USER_SETUP_CREATED=true`. If empty/missing: skip.
@@ -418,10 +423,9 @@ If user_setup exists: create `{phase}-USER-SETUP.md` using the template at `~/.c
 <step name="create_summary">
 **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
 emit narrative output between the Write tool call and the commit tool call.
-Truncation at this boundary is a known failure mode (see #2070 rescue logic in
-execute-phase.md step 5.5).
+Truncation recovery: execute-phase.md step 5.5 (#2070).
 
-Create `{phase}-{plan}-SUMMARY.md` at `{phase_dir}/` (`phase_dir` from init, e.g. `{planning_root}/phases/XX-name/`). Use the template at `~/.claude/gsd-core/templates/summary.md` (or `summary.compact.md` — same `compact-content-gate.md` resolution as the USER-SETUP template above).
+Create `{summary_path}` from the plan path: final `-PLAN.md` → `-SUMMARY.md`. Use `~/.claude/gsd-core/templates/summary.md` or `summary.compact.md`; resolve via `compact-content-gate.md` as for USER-SETUP.
 
 **Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration ($DURATION), completed ($PLAN_END_TIME date).
 
@@ -430,6 +434,7 @@ Create `{phase}-{plan}-SUMMARY.md` at `{phase_dir}/` (`phase_dir` from init, e.g
 - A judgment-dependent deliverable (UX adequacy, external/multi-session behavior, anything no test asserts) → `human_judgment: true` with a `rationale`.
 - **Every deliverable MUST be classified.** If you cannot determine coverage, default to `human_judgment: true` with `rationale: "Coverage not determined at authoring time — verifier must classify"`. Never set `human_judgment: false` without a non-empty all-`pass` `verification` — `verify-work` auto-passes (skips the human) ONLY on that proof, so an unproven `false` still routes to the human but loses the audit trail. Omit the whole block only for a genuinely prose-only SUMMARY (verify-work then uses the legacy `## Accomplishments` path). The block is validated downstream by `gsd-tools uat classify-coverage`.
 
+Sequential-only legacy rendering (other conventions use the writer-returned plan identity):
 Title: `# Phase [X] Plan [Y]: [Name] Summary`
 
 One-liner SUBSTANTIVE: "JWT auth with refresh rotation using jose library" not "Authentication implemented"
@@ -537,8 +542,7 @@ fi
 <step name="git_commit_metadata">
 **Critical ordering — write and commit SUMMARY.md as one atomic block.** Do NOT
 emit narrative output between the Write tool call and the commit tool call.
-Truncation at this boundary is a known failure mode (see #2070 rescue logic in
-execute-phase.md step 5.5).
+Truncation recovery: execute-phase.md step 5.5 (#2070).
 
 Task code already committed per-task. Commit plan metadata:
 
@@ -548,9 +552,9 @@ IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 
 # In parallel mode: exclude STATE.md and ROADMAP.md (orchestrator commits these)
 if [ "$IS_WORKTREE" = "true" ]; then
-  gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "{phase_dir}/{phase}-{plan}-SUMMARY.md" "{requirements_path}"
+  gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "{summary_path}" "{requirements_path}"
 else
-  gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "{phase_dir}/{phase}-{plan}-SUMMARY.md" "{state_path}" "{roadmap_path}" "{requirements_path}"
+  gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "{summary_path}" "{state_path}" "{roadmap_path}" "{requirements_path}"
 fi
 ```
 </step>

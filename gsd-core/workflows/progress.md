@@ -4,6 +4,11 @@
 Check project progress, summarize recent work and what's ahead, then intelligently route to the next action — either executing an existing plan or creating the next one. Provides situational awareness before continuing work.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -144,7 +149,7 @@ Present:
 - [Phase X, Plan Z]: [what was accomplished - 1 line from summary-extract]
 
 ## Current Position
-Phase [N] of [total]: [phase-name]
+{phase_display} of [total]: [phase-name]
 Plan [M] of [phase-total]: [status]
 CONTEXT: [✓ if has_context | - if not]
 
@@ -389,7 +394,7 @@ PHASE_HAS_UI=$(echo "$PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true" ||
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+**{phase_display}: {Name}** — {Goal from ROADMAP.md}
 <sub>✓ Context gathered, ready to plan</sub>
 
 `/clear` then:
@@ -406,7 +411,7 @@ PHASE_HAS_UI=$(echo "$PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true" ||
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+**{phase_display}: {Name}** — {Goal from ROADMAP.md}
 
 `/clear` then:
 
@@ -429,7 +434,7 @@ PHASE_HAS_UI=$(echo "$PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true" ||
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+**{phase_display}: {Name}** — {Goal from ROADMAP.md}
 
 `/clear` then:
 
@@ -507,7 +512,7 @@ All plans have summaries, but canonical verification has not passed (`missing`, 
 
 ## Verification Not Passed
 
-**Phase {phase}** has all plans summarized, but verification reads `${VERIFICATION_STATUS}`. ${VERIFICATION_NEXT_ACTION}
+**{phase_display}** has all plans summarized, but verification reads `${VERIFICATION_STATUS}`. ${VERIFICATION_NEXT_ACTION}
 
 `/clear` then:
 
@@ -597,7 +602,7 @@ NEXT_HAS_UI=$(echo "$NEXT_PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+**{phase_display}: {Name}** — {Goal from ROADMAP.md}
 
 `/clear` then:
 
@@ -622,7 +627,7 @@ NEXT_HAS_UI=$(echo "$NEXT_PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+**{phase_display}: {Name}** — {Goal from ROADMAP.md}
 
 `/clear` then:
 

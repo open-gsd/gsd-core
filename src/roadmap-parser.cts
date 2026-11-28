@@ -2338,9 +2338,10 @@ function withPhaseSection(
   phaseId: unknown,
   edit: (body: string) => string,
   levelBounded = false,
+  headingPrefix = '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+',
 ): string {
   const src = phaseMarkdownRegexSource(phaseId);
-  const headingRe = new RegExp(`^\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${src}(?=[\\s:(]|$)`, 'i');
+  const headingRe = new RegExp(`^\\s*${headingPrefix}${src}(?=[\\s:(]|$)`, 'i');
   // levelBounded runs to the next same-or-higher heading, so cut at a deeper phase heading too.
   const ownBody = !levelBounded ? edit : (body: string): string => {
     const cut = body.search(/^#{1,6}[ \t]+(?:\[[^\]\n]{1,200}\][ \t]*)?Phase\s+\S/m);

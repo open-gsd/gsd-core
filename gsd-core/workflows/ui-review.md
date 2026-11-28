@@ -2,6 +2,11 @@
 Retroactive 6-pillar visual audit of implemented frontend code. Standalone command that works on any project — GSD-managed or not. Produces scored UI-REVIEW.md with actionable findings.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/ui-brand.md
 </required_reading>
@@ -146,7 +151,7 @@ Display score summary:
 ```
 ### GSD ► UI AUDIT COMPLETE ✓
 
-**Phase {N}: {Name}** — Overall: {score}/24
+**{phase_display}: {Name}** — Overall: {score}/24
 
 | Pillar | Score |
 |--------|-------|

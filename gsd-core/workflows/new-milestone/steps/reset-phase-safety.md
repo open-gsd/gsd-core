@@ -1,6 +1,13 @@
 ## 7.5 Reset-phase safety (only when `--reset-phase-numbers`)
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 If `--reset-phase-numbers` is active:
+
+
 
 1. Set starting phase number to `1` for the upcoming roadmap.
 2. If `phase_dir_count > 0`, archive the old phase directories before roadmapping so new `01-*` / `02-*` directories cannot collide with stale milestone directories.

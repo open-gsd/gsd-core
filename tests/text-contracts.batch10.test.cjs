@@ -3477,7 +3477,7 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
     ], 'verify-mvp-uat', /the workflow must declare MVP_MODE/);
     passes('MVP_MODE only in the framing step is enough', 'gsd-core/workflows/verify-work.md', eraseAll('MVP_MODE'), 'verify-mvp-uat');
     // The framing step with only the line that carries the verify-mvp-mode.md reference and one probe body.
-    const framingBody3 = (text, body) => `${text.split('\n')[0]}\n\n${body}\n`;
+    const framingBody3 = (text, body) => `${text.split('\n').find(line => line.includes('verify-mvp-mode.md'))}\n\n${body}\n`;
     gapCases('characters between user-flow and the ordering word', 'gsd-core/workflows/verify-work/steps/mvp-uat-framing.md', 'verify-mvp-uat',
       (text, gap) => framingBody3(text, `user-flow${'x'.repeat(gap)}first\ntechnical checks defer`), 80, /the workflow must specify user-flow-first ordering/);
     gapCases('characters between technical checks and the deferral word', 'gsd-core/workflows/verify-work/steps/mvp-uat-framing.md', 'verify-mvp-uat',

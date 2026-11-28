@@ -1,5 +1,10 @@
 # Bounded Stall-Detection Helpers (#2650)
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 `planner.stall_detection_enabled` controls the wait policy for the five scoped
 planner/plan-checker spawns. It defaults to `true`. In that default-on mode each
 spawn dispatches with `run_in_background=true`, records `TS=$(date +%s)`, and

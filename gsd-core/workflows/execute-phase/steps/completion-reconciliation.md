@@ -4,6 +4,11 @@ Read and follow this fragment from `execute-phase.md` step 4 whenever an executo
 completion is in question. It owns the whole reconciliation policy — both arms — so the
 host wait step stays inside the ADR-857 Phase 6 byte ceiling (#1168).
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 **Reconcile FIRST, classify SECOND.** How the child's session ended is bookkeeping
 about the transport; what it wrote to disk and to git is the evidence about the work.
 

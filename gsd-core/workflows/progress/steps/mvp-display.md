@@ -1,3 +1,8 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <step name="mvp_display">
 **MVP-mode display (when phase has `**Mode:** mvp` in ROADMAP.md).**
 
@@ -6,7 +11,7 @@
 The per-phase progress block adds a **user-flow status** sub-block sourced from the phase's PLAN.md task names. Each task whose name reads like a user-visible capability (e.g., "Register flow", "Login flow", "Password reset") is rendered as a status line:
 
 ```
-Phase 1 — User Auth MVP
+{phase_display} — User Auth MVP
   ✅ Walking Skeleton complete           ← from SKELETON.md existence
   ✅ Register flow working               ← from PLAN.md task with summary
   ✅ Login flow working                  ← from PLAN.md task with summary

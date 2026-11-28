@@ -9,6 +9,11 @@ consumes: PLAN.md
 Execute all plans in a phase using wave-based parallel execution. Orchestrator stays lean — delegates plan execution to subagents.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <core_principle>
 Orchestrator coordinates, not executes. Each subagent loads the full execute-plan context. Orchestrator: discover plans → analyze deps → group waves → spawn agents → handle checkpoints → collect results.
 </core_principle>
@@ -413,7 +418,7 @@ Report:
 ```
 ## Execution Plan
 
-**Phase {X}: {Name}** — {total_plans} matching plans across {wave_count} wave(s)
+**{phase_display}: {Name}** — {total_plans} matching plans across {wave_count} wave(s)
 
 {If WAVE_FILTER is set: `Wave filter active: executing only Wave {WAVE_FILTER}`.}
 
@@ -522,25 +527,7 @@ export ORCHESTRATOR_WT
 cd "$ORCHESTRATOR_WT" || { echo "FATAL: cannot cd to orchestrator worktree '$ORCHESTRATOR_WT' (#48)." >&2; exit 1; }
 ```
 
-**Stream-idle-timeout prevention — checkpoint heartbeats (#2410):**
-
-Multi-plan phases can accumulate enough subagent context that the Claude API
-SSE layer terminates with `Stream idle timeout - partial response received`
-between a large tool_result and the next assistant turn (seen on Claude Code
-+ Opus 4.7 at ~200K+ cache_read). To keep the stream warm, emit short
-assistant-text heartbeats — **no tool call, just a literal line** — at every
-wave and plan boundary. Each heartbeat MUST start with `[checkpoint]` so
-tooling and `/gsd:manager`'s background-completion handler can grep partial
-transcripts. `{P}/{Q}` is the phase-wide completed/total plans counter and
-increases monotonically across waves. `{status}` is `complete` (success),
-`failed` (executor error), or `checkpoint` (human-gate returned).
-
-```
-[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} starting, {wave_plan_count} plan(s), {P}/{Q} plans done
-[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} plan {plan_id} starting ({P}/{Q} plans done)
-[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} plan {plan_id} {status} ({P}/{Q} plans done)
-[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} complete, {P}/{Q} plans done ({wave_success}/{wave_plan_count} ok)
-```
+**Checkpoint heartbeats (#2410):** emit each `[checkpoint]` line below as plain assistant text, no tool call, at its wave or plan boundary. Why and the full format: `execute-phase/steps/checkpoint-heartbeats.md`.
 
 **For each wave:**
 
@@ -1139,7 +1126,7 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
 After all waves:
 
 ```markdown
-## Phase {X}: {Name} Execution Complete
+## {phase_display}: {Name} Execution Complete
 
 **Waves:** {N} | **Plans:** {M}/{total} complete
 
@@ -1325,7 +1312,7 @@ Extract from result: `next_phase`, `next_phase_name`, `is_last_phase`, `warnings
 
 **If has_warnings is true**:
 ```
-## Phase {X} marked complete with {N} warnings:
+## {phase_display} marked complete with {N} warnings:
 
 {list each warning}
 

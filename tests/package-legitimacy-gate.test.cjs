@@ -91,7 +91,8 @@ function extractResearchTemplate(content) {
 
     if (inside && line.startsWith('```') && isMarkdownFence) {
       const candidate = buf.join('\n');
-      if (/^\s*#\s+Phase\b/m.test(candidate)) return candidate;
+      // Identify the artifact by its purpose, independent of configured phase spelling.
+      if (/^# .+ - Research$/m.test(candidate)) return candidate;
       inside = false;
       isMarkdownFence = false;
       continue;

@@ -6,8 +6,13 @@ produces: PLAN.md
 consumes: CONTEXT.md
 -->
 <purpose>
-Create executable phase prompts (PLAN.md files) for a roadmap phase with integrated research and verification. Default flow: Research (if needed) -> Plan -> Verify -> Done. Orchestrates gsd-phase-researcher, gsd-planner, and gsd-plan-checker agents with a revision loop (max 3 iterations).
+Create executable PLAN.md phase prompts. Default flow: Research (if needed) -> Plan -> Verify -> Done. Orchestrate gsd-phase-researcher, gsd-planner, and gsd-plan-checker; revision loop: max 3 iterations.
 </purpose>
+
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
 
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
@@ -99,7 +104,7 @@ CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || ec
 MVP_MODE_CFG=$(gsd_run query config-get workflow.mvp_mode --raw 2>/dev/null || echo "false")
 ```
 
-When the tdd capability's `workflow.tdd_mode` is active (resolved via the plan:pre render-hooks), the planner agent is instructed to apply `type: tdd` to eligible tasks using heuristics from `gsd-core/references/tdd.md`. The TDD guidance is injected via the tdd capability's contribution hook at §8; no inline config-get is needed.
+When the tdd capability's `workflow.tdd_mode` is active (via plan:pre render-hooks), the planner applies `type: tdd` to eligible tasks per `gsd-core/references/tdd.md`. The tdd contribution hook injects guidance at §8; no inline config-get is needed.
 
 When `CONTEXT_WINDOW >= 500000`, the planner prompt includes the 3 most recent prior-phase CONTEXT.md/SUMMARY.md files plus any phases in the current phase's `Depends on:` field (explicit deps load regardless of recency).
 
@@ -194,9 +199,9 @@ Extract express-path args from $ARGUMENTS: `PRD_FILE` (`--prd <filepath>`), `ING
 `--prd` and `--ingest` are mutually exclusive. If both are present, error and exit:
 `Invalid arguments: cannot combine \`--prd\` with \`--ingest\`.`
 
-**If no phase number:** Auto-detect it — `query init.plan-phase` and `query roadmap.get-phase` require an explicit number, so this is an orchestrator step. Run `gsd_run query roadmap.analyze` and read `next_phase` (first phase with `disk_status` of `no_directory`, `empty`, `discussed`, or `researched`). If `next_phase` is `null`, read ROADMAP.md's `### Phase N:` headers and ask the user which phase to plan. Set `PHASE` to the result before step 1's `query init.plan-phase "$PHASE"` call.
+**If no phase number:** the orchestrator auto-detects it (`query init.plan-phase` and `query roadmap.get-phase` need an explicit number). Run `gsd_run query roadmap.analyze` and read `next_phase` (first phase with `disk_status` of `no_directory`, `empty`, `discussed`, or `researched`). If `next_phase` is `null`, read ROADMAP.md's `### {phase_display}:` headers and ask the user which phase to plan. Set `PHASE` to the result before step 1's `query init.plan-phase "$PHASE"` call.
 
-**If `phase_found` is false:** Validate phase exists in ROADMAP.md. If valid, create the directory using `expected_phase_dir` from init (includes `project_code` prefix when set):
+**If `phase_found` is false:** Validate phase exists in ROADMAP.md. If valid, create the directory using `expected_phase_dir` from init unchanged:
 ```bash
 mkdir -p "${expected_phase_dir}"
 ```
@@ -1524,7 +1529,7 @@ Output this markdown directly (not as a code block):
 
 ### GSD ► PHASE {X} PLANNED ✓
 
-**Phase {X}: {Name}** — {N} plan(s) in {M} wave(s)
+**{phase_display}: {Name}** — {N} plan(s) in {M} wave(s)
 
 | Wave | Plans | What it builds |
 |------|-------|----------------|
@@ -1556,7 +1561,7 @@ Verification: {Passed | Passed with override | Skipped}
 </offer_next>
 
 <windows_troubleshooting>
-Read `gsd-core/workflows/plan-phase/steps/windows-troubleshooting.md` if plan-phase freezes on Windows during agent spawning (stdio deadlocks with MCP servers, anthropics/claude-code#28126) — it covers force-kill, orphaned-node cleanup, stale task-dir cleanup, reducing the MCP server count, and the `--skip-research` fallback.
+Read `gsd-core/workflows/plan-phase/steps/windows-troubleshooting.md` if plan-phase freezes on Windows during agent spawning (stdio deadlocks with MCP servers, anthropics/claude-code#28126).
 </windows_troubleshooting>
 
 <!-- gsd:protected:start -->

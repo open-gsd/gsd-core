@@ -2,6 +2,11 @@
 
 External plan ingestion with conflict detection and agent delegation.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 - **--from**: Import external plan → conflict detection → write PLAN.md → validate via gsd-plan-checker
 
 Future: `--prd` mode (PRD extraction into PROJECT.md + REQUIREMENTS.md + ROADMAP.md) is planned for a follow-up PR.
@@ -177,7 +182,7 @@ Apply GSD naming convention for the output filename:
 - NEVER use `PLAN-01.md`, `plan-01.md`, or any other format
 - NN = phase number (zero-padded), MM = plan number within the phase (zero-padded)
 
-Determine the target directory by querying `init.phase-op` for the phase number extracted in `plan_read_input`. This ensures the `project_code` prefix from `{planning_root}/config.json` is applied:
+Determine the target directory by querying `init.phase-op` for the phase number extracted in `plan_read_input`. Use its returned directory unchanged, including the configured project prefix from `{planning_root}/config.json`, as the generated guidance requires:
 
 ```bash
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
@@ -251,7 +256,7 @@ Commit the imported plan and updated files:
 ```bash
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
 : "${PLANNING_ROOT:?}"
-gsd_run query commit "docs({phase}): import plan from {basename FILEPATH}" --files "${PLANNING_ROOT}/phases/{phase}/{plan}-PLAN.md" "${PLANNING_ROOT}/ROADMAP.md"
+gsd_run query commit "docs({phase}): import plan from {basename FILEPATH}" --files "{phase_dir}/{plan_file}" "${PLANNING_ROOT}/ROADMAP.md"
 ```
 
 Display completion:

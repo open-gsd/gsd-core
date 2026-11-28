@@ -5,6 +5,11 @@ Produces a SPEC.md with falsifiable requirements that discuss-phase treats as lo
 This workflow handles "what" and "why" — discuss-phase handles "how".
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <ambiguity_model>
 Score each dimension 0.0 (completely unclear) to 1.0 (crystal clear):
 
@@ -67,7 +72,7 @@ Parse JSON for: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase
 
 **If `phase_found` is false:**
 ```
-Phase [X] not found in roadmap.
+Requested phase [X] not found in roadmap.
 Use /gsd:progress to see available phases.
 ```
 Exit.

@@ -99,7 +99,7 @@ function seedTwoMilestones(tmpDir) {
 
 function runFence(bashFence, tmpDir) {
   // The workflow's own launcher defines gsd_run; the fixture points it at this checkout's CLI.
-  const script = [`gsd_run() { node "${TOOLS_PATH}" "$@"; }`, bashFence.split('{phase_dir}').join('.planning/phases/03-beta')].join('\n');
+  const script = [`gsd_run() { node "${TOOLS_PATH}" "$@"; }`, bashFence.split('{phase_dir}').join(path.join(tmpDir, '.planning/phases/03-beta'))].join('\n');
   const scriptPath = path.join(tmpDir, '.diff-base-script.sh');
   fs.writeFileSync(scriptPath, script);
   const output = execFileSync('bash', [scriptPath], {

@@ -1,6 +1,13 @@
 # Verification Report Template
 
-Template for `.planning/phases/XX-name/{phase_num}-VERIFICATION.md` — phase goal verification results.
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
+Template for `{phase_dir}/{padded_phase}-VERIFICATION.md` — phase goal verification results.
 
 ---
 
@@ -29,7 +36,7 @@ coincidental_reliance_items: # Only if a ✓ VERIFIED truth holds incidentally �
     harden: "Precondition/ordering to declare or enforce"
 ---
 
-# Phase {X}: {Name} Verification Report
+# {phase_display}: {Name} Verification Report
 
 **Phase Goal:** {goal from ROADMAP.md}
 **Verified:** {timestamp}

@@ -556,19 +556,43 @@ const WORKFLOW_PATH = path.join(
   'execute-phase.md'
 );
 const COMMANDS_DOC_PATH = path.join(__dirname, '..', 'docs', 'COMMANDS.md');
+// The rationale and full line format live in a step fragment so the host stays
+// under the frozen ADR-857 pre-phase-6 ceiling (#1168); the per-step literals
+// stay in the host, where the orchestrator emits them.
+const HEARTBEAT_FRAGMENT_PATH = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'checkpoint-heartbeats.md'
+);
 
 describe('bug #2410: execute-phase emits checkpoint heartbeats', () => {
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+  const fragment = fs.readFileSync(HEARTBEAT_FRAGMENT_PATH, 'utf-8');
 
   test('workflow references the stream idle timeout symptom by name', () => {
     assert.ok(
-      /Stream idle timeout/.test(workflow),
-      'workflow should name the API error it is preventing'
+      /Stream idle timeout/.test(fragment),
+      'the heartbeat fragment should name the API error it is preventing'
     );
     assert.ok(
-      workflow.includes('#2410'),
-      'workflow should cite the tracking issue for future maintainers'
+      workflow.includes('#2410') && fragment.includes('#2410'),
+      'host and fragment should cite the tracking issue for future maintainers'
     );
+    assert.ok(
+      workflow.includes('execute-phase/steps/checkpoint-heartbeats.md'),
+      'the host should point at the heartbeat fragment'
+    );
+  });
+
+  test('the heartbeat fragment defines every line shape and the no-tool-call rule', () => {
+    for (const shape of [
+      '[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} starting, {wave_plan_count} plan(s), {P}/{Q} plans done',
+      '[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} plan {plan_id} starting ({P}/{Q} plans done)',
+      '[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} plan {plan_id} {status} ({P}/{Q} plans done)',
+      '[checkpoint] phase {PHASE_NUMBER} wave {N}/{M} complete, {P}/{Q} plans done ({wave_success}/{wave_plan_count} ok)',
+    ]) {
+      assert.ok(fragment.includes(shape), `fragment should define: ${shape}`);
+    }
+    assert.match(fragment, /no tool call, just a literal line/);
+    assert.match(fragment, /`\{status\}` is `complete` \(success\),\s+`failed` \(executor error\), or `checkpoint`/);
   });
 
   test('workflow defines a [checkpoint] heartbeat line format', () => {

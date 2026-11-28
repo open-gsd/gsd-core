@@ -1,5 +1,11 @@
 # Post-wave requirement completion (#6102)
 
+
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 Read and follow this fragment from `execute-phase.md` step 5.7 (the post-wave shared artifact update), after the
 ROADMAP plan-progress loop and inside the same `TEST_EXIT` guard. Substitute `{completed_plan_ids}` exactly as that
 loop does: the plan IDs that COMPLETED in this wave (each has a `*-SUMMARY.md`), written out as a literal list.

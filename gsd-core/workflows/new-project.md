@@ -2,6 +2,11 @@
 Initialize a new project through unified flow: questioning, research (optional), requirements, roadmap. This is the most leveraged moment in any project — deep questioning here means better plans, better execution, better outcomes. One workflow takes you from idea to ready-for-planning.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -997,13 +1002,13 @@ Display stage banner:
 
 **ROADMAP.md template — mode-aware emit.** When generating the initial ROADMAP.md:
 
-- If `PROJECT_MODE=mvp`: under each `### Phase N:` header, emit `**Mode:** mvp` on the line immediately following `**Goal:**`. This sets every initial phase to MVP mode (per Phase-4-Persistence decision: per-phase mode, not project-wide config).
+- If `PROJECT_MODE=mvp`: under each `### {phase_display}:` header, emit `**Mode:** mvp` on the line immediately following `**Goal:**`. This sets every initial phase to MVP mode (per Phase-4-Persistence decision: per-phase mode, not project-wide config).
 - If `PROJECT_MODE=standard`: emit the standard ROADMAP.md template with no `**Mode:**` lines (Horizontal Layers standard template — no behavioral change for users who pick Horizontal Layers).
 
 Example MVP-mode emit for Phase 1:
 
 ```markdown
-### Phase 1: [Name]
+### {phase_display}: [Name]
 **Goal:** [Goal]
 **Mode:** mvp
 **Success Criteria**:
@@ -1079,7 +1084,7 @@ Read the created ROADMAP.md and present it nicely inline:
 
 ### Phase Details
 
-**Phase 1: [Name]**
+**{phase_display}: [Name]**
 Goal: [goal]
 Requirements: [REQ-IDs]
 Success criteria:
@@ -1087,7 +1092,7 @@ Success criteria:
 2. [criterion]
 3. [criterion]
 
-**Phase 2: [Name]**
+**{phase_display}: [Name]**
 Goal: [goal]
 Requirements: [REQ-IDs]
 Success criteria:
@@ -1209,7 +1214,7 @@ PHASE1_HAS_UI=$(echo "$PHASE1_SECTION" | grep -qi "UI hint.*yes" && echo "true" 
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase 1: [Phase Name]** — [Goal from ROADMAP.md]
+**{phase_display}: [Phase Name]** — [Goal from ROADMAP.md]
 
 /clear then:
 
@@ -1231,7 +1236,7 @@ PHASE1_HAS_UI=$(echo "$PHASE1_SECTION" | grep -qi "UI hint.*yes" && echo "true" 
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase 1: [Phase Name]** — [Goal from ROADMAP.md]
+**{phase_display}: [Phase Name]** — [Goal from ROADMAP.md]
 
 /clear then:
 

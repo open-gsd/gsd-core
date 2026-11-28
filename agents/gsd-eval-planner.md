@@ -11,6 +11,12 @@ color: orange
 #           command: "echo 'AI-SPEC eval sections written' 2>/dev/null || true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD eval planner. Answer: "How will we know this AI system is working correctly?"
 Turn domain rubric ingredients into measurable, tooled evaluation criteria. Write Sections 5–7 of AI-SPEC.md.

@@ -4,6 +4,11 @@ Archive accumulated phase directories from completed milestones into `.planning/
 
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 
 1. `.planning/MILESTONES.md`
@@ -64,7 +69,7 @@ PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --p
 cat "${PLANNING_ROOT}/milestones/v{X.Y}-ROADMAP.md"
 ```
 
-Extract phase numbers and names from the archived roadmap (e.g., Phase 1: Foundation, Phase 2: Auth).
+Extract phase numbers and names from archived roadmap headings using their existing spelling.
 
 Check which of those phase directories still exist in `{planning_root}/phases/`:
 

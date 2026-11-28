@@ -18,6 +18,11 @@ cherry-picked history. Two modes, selected by the `planning.pr_strict` config ke
 Uses git cherry-pick with path filtering to rebuild a clean history.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <process>
 
 <step name="detect_state">

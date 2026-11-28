@@ -4,6 +4,11 @@
 Create a structured handoff (`.planning/HANDOFF.latest.<role_id>.json` with a role, `.planning/HANDOFF.<session_id>.json` without one, legacy `.planning/HANDOFF.json` with no session id) and a `.continue-here` file to preserve complete work state across sessions. The JSON provides machine-readable state for `/gsd:resume-work`; the markdown provides human-readable context. The handoff file is the pause: it belongs to the session that wrote it, and nothing is written to `paused_at` or `status: paused` in STATE.md.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -35,7 +40,7 @@ sketch=${sketch:+$(basename "$(dirname "$sketch")")}
 deliberation=$(ls .planning/deliberations/*.md 2>/dev/null | head -1 || true)
 ```
 
-- **Phase work**: active phase directory → handoff to `{planning_root}/phases/XX-name/.continue-here.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)
+- **Phase work**: active phase directory → handoff to `{phase_dir}/.continue-here.md`
 - **Spike work**: active spike directory or spike-related files (no active phase) → handoff to `.planning/spikes/SPIKE-NNN/.continue-here.md` (create directory if needed)
 - **Sketch work**: active sketch directory (no active phase/spike) → handoff to `.planning/sketches/.continue-here.md`
 - **Deliberation work**: active deliberation file (no phase/spike/sketch) → handoff to `.planning/deliberations/.continue-here.md`
@@ -158,7 +163,7 @@ UNCOMMITTED=$(git status --porcelain)
 </step>
 
 <step name="write">
-**Write handoff to the path determined in the detect step**, with `${CONTINUE_NAME}` as the file name (e.g. `{planning_root}/phases/XX-name/${CONTINUE_NAME}`, `.planning/spikes/SPIKE-NNN/${CONTINUE_NAME}`, or `.planning/${CONTINUE_NAME}`):
+**Write handoff to the path determined in the detect step**, with `${CONTINUE_NAME}` as the file name (e.g. `{phase_dir}/${CONTINUE_NAME}`, `.planning/spikes/SPIKE-NNN/${CONTINUE_NAME}`, or `.planning/${CONTINUE_NAME}`):
 
 ```markdown
 ---

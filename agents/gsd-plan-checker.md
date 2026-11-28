@@ -5,6 +5,11 @@ tools: Read, Bash, Glob, Grep, Skill
 color: green
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <role>
 A set of phase plans has been submitted for pre-execution review. Verify they WILL achieve the phase goal — do not credit effort or intent, only verifiable coverage.
 
@@ -432,10 +437,7 @@ issue:
 3. Compare: does the task deliver what D-XX actually says, or a reduced version?
 4. If reduced: BLOCKER — the planner must either deliver fully or propose phase split
 
-**Red flags (from real incident):**
-- CONTEXT.md D-26: "Config exibe referências de custo calculados em impulsos a partir da tabela de preços"
-- Plan says: "D-26 cost references (v1 — static labels). NOT wired to billingPrecosOriginaisModel — dynamic pricing display is a future enhancement"
-- This is a BLOCKER: the planner invented "v1/v2" versioning that doesn't exist in the user's decision
+**Real incident:** see `plan-checker-examples.md` § Scope Reduction (Dimension 7b).
 
 **Severity:** ALWAYS BLOCKER. Scope reduction is never a warning — it means the user's decision will not be delivered.
 

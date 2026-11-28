@@ -1,3 +1,8 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 @~/.claude/gsd-core/references/response-language-directive.md
 
 # Add Backlog Item Workflow
@@ -42,7 +47,7 @@ of ROADMAP.md:
 ```markdown
 ## Backlog
 
-### Phase {NEXT}: {description} (BACKLOG)
+### {backlog_phase_display}: {description} (BACKLOG)
 
 **Goal:** [Captured for future planning]
 **Requirements:** TBD
@@ -54,7 +59,7 @@ Plans:
 
 ## Step 4: Create the phase directory
 
-Apply the `project_code` prefix (if set in `config.json`) so the backlog directory name is consistent with all other phase-creation paths:
+Use the existing backlog directory layout for every convention, with the configured project prefix as returned by the CLI:
 
 ```bash
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
@@ -88,7 +93,7 @@ gsd_run query commit "docs: add backlog item ${NEXT} — ${GSD_ARGS}" --files "$
 ```
 ## 📋 Backlog Item Added
 
-Phase {NEXT}: {description}
+{backlog_phase_display}: {description}
 Directory: {PHASE_DIR}/
 
 This item lives in the backlog parking lot.

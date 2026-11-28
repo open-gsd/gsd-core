@@ -157,6 +157,7 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  'tests/phase-id-card.test.cjs': ['docs/how-to/change-phase-id-guidance.md'],
   // #4647: the closed seed status must be named beside the open values in the CLI, user and command docs.
   'tests/seed-close.test.cjs': ['docs/CLI-TOOLS.md', 'docs/USER-GUIDE.md', 'docs/COMMANDS.md'],
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],

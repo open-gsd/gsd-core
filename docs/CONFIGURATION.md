@@ -222,6 +222,15 @@ Set `"phase_naming": "custom"` to create phases with explicit identities:
 
 `gsd-tools phase add "Product boundary" --id PRODUCT-BOUNDARY` creates `.planning/phases/CCM-PRODUCT-BOUNDARY-product-boundary/`; the optional `project_code` prefixes the directory. `phase add --id` is a usage error unless the effective `phase_naming` is custom, and a project config (even `{}`) shadows global defaults. Which IDs are accepted or refused, the `.phase-id` marker and how markerless directories resolve: [Custom phase IDs](reference/custom-phase-ids.md).
 
+Phase convention guidance in full agents, phase-emitting workflows, and
+template instruction wrappers is generated from `src/phase-id-card.cts`. The
+wrappers include core phase templates, verification-report, and user-setup. The
+generator pins its exact target set and checks both parity and convention prose outside generated regions.
+After required completion writes succeed, an installer invocation displays one titled
+canonical card on stderr, including when installing all runtimes. See the [canonical convention reference](../gsd-core/references/phase-id-convention.md).
+Bracket remains opt-in; this guidance does not change new-project defaults or migrate
+existing identifiers. `phase_naming` remains independent of `phase_id_convention`.
+
 > **Note:** `granularity` was renamed from `depth` in v1.22.3. Existing configs are auto-migrated.
 
 > **Note:** `GSD_HOME` defaults to your home directory (`~`) when unset, so the key files above live in `~/.gsd/` unless you point `GSD_HOME` elsewhere.

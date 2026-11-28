@@ -12,6 +12,11 @@ Use this workflow when:
 Instantly restore full project context so "Where were we?" has an immediate, complete answer.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/continuation-format.md
 </required_reading>
@@ -317,9 +322,7 @@ What would you like to do?
 **Note:** When offering phase planning, check for CONTEXT.md existence first:
 
 ```bash
-PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
-: "${PLANNING_ROOT:?}"
-ls "${PLANNING_ROOT}"/phases/XX-name/*-CONTEXT.md 2>/dev/null || true
+ls "{phase_dir}"/*-CONTEXT.md 2>/dev/null || true
 ```
 
 If missing, suggest discuss-phase before plan. If exists, offer plan directly.
@@ -416,7 +419,7 @@ Resume-specific exception: do **not** emit `/clear then:` here. Resume is alread
 
   ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-  **Phase [N]: [Name]** — [Goal from ROADMAP.md]
+  **{phase_display}: [Name]** — [Goal from ROADMAP.md]
 
   `/gsd:plan-phase [phase-number] ${GSD_WS}`
 

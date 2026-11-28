@@ -228,18 +228,18 @@ test('#3206: step 5b defines explicit evidence inline — presence+wiring never 
   assert.match(m[0], /\*never\* qualifies/, 'presence+wiring must be excluded in the 5b line itself');
 });
 
-test('#3206: every references-tree cite in gsd-verifier.md resolves on disk as written', () => {
+test('#3206: every references-tree cite in gsd-verifier.md maps to a shipped reference', () => {
   // Pre-fix, this file cited `references/honest-verifier.md` — a bare path that
   // 404s from repo root after the reference-tree reorg. Every cite must now
-  // resolve exactly as written.
-  const citeRe = /`((?:gsd-core\/)?references\/[A-Za-z0-9._-]+\.md)`/g;
+  // resolve after the supported installer source-prefix rewrite.
+  const citeRe = /`((?:~\/\.claude\/)?(?:gsd-core\/)?references\/[A-Za-z0-9._-]+\.md)`/g;
   const cites = [...verifier.matchAll(citeRe)].map((m) => m[1]);
   assert.ok(cites.includes('gsd-core/references/honest-verifier.md'), 'the 5c honest-verifier cite');
-  assert.ok(cites.includes('gsd-core/references/verify-mvp-mode.md'), 'the MVP-mode cite');
+  assert.ok(cites.includes('~/.claude/gsd-core/references/verify-mvp-mode.md'), 'the MVP-mode cite');
   assert.ok(cites.length >= 2, `expected the two repaired cites, found ${cites.length}`);
   for (const cited of cites) {
     assert.ok(
-      fs.existsSync(path.join(ROOT, cited)),
+      fs.existsSync(path.join(ROOT, cited.replace(/^~\/\.claude\//, ''))),
       `gsd-verifier.md cites \`${cited}\` but no such file exists — the agent is handed a path that does not resolve (#3206)`,
     );
   }

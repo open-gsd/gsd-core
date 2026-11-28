@@ -608,7 +608,6 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
     { file: 'gsd-core/workflows/settings.md', match: /hardcode\S* `\.planning\/config\.json`|hardcoded `\.planning\/config\.json`/, why: 'negative example next to `$GSD_CONFIG_PATH`' },
     { file: 'gsd-core/workflows/settings-advanced.md', match: /\.planning\/config\.json` — workstream installs must route/, why: 'states why the root literal must not be used; the line names `$GSD_CONFIG_PATH`' },
     { file: 'gsd-core/workflows/smart-entry.md', match: /^\s*- Read `\.planning\/STATE\.md` \(frontmatter \+ body\)/, why: 'gsd-tools-down fallback: runs only when the CLI cannot run, so it cannot ask planning.inspect for the scope root and reads the flat file by construction (lint-state-field-drift PROMPT_LAYER_EXEMPTIONS pins this exact line)' },
-    { file: 'gsd-core/workflows/undo.md', match: /\.planning\/phases\/03-auth/, why: 'historical incident quote, not an instruction' },
     { file: 'gsd-core/workflows/help/modes/full.md', match: /Result: Creates `\.planning\/phases\/01-foundation/, why: 'example command output for the flat project' },
     { file: 'gsd-core/workflows/help/modes/full.compact.md', match: /Result: Creates `\.planning\/phases\/01-foundation/, why: 'example command output for the flat project' },
     { file: 'agents/gsd-roadmapper.md', match: /\.planning\/ROADMAP\.md/, why: 'write targets of the roadmapper are owned by #5859, which names the flat fallback explicitly' },

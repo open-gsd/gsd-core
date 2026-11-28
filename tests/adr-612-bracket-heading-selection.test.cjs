@@ -105,6 +105,8 @@ const BASE_SITES = [
   { file: 'roadmap-parser.cts', site: 'isBracketMilestoneBoundary BRACKET_PHASE_TAIL_RE',
     baseline: B.ANY_BRACKET, src: '(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+', runtimeGated: true },
   // --- baseline: the site spells a BARE `Phase ` with no bracket tolerance
+  { file: 'roadmap.cts', site: 'cmdRoadmapUpdatePlanProgress headingPrefix',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'roadmap.cts', site: 'searchPhaseInContent checklistPattern',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'roadmap.cts', site: 'cmdRoadmapAnalyze checkboxPattern',
@@ -738,7 +740,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
     'commands.cts': [1, 0],
     'init.cts': [0, 2],
     'phase.cts': [1, 9],
-    'roadmap.cts': [3, 3],
+    'roadmap.cts': [3, 4],
     'validate.cts': [1, 2],
     'state.cts': [0, 3],
     'planning-snapshot.cts': [0, 2],

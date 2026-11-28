@@ -1,3 +1,8 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 # Execute:pre Capability Dispatch (execute:pre)
 
 The whole execute:pre dispatch, extracted from the host's `discover_and_group_plans` step (#5848; the host file carries a frozen pre-phase-6 byte ceiling, #1168, so dispatch lives here). The host reaches this step once, after plan discovery and before STATE.md records the phase start. For gates it mirrors `wave-post-gate-hooks.md`. The difference is what a block stops: here it stops the whole phase before any plan is dispatched and before STATE.md records the phase start.

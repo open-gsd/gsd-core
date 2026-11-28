@@ -83,3 +83,26 @@ User story: «As a new user, I want to register and log in, so that I can access
 ```
 
 Standard technical-check sections of VERIFICATION.md remain (API verification, error handling, etc.) but are appended below "User Flow Coverage", not above.
+
+## Verifier contract (MVP phases only)
+
+**When the phase under verification has `mode: mvp` in ROADMAP.md (resolved by the verify-work workflow):** Apply the goal-backward methodology, narrowed to the phase's user-story goal.
+
+**Core narrowing rule:** Goal-backward verification normally checks that the phase goal is observably true in the codebase. Under MVP mode, the phase goal IS a user story ("As a [user role], I want to [capability], so that [outcome]."). Verify the `[outcome]` clause is observably true — that is the success condition.
+
+**VERIFICATION.md output structure under MVP mode:**
+
+1. Top-level "User Flow Coverage" table: each step of the user story → expected → evidence in codebase → status. (Use the User Flow Coverage format above.)
+2. Standard technical-check sections (API verification, error handling, etc.) follow below — only if the user flow coverage is complete.
+
+**User Story format guard:** Apply via the centralized verb instead of inlining the regex:
+
+```bash
+USER_STORY_VALID=$(gsd_run query user-story.validate --story "$PHASE_GOAL" --pick valid)
+```
+
+If `valid != true`, refuse to verify. Surface the discrepancy and ask the user to run `/gsd:mvp-phase ${PHASE}` to set a proper User Story goal. The verb owns the canonical regex `/^As a .+, I want to .+, so that .+\.$/` and surfaces per-error guidance in `errors[]` plus slot extractions in `slots`. Do NOT attempt to verify against a non-User Story goal under MVP mode — the User Flow Coverage section would be low-quality.
+
+**Mode is all-or-nothing per phase** (PRD decision Q1, inherited from Phase 1). The MVP Mode Verification rules apply to the whole phase or not at all.
+
+**Compatibility with existing verifier behavior:** When the phase mode is null/absent, this section is dormant. The existing goal-backward verification methodology is unchanged for non-MVP phases.

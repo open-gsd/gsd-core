@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 const crypto = require('crypto');
+const { phaseIdCard } = require('../gsd-core/bin/lib/phase-id-card.cjs');
 const {
   isManagedHookBasename,
   isManagedHookCommand,
@@ -15835,6 +15836,14 @@ function installAllRuntimes(runtimes, isGlobal, isInteractive) {
       // docs/installer-migrations.md#phase-4-installupdate-integration.
       rollbackFinalizedInstallerMigrations(error);
       throw error;
+    }
+    // Presentation cannot invalidate successful migration/finalization writes.
+    try {
+      if (results.some(result => result && !result.skipped)) {
+        process.stderr.write(`${phaseIdCard({ title: 'Bracket phase-ID convention' })}\n`);
+      }
+    } catch {
+      // stderr can be closed by a consumer after installation succeeds.
     }
   };
 
