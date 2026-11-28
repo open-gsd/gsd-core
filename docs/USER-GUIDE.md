@@ -719,63 +719,11 @@ Run `/gsd-progress`. It reads all state files and tells you exactly where you ar
 
 ### Model Costs Too High
 
-Switch to budget profile: `/gsd-config --profile budget`. Disable research and plan-check agents via `/gsd-settings` if the domain is familiar.
+Switch to the budget profile: `/gsd-config --profile budget`. Disable research and plan-check agents via `/gsd-settings` if the domain is familiar.
 
-### Tuning model cost by phase (`models`) — added in v1.40
+To spend by phase type (Opus for planning, Sonnet for the rest), by agent, or to start cheap and escalate on failure, follow [How to configure model profiles](how-to/configure-model-profiles.md): it covers the `models` block, `model_overrides`, `dynamic_routing` and the resolution precedence. The keys are in [Per-Phase-Type Models](CONFIGURATION.md#per-phase-type-models-models--added-in-v140) and [Dynamic Routing](CONFIGURATION.md#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140).
 
-Add a `models` block to `.planning/config.json`:
-
-```json
-{
-  "model_profile": "balanced",
-  "models": {
-    "planning": "opus",
-    "discuss": "opus",
-    "research": "sonnet",
-    "execution": "opus",
-    "verification": "sonnet",
-    "completion": "sonnet"
-  }
-}
-```
-
-Need a per-agent exception? Add `model_overrides` alongside — it wins over `models`:
-
-```json
-{
-  "models": { "research": "sonnet" },
-  "model_overrides": {
-    "gsd-codebase-mapper": "haiku"
-  }
-}
-```
-
-For the full mapping table and resolution-precedence rules, see [Per-Phase-Type Models](CONFIGURATION.md#per-phase-type-models-models--added-in-v140).
-
-### Cheap-by-default with `dynamic_routing` — added in v1.40
-
-```json
-{
-  "dynamic_routing": {
-    "enabled": true,
-    "tier_models": {
-      "light":    "haiku",
-      "standard": "sonnet",
-      "heavy":    "opus"
-    },
-    "escalate_on_failure": true,
-    "max_escalations": 1
-  }
-}
-```
-
-For the full agent → tier mapping, see [Dynamic Routing](CONFIGURATION.md#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140).
-
-### Trim MCP servers to reduce per-turn cost
-
-Before tuning `model_profile` or `models.<phase_type>`, audit which **MCP servers** your harness has enabled. Every enabled MCP server injects its tool schema into every turn — heavyweight servers can cost 20k+ tokens each.
-
-This is a **harness setting**, not a GSD setting. The toggle lives in `.claude/settings.json`:
+Before tuning any of those, trim the MCP servers your harness has enabled: each one adds its tool schema to every turn, and the saving applies to every subagent. This is a harness setting, not a GSD setting, in `.claude/settings.json`:
 
 ```json
 {
@@ -784,15 +732,7 @@ This is a **harness setting**, not a GSD setting. The toggle lives in `.claude/s
 }
 ```
 
-Quick audit before a long phase:
-
-- Are any browser / playwright tools enabled when this phase has no UI work?
-- Are any platform-specific tools enabled when not needed?
-- Are any project-specific MCPs from a different project still enabled here?
-
-Each disabled server removes its schema from every subsequent turn. Trimming MCPs **compounds** with `model_profile` tuning — both levers are additive, and MCP savings show up immediately across every subagent the orchestrator spawns.
-
-For the full audit, harness reference, and the composition note with `model_profile`, see [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) in the bundled `context-budget.md` reference.
+The audit and how it composes with `model_profile` are in [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern).
 
 ### Using Non-Claude Runtimes (Codex, OpenCode, Antigravity CLI, Kilo)
 
