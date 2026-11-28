@@ -654,8 +654,7 @@ describe('project-context CLI: workspace and verb', () => {
       assert.equal(res.exitCode, 0, JSON.stringify(res));
       const o = outcome(res);
       assert.equal(o.committed, false);
-      assert.notEqual(o.reason, 'not_git_repo', 'the commit_docs skip wins over the refusal, as in cmdCommit');
-      assert.equal(typeof o.reason, 'string');
+      assert.equal(o.reason, 'skipped_commit_docs_false', 'the commit_docs skip wins over the refusal, as in cmdCommit');
     });
 
     test('commitToSubrepoFromAWorkspaceSubdirectoryCommitsInTheNamedSubRepo', (t) => {

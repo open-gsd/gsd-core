@@ -2144,6 +2144,19 @@ function rebaseToWorktree(ctx: ProjectContext, declared: string[] | undefined): 
     : path.relative(worktreeReal, path.resolve(projectReal, p)).split(path.sep).join('/')));
 }
 
+/**
+ * The one evaluation of "would a commit of these files proceed under commit_docs": shared by
+ * cmdCommit and `uat complete-session`'s pre-check so the two cannot diverge. Config and the
+ * gitignore probe read the project root (ADR-4908 section 3).
+ */
+function commitDocsPolicyFor(ctx: ProjectContext, config: Record<string, unknown>, files: string[] | undefined): ReturnType<typeof resolveCommitDocsPolicy> {
+  return resolveCommitDocsPolicy(
+    config,
+    detectPhaseNumberFromFiles(files),
+    () => isGitIgnored(ctx.projectRoot, '.planning'),
+  );
+}
+
 function cmdCommit(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[]): void {
   requireProjectContext(ctx, 'cmdCommit');
   // ADR-4908 §3: git and the commit run in worktreeRoot; `.planning` content and config
@@ -2171,11 +2184,7 @@ function cmdCommit(ctx: ProjectContext, message: string | undefined, files: stri
   // `skipped: true` is explicit so agent prompts can match on a first-class
   // success signal rather than inferring "skip" from "committed is missing"
   // and improvising raw git fallbacks (#3678).
-  const commitDocsPolicy = resolveCommitDocsPolicy(
-    config,
-    detectPhaseNumberFromFiles(files),
-    () => isGitIgnored(planningCwd, '.planning'),
-  );
+  const commitDocsPolicy = commitDocsPolicyFor(ctx, config, files);
   if (!commitDocsPolicy.resolved) {
     const result = {
       committed: false,
@@ -4591,6 +4600,7 @@ export = {
   resolveCommitDocsPolicy,
   COMMIT_DOCS_SKIP_REASON,
   commitRefusal,
+  commitDocsPolicyFor,
   cmdCommit,
   cmdCommitToSubrepo,
   cmdPrSubrepo,
