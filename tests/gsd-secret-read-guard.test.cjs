@@ -6551,8 +6551,7 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
               if (i === at) cmd = `${prefix} ${cmd}`;
             }
             count++;
-            const r = runHook(bash(cmd));
-            const code = r.status === 2 ? JSON.parse(r.stdout).code : `exit ${r.status}`;
+            const code = spawnCode(cmd);
             if (code !== 'debugger-cli-spawn') allowed.push(`${code}: ${cmd}`);
           }
         }
@@ -6609,10 +6608,20 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
     }
     return cmd;
   };
-  const deniedAsSpawn = (cmd) => {
-    const r = runHook(bash(cmd));
-    return r.status === 2 && JSON.parse(r.stdout).code === 'debugger-cli-spawn';
+  // The block code main gives a command, read in process (bashVerdict); every
+  // 50th command also runs the hook as a process, which must agree.
+  let spawnChecks = 0;
+  const spawnCode = (cmd) => {
+    const v = bashVerdict(cmd);
+    const code = v === null ? 'exit 0' : v.code;
+    if (spawnChecks++ % 50 === 0) {
+      const r = runHook(bash(cmd));
+      const viaProcess = r.status === 2 ? JSON.parse(r.stdout).code : `exit ${r.status}`;
+      assert.equal(viaProcess, code, `process and in-process verdicts: ${cmd}`);
+    }
+    return code;
   };
+  const deniedAsSpawn = (cmd) => spawnCode(cmd) === 'debugger-cli-spawn';
   test('denies a debugger spawn for every carrier, prefix and form one payload deep', () => {
     const cmds = new Set();
     for (const inner of Object.keys(WRAP)) {
