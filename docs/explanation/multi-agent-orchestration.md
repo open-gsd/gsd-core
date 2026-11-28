@@ -219,6 +219,11 @@ input rather than conversation history.
 
 ---
 
+
+## Isolated-run recovery (fail-safe)
+
+When a worktree-isolated run is rejected — the user declines to merge it, or the run over-reached the requested scope, or the orchestrator surfaces recovery guidance for a blocked plan — GSD halts safely and offers two options: (a) re-attempt in a fresh, narrowly-scoped worktree, or (b) inspect or discard the rejected worktree without merging. GSD never defaults recovery to editing the primary checkout (`main`). Any path that edits the primary checkout requires explicit, clearly-labeled confirmation from the user first. This behavior is unconditional and applies to both `/gsd-execute-phase` (worktree executor waves) and `/gsd-quick` (quick-mode isolated runs).
+
 ## Related
 
 - [Context engineering](context-engineering.md) — the upstream principle that

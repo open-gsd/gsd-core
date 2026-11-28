@@ -226,8 +226,11 @@ describe('config-field-docs', () => {
     const publicDocs = fs.readFileSync(DOCS_CONFIG_PATH, 'utf-8');
     assert.ok(tableRowForKey(publicDocs, 'agent_tools.<selector>'),
       'agent_tools must have a public configuration table row');
-    assert.match(publicDocs, /agents without a\s+`tools:` key inherit/i);
-    assert.match(publicDocs, /Codex.*parent.*MCP servers.*sandbox_mode/is);
+    // The grant semantics live in the reference page the configuration row links to.
+    const grants = fs.readFileSync(path.join(path.dirname(DOCS_CONFIG_PATH), 'reference', 'agent-tool-grants.md'), 'utf-8');
+    assert.match(publicDocs, /reference\/agent-tool-grants\.md/);
+    assert.match(grants, /agents without a\s+`tools:` key inherit/i);
+    assert.match(grants, /Codex.*parent.*MCP servers.*sandbox_mode/is);
   });
 
   test('documents sub_repos field (CONFIG_DEFAULTS, no namespace form)', () => {

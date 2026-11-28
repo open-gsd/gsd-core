@@ -30,7 +30,8 @@ const { output, error } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtils = require('./core-utils.cjs');
 const { toPosixPath } = coreUtils;
-import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import { sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import { requirePlanningArtifactPath, resolveProjectContext } from './project-context.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Frozen typed-IR surface ────────────────────────────────────────────────
@@ -469,11 +470,12 @@ function cmdClassify(cwd: string, options: { summary?: string; file?: string } =
   const filePath = options.summary || options.file;
   if (!filePath) {
     error('SUMMARY file required: use uat classify-coverage --summary <path>');
+    return;
   }
 
   let resolvedPath: string;
   try {
-    resolvedPath = requireSafePath(filePath, cwd, 'SUMMARY file', PathAcceptance.AbsoluteInsideRoot);
+    resolvedPath = requirePlanningArtifactPath(resolveProjectContext(cwd), filePath, 'SUMMARY file', PathAcceptance.AbsoluteInsideRoot).resolved;
   } catch (e) {
     // Emit a structured command error instead of leaking a raw stack trace.
     error(`Invalid SUMMARY path: ${e instanceof Error ? e.message : 'unsafe path'}`);

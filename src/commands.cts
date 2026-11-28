@@ -15,7 +15,7 @@ import { stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
-import type { ProjectContext } from './project-context.cjs';
+import { requirePlanningArtifactPath, resolveProjectContext, type ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, ERROR_REASON } = ioMod;
@@ -3291,7 +3291,7 @@ function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields:
   // path within the project resolves correctly) while refusing one that
   // escapes cwd, and rejects relative `../` escapes the same way (pre-existing
   // in this function, closed as a direct consequence, not separately in scope).
-  const fullPath = requireSafePath(summaryPath, cwd, 'summary-extract target', PathAcceptance.AbsoluteInsideRoot);
+  const fullPath = requirePlanningArtifactPath(resolveProjectContext(cwd), summaryPath, 'summary-extract target', PathAcceptance.AbsoluteInsideRoot).resolved;
 
   if (!fs.existsSync(fullPath)) {
     output({ error: 'File not found', path: summaryPath }, raw, undefined);

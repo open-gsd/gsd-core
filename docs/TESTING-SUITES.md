@@ -23,13 +23,13 @@ This project's `tests/` directory uses **filename suffix markers** to group test
 1. Pick the most specific bucket above.
 2. Name the file with the matching suffix: `tests/<feature>.<suite>.test.cjs`.
 3. If unsure, leave the suffix off — the file lands in `unit`, the default fast lane.
-4. A CLI test calls `runGsdTools` (or `await runGsdToolsAsync`), which runs the command in the test's process. A test that asserts on what a successful command wrote to stderr, or on stdout's exact bytes, calls `runGsdToolsCaptured`, which returns `{ exitCode, stdout, stderr }` in the same process. Only when the test is about a real process does it call `runGsdToolsProcess` or the process seam, and then the file is named `tests/<feature>.process.test.cjs` and each such test says in its title what it needs the process for.
+4. A CLI test calls `runGsdTools`; only a test about a real process uses the process seam, in a `tests/<feature>.process.test.cjs` file. The rules, including `runGsdToolsCaptured` for exact stderr/stdout bytes, are in [In-process CLI tests: the rules](../TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
 
 Examples:
 - `tests/agent-frontmatter.test.cjs` — `unit`
-- `tests/prompt-injection-guards.security.test.cjs` — `security`
-- `tests/installer-end-to-end.install.test.cjs` — `install`
-- `tests/sdk-mutation-stress.slow.test.cjs` — `slow`
+- `tests/injection-patterns-parity.security.test.cjs` — `security`
+- `tests/agent-tools.install.test.cjs` — `install`
+- `tests/graphify-auto-update.slow.test.cjs` — `slow`
 - `tests/loop-walk.qa.test.cjs` — `qa`
 - `tests/cli-parity.process.test.cjs` — `unit`, marked as starting real processes
 
@@ -37,75 +37,17 @@ The suite-suffix convention was chosen over a directory layout (`tests/security/
 
 ## Regression tests
 
-**Do not create new top-level `tests/bug-NNNN-*.test.cjs`,
-`tests/fix-NNNN-*.test.cjs`, or `tests/issue-NNNN-*.test.cjs` files.** Add the
-regression case to the owning module's main test file instead (e.g. a
-`describe('regressions')` block in `tests/<module>.test.cjs`).
+**Do not create new top-level `tests/bug-NNNN-*.test.cjs`, `tests/fix-NNNN-*.test.cjs`, or
+`tests/issue-NNNN-*.test.cjs` files.** Add the regression case to the owning module's main test
+file instead (e.g. a `describe('regressions')` block in `tests/<module>.test.cjs`). The reasoning is in
+[Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-regression-tests-are-folded-not-filed-one-per-bug).
 
-`node --test` spawns one child process per FILE, so file count — not test
-count — is the unit of CI overhead, and it is worst on Windows lanes where
-every spawn is Defender-scanned. The 2026-06 CI audit found 244 one-off
-`bug-*` files (~38% of the suite). That population is grandfathered in
-`scripts/lint-regression-test-names.allowlist.json` and enforced by an
-identity ratchet (`npm run lint:regression-names`, part of `npm run lint:ci`),
-which also bans `fix-*` and `issue-*` NNNN-prefixed files the same way:
-
-- A **new** `bug-*`, `fix-*`, or `issue-*` NNNN-prefixed file fails CI — fold
-  it into the owning module's file.
-- **Deleting/consolidating** a grandfathered file requires pruning its
-  allowlist entry, so the baseline only ever shrinks.
-- **Inherited drift** (the failure names files your PR didn't add — e.g. the
-  base branch merged `bug-*`/`fix-*`/`issue-*` files without feeding the
-  allowlist, or you rebased and carried a pre-rebase allowlist): run
-  `node scripts/lint-regression-test-names.cjs --update` and commit the
-  regenerated allowlist. Snapshot artifacts like this allowlist (and
-  `docs/INVENTORY.md`) must be regenerated **after** rebasing, never carried
-  through a rebase.
-
-### A folded suite may appear only once per host
-
-When a standalone file is folded into its owning module's test file, the moved
-suite is wrapped in a self-contained block carrying a marker:
-
-```javascript
-// ────────────────────────────────────────────────────────────────────────
-// Folded from tests/bug-376-claude-js-hook-gsd-rewriter.test.cjs — …
-// ────────────────────────────────────────────────────────────────────────
-{
-  const { describe: __foldDescribe } = require('node:test');
-  __foldDescribe("folded:bug-376-claude-js-hook-gsd-rewriter (…)", () => { … });
-}
-```
-
-Because the block is self-contained, a **second verbatim copy in the same host
-parses, registers, and passes — twice.** Nothing in a green suite reports it.
-[#3271](https://github.com/open-gsd/gsd-core/issues/3271) found 25 such copies
-(~5,800 lines) across three install suites, all from a single stale-base
-re-application during the consolidation epic. The cost is not only wasted CI on
-every lane: it is a `DEFECT.GENERATIVE-FIX` trap, because a contributor fixing
-one of those regressions edits the copy they found and leaves the other
-asserting the old behavior, with the suite still green.
-
-`local/no-duplicate-fold-marker` (`eslint-rules/no-duplicate-fold-marker.cjs`,
-error under `tests/**/*.cjs`) reports the second and every later occurrence of a
-`folded:<marker>` title in one file, naming the line the first occurrence sits
-on. **When it fires, delete the copy it points at** — the two blocks are the
-same suite, so the fix is removal, never an `eslint-disable`.
-
-It keys on the whitespace-delimited token after `folded:`, which matters in both
-directions. A narrower key that stops at `.` would collide
-`feat-443-effort-fast-mode.integration` with `feat-443-effort-fast-mode` — two
-genuinely distinct suites that coexist in `tests/model-resolver.test.cjs`. Keying
-on the *whole* title instead would let a re-fold under a different batch label
-slip through, which is exactly the shape #3271 took. Titles without a `folded:`
-prefix, non-literal titles, and the same marker appearing in two *different* host
-files are all left alone.
-
-The ratchet deliberately covers only `bug-*`. Files named `feat-NNNN-*` /
-`enh-NNNN-*` are *feature* test files — one (or one per suite) per feature is
-the sanctioned layout (see the #443 strategy below), not a one-off regression
-pattern. If `issue-*`/`perf-*` one-offs start accumulating the same way
-`bug-*` did, extend the ratchet's regex and regenerate the allowlist.
+The ratchet (`npm run lint:regression-names`, part of `npm run lint:ci`) enforces it against the
+allowlist `scripts/lint-regression-test-names.allowlist.json`; a new `bug-*`, `fix-*`, or `issue-*`
+NNNN-prefixed file fails CI, and removing a grandfathered file requires pruning its allowlist entry.
+`local/no-duplicate-fold-marker` (`eslint-rules/no-duplicate-fold-marker.cjs`, error under
+`tests/**/*.cjs`) reports a second `folded:<marker>` title in one file. To resolve either failure,
+follow [Fix a regression-test-name or duplicate-fold lint failure](how-to/fix-a-regression-test-lint-failure.md).
 
 ## Workflow & agent size budget
 
@@ -127,15 +69,7 @@ layers:
 | **Loose tier hard caps** (backstop) | Absolute outer red lines per tier — workflows: `XL ≤ 98304`, `LARGE ≤ 61440`, `DEFAULT ≤ 40960` bytes; agents: `XL ≤ 57344`, `LARGE ≤ 49152`, `DEFAULT ≤ 24576` bytes. A cap is **never raised** when a file approaches it: crossing it means *extract*, not bump. Independent of the ratchet above — unaffected by #2724. | `XL/LARGE/DEFAULT_CAP` in each guard file |
 | **Headroom census + reserved margin** (visibility, [#4261](https://github.com/open-gsd/gsd-core/issues/4261)) | Every run prints each capped file's remaining bytes and percentage used — green runs included — sorted least-headroom-first, and appends a table of the files past a **95% reserved margin** to the GitHub job summary. The margin **reports, it does not fail**: a file at 96% is not broken, it is a file whose next contributor should extract before adding. Nothing here raises or relaxes a cap. | `buildHeadroomRows` / `marginFor` in `scripts/workflow-size.cjs` |
 
-Why the census exists: each PR's CI measures only its own base plus its own
-diff, so two PRs that are individually under a cap can be jointly over it, and
-no run either of them produces can show that. The census does not solve that
-directly — measuring on the merge result would, and was deliberately left out
-of #4261's approved scope — but it makes the density that causes it legible
-before the collision, which a passing run previously did not. It also replaces
-the hand-written per-tier high-water comments in both guard files, which had
-gone stale by several kilobytes and were themselves the reason the shrinking
-margin went unnoticed.
+The census makes the density that causes two jointly-over-cap PRs legible before the collision; the reasoning is in [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-the-size-census-exists).
 
 `discuss-phase.md` additionally has a thin-dispatcher target of `< 32000` bytes
 (the discuss-phase progressive-disclosure split, #717). A net-new agent is
@@ -145,49 +79,7 @@ extraction-evidence threshold on `gsd-planner` enforced by
 the `planner-decomposition` text contract — that one proves mode sections were
 extracted; this one bounds total agent bytes.)
 
-### How-to: a workflow or agent grew and CI is red
-
-The differential attribution check reports the file and the byte delta. To resolve:
-
-1. **Justify the growth in your PR** (a sentence in the description is enough) —
-   the acknowledgment entry (below) is the review record that the larger size
-   was a deliberate, seen decision, not silent drift.
-2. **Add an acknowledgment trailer** to one of your own commits (ADR-3942),
-   naming the file and the reason, per `CONTRIBUTING.md`'s "Editing shipped
-   content" section and `CONTEXT.md`'s `### Emitted Artifact Provenance` entry:
-
-   ```
-   Emitted-Drift-Ack-Growth: explore.md — new dispatch section, reasoning ships with the block
-   ```
-
-   Growth keys on the **bare filename** as it appears under `gsd-core/workflows/`
-   or `agents/`; an unattributable **hash** ripple uses
-   `Emitted-Drift-Ack-Hash:` and keys on the emitted path (which always contains
-   a `/`). The two are separate namespaces — a growth trailer will not excuse a
-   hash ripple, and the failure output says which one applies. The trailer is the
-   review record that the larger size was a deliberate, seen decision.
-
-   If you need to change an acknowledgment, amend the commit carrying it. That is
-   deliberate: the trailer cannot drift out of sync with the diff it explains,
-   because changing either changes the sha and re-runs the gate.
-3. **There is nothing to clean up afterwards.** The trailer is read from
-   `git log $(git merge-base <base> HEAD)..HEAD` — your commits and no others —
-   so once your PR merges it is out of range by construction. It never becomes
-   "spent", it owns no shared key space, it cannot conflict with anyone else's,
-   and no sweeper has to delete it. That is the whole reason ADR-3942 moved the
-   acknowledgment off the working tree.
-4. **Or shrink it instead of acknowledging.** Prefer extraction when the growth
-   is incidental: for a workflow, move per-mode bodies to
-   `workflows/<name>/modes/`, templates to `workflows/<name>/templates/`, and
-   shared prose to `gsd-core/references/`; for an agent, lift shared boilerplate
-   into `gsd-core/references/` and `@`-reference it — then load it **LAZILY**. Do
-   *not* convert them to eager `@-required_reading` includes: that shrinks the
-   file's bytes without shrinking loaded context, so it games the guard while
-   making the real cost worse. See `workflows/discuss-phase/` for the
-   progressive-disclosure pattern.
-
-If a hard cap (not the ratchet) is what failed, an acknowledgment will **not**
-help — that is the signal to extract, per step 3.
+To resolve a red size check, follow [How to fix a workflow or agent size failure](how-to/fix-a-workflow-or-agent-size-failure.md): justify the growth, add an `Emitted-Drift-Ack-Growth:` trailer to one of your own commits, or shrink the file by extraction. A failed hard cap is not excused by a trailer.
 
 ### Reference
 
@@ -200,18 +92,7 @@ help — that is the signal to extract, per step 3.
 | `tests/workflow-size-budget.test.cjs` | The workflow tier hard-cap guards, plus the `discuss-phase` progressive-disclosure checks. |
 | `tests/agent-size-budget.test.cjs` | The agent tier hard-cap guards (the agent analog). |
 
-`tests/workflow-size-baseline.json`, `tests/agent-size-baseline.json`,
-`tests/fixtures/golden-install-parity/*.json`, `scripts/update-size-baseline.cjs`
-(`npm run size:baseline`), and `scripts/git-merge-regen-driver.cjs`
-(`npm run setup:merge-driver`) are all removed by
-[#2724](https://github.com/open-gsd/gsd-core/issues/2724): they were pure
-functions of the source tree, conflicted on every merge that touched them, and
-their functions are now served by the differential attribution check above.
-`tests/fixtures/install-tree/*.json` is the one artifact family that stays
-committed and normally-merged (ADR-2719 §7) — it conflicts on 0 of 7, its diffs
-are readable, and it preserves "the installer stopped shipping X" as a hard
-absolute failure with no attribution reasoning involved. Regenerate it with
-`npm run gen:install-tree` (folded into `npm run regen:derived`).
+`tests/fixtures/install-tree/*.json` is the one artifact family that stays committed: it preserves "the installer stopped shipping X" as a hard absolute failure ([ADR-2719](adr/2719-emitted-artifact-attribution.md) §7). Regenerate it with `npm run gen:install-tree` (folded into `npm run regen:derived`). The snapshot files and merge driver removed by [#2724](https://github.com/open-gsd/gsd-core/issues/2724) are recorded in [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-the-size-baselines-were-removed).
 
 ## The QA smell ratchet
 
@@ -240,25 +121,7 @@ The third comes from the scenarios themselves, not from an oracle:
   carries no fingerprint, so there is no `key` to put in a baseline entry or
   an ack fragment. Fix the engine, or correct the expectation.
 
-Expectation failures were invisible to the gate until
-[#3597](https://github.com/open-gsd/gsd-core/issues/3597): `buildReport`
-counted them in `totals.violations` while `collectFindings` read only oracle
-violations, so a failing scenario printed `0 violations` and exited 0. The
-`multi-workstream` scenario failed on every CI run for three weeks without
-reddening a build. The invariant that keeps the two honest — asserted in
-`tests/loop-walk.qa.test.cjs` — is:
-
-```
-collectFindings().violations.length
-  + collectFindings().expectationFailures.length
-  === report.totals.violations
-```
-
-Note also that `scripts/qa-smell-ratchet.cjs` only invokes its own `main()`
-under `require.main === module`. That guard is what lets the QA suite
-`require()` the script to test `collectFindings` without kicking off a real
-20-scenario walk as an import side effect — the reason the gate's own logic
-had no test before #3597.
+Why expectation failures are counted separately and how the gate's own logic is tested is in [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-the-qa-smell-ratchet-counts-expectation-failures).
 
 Every smell must terminate in exactly one of TWO states — there is no third
 "accepted with a good explanation" state:
@@ -269,29 +132,7 @@ Every smell must terminate in exactly one of TWO states — there is no third
 2. **FALSE POSITIVE** — the oracle itself is wrong. Fix the oracle
    (`tests/qa/oracles.cjs`) so it stops firing. It is NEVER baselined.
 
-When the ratchet reports a NEW smell, there are exactly two legitimate
-responses — fix the detector, or file a defect and cite its issue number:
-
-1. **Fix the underlying behavior (or the oracle, if it's a false positive)**
-   so the smell stops firing.
-2. **File a defect and acknowledge it** by adding a fragment under
-   `tests/qa/smell-acks/` — the ratchet's failure output prints a paste-ready
-   skeleton naming the required `key`, `id`, `scenario`, and `issue` fields.
-   `issue` MUST be a positive integer naming the tracking issue; a free-text
-   `reason` may accompany it as an optional human note but can NEVER
-   substitute for `issue` — "write an explanation" is not a way to acknowledge
-   a smell. See `tests/qa/smell-acks/README.md` for the full shape and
-   lifecycle.
-
-Run `node scripts/qa-smell-ratchet.cjs --update` to regenerate
-`tests/qa/smell-baseline.json` from the current run, folding in any acked
-fragments and pruning stale entries. `--update` never invents an issue
-number: a genuinely new smell is written with `issue: null` and a TODO
-`reason`, and the very next plain (non-`--update`) run REJECTS that entry —
-forcing a human to triage it before it can ship. The baseline only ever
-shrinks: growth happens by adding an acknowledgment carrying a real issue
-number (a reviewable diff), never by widening the generator's tolerance and
-never by prose alone.
+When the ratchet reports a NEW smell, follow [Respond to a new QA smell](how-to/respond-to-a-new-qa-smell.md).
 
 ## The gate positive-control ratchet
 
@@ -344,16 +185,7 @@ module has a **positive control**: a test that drives the gate, through its real
   cannot read, or a source the parser cannot read, is a violation: an inert scan
   does not report a clean tree.
 
-### How-to: you added a gate and `lint:ci` reports `no-control`
-
-1. Add a `gateControl({...})` call to `tests/gate-positive-control.test.cjs`
-   naming your gate, its module and its `evaluate*` function.
-   `expectRed` names the arm the red scenario reaches.
-2. Take `red` from the lint's message (`wrong-red` states what the gate reaches).
-3. Write the red scenario from the input that makes the gate fail, and the green
-   scenario from the nearest input that does not. Reuse the cases in your gate's
-   own unit test; the control asserts the pair through one harness.
-4. Run `npm run lint:gate-positive-control`.
+If `lint:ci` reports `no-control` for a gate you added, follow [How to add a positive control for a new gate](how-to/add-a-gate-positive-control.md).
 
 ## Running suites locally
 
@@ -389,19 +221,7 @@ Unknown suites exit non-zero with the list of valid suites. Empty suites (e.g. `
 
 ## The live-config hermeticity guard
 
-Every `run-tests.cjs` invocation snapshots GSD's own install footprint in each
-live runtime config directory before the suite and re-checks it afterwards. It
-exists because the failure it catches is silent by construction: a test that
-resolves a config directory from the ambient environment instead of a sandbox
-writes into *your real* `~/.claude` (or `$GSD_HOME/.gsd`, or a Kimi
-`config.toml`), and nothing reports it. CI cannot catch this class at all —
-CI never has `CLAUDE_CONFIG_DIR` and friends set.
-
-The guard watches only what GSD unambiguously owns — its top-level install
-footprint plus `gsd-`-prefixed children of directories shared with the host
-agent — never whole config roots, because a host agent legitimately writing
-`history.jsonl` mid-run would make the guard cry wolf, and a guard that cries
-wolf gets switched off.
+Every `run-tests.cjs` invocation snapshots GSD's own install footprint in each live runtime config directory before the suite and re-checks it afterwards, because a test that resolves a config directory from the ambient environment writes into the real `~/.claude` (or `$GSD_HOME/.gsd`, or a Kimi `config.toml`) with nothing to report it. It watches only what GSD owns, never whole config roots. The reasoning is in [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-the-live-config-guard-is-narrow-and-report-only-by-default).
 
 Two environment variables control it:
 
@@ -410,19 +230,7 @@ Two environment variables control it:
 | `GSD_STRICT_LIVE_CONFIG_GUARD=1` | A detected write **fails the run**. Set on the Linux/macOS lanes of every CI job that runs the suite. |
 | `GSD_SKIP_LIVE_CONFIG_GUARD=1` | Skips the check entirely. |
 
-Unset, the guard **reports and does not fail** — deliberately, not timidly. On
-its first CI run it surfaced pre-existing leaks on the Windows lane, where
-`os.homedir()` reads `USERPROFILE` and ~190 test sites sandbox `HOME` alone.
-Those are real and worth fixing, but they are a different defect class, and a
-brand-new gate that instantly reds an unrelated lane gets reverted rather than
-obeyed. Windows lanes therefore stay report-only until that sweep lands; this
-repo has the pattern already, in the `local/no-source-grep` ESLint rule that
-shipped at `warn` and was promoted to `error` after its cleanup (ADR 452).
-
-`GSD_SKIP_LIVE_CONFIG_GUARD` is a bypass on a safety check, so it is documented
-here rather than left to be discovered in the source: an undocumented bypass is
-one people eventually set without knowing what they turned off. If you need it
-routinely, that is a bug report, not a workflow.
+Unset, the guard **reports and does not fail**; Windows lanes stay report-only until the `USERPROFILE` sweep lands. `GSD_SKIP_LIVE_CONFIG_GUARD` is a bypass on a safety check; needing it routinely is a bug report, not a workflow.
 
 Reported paths are labelled `CREATED`, `MODIFIED`, `DELETED`, or `UNVERIFIED`.
 `UNVERIFIED` means a scan bound was hit and the path could not be attested
@@ -445,29 +253,7 @@ conflict runs no CI at all until the conflict is resolved** (#3833).
 | `SKIPPED_NOT_A_PR` | the event is not `pull_request` (push, `workflow_dispatch`, a `release.yml` call into `install-smoke.yml`) | success | everything runs as normal; **zero** API calls |
 | `INDETERMINATE` (bootstrap) | `scripts/ci-pr-mergeability.cjs` is absent at the base sha | success **(fails open)** | everything runs as normal; a `::warning::` names the cause |
 
-The bootstrap row is a consequence of the checkout being pinned to the base sha:
-the preflight runs the script **as it exists on the base branch**, so the script
-is absent on the pull request that introduces it, and on any branch whose base
-predates it. Absent is not "conflicted" — it is one more thing the gate cannot
-determine, so it takes the same fail-open path. The arm is self-healing and
-never fires again once the script is on the base branch; a test pins it in place
-so a future reader does not mistake it for dead code.
-
-The verdict comes from `scripts/ci-pr-mergeability.cjs`, which polls
-`GET /repos/{owner}/{repo}/pulls/{number}` until `mergeable` is non-null.
-GitHub computes mergeability in an **asynchronous background job** and returns
-`null` while it is in progress, so a single cold read is never authoritative —
-the poll is required, not defensive.
-
-Two properties are load-bearing and easy to break:
-
-- **Only `mergeable === true` / `=== false` decides the verdict.** `null` is
-  falsy, so a truthiness test (`if (!mergeable)`) would classify every cold read
-  as a conflict and red every PR in the repo.
-- **`mergeable_state` never decides the verdict.** Its `blocked` value means
-  "required checks have not passed", which is true *while this very job is
-  running* — gating on it self-deadlocks the pipeline. It is read for the
-  failure message only.
+The bootstrap row is a consequence of the checkout being pinned to the base sha: the script is absent on the pull request that introduces it, and absent is one more thing the gate cannot determine, so it fails open. The verdict polls `GET /repos/{owner}/{repo}/pulls/{number}` until `mergeable` is non-null; only `mergeable === true` / `=== false` decides it, and `mergeable_state` never does. The reasoning is in [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-the-mergeability-preflight-is-shaped-the-way-it-is).
 
 Gated: `test.yml` (`lint-tests`, `test`, `test-inert`,
 `test-conformance`, `coverage-gate`, `qa-loop-walk`, `required-tests`), `install-smoke.yml`,
@@ -480,29 +266,7 @@ validators, issue-link, and unauthorized-approval dismissal. Gating those would
 let a conflicted drive-by PR evade auto-close, so they keep running on a
 conflicted PR and a test asserts they are never wired to the preflight.
 
-### What it deliberately does not do
-
-**It applies no label.** The gate does not add or remove `needs-review: merge-conflict`.
-Eight caller workflows each invoke the preflight, so eight jobs would race to
-add-or-remove one label on every PR event, and it would force
-`pull-requests: write` into eight lanes that today hold `contents: read`.
-`needs-review: merge-conflict` stays a maintainer triage label applied during PR
-sweeps; the red check and its annotation are the machine signal.
-
-**It changes no branch protection.** `.github/rulesets/main-protection.json` is
-untouched and needs no new required context — GitHub natively refuses to merge a
-pull request with conflicts, so the ruleset already blocks it. (Adding the check
-as *required* before the workflow exists on the base branch would deadlock every
-open PR until it landed.)
-
-### What this does not replace
-
-`scripts/ci-rebase-check.cjs` is unchanged and still runs inside each matrix job,
-including its #2472 base-sha pin. The preflight is an early-exit optimization on
-GitHub's asynchronously-computed view; the in-job merge remains authoritative and
-covers the case where the base advances mid-run. **The gate is never a safety
-property** — every path except an explicit `mergeable: false` fails open, so an
-API outage simply restores the pre-#3833 behavior.
+The gate applies no label and changes no branch protection, and it does not replace `scripts/ci-rebase-check.cjs`; it is never a safety property, because every path except an explicit `mergeable: false` fails open.
 
 ### If your PR shows a red `PR mergeability` check
 
@@ -539,15 +303,7 @@ only supported runtime.
 | `qa-loop-walk` | `ubuntu-latest` | `product_changed == 'true'` | The QA smell-ratchet scenario walk (see "The QA smell ratchet" below) |
 | `required-tests` | `ubuntu-latest` | `always()` | Aggregates every job above into the one branch-protection-required check |
 
-The `Tests` workflow does not run on label events (#6076), so a label change
-never spends the matrix or cancels a run in flight. The one exception is a
-separate workflow, `fix-next re-run` (`.github/workflows/fix-next-rerun.yml`):
-when `fix-next` is added or removed it re-runs only the `Base branch health`
-job of the PR's latest `Tests` run (and so its dependent `Required tests`),
-reading the label from the API. It skips when the run was cancelled or the PR
-head has since moved. Logic and tests: `scripts/ci-fix-next-rerun.cjs`,
-`tests/ci-fix-next-rerun.test.cjs`. A `Tests` run that started before #6076
-merged ignores the API label; push a commit after applying `fix-next`.
+The `Tests` workflow does not run on label events (#6076). Adding or removing `fix-next` re-runs only the `Base branch health` job of the PR's latest `Tests` run through `.github/workflows/fix-next-rerun.yml`; the label's use is in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 `full_matrix` fires on any changed `tests/**/*.test.cjs` file unconditionally (restored
 by #4421 after #962's narrowing let a real regression through undetected), plus a
@@ -555,15 +311,7 @@ handful of curated `RULES` (workflow/installer/hooks/env-gate changes) — see
 `scripts/ci-test-scope.cjs`'s own `classify()` for the exact, current rule set; this
 doc intentionally does not restate it in full, to avoid drifting out of sync with it.
 
-Coverage is evaluated by the dedicated `coverage-gate` job (moved out of the `test`
-job by #2952, once sharding meant no single `test` runner saw the whole picture) and
-stays single-lane (Ubuntu / Node 24 only) because multiplying coverage across
-OS/runtime lanes adds cost without improving the threshold signal. Note the gate's
-deliberate blind spot: it measures
-`gsd-core/bin/lib/*.cjs` only — `scripts/`, `hooks/`, and `bin/` are
-unenforced, and `stryker.config.mjs` additionally excludes ~48% of lib lines
-from mutation testing (see the UNMUTATED list there). Widening either gate is
-tracked work, not an accident to "fix" silently by raising thresholds.
+Coverage is evaluated by the `coverage-gate` job on one lane (Ubuntu / Node 24). The gate measures `gsd-core/bin/lib/*.cjs` only, and `stryker.config.mjs` excludes part of lib from mutation testing; see [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-the-coverage-gate-has-a-blind-spot).
 
 To inspect the scope locally:
 
@@ -642,105 +390,13 @@ run-tests: platform-timings=win32 weighed=91/94
 No line means no win32 table loaded, and the shard was packed from Linux weights
 exactly as before.
 
-### CI job timeout budgets: report + near-cap warning (#4036)
+### CI job timeout budgets (#4036)
 
-Every matrixed job — `test` in `test.yml`, `mutate` in
-`mutation.yml`, `smoke` in `install-smoke.yml` — declares a `timeout-minutes`
-cap. `tests/ci-test-job-timeout-budget.test.cjs` enforces that each checked-in
-cap stays at least the **headroom factor** (1.5x) above a documented,
-hand-measured cost for that job — now all three of the jobs above, not just
-`test`/`coverage-gate`/`test-inert` as before.
-
-`test-conformance` in `test.yml` (#4591, epic #4589 Phase 2) runs the
-`scripts/lib/platform-conformance-tier.generated.cjs` file list on
-`windows-latest` and `macos-latest`, both sharded since #5029 (the `shard:`
-rows of the job's matrix in `test.yml` are the one statement of the counts) —
-the sole gating signal for real-OS coverage (#4603 retired the parallel legacy
-full-matrix safety-net job). It also declares a `timeout-minutes` cap and runs
-the same in-job near-cap check described below. Since #5029 it **is** covered
-by the headroom-factor gate. One cap covers every matrix row, so its
-`LANE_COSTS` entry is the slowest row, windows or macOS shard. That entry, in
-`tests/ci-test-job-timeout-budget.test.cjs`, is the one place the lane's
-measurements are recorded: the long pole per layout, why each OS is split the
-way it is (a slow macOS runner took the unsharded row past what the gate
-admits), and the figure the cap may not drop below. It had been uncovered
-since #4591, which is how it drifted to a 34m long pole against a 45m cap and
-began cancelling shards whose every chunk passed (#4935). The same file also
-projects the Windows rows' worst shard from the shard count `test.yml`
-declares and the current tier size, at the slow-runner skew #5029's triage
-measured, and fails when that shard would land in the near-cap band. At the
-tier size #5029 merged with, it fails at the layout #5029 replaced and passes
-at the one `test.yml` declares; the comment on the model says how far that
-verdict depends on the fit.
-
-#5071 → #5097 has since priced win32 files by win32 measurements, which evened
-out the shards. Whenever this lane is resharded again, in either direction,
-re-measure from the new runs and set the entry from the slowest row; never
-scale the existing figure. The per-shard balance check (`SHARD_BALANCE`, see
-[Read CI timeout signals](how-to/read-ci-timeout-signals.md)) must then be
-re-baselined too; a test fails until it is.
-
-**`.platform.test.cjs` siblings (#5074).** The tier selects whole files, so a large file whose
-platform signal sits in a few tests can be split: those tests move to
-`tests/<name>.platform.test.cjs`, which the tier selects, and `tests/<name>.test.cjs` runs on
-Linux only. A sibling is a unit-suite file (`suiteOf` returns `null`), so Linux shards run both
-halves. `gen-platform-conformance-tier.cjs` fails with `platform split invariant violated` when a
-split base regains a platform signal (`base-has-signal`), a sibling carries none and is not declared in `ALWAYS_REAL_OS`
-(`sibling-without-signal`), or a split base is listed in `ALWAYS_REAL_OS`
-(`base-always-real-os`). Split so far: `state`, `commands`, `phase`, `config` (`init` needed no
-sibling — its residual matches were fixture idioms and comments). See
-[Split platform-sensitive tests](how-to/split-platform-sensitive-tests.md) and the #5074 amendment
-to [ADR-4641](adr/4641-windows-selector-consolidation.md).
-
-Two runtime mechanisms sit on top of that static gate, both new in #4036:
-
-- **In-job near-cap check** (`scripts/ci-check-job-near-cap.cjs`) — the last
-  step of each of the three jobs computes elapsed-vs-cap from a start-time
-  marker recorded as that job's first step. At >=90% of budget it emits a
-  `::warning::` annotation (visible in the PR Checks UI) and a
-  `$GITHUB_STEP_SUMMARY` block. Advisory only — it never fails the job. Known
-  limit: it cannot fire for a job actually killed by the timeout, since a
-  killed job never reaches its last step. That case is caught by the second
-  mechanism instead.
-- **Scheduled trending report** (`.github/workflows/ci-timeout-report.yml`,
-  `scripts/ci-timeout-report.cjs`) — runs daily and on `workflow_dispatch`. It
-  polls GitHub's Actions REST API for recently completed jobs across
-  `test.yml`, `mutation.yml`, and `install-smoke.yml`, resolves each job's
-  declared cap (a literal `timeout-minutes` for `test`/`test-conformance`/`smoke`, or
-  `scripts/mutation-matrix.cjs`'s `COVERED[<module>].timeoutMinutes` for
-  `mutate`'s per-module shards), and appends any new `(runId, jobName)`
-  records to `tests/ci-timeout-budget-history.jsonl`. Unlike the in-job check,
-  this also catches jobs killed by an actual timeout breach — GitHub's Jobs
-  API still reports `started_at`/`completed_at` for a cancelled job. The new
-  rows travel in one rolling, data-only PR (branch `chore/4036-ci-timeout-budget-history`,
-  titled `chore(#4036): CI timeout budget history update`), since `next` is a
-  protected branch and nothing pushes to it directly — the same constraint
-  `auto-backmerge.yml` already works within. Each run rebuilds that branch on
-  the current `next` tip with every pending row; the workflow approves the PR
-  when it is provably its own data-only PR, then auto-merges it once required
-  checks pass. Until the org allows GitHub Actions to approve PRs, it waits for
-  one human approval (the run logs a warning).
-
-This does not retune any `timeout-minutes` value, rebalance shard composition,
-or trim what runs in shard 1 — those stay maintainer policy calls made from
-the accumulated history, not something either mechanism decides on its own.
+Every matrixed job declares a `timeout-minutes` cap, and `tests/ci-test-job-timeout-budget.test.cjs` requires each cap to stay at least 1.5x above a documented, hand-measured cost; the `test-conformance` lane's `LANE_COSTS` entry is the slowest row. An in-job check (`scripts/ci-check-job-near-cap.cjs`) warns at >=90% of budget and a daily report (`.github/workflows/ci-timeout-report.yml`) trends history. Neither retunes a cap. How to read the signals is in [Read CI timeout signals](how-to/read-ci-timeout-signals.md), and the design is in [Why the test suites are guarded the way they are](explanation/testing-suites-design.md#why-ci-job-timeouts-are-budgeted-and-reported).
 
 ### How-to: regenerate the timing table
 
-Regenerate when the suite's cost profile has visibly drifted — after adding or
-removing expensive tests, not on a schedule. The input is a `node:test` reporter
-event stream from a `gsd-test` run:
-
-```bash
-node scripts/gen-test-timings.cjs \
-  ~/.local/state/gsd-test/runs/<run-id>/test-events-linux-node24.jsonl \
-  ~/.local/state/gsd-test/runs/<run-id>/test-events-macos-node24.jsonl
-```
-
-Pass every lane you have. A file's recorded time is the **max** across the
-supplied streams, not the mean: the packer exists to keep the *slowest* lane's
-slowest chunk away from the timeout, so the conservative bound is the right one.
-Keys are sorted so a regeneration diff shows only the files whose cost moved.
+See [Regenerate the timing table](how-to/regenerate-the-timing-table.md).
 
 ### How-to: regenerate the win32 timing table
 
@@ -757,134 +413,4 @@ See [Regenerate the win32 timing table](how-to/regenerate-the-win32-timing-table
 
 ## Test strategy: #443 effort + fast_mode engine
 
-> Feature: unified cross-provider effort and fast_mode knobs (issue #443).
-> Test files: `tests/model-resolver.test.cjs` (unit),
-> `tests/model-resolver.test.cjs` (integration).
-
-### Testing pyramid
-
-| Layer | File | What it covers |
-|---|---|---|
-| **Unit** | `feat-443-effort-fast-mode.test.cjs` | Pure logic: cascade rules, clamping, escalation math, malformed config handling, schema key validation. No CLI subprocess. |
-| **Integration** | `feat-443-effort-fast-mode.integration.test.cjs` | Architecture-level invariants: cross-provider validity, totality across the 33-agent registry, CLI JSON contract, config round-trip, fast-mode honesty. Real subprocesses via `runGsdTools`. |
-| **E2E** *(pending)* | *(not yet wired)* | Propagation layer: effort frontmatter / `CLAUDE_CODE_EFFORT_LEVEL` env actually reaching a spawned Claude Code subagent. See "Gaps" below. |
-
-### Architectural invariants
-
-Each invariant exists to prevent a specific class of production failure.
-
-#### (a) Cross-provider validity
-
-**What:** `renderEffortForRuntime(runtime, universalEffort).value` must always
-be a member of the runtime's real provider enum. Ground-truth enums are defined
-as local constants in the test — not sourced from the implementation.
-
-```
-PROVIDER_EFFORT_ENUMS = {
-  claude: Set { 'low', 'medium', 'high', 'xhigh', 'max' }   // Anthropic output_config.effort
-  codex:  Set { 'minimal', 'low', 'medium', 'high', 'xhigh' } // OpenAI model_reasoning_effort
-}
-```
-
-**Why:** Passing a value outside these sets results in a 400 from the real API.
-The clamping logic (`max -> xhigh` for codex; `minimal -> low` for claude) must
-hold for every cell of the VALID_EFFORTS × runtimes matrix.
-
-#### (b) Param/channel contract
-
-**What:** Each runtime exposes a stable `param` string (the native API field
-name) and `channel` (how the value is propagated). Unknown runtimes return
-`param: null, channel: null` and pass the effort value through unchanged.
-
-**Why:** Callers read `.param` to construct the dispatch payload. A regression
-here would silently drop effort from subagent invocations.
-
-#### (c) Resolve-execution JSON contract
-
-**What:** The `gsd-tools resolve-execution <agent>` command emits a JSON object
-with all eight keys present and typed correctly: `model` (string), `profile`
-(string), `effort` (VALID_EFFORTS member), `effort_rendered` (string),
-`effort_param` (string|null), `effort_propagation` (string|null), `fast_mode`
-(boolean), `fast_mode_supported` (boolean).
-
-**Why:** Orchestrators and workflow dispatchers parse this JSON. A missing or
-mistyped field silently breaks downstream consumers.
-
-#### (d) Totality across the real registry
-
-**What:** For every agent in the 33-agent registry, `resolveEffortInternal`
-returns a VALID_EFFORTS member (never undefined/null), `resolveFastModeInternal`
-returns a strict boolean, and `renderEffortForRuntime('claude', effort)` stays
-within the claude provider enum.
-
-**Why:** A catalog addition that introduces a missing `routingTier` mapping
-would otherwise produce `undefined` and propagate silently.
-
-#### (e) Fast-mode honesty invariant
-
-**What:** When the runtime is `claude`, `fast_mode_supported` in
-resolve-execution output is always `false`, regardless of the fast_mode config.
-`RUNTIMES_WITH_FAST_MODE` contains only `'api'`.
-
-**Why:** Claude Code's `/fast` toggle is session-level only. Emitting
-`fast_mode: true` as frontmatter on a Claude subagent is a silent no-op.
-Advertising `fast_mode_supported: true` for claude would cause orchestrators to
-believe the knob was wired when it is not.
-
-#### (f) Precedence first-valid-wins
-
-**What:** Both effort and fast_mode use a layered cascade. The test table covers
-all four effort layers (invocation override → agent_overrides →
-routing_tier_defaults → default) and all five fast_mode layers, including the
-case where an invalid value at a higher layer correctly falls through.
-
-**Why:** Silent precedence bugs (e.g., a numeric value in agent_overrides not
-being rejected) would override intentional user config.
-
-#### (g) Dynamic-routing composition
-
-**What:** `resolveEffortForTier` escalates effort by attempt number
-independently of the model tier mapping. The test verifies the effort ladder
-(`low -> medium -> high -> xhigh -> max`), the `max` clamp, the
-`max_escalations` cap, and that `escalate_on_failure: false` suppresses
-escalation entirely.
-
-**Why:** Effort escalation and model escalation share configuration
-(`dynamic_routing`) but must operate independently; coupling them would cause
-over-escalation or under-escalation.
-
-#### (h) Config-tooling round-trip
-
-**What:** `gsd-tools config-set` accepts all new key namespaces
-(`effort.default`, `effort.routing_tier_defaults.<tier>`,
-`effort.agent_overrides.<agent>`, `fast_mode.enabled`,
-`fast_mode.routing_tier_defaults.<tier>`, `fast_mode.agent_overrides.<agent>`)
-without an "Unknown config key" error, and values set via `config-set` are
-reflected in `resolve-execution` output.
-
-**Why:** The schema validation gate (`VALID_CONFIG_KEYS` + `DYNAMIC_KEY_PATTERNS`)
-is separate from the resolver logic. A key missing from the schema would produce
-a silent write failure and appear as a bug only at runtime.
-
-### Coverage targets
-
-| Suite | Target |
-|---|---|
-| Unit | Every cascade rule, every fallthrough, every clamp. All function branches in `resolveEffortInternal`, `resolveFastModeInternal`, `resolveEffortForTier`, `renderEffortForRuntime`. |
-| Integration | All 8 architectural invariants. All 33 registered agents. All 6 provider × effort combinations for the valid-enum check. Full config-set key namespace. |
-
-### Gaps / not yet covered
-
-**E2E orchestrator-spawn-propagation layer (pending follow-up wiring):**
-The integration tests verify that GSD resolves and renders effort values
-correctly. They do NOT verify that the rendered values actually reach a spawned
-Claude Code or Codex subagent at runtime. Specifically uncovered:
-
-- `CLAUDE_CODE_EFFORT_LEVEL` env var being set and read by a spawned claude subprocess
-- `output_config.effort` frontmatter key surviving the AGENTS.md template substitution
-- `model_reasoning_effort` field surviving serialization into a Codex API request body
-- Fast-mode `speed: "fast"` field reaching an `api`-runtime request when `fast_mode_supported: true`
-
-These require spawning real subagents (or stubs thereof) and asserting on the
-process environment / request payload — a scope that belongs in a future E2E
-suite under `*.slow.test.cjs` or dedicated fixture-driven integration work.
+The testing pyramid, the architectural invariants, the coverage targets and the known gaps for the effort and fast_mode engine are in [Effort and fast_mode test strategy](explanation/effort-fast-mode-test-strategy.md).

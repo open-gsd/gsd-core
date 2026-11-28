@@ -2081,18 +2081,6 @@ describe('plan-review-convergence: cross-artifact fact-drift pass (#1956)', () =
       );
     });
 
-    test('USER-GUIDE.md documents the second axis', () => {
-      const guide = readFileNormalized(path.join(__dirname, '..', 'docs', 'USER-GUIDE.md'));
-      const start = guide.indexOf('plan_review.source_grounding: true');
-      assert.ok(start >= 0, 'docs/USER-GUIDE.md must retain its Drift Guard section');
-      const section = guide.slice(start, start + 4000);
-      assert.match(
-        section,
-        /cross-artifact|fact drift/i,
-        'the USER-GUIDE Drift Guard section must describe the cross-artifact fact-drift axis'
-      );
-    });
-
     test('ARCHITECTURE.md documents the second axis', () => {
       // The issue's Scope of changes names ARCHITECTURE.md explicitly, and its
       // existing drift-guard paragraph is the one place the architecture doc

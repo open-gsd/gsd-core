@@ -310,6 +310,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/token-scanner.cjs',
       // #3311: tsc-generated runtime artifact — lint src/milestone-lock.cts, not this.
       'gsd-core/bin/lib/milestone-lock.cjs',
+      // #6796: tsc-generated runtime artifact — lint src/session-store.cts, not this.
+      'gsd-core/bin/lib/session-store.cjs',
       // #5551: tsc-generated runtime artifact — lint src/git-info-exclude.cts, not this.
       'gsd-core/bin/lib/git-info-exclude.cjs',
       'gsd-core/bin/lib/health-diagnostic-types.cjs',
@@ -328,6 +330,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/health-diagnostic-rules/install-surface-shadowing.cjs',
       // #6430: tsc-generated runtime artifact — lint src/health-diagnostic-rules/context-bridge.cts, not this.
       'gsd-core/bin/lib/health-diagnostic-rules/context-bridge.cjs',
+      // #5249: tsc-generated runtime artifact — lint src/health-diagnostic-rules/project-skills-budget.cts, not this.
+      'gsd-core/bin/lib/health-diagnostic-rules/project-skills-budget.cjs',
       'gsd-core/bin/lib/shell-command-projection.cjs',
       'gsd-core/bin/lib/security.cjs',
       'gsd-core/bin/lib/command-aliases.cjs',

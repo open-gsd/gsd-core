@@ -3178,9 +3178,10 @@ describe('ship.pr_body_sections config (#3167)', () => {
     const docs = readRepoFile('docs/CONFIGURATION.md');
     assert.match(docs, /`ship\.pr_body_sections`/);
     assert.match(docs, /additional PR body sections/i);
-    assert.match(docs, /append-only/i);
-    assert.match(docs, /lean\/agile PRD/i);
-    assert.match(docs, /Definition of Done/);
+    // The append-only rule and the onboarding examples live in the guide the reference links to.
+    const guide = readRepoFile('docs/ship-pr-body-sections.md');
+    assert.match(guide, /append-only/i);
+    assert.match(guide, /Definition of Done/);
 
     const planningConfig = readRepoFile('gsd-core/references/planning-config.md');
     assert.match(planningConfig, /ship\.pr_body_sections/);

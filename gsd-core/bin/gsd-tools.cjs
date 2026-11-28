@@ -205,6 +205,11 @@
  *   state record-session               Update session continuity
  *     --stopped-at "..."
  *     [--resume-file path]
+ *     [--session ID] [--role TEXT] [--role-id SLUG]   Also write .planning/sessions/<ID>.json
+ *   state session-resume               Resume this session: record it, repair a legacy paused status, remove its own handoff
+ *     [--session ID] [--role TEXT] [--role-id SLUG] [--action TEXT] [--handoff NAME] [--keep-handoff]
+ *   state sessions                     List handoffs and session records; who owns each (read-only)
+ *     [--session ID] [--role TEXT] [--role-id SLUG]
  *
  * Compound Commands (workflow-specific initialization):
  *   init execute-phase <phase>         All context for execute-phase workflow
@@ -297,30 +302,26 @@ try {
 const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
 const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutMaybeSync, resolveAtFileOutput } = io;
-const projectRoot = require('./lib/project-root.cjs');
 const { resolveProjectContext, legacyDispatchCwd } = require('./lib/project-context.cjs');
-// Resolve findProjectRoot lazily at call time rather than binding it at module
-// load. It is sourced from project-root.cjs; a call-time lookup is robust
-// against any require/load-ordering edge where the export isn't bound yet
-// when this entrypoint is first required (#604).
-const findProjectRoot = (...args) => projectRoot.findProjectRoot(...args);
 
 // #1754: CLI skew detection — warn (stderr, non-blocking) if this gsd-tools.cjs
 // is NOT the project-local install while a project-local install exists. Catches
 // the shadowing scenario from #1748 (stale global canary shadowing project-local).
-try {
-  const _skew = require('./lib/cli-skew-check.cjs');
-  const _skewRoot = findProjectRoot(process.cwd());
-  if (_skewRoot) {
-    const _skewLocal = path.join(_skewRoot, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
-    const _skewWarn = _skew.checkCliSkew({
+// #6820 (ADR-4908): keyed on the ProjectContext main() resolves once, so `--cwd`
+// and `--project-dir` name the project the check looks in (it used to walk up
+// from process.cwd() at module load).
+function warnOnCliSkew(ctx) {
+  try {
+    const skew = require('./lib/cli-skew-check.cjs');
+    const projectLocal = path.join(ctx.projectRoot, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const warning = skew.checkCliSkew({
       resolvedPath: path.resolve(__filename),
-      projectRoot: _skewRoot,
-      projectLocalExists: fs.existsSync(_skewLocal),
+      projectRoot: ctx.projectRoot,
+      projectLocalExists: fs.existsSync(projectLocal),
     });
-    if (_skewWarn) process.stderr.write(_skewWarn + '\n');
-  }
-} catch { /* advisory — never block */ }
+    if (warning) process.stderr.write(warning + '\n');
+  } catch { /* advisory — never block */ }
+}
 
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv, peekActiveWorkstream } = require('./lib/active-workstream-store.cjs');
 const { specFor, GLOBAL_FLAGS, CLI_SURFACE } = require('./lib/cli-surface.cjs');
@@ -1443,11 +1444,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     routeEvalCommand({ evalMod, args, cwd, raw, error });
   }
 
-  function routeVerification({ args, cwd, raw, error }) {
+  function routeVerification({ args, cwd, raw, error, ctx }) {
     routeVerificationCommand({
             verification,
             args,
             cwd,
+            ctx,
             raw,
             error,
           });
@@ -4041,12 +4043,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           commands.cmdProgressRender(cwd, subcommand, raw);
   }
 
-  function routeUat({ args, cwd, raw, error }) {
+  function routeUat({ args, cwd, raw, error, ctx }) {
     const subcommand = args[1];
           if (subcommand === 'render-checkpoint') {
             const uat = require('./lib/uat.cjs');
             const options = parseNamedArgsOrExit(args, specFor('uat.render-checkpoint'), error);
-            uat.cmdRenderCheckpoint(cwd, options, raw);
+            uat.cmdRenderCheckpoint(ctx, options, raw);
           } else if (subcommand === 'classify-coverage') {
             const coverage = require('./lib/coverage.cjs');
             const options = parseNamedArgsOrExit(args, specFor('uat.classify-coverage'), error);
@@ -5888,7 +5890,7 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // #2844: verify-summary was previously skipped, leaving relative file-claim
   // paths resolved against the raw process.cwd() — invoking from a subdirectory
   // manufactured "missing files" on an otherwise-correct SUMMARY. It now goes
-  // through findProjectRoot so claims resolve against the project root.
+  // through resolveProjectContext so claims resolve against the project root.
   'template', 'frontmatter', 'detect-custom-files',
   // #1854: restore-custom-files operates on a runtime config dir passed
   // explicitly via --config-dir; it never reads .planning/.
@@ -5912,7 +5914,7 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // invocations that run before .planning/ exists (new-project Step 1).
   'project-instruction-file',
   // #1579: eval.score is pure arithmetic (covered/total + infra weights); it
-  // needs no .planning/ access, so skip the findProjectRoot traversal.
+  // needs no .planning/ access, so skip the resolveProjectContext traversal.
   'eval',
 ]);
 
@@ -6074,9 +6076,9 @@ function main() {
 
   // #3881: --project-dir <path> is a documented (docs/CONFIGURATION.md,
   // "Project-Root Resolution in Multi-Repo Workspaces") explicit override of
-  // the project root. It is idempotent under findProjectRoot's ancestor
+  // the project root. It is idempotent under resolveProjectContext's ancestor
   // walk-up — i.e. it short-circuits the walk-up rather than seeding it —
-  // so it MUST be validated and applied here, before findProjectRoot ever
+  // so it MUST be validated and applied here, before resolveProjectContext ever
   // runs, and its result must skip that call entirely below. A relative
   // value resolves against process.cwd(), matching --cwd's own resolution.
   let projectDirExplicit = false;
@@ -6117,11 +6119,9 @@ function main() {
   const preWorktreeRemapCwd = cwd;
   const ctx = resolveProjectContext(cwd, { explicit: projectDirExplicit ? cwd : null });
   warnIfGitTimedOut(ctx);
-  // #4894: verification derives its root from a phase directory, not `cwd`, so
-  // hand it the validated explicit root. Always (re)set — `null` when the flag is
-  // absent — so a prior in-process main() call can never leak an override.
-  // Deleted in Phase 2 (#6044) when verification takes the context itself.
-  projectRoot.setExplicitProjectRoot(projectDirExplicit ? ctx.projectRoot : null);
+  // #4894/#6820: verification takes `ctx` itself (`ctx.provenance.source` is
+  // `explicit` under `--project-dir`), so there is no module global to set or leak.
+  warnOnCliSkew(ctx);
   // SKIP_ROOT_RESOLUTION commands and workstream resolution keep the value the
   // retired resolveMainWorktreeCwd produced (Phase 2 migrates them to named fields).
   cwd = legacyDispatchCwd(ctx, cwd);

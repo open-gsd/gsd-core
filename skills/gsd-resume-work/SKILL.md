@@ -17,6 +17,7 @@ Restore complete project context and resume work seamlessly from previous sessio
 Routes to the resume-project workflow which handles:
 
 - STATE.md loading (or reconstruction if missing)
+- Claiming this session's handoff by atomic rename (`--role <text>` as the last argument resumes that role's pause; a second session finds none)
 - Checkpoint detection (.continue-here files)
 - Incomplete work detection (PLAN without SUMMARY)
 - Status presentation

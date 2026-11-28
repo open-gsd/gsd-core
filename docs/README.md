@@ -12,13 +12,15 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md) — bring GSD Core to a brownfield repo
 - [Build your first capability](tutorials/build-your-first-capability.md) — author a tiny declarative capability and watch it act in the loop
 - [Install your first capability](tutorials/install-your-first-capability.md) — install a third-party capability end-to-end: consent, verify, check for updates, remove
+- [Embed GSD in a new host](tutorials/embed-gsd-in-a-new-host.md) — embed the orchestration loop into a brand-new host, step by step
 
 ---
 
 ## How-to guides
 
-- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 16 supported runtimes
+- [Install on your runtime](how-to/install-on-your-runtime.md) — runtime-specific install steps for all 18 supported runtimes
 - [Start a GSD workflow from Pi](how-to/start-a-gsd-workflow-from-pi.md) — run `/skill:gsd-<command>` (or `/gsd <command>`) in Pi instead of getting a JSON dump from `/gsd`
+- [Run two sessions with roles](how-to/run-two-sessions-with-roles.md) — pause under `--role`, resume it in another session, and have a second session find no handoff to take
 - [Check that GSD's guards run on Pi](how-to/check-gsd-guards-on-pi.md) — confirm the secret-read guard blocks a `.env` read in Pi and turn on the opt-in hooks
 - [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) — exempt one committed file, such as a placeholder `.env.production`, from the secret-read guard while every other secret file stays blocked
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
@@ -37,6 +39,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
 - [Guide external reviewers with a capability](how-to/guide-external-reviewers-with-a-capability.md) — add `review:pre` reviewer guidance so `/gsd-review` and convergence cycles judge plans under your capability's constraints
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
+- [Tune the context monitor's fire-points](how-to/tune-the-context-monitor.md) — move the WARNING and CRITICAL context-remaining thresholds per project in the root `.planning/config.json`
 - [Migrate to bracket phase IDs](how-to/migrate-to-bracket-phase-ids.md) — preview and apply `roadmap upgrade --convention bracket`, read the `STATE.md` and `PROJECT.md` label edits, and resolve each reference the migration skipped
 - [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
 - [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
@@ -62,6 +65,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Read the statusline freshness marker](how-to/read-the-statusline-freshness-marker.md) — turn on `state ~N commits back`, and tell "STATE.md is fresh" apart from "freshness could not be established"
 - [Consume the planning snapshot](how-to/consume-the-planning-snapshot.md) — read `planning inspect` from a dashboard or harness, and tell "nothing to report" apart from "could not look"
 - [Read CI timeout budget signals](how-to/read-ci-timeout-signals.md) — find the near-cap warning on a run, read the accumulated `tests/ci-timeout-budget-history.jsonl` trend, and know which lever (cap, shard balance, shard-1 contents) a repeatedly-near-cap lane calls for
+- [Regenerate the timing table](how-to/regenerate-the-timing-table.md) — rebuild the per-file duration table the chunk packer reads, from a `gsd-test` event stream
 - [Regenerate the win32 timing table](how-to/regenerate-the-win32-timing-table.md) — rebuild `tests/test-timings.win32.json` from the Windows conformance shards' duration artifacts so the win32 shards stay balanced
 - [Split platform-sensitive tests out of a heavy test file](how-to/split-platform-sensitive-tests.md) — move the few tests that need a real OS into a `.platform.test.cjs` sibling so the rest of the file stops running on Windows, and fix the generator's split errors
 - [Consume the state contract](how-to/consume-the-state-contract.md) — read `.planning/state.json` from a workbench or editor extension, gate on the contract version, and tell "nothing to show" apart from "could not look"
@@ -74,6 +78,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Enable parallel reviewer lanes](how-to/enable-parallel-reviewer-lanes.md) — cut a multi-reviewer `/gsd-review` pass toward its slowest lane, and tell a rate-limited lane apart from one that was never selected
 - [Enable concurrent per-plan planners in chunked mode](how-to/enable-concurrent-chunked-planning.md) — dispatch chunked `/gsd-plan-phase`'s per-plan Tasks together within one outline Wave instead of one at a time, and know when the setting has no effect
 - [Verify and ship](how-to/verify-and-ship.md) — walk through completed work, diagnose failures, and create the PR
+- [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) — have the session advisor check the output is final and consistent before the next review gate; opt-in, advisory, cost stated
 - [Catch complexity before it compounds](how-to/act-on-a-refactor-proposal.md) — enable the post-execute refactor hook, read a proposal's score vs. anchor delta, and accept or decline it
 - [Run phases autonomously](how-to/run-phases-autonomously.md) — use autonomous mode for unattended phase execution
 - [Handle quick and fast tasks](how-to/handle-quick-and-fast-tasks.md) — use `/gsd-quick` and `/gsd-fast` for ad-hoc work outside the phase loop
@@ -93,6 +98,11 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Interpret scope-conformance warnings](how-to/interpret-scope-conformance-warnings.md) — read the advisory the worktree-wave merge emits when a plan branch commits outside its declared scope
 - [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md) — read the advisory GSD Core emits when a `/gsd-*` trigger is installed at both scopes and one silently wins, and tell "nothing to report" apart from "could not look"
 - [Interpret `state validate` results](how-to/interpret-state-validate-results.md) — read the `scope` reason codes and tell "nothing to report" apart from "could not look"
+- [Park an idea for later](how-to/park-an-idea-for-later.md) — choose between the backlog, a seed and a thread, then park, review, promote or close the idea
+- [Fix a workflow or agent size failure](how-to/fix-a-workflow-or-agent-size-failure.md) — resolve a red size-budget check by justifying the growth with an acknowledgment trailer or shrinking the file
+- [Fix a regression-test-name or duplicate-fold lint failure](how-to/fix-a-regression-test-lint-failure.md) — fold a one-off regression file into its module's test file, prune the allowlist, or delete a duplicate fold block
+- [Respond to a new QA smell](how-to/respond-to-a-new-qa-smell.md) — decide whether a smell is a real defect or a false positive, then fix the oracle or acknowledge it with an issue
+- [Add a positive control for a new gate](how-to/add-a-gate-positive-control.md) — resolve a `no-control` report from `lint:ci` by adding a `gateControl` call with a red and a green scenario
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
 - [Enable live-DOM verification](how-to/enable-live-dom-verification.md) — opt a project into browser-backed UI acceptance checks during execution, handle the browser-profile lock, and tell "nothing to report" apart from "could not look"
@@ -114,6 +124,17 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Clean up get-shit-done-cc](cleanup-get-shit-done-cc.md) — remove leftover old-package artifacts that cause a spurious `⬆ /gsd-update` indicator after migrating to `@opengsd/gsd-core`
 - [Fix the worktree base-mismatch (exit 42) error](how-to/fix-worktree-base-mismatch.md) — resolve the branch-divergence condition that halts parallel phase execution
 - [Recover and troubleshoot](how-to/recover-and-troubleshoot.md) — fix common problems, rebuild context, and uninstall
+- [Run a long-running job asynchronously](how-to/async-external-jobs.md) — run a legitimately long execute task through the SLURM adapter
+- [Author a host plugin](how-to/author-a-host-plugin.md) — for external tool authors who want to embed GSD's orchestration
+- [Add a `command-exit-zero` gate to a capability](how-to/command-exit-zero-gate.md) — a recipe for capability authors
+- [Connect a host to the GSD companion MCP server](how-to/connect-gsd-mcp-server.md) — make an MCP-capable host talk to GSD
+- [Enable cross-session memory with MemPalace](how-to/enable-cross-session-memory-with-mempalace.md) — durable memory across sessions and projects: recall before planning, capture at each phase boundary
+- [Import a capability from a URL](how-to/import-a-capability-from-a-url.md) — install a published capability from a git repository, an npm package, a tarball or a local path
+- [Publish a capability](how-to/publish-a-capability.md) — prepare the manifest, validate locally and release it so others can `gsd capability install` it
+- [Remove or disable a capability](how-to/remove-a-capability.md) — delete a capability and its shared configuration, or toggle it off without touching files
+- [Version and upgrade a capability](how-to/version-a-capability.md) — keep a manifest correctly versioned as an author, or apply updates safely as a consumer
+- [Update manually (non-npm install)](manual-update.md) — update when `npx @opengsd/gsd-core@latest` is unavailable
+- [Add custom PR body sections](ship-pr-body-sections.md) — make `/gsd-ship` carry user stories, acceptance criteria, risks or approval notes
 
 ---
 
@@ -131,10 +152,25 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [ROADMAP phase-list entry grammar](reference/roadmap-phase-entry.md) — the one accepted form of a `- [ ] **Phase N: Name**` checklist entry, shared by every reader
+- [Custom phase IDs](reference/custom-phase-ids.md) — which custom phase IDs are accepted or refused, the `.phase-id` marker and how readers resolve a directory to its owner
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
+- [Security hooks](reference/security-hooks.md) — the exact rules, limits, bypasses and known gaps of the prompt, workflow, write and secret-read guards
+- [Config section null semantics](reference/config-null-semantics.md) — how an explicit non-object section such as `"workflow": null` blocks defaults in the config merge
+- [Agent tool grants](reference/agent-tool-grants.md) — `agent_tools` selectors, validation, precedence and per-runtime output
+- [Bracket phase IDs](reference/bracket-phase-ids.md) — what `phase_id_convention: "bracket"` changes across read, display, migration and write paths
+- [Compact content mode](reference/compact-content-mode.md) — the spine-and-detail, variant-swap and agent-payload mechanisms behind `workflow.compact_content`
+- [Project-root resolution](reference/project-root-resolution.md) — the ordered rules that walk a child repo up to the workspace that owns `.planning/`
+- [Decision-coverage plan gate](reference/check-decision-coverage-plan.md) — invoking `check decision-coverage-plan` directly, with its fail-closed reasons
+- [Check gate modules](reference/check-gate-modules.md) — support modules, ESLint boundaries and behavior differences for the `check <gate>` router
+- [Evaluation scope resolver](reference/evaluation-scope.md) — the fields, design rules and flags of `check evaluation-scope`
+- [Runtime install contracts](reference/runtime-install-contracts.md) — the installed file layout, the per-runtime install contract matrix, and the upstream docs each row was checked against
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
+- [Templates](reference/templates.md) — every file under `gsd-core/templates/`, the artifact it produces, and what references it
+- [Environment variables and file formats](reference/environment-variables.md) — every variable the installer, `gsd-tools`, hooks and plugins read, and the state files GSD writes outside `.planning/`
+- [Installer flags](reference/installer-flags.md) — every option of `npx @opengsd/gsd-core`: runtime flags, location, skill profiles, cleanup and hook-path behavior
 - [Agent reference](reference/agents.md) — role cards, tools and constraints for every shipped GSD agent
 - [Gate predicates](reference/gate-predicates.md) — canonical specification of the phase-gate predicate vocabulary
+- [Documentation coverage matrix](reference/coverage-matrix.md) — generated: every command, verb, config key, agent, hook, template and installer flag, where it is documented, and which options are not; `npm run lint:generated-sync` fails when the page is stale or any item or option is undocumented
 - [Capability matrix](reference/capability-matrix.md) — generated catalogue of every capability's role, tier, extension points, hook kinds, and `engines.gsd`
 - [Exit code reference](reference/exit-codes.md) — generated catalogue of every registered process exit code, its name, meaning, and owning module, plus the reserved bands and the v1/v2 exit contract
 - [Capability manifest](reference/capability-manifest.md) — the full `capability.json` schema and validation rules
@@ -142,6 +178,15 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Workflow fragments](reference/workflow-fragments.md) — in-file `<!-- gsd:section -->` marker grammar for fragmentizing workflow markdown at emission time
 - [Partition rules for compact-content splits](PARTITION-RULES.md) — the protected-content list, sentinel syntax, and the five CI checks a `workflow.compact_content` spine/detail split must obey
 - [Reviewer Lane Registry](registries/reviewer-registry.md) — generated catalogue of third-party reviewer lanes, with their flags, transport, and install commands
+- [Host Integration capability matrix](reference/host-integration-capability-matrix.md) — maintainer-facing source of truth for the `hostIntegration` block of every runtime
+- [Host-Integration Interface](reference/host-integration-interface.md) — the normative reference for the interface (ADR-1239)
+- [Long-running operations](reference/long-running-operations.md) — the operation-classification policy and the async external-job contract
+- [OpenCode 2.x verification matrix](reference/opencode-v2-verification-matrix.md) — every GSD feature that reaches OpenCode, exercised on a real OpenCode 2.x
+- [Per-runtime skill mapping matrix](reference/skill-mapping-matrix.md) — where each runtime places skills, commands and agents
+- [Testing suites](TESTING-SUITES.md) — the filename-suffix markers that group `tests/` into named suites, and where a new test goes
+- [Installer migration architecture](installer-migrations.md) — the migration layer for GSD installs and upgrades
+- [Beta features](BETA.md) — opt-in features that may change or be removed without notice
+- [Canary stream](CANARY.md) — the earliest preview channel, built from the `dev` integration branch
 
 ---
 
@@ -149,22 +194,50 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 - [Context engineering](explanation/context-engineering.md) — how context rot forms and how GSD Core prevents it
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
+- [Nyquist validation explained](explanation/nyquist-validation.md) — how test coverage is mapped to requirements before code is written, and how `/gsd-validate-phase` fills the gaps afterwards
+- [Quick-task archival explained](explanation/archive-quick-tasks.md) — why archiving `.planning/quick/` is opt-in, bucketed into one milestone and indexed from disk
+- [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md) — why `planning inspect` and the `.planning/state.json` contract each declare their own schema
+- [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md) — why path grounding is a recognizer and why a plan must state its failing direction
+- [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md) — why a reviewer lane refuses an over-window prompt instead of trimming it, and why each review records its model
+- [Effort and fast_mode test strategy](explanation/effort-fast-mode-test-strategy.md) — why the effort and fast_mode engine's tests are shaped as they are: layers, invariants, targets and known gaps
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
 - [How GSD runs on Pi](explanation/how-gsd-runs-on-pi.md) — how commands, agent roles and guards map onto Pi's skills, tools and events, and the limits that leaves
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
+- [Agent skills dual injection](explanation/agent-skills-dual-injection.md) — why configured skills reach agents through two seams and how the dedup guard keeps one copy
+- [Decision coverage gates explained](explanation/decision-coverage-gates.md) — how the plan-phase and verify-phase decision gates work, and when a decision is exempt
+- [About the code-review pipeline design](explanation/review-pipeline-design.md) — why depth escalation, prefix matching, ledger replacement and the sibling record are shaped as they are
+- [Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md) — the ADR-3473 and ADR-3889 hardening: dropped data, unreadable directories, the raw terminator and short-form dependencies
+- [Runtime identity design](explanation/runtime-identity-design.md) — why the launcher's PATH branch and anchored probe defend against a foreign `gsd-tools`
+- [Spec-phase probe design](explanation/spec-phase-probe-design.md) — why the edge and prohibition probes classify, tier and abstain the way they do
+- [Deep verify capability](explanation/deep-verify-capability.md) — why interaction-level behaviors are enumerated during UAT and how the capability is shaped
+- [Why planners query graphify first](explanation/graphify-query-path.md) — why the single graph query per phase goes to the CLI, with the built-in reader as fallback
+- [Codebase drift gate design](explanation/codebase-drift-gate-design.md) — why the rule is inverted, the baseline stamp is a shell step and an absent baseline is skipped
+- [Why PR-branch filtering has a strict mode](explanation/pr-branch-filtering-design.md) — why keeping planning out of git costs worktrees and strict mode does not
+- [Why the test suites are guarded the way they are](explanation/testing-suites-design.md) — the reasoning behind the regression-fold, size, QA, live-config, mergeability and timeout guards
+- [Installer permissions](explanation/installer-permissions.md) — what the installer pre-populates in `settings.json` and why two earlier rules were retired
+- [How GSD runs on OpenCode](explanation/how-gsd-runs-on-opencode.md) — how one `opencode` runtime serves OpenCode 1.x and 2.x
+- [About autonomous decision classification](explanation/autonomous-decision-classification.md) — why /gsd-autonomous decides some discuss questions and asks about others
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
 - [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
-- [Context monitoring](context-monitor.md) — context window monitoring hook architecture
-- [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
+- [Context monitoring](context-monitor.md) — context window monitoring hook architecture and why the fire-points are defaults
+- [Issue-driven orchestration explained](issue-driven-orchestration.md) — how GSD's primitives map onto a tracker-issue loop, why that loop is safe, and what it deliberately does not do; the steps are in the [how-to](how-to/drive-gsd-from-a-tracker-issue.md)
+- [Claude orchestration capability (BETA)](explanation/claude-orchestration-capability.md) — why the capability exists and how it fits the loop
+- [Interface versioning and deprecation policy](explanation/interface-versioning-policy.md) — how the Host-Integration Interface (ADR-1239) evolves
+- [The live-DOM UAT capability](explanation/live-dom-uat-capability.md) — why GSD can drive a browser during execution, and why from a purpose-built agent
+- [Branching model](branching.md) — a plain-English guide to where work happens, where it merges, and why
 
 ---
 
 ## Related
 
 - [What's new in 1.7.0](whats-new-1.7.0.md) — curated highlights of the 1.7.0 release
+- [User guide](USER-GUIDE.md) — a narrative companion that orients you, then links into the dedicated docs
+- [Branch protection rollout](branch-protection.md) — the four ruleset specs under `.github/rulesets/`
+- [Contributor standards](contributor-standards.md) — standards for `CONTEXT.md`, `docs/adr/` and AI-agent-assisted contributions
+- [Legacy release notes](RELEASE-NOTES-LEGACY.md) — frozen history of the earlier package names, `1.0.0` to `1.42.x`
 - [Root README](../README.md) — landing page, quickstart, and documentation overview
 - [Changelog](../CHANGELOG.md) — release history

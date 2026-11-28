@@ -270,7 +270,7 @@ Pure doc-only / config-only / test-only tasks return `is_behavior_adding=false` 
 Look for a `.continue-here.md` in the current phase directory:
 
 ```bash
-ls ${phase_dir}/.continue-here.md 2>/dev/null || true
+ls ${phase_dir}/.continue-here*.md 2>/dev/null || true
 ```
 
 If `.continue-here.md` exists, parse its "Critical Anti-Patterns" table for rows with `severity` = `blocking`.
@@ -743,7 +743,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
        - ${PROJECT_ROOT}/${prior_wave_summaries} (SUMMARY.md files from earlier waves in this phase — what was already built)
        ` : ''}
        - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
-       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
+       - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — read SKILL.md frontmatter; full file only if description fits or is missing; follow its rules)
        </required_reading>
 
        ${AGENT_SKILLS}

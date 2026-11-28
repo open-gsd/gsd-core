@@ -1007,6 +1007,37 @@
       "workstreamScoped": false
     },
     {
+      "verb": "state.session-resume",
+      "aliases": [
+        "state session-resume"
+      ],
+      "positionals": 2,
+      "flags": {
+        "action": "value",
+        "handoff": "value",
+        "keep-handoff": "boolean",
+        "role": "value",
+        "role-id": "value",
+        "session": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "state.sessions",
+      "aliases": [
+        "state sessions"
+      ],
+      "positionals": 2,
+      "flags": {
+        "role": "value",
+        "role-id": "value",
+        "session": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
       "verb": "stats.json",
       "aliases": [
         "stats json"

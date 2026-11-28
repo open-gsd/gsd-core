@@ -7,6 +7,62 @@
  */
 
 const capabilities = {
+  "advisor-prefilter": {
+    "id": "advisor-prefilter",
+    "role": "feature",
+    "version": "1.23.0",
+    "title": "Advisor pre-filter",
+    "description": "Opt-in, advisory consult of the Claude Code session advisor before the next review gate: asks whether the phase output is final and internally consistent given everything already reviewed this session. A same-context pre-filter that runs before the cold-subagent reviewers (gsd-code-reviewer, gsd-verifier, gsd-security-auditor, gsd-plan-checker) and never replaces or blocks them. Silent no-op when the session has no advisor tool.",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.23.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.advisor_prefilter": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the advisor pre-filter contribution at verify:post and ship:pre. Each enabled run sends the full session transcript to the advisor model once per point (billed at the advisor's rate), so it is off by default. Advisory only; a no-op when no advisor is configured."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "verify:post",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/advisor-prefilter.md",
+          "inline": "## Advisor pre-filter (opt-in, advisory)\n\nBefore this workflow opens the next review gate, consult the Claude Code session advisor once and ask whether the work is final and internally consistent given everything already reviewed in this session. You run in the orchestrator's own context, so the advisor sees the whole transcript, including every edit made after the last reviewer pass.\n\n**1. Silent no-op without an advisor.** If no advisor tool is present in your tool list for this session (no advisor is configured, the host is not Claude Code, or the host removed the tool), skip this section: print nothing, write nothing, and continue the workflow. That is a silent no-op, not an error and not a warning. Do not read host settings files to decide this, and do not simulate an advisor by reasoning in your own voice.\n\n**2. Gather bounded evidence.** Run these read-only commands and keep only their output:\n\n```bash\ngit rev-parse HEAD\ngit status --porcelain\n```\n\nWhen a phase directory is known, also list the review artifacts that exist in it (`*-REVIEW.md`, `*-VERIFICATION.md`, `*-SECURITY.md`, `*-UAT.md`) by name. Do not paste file contents into the consult.\n\n**3. Make one consult.** Call the advisor tool exactly once with this question, naming the calling point (`verify:post` or `ship:pre`):\n\n> \"At `<point>`, given everything already reviewed in this session, is the current output final and internally consistent? List any edit made after the last reviewer or verifier pass, any partially applied fix, and any finding that was acknowledged but not resolved. Answer `consistent` or `drift-suspected` first, then at most five specific bullets.\"\n\nInclude the `git rev-parse HEAD` value, the `git status --porcelain` output and the artifact names in the question. One consult only, never a retry loop.\n\n**4. Report and continue.** Print one advisory line, `advisor-prefilter (<point>): <consistent|drift-suspected>`, followed by the advisor's bullets verbatim when it answered `drift-suspected`. This never blocks and never redirects the workflow: the next gate runs regardless of the answer, and a `drift-suspected` answer is information for the reviewers that follow. Do not edit files, do not spawn a subagent, and do not re-run any reviewer on the strength of this answer. If the advisor call fails or returns nothing usable, print nothing and continue.\n\nThis does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`, or any cross-AI reviewer lane. Those exist for specialised, decorrelated review and keep running unchanged. The advisor is a session-level model that may share a family with the executor, so its answer is a cheap early warning, never a verdict. Each consult sends the full session transcript to the advisor model at the advisor's rate, which is why `workflow.advisor_prefilter` is off by default.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      },
+      {
+        "point": "ship:pre",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/advisor-prefilter.md",
+          "inline": "## Advisor pre-filter (opt-in, advisory)\n\nBefore this workflow opens the next review gate, consult the Claude Code session advisor once and ask whether the work is final and internally consistent given everything already reviewed in this session. You run in the orchestrator's own context, so the advisor sees the whole transcript, including every edit made after the last reviewer pass.\n\n**1. Silent no-op without an advisor.** If no advisor tool is present in your tool list for this session (no advisor is configured, the host is not Claude Code, or the host removed the tool), skip this section: print nothing, write nothing, and continue the workflow. That is a silent no-op, not an error and not a warning. Do not read host settings files to decide this, and do not simulate an advisor by reasoning in your own voice.\n\n**2. Gather bounded evidence.** Run these read-only commands and keep only their output:\n\n```bash\ngit rev-parse HEAD\ngit status --porcelain\n```\n\nWhen a phase directory is known, also list the review artifacts that exist in it (`*-REVIEW.md`, `*-VERIFICATION.md`, `*-SECURITY.md`, `*-UAT.md`) by name. Do not paste file contents into the consult.\n\n**3. Make one consult.** Call the advisor tool exactly once with this question, naming the calling point (`verify:post` or `ship:pre`):\n\n> \"At `<point>`, given everything already reviewed in this session, is the current output final and internally consistent? List any edit made after the last reviewer or verifier pass, any partially applied fix, and any finding that was acknowledged but not resolved. Answer `consistent` or `drift-suspected` first, then at most five specific bullets.\"\n\nInclude the `git rev-parse HEAD` value, the `git status --porcelain` output and the artifact names in the question. One consult only, never a retry loop.\n\n**4. Report and continue.** Print one advisory line, `advisor-prefilter (<point>): <consistent|drift-suspected>`, followed by the advisor's bullets verbatim when it answered `drift-suspected`. This never blocks and never redirects the workflow: the next gate runs regardless of the answer, and a `drift-suspected` answer is information for the reviewers that follow. Do not edit files, do not spawn a subagent, and do not re-run any reviewer on the strength of this answer. If the advisor call fails or returns nothing usable, print nothing and continue.\n\nThis does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`, or any cross-AI reviewer lane. Those exist for specialised, decorrelated review and keep running unchanged. The advisor is a session-level model that may share a family with the executor, so its answer is a cheap early warning, never a verdict. Each consult sends the full session transcript to the advisor model at the advisor's rate, which is why `workflow.advisor_prefilter` is off by default.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
@@ -3167,6 +3223,7 @@ const capabilities = {
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
         "opencodePathPrefix": true,
+        "rewritesClaudeOnlyForms": true,
         "bakesStaticAgentModel": true,
         "bakedAgentFileExtensions": [
           ".md"
@@ -3747,7 +3804,7 @@ const capabilities = {
         },
         "fragment": {
           "path": "fragments/plan-pre.md",
-          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read each SKILL.md's frontmatter and read in full only the skills whose description fits this phase (or that have no description); account for their patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
         },
         "produces": [
           "RESEARCH.md"
@@ -4550,7 +4607,7 @@ const byLoopPoint = {
         },
         "fragment": {
           "path": "fragments/plan-pre.md",
-          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read SKILL.md files and account for project skill patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
+          "inline": "<objective>\nResearch how to implement Phase {phase_number}: {phase_name}\nAnswer: \"What do I need to know to PLAN this phase well?\"\n</objective>\n\n<required_reading>\n- {context_path} (USER DECISIONS from /gsd-discuss-phase)\n- {requirements_path} (Project requirements)\n- {state_path} (Project decisions and history)\n</required_reading>\n\n${AGENT_SKILLS_RESEARCHER}\n\n<additional_context>\n**Phase description:** {phase_description}\n**Phase requirement IDs (MUST address):** {phase_req_ids}\n\n**Project instructions:** Read ./CLAUDE.md or ./.claude/CLAUDE.md if either exists; follow project-specific guidelines.\n**Project skills:** Check .claude/skills/ or .agents/skills/ directory if either exists. Read each SKILL.md's frontmatter and read in full only the skills whose description fits this phase (or that have no description); account for their patterns.\n</additional_context>\n\n<output>\nWrite to: {phase_dir}/{phase_num}-RESEARCH.md\n</output>\n"
         },
         "produces": [
           "RESEARCH.md"
@@ -5023,12 +5080,40 @@ const byLoopPoint = {
         "onError": "skip"
       }
     ],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "advisor-prefilter",
+        "point": "verify:post",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/advisor-prefilter.md",
+          "inline": "## Advisor pre-filter (opt-in, advisory)\n\nBefore this workflow opens the next review gate, consult the Claude Code session advisor once and ask whether the work is final and internally consistent given everything already reviewed in this session. You run in the orchestrator's own context, so the advisor sees the whole transcript, including every edit made after the last reviewer pass.\n\n**1. Silent no-op without an advisor.** If no advisor tool is present in your tool list for this session (no advisor is configured, the host is not Claude Code, or the host removed the tool), skip this section: print nothing, write nothing, and continue the workflow. That is a silent no-op, not an error and not a warning. Do not read host settings files to decide this, and do not simulate an advisor by reasoning in your own voice.\n\n**2. Gather bounded evidence.** Run these read-only commands and keep only their output:\n\n```bash\ngit rev-parse HEAD\ngit status --porcelain\n```\n\nWhen a phase directory is known, also list the review artifacts that exist in it (`*-REVIEW.md`, `*-VERIFICATION.md`, `*-SECURITY.md`, `*-UAT.md`) by name. Do not paste file contents into the consult.\n\n**3. Make one consult.** Call the advisor tool exactly once with this question, naming the calling point (`verify:post` or `ship:pre`):\n\n> \"At `<point>`, given everything already reviewed in this session, is the current output final and internally consistent? List any edit made after the last reviewer or verifier pass, any partially applied fix, and any finding that was acknowledged but not resolved. Answer `consistent` or `drift-suspected` first, then at most five specific bullets.\"\n\nInclude the `git rev-parse HEAD` value, the `git status --porcelain` output and the artifact names in the question. One consult only, never a retry loop.\n\n**4. Report and continue.** Print one advisory line, `advisor-prefilter (<point>): <consistent|drift-suspected>`, followed by the advisor's bullets verbatim when it answered `drift-suspected`. This never blocks and never redirects the workflow: the next gate runs regardless of the answer, and a `drift-suspected` answer is information for the reviewers that follow. Do not edit files, do not spawn a subagent, and do not re-run any reviewer on the strength of this answer. If the advisor call fails or returns nothing usable, print nothing and continue.\n\nThis does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`, or any cross-AI reviewer lane. Those exist for specialised, decorrelated review and keep running unchanged. The advisor is a session-level model that may share a family with the executor, so its answer is a cheap early warning, never a verdict. Each consult sends the full session transcript to the advisor model at the advisor's rate, which is why `workflow.advisor_prefilter` is off by default.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      }
+    ],
     "gates": []
   },
   "ship:pre": {
     "steps": [],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "advisor-prefilter",
+        "point": "ship:pre",
+        "into": "orchestrator",
+        "fragment": {
+          "path": "fragments/advisor-prefilter.md",
+          "inline": "## Advisor pre-filter (opt-in, advisory)\n\nBefore this workflow opens the next review gate, consult the Claude Code session advisor once and ask whether the work is final and internally consistent given everything already reviewed in this session. You run in the orchestrator's own context, so the advisor sees the whole transcript, including every edit made after the last reviewer pass.\n\n**1. Silent no-op without an advisor.** If no advisor tool is present in your tool list for this session (no advisor is configured, the host is not Claude Code, or the host removed the tool), skip this section: print nothing, write nothing, and continue the workflow. That is a silent no-op, not an error and not a warning. Do not read host settings files to decide this, and do not simulate an advisor by reasoning in your own voice.\n\n**2. Gather bounded evidence.** Run these read-only commands and keep only their output:\n\n```bash\ngit rev-parse HEAD\ngit status --porcelain\n```\n\nWhen a phase directory is known, also list the review artifacts that exist in it (`*-REVIEW.md`, `*-VERIFICATION.md`, `*-SECURITY.md`, `*-UAT.md`) by name. Do not paste file contents into the consult.\n\n**3. Make one consult.** Call the advisor tool exactly once with this question, naming the calling point (`verify:post` or `ship:pre`):\n\n> \"At `<point>`, given everything already reviewed in this session, is the current output final and internally consistent? List any edit made after the last reviewer or verifier pass, any partially applied fix, and any finding that was acknowledged but not resolved. Answer `consistent` or `drift-suspected` first, then at most five specific bullets.\"\n\nInclude the `git rev-parse HEAD` value, the `git status --porcelain` output and the artifact names in the question. One consult only, never a retry loop.\n\n**4. Report and continue.** Print one advisory line, `advisor-prefilter (<point>): <consistent|drift-suspected>`, followed by the advisor's bullets verbatim when it answered `drift-suspected`. This never blocks and never redirects the workflow: the next gate runs regardless of the answer, and a `drift-suspected` answer is information for the reviewers that follow. Do not edit files, do not spawn a subagent, and do not re-run any reviewer on the strength of this answer. If the advisor call fails or returns nothing usable, print nothing and continue.\n\nThis does not replace `gsd-plan-checker`, `gsd-code-reviewer`, `gsd-verifier`, `gsd-security-auditor`, or any cross-AI reviewer lane. Those exist for specialised, decorrelated review and keep running unchanged. The advisor is a session-level model that may share a family with the executor, so its answer is a cheap early warning, never a verdict. Each consult sends the full session transcript to the advisor model at the advisor's rate, which is why `workflow.advisor_prefilter` is off by default.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "workflow.advisor_prefilter",
+        "onError": "skip"
+      }
+    ],
     "gates": [
       {
         "capId": "broken-windows",
@@ -5089,6 +5174,7 @@ const byLoopPoint = {
 };
 
 const configKeys = {
+  "workflow.advisor_prefilter": "advisor-prefilter",
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.api_coverage_gate": "ai-integration",
   "review.models.agy": "antigravity",
@@ -5190,6 +5276,12 @@ const configKeys = {
 };
 
 const configSchema = {
+  "workflow.advisor_prefilter": {
+    "owner": "advisor-prefilter",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the advisor pre-filter contribution at verify:post and ship:pre. Each enabled run sends the full session transcript to the advisor model once per point (billed at the advisor's rate), so it is off by default. Advisory only; a no-op when no advisor is configured."
+  },
   "workflow.ai_integration_phase": {
     "owner": "ai-integration",
     "type": "boolean",
@@ -7675,6 +7767,7 @@ const runtimes = {
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
         "opencodePathPrefix": true,
+        "rewritesClaudeOnlyForms": true,
         "bakesStaticAgentModel": true,
         "bakedAgentFileExtensions": [
           ".md"
@@ -8539,6 +8632,7 @@ const profileMembership = {
 };
 
 const _requiresGraph = {
+  "advisor-prefilter": [],
   "ai-integration": [],
   "antigravity": [],
   "assumption-delta": [],

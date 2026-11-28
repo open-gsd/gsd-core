@@ -44,7 +44,7 @@ Core package and are stamped with the package version at release (per
 ADR-1244 D6). They are not subject to the consent or integrity-pin flow applied
 to third-party capabilities.
 
-### Feature capabilities (role: feature) — 23
+### Feature capabilities (role: feature) — 24
 
 Feature capabilities extend what the loop does — contributing research,
 planning, execution, verification, or ship artefacts at the loop extension
@@ -52,6 +52,7 @@ points.
 
 | id | role | tier | engines.gsd | extension points | hook kinds | source |
 |---|---|---|---|---|---|---|
+| `advisor-prefilter` | feature | full | `>=1.23.0` | `verify:post`, `ship:pre` | contribution | first-party |
 | `ai-integration` | feature | full | `>=1.6.0` | `plan:pre`, `verify:pre` | step, contribution, gate | first-party |
 | `assumption-delta` | feature | full | `>=1.6.0` | `plan:pre` | contribution | first-party |
 | `audit` | feature | full | `>=1.6.0` | — | — | first-party |

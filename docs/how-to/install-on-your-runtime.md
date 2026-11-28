@@ -2,7 +2,7 @@
 
 Install GSD Core (`@opengsd/gsd-core`) into the AI coding runtime you use every day. This guide gives you the standard installer path for each supported runtime, then covers the manual path for machines without Node.js.
 
-**What you need:** Node.js 18+ and npm (or npx). If you do not have Node.js, jump to [Installing without Node.js](#installing-without-nodejs).
+**What you need:** Node.js 24+ and npm 10+ (or npx). If you do not have Node.js, jump to [Installing without Node.js](#installing-without-nodejs).
 
 ---
 
@@ -170,6 +170,8 @@ npx @opengsd/gsd-core@latest --codex --global
 Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written as standalone `~/.codex/agents/gsd-*.toml` files, which Codex auto-discovers — that is the sole registration source for each role; `config.toml` only carries the shared `[agents]` dispatch-tuning scalar (`max_depth`), not a per-role table (#2406). Restart Codex (or run `codex --reload`) after install.
 
 **Minimum supported version:** Codex CLI 0.130.0. Earlier versions had additional skill-root scanning that can produce duplicate listings.
+
+**Agent scheduling and the skill picker.** Light-tier agents (haiku-equivalent) are written with `service_tier = "flex"` and `model_verbosity = "low"` in their agent TOML, so the Codex scheduler routes them to the flex tier (lower cost, background processing) and suppresses verbose output. GSD skills appear in the `/skills` picker through their `SKILL.md`, which Codex discovers on its own; no `agents/openai.yaml` sidecar is written, because that produced duplicate autocomplete entries (#1326). Both are done at install time and need no configuration.
 
 **Hook coverage**
 
@@ -479,6 +481,30 @@ npx @opengsd/gsd-core@latest --zcode --global
 ZCode's skill format is identical to Claude Code's, so no runtime-specific converter is required — GSD lands as a pure declarative descriptor with no hardcoded installer branches. ZCode also natively imports skills and MCP config from `~/.claude`; if you install GSD for **both** Claude and ZCode, you may see duplicate GSD skills inside ZCode, which is expected. To connect ZCode's MCP servers to GSD's companion server, see [how to connect the GSD MCP server](connect-gsd-mcp-server.md).
 
 GSD's hook-automation and native-MCP-registration integrations are not yet wired for ZCode — both are blocked on ZCode not yet publishing the on-disk config format for its plugin `Hook` component or the settings filename/schema for its MCP store. See the [`## zcode`](../reference/host-integration-capability-matrix.md#zcode) section of the host-integration capability matrix for the cited source URLs.
+
+---
+
+### Hermes Agent
+
+```bash
+npx @opengsd/gsd-core@latest --hermes --global
+```
+
+GSD installs under `~/.hermes/` (`./.hermes/` with `--local`):
+
+- **Skills** → `~/.hermes/skills/gsd/`: the six namespace routers (`gsd-ns-workflow`, `gsd-ns-project`, `gsd-ns-review`, `gsd-ns-context`, `gsd-ns-ideate`, `gsd-ns-manage`), each with its concrete skills nested inside. Hermes has a non-recursive skill loader, so only the routers are listed at the top level.
+- **Agents** → `~/.hermes/agents/gsd-<name>.md`
+- **Hooks** → `~/.hermes/hooks/`, registered in `~/.hermes/settings.json`
+
+**Override the install directory:** set `HERMES_HOME`, or pass `--config-dir <path>` (which takes priority):
+
+```bash
+HERMES_HOME=~/.hermes-alt npx @opengsd/gsd-core@latest --hermes --global
+```
+
+The context monitor hook is not registered on Hermes: nothing there writes the context metrics it reads, so the agent-facing context warnings do not appear. The installer sets `resolve_model_ids: "omit"` and `runtime: "hermes"` in `~/.gsd/defaults.json`.
+
+Open a blank directory in Hermes Agent and run `/gsd-new-project`.
 
 ---
 

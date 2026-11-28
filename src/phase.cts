@@ -19,6 +19,7 @@
 import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveProjectContext } from './project-context.cjs';
 import { execFileSync } from 'node:child_process';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
@@ -7037,6 +7038,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     // of here; withPlanningLock releases the lock on the way out and the CLI
     // seam reports `verification_status_invalid`.
     const verificationStatus = readVerificationStatus(phaseFullDir, {
+      ctx: resolveProjectContext(cwd),
       runtime: resolveRuntime(cwd),
       convention: resolvePhaseIdConvention(cwd),
     });
