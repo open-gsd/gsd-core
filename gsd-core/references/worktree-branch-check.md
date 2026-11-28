@@ -23,9 +23,9 @@ force-move, index-discard) on a worktree it did not create (#48, #2924). Run the
 guard below as ONE plain command (#6216). It refuses a detached HEAD, a HEAD on
 `main`, `master`, `develop`, `trunk` or `release/*`, a
 branch outside the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace, and a
-HEAD that is neither expected base, and it exits 42 on any of them. On exit 42,
-HALT immediately — surface its FATAL lines and let the orchestrator (the lifecycle
-owner) decide recovery. Do NOT self-recover via `git update-ref`, do NOT commit.
+HEAD that is neither expected base, and it exits 42 on any of them; a refused
+argument exits non-zero too. On any non-zero exit, HALT immediately — surface its
+FATAL or Error lines and let the orchestrator (the lifecycle owner) decide recovery. Do NOT self-recover via `git update-ref`, do NOT commit.
 ```bash
 gsd_run query executor.guard --expected-base "{EXPECTED_BASE}" --expected-base-alternate "{EXPECTED_BASE_ALTERNATE}"
 ```

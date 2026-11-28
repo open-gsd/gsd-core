@@ -128,14 +128,17 @@ If your prompt contains a `<worktree_branch_check>` embed instruction rather tha
 
 A prior Bash call may have `cd`'d out of the worktree into the main repo. Keep the
 `worktree_root` that the executor's first `executor.guard` run printed as a literal
-path, and pass it on every later step 0 run, before every commit:
+path, and pass it on every later step 0 run, before every commit (when `gsd_run` cannot
+run, keep what `git rev-parse --show-toplevel` printed on the first run, and compare each
+later output with it):
 
 ```bash
 gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
 ```
 
-The guard exits 42 when the current directory's worktree root is anywhere else;
-`cd` back to that root and re-run the commit.
+On any non-zero exit, do not commit. A `toplevel` FATAL line means the current
+directory's worktree root is elsewhere: `cd` back to that root and re-run the commit;
+on any other, HALT.
 
 This is step 0's pre-commit command, so its branch checks run too: add `--sequential`
 only when the executor's prompt has a `<sequential_execution>` block (#4799). Without it
@@ -157,11 +160,16 @@ gsd_run query executor.guard --path "<absolute path>"
 ```
 
 It exits 42 when the path lands outside the worktree root, or cannot be resolved,
-judging a file not yet created by where it would land.
+judging a file not yet created by where it would land. On any non-zero exit, do not
+write to that path.
 
 Given alone, `--path` runs only this check: the branch checks of step 0 are not run,
 so the command is the same in a sequential dispatch. `--sequential` beside it is
 refused, since it would change nothing.
+
+If `gsd_run` cannot run, use a relative path. An absolute path is used only when it
+begins with the worktree root kept for step 0a followed by `/` and has no `.` or `..`
+segment; otherwise HALT.
 
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the

@@ -29,7 +29,7 @@ When those blocks are refused, an executor splits them up by hand or skips them.
 
 Given `--path` with none of `--toplevel`, `--expected-base` and `--expected-base-alternate`, the verb runs the `path` check alone, as the step 0b block did: `head-attached`, `not-protected` and `agent-namespace` are run by the spawn-time and pre-commit calls. `--sequential` on such a call changes nothing, so it is refused as a usage error, and `--expected-base-alternate` (empty or not) makes the call a branch-checking one.
 
-The verb reads the worktree of the directory it runs in, its HEAD and branch, and writes nothing. It prints its checks as JSON, prints a `FATAL:` line on stderr for each failed check, and exits 42, the `worktree_branch_check` contract's code; a git call the seam stops (its timeout or a signal) is named in the failed checks. Recovery stays with the orchestrator that owns the worktree (#48).
+The verb reads the worktree of the directory it runs in, its HEAD and branch, and writes nothing. It prints its checks as JSON, prints a `FATAL:` line on stderr for each failed check, and exits 42, the `worktree_branch_check` contract's code; a git call the seam stops (its timeout or a signal) is named in the failed checks. An argument the parser refuses exits with its usage code, so the step texts halt on any non-zero exit. Recovery stays with the orchestrator that owns the worktree (#48).
 
 ### 2. The ledger lives in the worktree's `.gsd/executor-ledger/` directory
 
@@ -49,7 +49,7 @@ The verb reads the worktree of the directory it runs in, its HEAD and branch, an
 
 ### 3. A named fallback when a verb cannot run
 
-When `gsd_run` cannot run, the executor checks the root and the branch with single commands (`git rev-parse --show-toplevel`, `git symbolic-ref --quiet --short HEAD`), each in its own Bash call. When `executor.ledger record` fails, it takes the base from the `head` its first `executor.guard` run printed before the first commit (or a `git rev-parse HEAD` run then) and keeps it as a literal; the SUMMARY records that base as `plan_head_before:`.
+When `gsd_run` cannot run, the executor checks the root and the branch with single commands (`git rev-parse --show-toplevel`, `git symbolic-ref --quiet --short HEAD`), each in its own Bash call. The root it compares against is what `git rev-parse --show-toplevel` printed on its first run in the plan, kept as a literal. For step 0b it uses a relative path, and an absolute one only when it begins with that root followed by `/` and has no `.` or `..` segment; otherwise it halts. When `executor.ledger record` fails, it takes the base from the `head` its first `executor.guard` run printed before the first commit (or a `git rev-parse HEAD` run then) and keeps it as a literal; the SUMMARY records that base as `plan_head_before:`.
 
 ### 4. One git command per Bash call
 

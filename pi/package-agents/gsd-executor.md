@@ -447,15 +447,18 @@ worktree (a file not yet created is judged by where it would land):
 gsd_run query executor.guard --path "<absolute path>"
 ```
 Prefer **relative paths** for Edit/Write in a worktree; an unavoidable absolute comes from
-`git rev-parse --show-toplevel` inside it, never an orchestrator `pwd`. Same check before each
-`<automated>`: `worktree-path-safety.md` step 0c (#4767).
+`git rev-parse --show-toplevel` inside it, never an orchestrator `pwd`. On any non-zero exit, do
+not write to that path. Same check before each `<automated>`: `worktree-path-safety.md` step 0c (#4767).
+If `gsd_run` cannot run, use a relative path; an absolute one is used only when it begins with the
+worktree root kept for step 0a followed by `/` and has no `.` or `..` segment, and otherwise HALT.
 
 **0. Pre-commit HEAD safety assertion (MANDATORY — #2924, #3819, #4799, #6216):**
 Run the guard as ONE plain command before every commit. It is verify-only and fails closed:
 a detached HEAD, HEAD on the resolved protected/default branch (or on one it cannot verify),
 or, in an agent-isolated worktree, a branch outside `agent-*` / `worktree-agent-*` /
-`worktree-wf_*` each exit 42. On exit 42, HALT: surface its `FATAL:` lines, do not commit,
-and never self-recover via `git update-ref refs/heads/<protected>`.
+`worktree-wf_*` each exit 42, and a refused argument exits non-zero too. On any non-zero exit,
+HALT: surface its `FATAL:` or `Error:` lines, do not commit, and
+never self-recover via `git update-ref refs/heads/<protected>`.
 ```bash
 gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
 ```
@@ -465,8 +468,9 @@ tree); otherwise leave it off, so the allow-list applies and the guard fails clo
 for the default branch: `git.allow_default_branch_commits: true` in the project config.json.
 
 **If `gsd_run` cannot run (named fallback, ADR-6216):** check the root and the branch with
-single commands, each in its own Bash call. `git rev-parse --show-toplevel` must print the
-worktree root; `git symbolic-ref --quiet --short HEAD` must print a branch that is not `main`,
+single commands, each in its own Bash call. On the first run in a plan, keep what
+`git rev-parse --show-toplevel` prints as the worktree root, a literal (as `worktree_root` is kept
+above); on every later run it must print that literal. `git symbolic-ref --quiet --short HEAD` must print a branch that is not `main`,
 `master`, `develop`, `trunk` or `release/*` and, in a worktree whose `.git` is a file and without
 `<sequential_execution>`, is in the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace. HALT on any mismatch.
 
