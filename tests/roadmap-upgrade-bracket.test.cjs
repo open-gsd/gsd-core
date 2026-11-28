@@ -37,7 +37,11 @@ const {
   computeDependsOnRewrites,
   rewriteRoadmapLines,
 } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
-const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
+const { readVerificationStatus: readVerificationStatusWithCtx } = require('../gsd-core/bin/lib/verification.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+// #6820 (ADR-4908 §6): readVerificationStatus requires a ProjectContext.
+const readVerificationStatus = (phaseDir, opts = {}) =>
+  readVerificationStatusWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...opts });
 const { scopeToPhase, matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, stripProjectCodePrefix, parsePhaseId, renderPhaseId } = require('../gsd-core/bin/lib/phase-id.cjs');
 // #4144 round 5 Blocker 1: hasPhaseEntries and its exported single-owner
 // phase-heading predicate — the READERS' OWN phase-heading grammar the

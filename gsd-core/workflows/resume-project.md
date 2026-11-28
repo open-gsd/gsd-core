@@ -81,7 +81,7 @@ cat "${PROJECT_PATH}"
 <step name="claim_handoff">
 If `$ARGUMENTS` contains a newline, or any line equal to `GSD_ARGS_END`, do not run the fences below: the text would end the heredoc early and the lines after it would run as shell. Tell the user the role must be one line.
 
-**Claim this session's handoff first (ADR-4962 Decision 3).** A pause belongs to the session that wrote it. With a role (`--role <text>` as the last argument; free text, handled only as data through `"$ROLE"`), the unclaimed `.planning/HANDOFF.latest.<role_id>.json` is claimed by an atomic rename to `.planning/HANDOFF.claimed.<role_id>.<session_id>.json` BEFORE it is read: of two sessions resuming the same role, one rename succeeds and the other finds no unclaimed file. A session without a role reads its own `.planning/HANDOFF.<session_id>.json`; a legacy `.planning/HANDOFF.json` is read unless its `role_id` names another role. Another session's `HANDOFF.claimed.*` file is never read.
+**Claim this session's handoff first (ADR-4962 Decision 3).** A pause belongs to the session that wrote it. With a role (`--role <text>` as the last argument; free text, handled only as data through `"$ROLE"`), the unclaimed `.planning/HANDOFF.latest.<role_id>.json` is claimed by a rename to `.planning/HANDOFF.claimed.<role_id>.<session_id>.json` BEFORE it is read, and only the session that first creates the exclusive claim marker `.planning/.handoff-claim.<role_id>` renames: of two sessions resuming the same role, one wins and the other finds no unclaimed file. A session without a role reads its own `.planning/HANDOFF.<session_id>.json`; a legacy `.planning/HANDOFF.json` is read unless its `role_id` names another role. Another session's `HANDOFF.claimed.*` file is never read.
 
 ```bash
 # fence=claim-handoff
@@ -97,8 +97,26 @@ OWN=$(_gsd_sess own_handoff)
 HANDOFF=""
 case "$OWN" in
   HANDOFF.latest.*.json)
-    if mv "./.planning/$OWN" "./.planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json" 2>/dev/null; then
-      HANDOFF=".planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json"
+    # The exclusive create of a claim marker decides the winner (ADR-4962 Decision 3, amended): two renames of one
+    # source can both succeed on Windows, so the rename alone is not exclusive. The marker holds its creation time
+    # (epoch seconds); one older than a day is a crash leftover and is removed. A guarded glob loop, not `find`
+    # (the check_incomplete_work block below says why); an empty or non-numeric marker is a live one being written.
+    shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+    _NOW=$(date +%s 2>/dev/null)
+    case "$_NOW" in ''|*[!0-9]*) ;; *)
+      for _M in .planning/.handoff-claim.*; do
+        [ -e "$_M" ] || continue
+        _T=''; IFS= read -r _T < "$_M" 2>/dev/null || :
+        case "$_T" in ''|*[!0-9]*) continue ;; esac
+        if [ $((_NOW - _T)) -gt 86400 ]; then rm -f -- "$_M"; fi
+      done ;;
+    esac
+    _CLAIM_MARK=".planning/.handoff-claim.${ROLE_ID}"
+    if ( set -o noclobber; date +%s > "$_CLAIM_MARK" ) 2>/dev/null; then
+      if mv "./.planning/$OWN" "./.planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json" 2>/dev/null; then
+        HANDOFF=".planning/HANDOFF.claimed.${ROLE_ID}.${SESSION_ID}.json"
+      fi
+      rm -f -- "$_CLAIM_MARK"
     fi ;;
   '')
     if [ -z "$SESSION_ID" ] && [ -f .planning/HANDOFF.json ]; then

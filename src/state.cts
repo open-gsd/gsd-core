@@ -136,7 +136,7 @@ import stateMdSchemaMod = require('./state-md-schema.cjs');
 
 // #2573 D5: used to pin `git rev-parse` to the project's own repo. Imports only
 // node builtins, so it introduces no cycle on this path.
-import { findProjectRoot } from './project-root.cjs';
+import { resolveProjectContext } from './project-context.cjs';
 // #3311: advisory (phase, session) claim over the single Current Position slot.
 // Imports only node builtins + planning-workspace + active-workstream-store, so
 // it introduces no cycle on this path.
@@ -3589,7 +3589,7 @@ function buildStateFrontmatter(
             // #612: `phaseConvention` threaded so a bracket phase dir resolves
             // and scopes its verification report like its legacy twin — the
             // read-side half of the same thread cmdStateSync gets below.
-            const completion = isPhaseComplete(phaseDir, { convention: phaseConvention });
+            const completion = isPhaseComplete(phaseDir, { ctx: resolveProjectContext(phaseDir), convention: phaseConvention });
             // #5118 (no write before the error): every STATE.md write rebuilds
             // this frontmatter BEFORE its write, so a report whose `status` is
             // outside the closed set fails the write here — the owner's error,
@@ -4008,7 +4008,7 @@ function readGitHeadSha(cwd: string | undefined): string | null {
   // subprocess on this path (the caller holds the STATE lock).
   let projectRoot: string;
   try {
-    projectRoot = findProjectRoot(cwd);
+    projectRoot = resolveProjectContext(cwd).projectRoot;
   } catch {
     return null; // cannot prove which repo would answer → unknown
   }
@@ -7365,7 +7365,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     // #5118 (no write before the error): `state sync` writes STATE.md only
     // after this scan, so an out-of-set report status fails it here, having
     // written nothing.
-    const completion = isPhaseComplete(dirPath, { convention: syncConvention });
+    const completion = isPhaseComplete(dirPath, { ctx: resolveProjectContext(dirPath), convention: syncConvention });
     if (completion.value.statusError) throw completion.value.statusError;
     if (completion.value.complete) diskCompletedPhases++;
 

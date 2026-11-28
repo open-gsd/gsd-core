@@ -9,6 +9,7 @@
 import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveProjectContext } from './project-context.cjs';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { PHASE_ENTRY_BOLD_CLOSE_SRC, isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
@@ -1393,7 +1394,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // thread convention here too, so this write path's completion reading
   // agrees with the read path's under the bracket convention.
   const convention = resolvePhaseIdConvention(cwd);
-  const completionResult = isPhaseComplete(phaseDir, { convention });
+  const completionResult = isPhaseComplete(phaseDir, { ctx: resolveProjectContext(cwd), convention });
   // #5118: no write before the error — a report whose `status` is outside the
   // closed set fails this writer before ROADMAP.md is touched.
   if (completionResult.value.statusError) failOnVerificationStatusError(completionResult.value.statusError);
