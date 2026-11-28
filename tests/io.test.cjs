@@ -935,10 +935,12 @@ describe('#3912 A3-A5: output({error}) records DEGRADED — shape-exhaustive plu
     assert.deepStrictEqual(
       perFile,
       {
-        'commands.cts': 5, 'frontmatter.cts': 10, 'gsd2-import.cts': 2, 'phase.cts': 4,
+        'commands.cts': 5, 'frontmatter.cts': 12, 'gsd2-import.cts': 2, 'phase.cts': 4,
         // frontmatter.cts +2 #5105: spliceOrReportRefusal's write-refusal report (shared by
         // set/merge) and cmdFrontmatterMerge's #1660 lossy-object-list-field refusal (parity
         // with cmdFrontmatterSet's existing site) — 8 -> 10.
+        // frontmatter.cts +2 #6278: the dotted-field-over-a-map refusal in cmdFrontmatterSet and
+        // cmdFrontmatterMerge — 10 -> 12.
         // verify.cts 8 -> 0 #5170: the eight sites became typed verdicts printed by emitVerbVerdict
         // (src/verify.cts), which calls output(verdict.payload) with a NON-literal argument (so the
         // literal-shape census no longer sees them) and then declareGateExit (src/gate-exit.cts). Pending
@@ -952,7 +954,7 @@ describe('#3912 A3-A5: output({error}) records DEGRADED — shape-exhaustive plu
       },
       `per-file output({error}) census drifted: ${JSON.stringify(perFile)}`,
     );
-    assert.strictEqual(total, 55, `enumerated output({error}) population drifted from the measured 55 (69 - verify.cts's 8 sites that #5170 converted to typed verdicts - #4926's 6 refusals moved to error()): got ${total}`);
+    assert.strictEqual(total, 57, `enumerated output({error}) population drifted from the measured 57 (69 - verify.cts's 8 sites that #5170 converted to typed verdicts - #4926's 6 refusals moved to error() + #6278's 2 dotted-field refusals): got ${total}`);
   });
 });
 

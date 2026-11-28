@@ -1361,6 +1361,8 @@ node gsd-tools.cjs frontmatter merge <file> --data '{json}'
 node gsd-tools.cjs frontmatter validate <file> --schema plan|summary|verification
 ```
 
+`frontmatter set --field` names one top-level key; a dot is part of the name, not a path. A dotted name that is not already a key and whose prefix is an existing map (`progress.percent` beside a `progress:` map) is refused, because writing it literally would add a separate top-level `progress.percent` key and leave the nested value unchanged (#6278). The refusal is `{ "error", "code": "FRONTMATTER_DOTTED_FIELD_OVER_MAP", "field" }` on stdout and nothing is written. It is a degraded result, which exits `0` under the default `v1` exit contract and `80` (`DEGRADED`) under `--exit-contract=v2` (see [json-errors.md](json-errors.md)), so match `code` rather than the exit status. `frontmatter merge` refuses such a key in `--data` the same way and writes none of the object; it checks the document it would write, so a map added by the same `--data` counts too (`{"progress":{"percent":1},"progress.percent":2}` is refused). To change a nested value, set the whole map: `frontmatter set <file> --field progress --value '{"percent":100}'`. A dotted name is still written as one literal key when a key of that exact spelling already exists, when its prefix is absent, or when the prefix holds a scalar or a list.
+
 ---
 
 ## Scaffold Commands

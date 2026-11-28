@@ -16,6 +16,7 @@
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const yaml = require('js-yaml');
+const fc = require('fast-check');
 
 const {
   extractFrontmatter,
@@ -23,6 +24,8 @@ const {
   spliceFrontmatter,
   stripFrontmatter,
   noOpObjectListSetError,
+  FRONTMATTER_DOTTED_FIELD_OVER_MAP,
+  dottedFieldOverMapError,
   parseMustHavesBlock,
   frontmatterListEntries,
   flattenObjectListItem,
@@ -2562,6 +2565,84 @@ describe('frontmatter commands and reader seam (in-process)', () => {
     });
   });
 
+  // #6278: the refusal set and merge report for a dotted field over a map. The message is spelled
+  // out here so a wording change shows in the diff; the code is read from its owner, the module.
+  const DOTTED_MSG = (field, prefix, surface = 'set') =>
+    `frontmatter ${surface} refused — "${field}" is not an existing key, and "${prefix}" is a map: ` +
+    `${surface === 'set' ? '--field' : 'a --data key'} names one top-level key, so this would add a ` +
+    `separate "${field}" key beside the "${prefix}" map, not a value inside it. To change a value ` +
+    `inside "${prefix}", set the whole map: ` +
+    (surface === 'set' ? `--field ${prefix} --value '{...}'.` : `--data '{"${prefix}":{...}}'.`);
+  const DOTTED = (field, prefix, surface = 'set') =>
+    ({ error: DOTTED_MSG(field, prefix, surface), code: FRONTMATTER_DOTTED_FIELD_OVER_MAP, field });
+
+  // #6278: --field is one literal key. A dotted name whose prefix is an existing map is refused
+  // with a code; any other dotted name, and a key of that exact spelling that already exists,
+  // is written as before.
+  describe('cmdFrontmatterSet: dotted field over an existing map (#6278)', () => {
+    const REPORTED_DOC = '---\nprogress:\n  total_phases: 2\n  completed_phases: 1\n  percent: 50\n---\n# body\n';
+
+    test('the refusal code is the documented string', () => {
+      assert.equal(FRONTMATTER_DOTTED_FIELD_OVER_MAP, 'FRONTMATTER_DOTTED_FIELD_OVER_MAP');
+    });
+
+    for (const [label, doc, field, prefix] of [
+      ['the reporter\'s progress.percent', REPORTED_DOC, 'progress.percent', 'progress'],
+      ['the reporter\'s progress.percent in a CRLF document', REPORTED_DOC.replace(/\n/g, '\r\n'), 'progress.percent', 'progress'],
+      ['a deeper name under the map', REPORTED_DOC, 'progress.detail.percent', 'progress'],
+      ['a map found at the second dot (first prefix absent)', '---\n"a.b":\n  c: 1\n---\n', 'a.b.c', 'a.b'],
+      ['a map found at the second dot (first prefix a scalar)', '---\na: 1\n"a.b":\n  c: 1\n---\n', 'a.b.c', 'a.b'],
+    ]) {
+      test(`${label} is refused with its code and nothing is written`, () => {
+        const name = file(doc);
+        assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, field, '100', false)), DOTTED(field, prefix));
+        assert.equal(read(name), doc);
+      });
+    }
+
+    for (const [label, doc, field, written] of [
+      ['no key named by the prefix', '---\nwave: 2\n---\n', 'release.notes', '---\nwave: 2\nrelease.notes: v\n---\n'],
+      ['a scalar prefix', '---\nwave: 2\n---\n', 'wave.x', '---\nwave: 2\nwave.x: v\n---\n'],
+      ['a list prefix', '---\ntags:\n  - a\n---\n', 'tags.x', '---\ntags:\n  - a\ntags.x: v\n---\n'],
+      ['an existing top-level key of that spelling beside the map', '---\na:\n  b: 1\na.b: 3\n---\n', 'a.b', '---\na:\n  b: 1\na.b: v\n---\n'],
+      ['a __proto__ prefix the file does not hold', '---\nwave: 2\n---\n', '__proto__.x', '---\nwave: 2\n__proto__.x: v\n---\n'],
+    ]) {
+      test(`a dotted field with ${label} is written as a literal key`, () => {
+        const name = file(doc);
+        assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, field, 'v', false)), { updated: true, field, value: 'v' });
+        assert.equal(read(name), written);
+      });
+    }
+
+    // Refused iff a proper dotted prefix of the name is an own map of the document and the name
+    // itself is not an own key. Documents are built from generated key and value shapes, not by
+    // the writer; seed and run count are pinned, and fast-check prints the counterexample and
+    // seed on failure (CONTRIBUTING: property-style tests).
+    test('property: refused iff a proper dotted prefix is an own map and the name is not an own key', () => {
+      const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+      const isMap = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+      const name = fc.array(fc.constantFrom('a', 'b', 'progress', '__proto__', ''), { minLength: 1, maxLength: 4 })
+        .map((segments) => segments.join('.'));
+      const value = fc.constantFrom('s', ['x'], { k: 'v' }, {});
+      const doc = fc.array(fc.tuple(name, value), { maxLength: 6 }).map((entries) => {
+        const fm = {};
+        for (const [k, v] of entries) Object.defineProperty(fm, k, { value: v, writable: true, enumerable: true, configurable: true });
+        return fm;
+      });
+      fc.assert(fc.property(doc, name, (fm, field) => {
+        const segments = field.split('.');
+        const mapPrefixes = [];
+        for (let i = 1; i < segments.length; i++) {
+          const prefix = segments.slice(0, i).join('.');
+          if (prefix !== '' && own(fm, prefix) && isMap(fm[prefix])) mapPrefixes.push(prefix);
+        }
+        const refused = !own(fm, field) && mapPrefixes.length > 0;
+        const got = dottedFieldOverMapError(fm, field, 'set');
+        assert.equal(got, refused ? DOTTED_MSG(field, mapPrefixes[0]) : null);
+      }), { seed: 6278, numRuns: 1000 });
+    });
+  });
+
   // ─── cmdFrontmatterMerge ──────────────────────────────────────────────────────
 
   describe('cmdFrontmatterMerge', () => {
@@ -2601,6 +2682,35 @@ describe('frontmatter commands and reader seam (in-process)', () => {
       });
       assert.equal(read(name), LOSSY_DOC);
     });
+
+    // #6278: each dotted key is checked against the document the merge would write, so a map the
+    // same --data adds counts in either key order; a refusal writes none of the object.
+    const PROGRESS_DOC = '---\nstatus: draft\nprogress:\n  percent: 50\n---\n';
+    for (const [label, doc, data, field] of [
+      ['a dotted key over an existing map, after a key that passes the lossy check', PROGRESS_DOC, '{"note":"n","progress.percent":100}', 'progress.percent'],
+      ['a dotted key after a key that changes an existing field', PROGRESS_DOC, '{"status":"done","progress.percent":100}', 'progress.percent'],
+      ['a depth-two dotted key over an existing map', PROGRESS_DOC, '{"progress.detail.percent":100}', 'progress.detail.percent'],
+      ['a dotted key over a map the same --data adds first', '---\nstatus: draft\n---\n', '{"progress":{"percent":1},"progress.percent":2}', 'progress.percent'],
+      ['a dotted key over a map the same --data adds after it', '---\nstatus: draft\n---\n', '{"progress.percent":2,"progress":{"percent":1}}', 'progress.percent'],
+      ['a dotted key over an existing map in a CRLF document', PROGRESS_DOC.replace(/\n/g, '\r\n'), '{"progress.percent":100}', 'progress.percent'],
+    ]) {
+      test(`${label} is refused with its code and nothing is written (#6278)`, () => {
+        const name = file(doc);
+        assert.deepEqual(json(() => cmdFrontmatterMerge(dir, name, data, false)), DOTTED(field, 'progress', 'merge'));
+        assert.equal(read(name), doc);
+      });
+    }
+
+    for (const [label, doc, data, written] of [
+      ['an existing top-level key of that spelling beside the map', '---\na:\n  b: 1\na.b: 3\n---\n', '{"a.b":"v"}', '---\na:\n  b: 1\na.b: v\n---\n'],
+      ['a prefix the same --data turns from a map into a scalar', '---\nprogress:\n  percent: 50\n---\n', '{"progress":"done","progress.percent":"v"}', '---\nprogress: done\nprogress.percent: v\n---\n'],
+    ]) {
+      test(`a dotted key with ${label} is merged as a literal key (#6278)`, () => {
+        const name = file(doc);
+        assert.deepEqual(json(() => cmdFrontmatterMerge(dir, name, data, false)), { merged: true, fields: Object.keys(JSON.parse(data)) });
+        assert.equal(read(name), written);
+      });
+    }
 
     test('an unparseable block is a write refusal reported with its code', () => {
       const name = file(BAD_DOC);

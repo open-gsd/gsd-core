@@ -1523,6 +1523,39 @@ function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: strin
   }
 }
 
+/**
+ * #6278: `--field` names one literal top-level key (docs/CLI-TOOLS.md: `--field key`); a dot is
+ * not a path separator. A dotted name whose prefix is an existing map (`progress.percent` beside
+ * `progress:`) almost always means the caller wanted the nested sub-key, and writing it literally
+ * added a sibling `progress.percent` key, left the nested value unchanged and reported success.
+ * Such a name is refused as `{ error, code: FRONTMATTER_DOTTED_FIELD_OVER_MAP, field }` and
+ * nothing is written. A key of that exact spelling that already exists stays settable: a document
+ * may legitimately hold both a map `a` and a top-level `a.b` (found while implementing #5105).
+ * Prefixes are read from `after`, the document the command would write (for `merge`, every
+ * `--data` key applied, so a map the same `--data` adds counts); the exact-spelling exemption
+ * reads `before`, the document as read. `surface` names the command and flag in the message.
+ */
+const FRONTMATTER_DOTTED_FIELD_OVER_MAP = 'FRONTMATTER_DOTTED_FIELD_OVER_MAP';
+
+function dottedFieldOverMapError(
+  before: Frontmatter, field: string, surface: 'set' | 'merge', after: Frontmatter = before,
+): string | null {
+  if (Object.prototype.hasOwnProperty.call(before, field)) return null;
+  for (let dot = field.indexOf('.'); dot !== -1; dot = field.indexOf('.', dot + 1)) {
+    const prefix = field.slice(0, dot);
+    if (!prefix || !Object.prototype.hasOwnProperty.call(after, prefix)) continue;
+    const existing: unknown = after[prefix];
+    if (existing === null || typeof existing !== 'object' || Array.isArray(existing)) continue;
+    const flag = surface === 'set' ? '--field' : 'a --data key';
+    const wholeMap = surface === 'set' ? `--field ${prefix} --value '{...}'` : `--data '{${JSON.stringify(prefix)}:{...}}'`;
+    return `frontmatter ${surface} refused — "${field}" is not an existing key, and "${prefix}" is a map: ` +
+      `${flag} names one top-level key, so this would add a separate "${field}" key beside the ` +
+      `"${prefix}" map, not a value inside it. To change a value inside "${prefix}", set the whole map: ` +
+      `${wholeMap}.`;
+  }
+  return null;
+}
+
 function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefined, value: string | undefined, raw: boolean): void {
   if (!filePath || !field || value === undefined) { error('file, field, and value required'); }
   // Path traversal guard: reject null bytes
@@ -1536,6 +1569,11 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   const fm = extractFrontmatter(content, fullPath);
   let parsedValue: unknown;
   try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
+  const dottedErr = dottedFieldOverMapError(fm, field as string, 'set');
+  if (dottedErr) {
+    output({ error: dottedErr, code: FRONTMATTER_DOTTED_FIELD_OVER_MAP, field }, raw, undefined);
+    return;
+  }
   // #1660 (broadened): a lossy object-list field being genuinely CHANGED must fail closed
   // before it is regenerated, not just when the regenerated result happens to be byte-identical
   // to the original (see objectListFieldWouldLoseData's docblock).
@@ -1653,7 +1691,17 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   // #1660 parity with `cmdFrontmatterSet`: a merged key that would flatten a lossy object-list
   // field is refused before anything is written, reported in set's `{ error, field }` shape
   // (found while implementing #5105).
+  // #6278: the document this merge would write, so a dotted key is checked against a map the
+  // same `--data` adds as well as one the file already holds, whatever the key order.
+  const merged = Object.assign(Object.create(null) as Frontmatter, fm);
+  for (const [key, value] of Object.entries(mergeData)) setOwnField(merged, key, value);
   for (const [key, value] of Object.entries(mergeData)) {
+    // #6278 parity with `cmdFrontmatterSet`: a dotted key over a map is refused too.
+    const dottedErr = dottedFieldOverMapError(fm, key, 'merge', merged);
+    if (dottedErr) {
+      output({ error: dottedErr, code: FRONTMATTER_DOTTED_FIELD_OVER_MAP, field: key }, raw, undefined);
+      return;
+    }
     const lossyErr = objectListFieldWouldLoseData(content, key, value);
     if (lossyErr) {
       output({ error: lossyErr, field: key }, raw, undefined);
@@ -1746,6 +1794,10 @@ export = {
   get SPLICE_PARSE_BUDGET_CHARS() { return spliceModule().SPLICE_PARSE_BUDGET_CHARS; },
   stripFrontmatter,
   noOpObjectListSetError,
+  // #6278: the refusal code set/merge report for a dotted field over a map, and the pure check
+  // behind it, so tests read the one owner of both.
+  FRONTMATTER_DOTTED_FIELD_OVER_MAP,
+  dottedFieldOverMapError,
   parseMustHavesBlock,
   // #3850: an array key's entries as parsed OBJECTS, for a caller that must
   // branch on an entry's `status:`/`resolution:` rather than print it. Off the
