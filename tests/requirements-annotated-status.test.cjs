@@ -109,6 +109,8 @@ describe('requirements mark-complete reads the Status word (#6238)', () => {
     assert.ok(r.success, r.error);
     const out = JSON.parse(r.output);
     const after = fs.readFileSync(reqPath(), 'utf-8');
+    assert.deepEqual(out.status_refused, CELLS.flatMap(([cell, advances], i) =>
+      advances || cell === 'Complete' ? [] : [{ requirement: idOf(i), status: cell }]));
     CELLS.forEach(([cell, advances], i) => {
       const id = idOf(i);
       if (advances) {
@@ -151,7 +153,79 @@ describe('requirements mark-complete reads the Status word (#6238)', () => {
     const out = JSON.parse(r.output);
     assert.deepEqual(out.marked_complete, []);
     assert.deepEqual(out.not_found, ['CELL-99']);
+    assert.equal(Object.hasOwn(out, 'status_refused'), false);
     assert.equal(rowOf(fs.readFileSync(reqPath(), 'utf-8'), 'CELL-01'), 'Pending');
+  });
+
+  test('mark-complete reports a refused Status separately from an unknown ID (#6651)', () => {
+    const before = requirementsText([['Blocked']]);
+    fs.writeFileSync(reqPath(), before);
+    const r = runGsdTools(['requirements', 'mark-complete', 'CELL-01', 'CELL-99'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepEqual(out.not_found, ['CELL-99']);
+    assert.deepEqual(out.status_refused, [{ requirement: 'CELL-01', status: 'Blocked' }]);
+    assert.deepEqual(out.table_unmatched, []);
+    assert.equal(out.updated, false);
+    assert.equal(fs.readFileSync(reqPath(), 'utf-8'), before);
+  });
+  test('mark-complete reports refused Status under a positional ID header and rolls back the checkbox (#6651)', () => {
+    const before = requirementsText([['Blocked'], ['Blocked (review)'], ['']])
+      .replace('| Requirement | Phase | Status |', '| ID | Phase | Status |')
+      .replace('- [ ] **CELL-02**', '- [x] **CELL-02**')
+      .replace(/^- \[ \] \*\*CELL-03\*\*.*\n/m, '');
+    fs.writeFileSync(reqPath(), before);
+    const r = runGsdTools(['requirements', 'mark-complete', 'CELL-01', 'CELL-02', 'CELL-03', 'CELL-99'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepEqual(out.status_refused, [
+      { requirement: 'CELL-01', status: 'Blocked' },
+      { requirement: 'CELL-02', status: 'Blocked (review)' },
+      { requirement: 'CELL-03', status: '' },
+    ]);
+    assert.deepEqual(out.not_found, ['CELL-99']);
+    assert.deepEqual(out.already_complete, []);
+    assert.deepEqual(out.marked_complete, []);
+    assert.equal(out.updated, false);
+    assert.equal(fs.readFileSync(reqPath(), 'utf-8'), before);
+  });
+
+  test('mark-complete retains applied writes and reports refusal per input in mixed CRLF results (#6651)', () => {
+    const before = requirementsText([['Pending'], ['Complete'], ['In Progress']])
+      .replace('- [ ] **CELL-02**', '- [x] **CELL-02**')
+      .replace(/\n/g, '\r\n');
+    fs.writeFileSync(reqPath(), before);
+    const r = runGsdTools(['requirements', 'mark-complete', 'CELL-01', 'CELL-02', 'CELL-03', 'CELL-99', 'CELL-03'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.equal(out.updated, true);
+    assert.deepEqual(out.marked_complete, ['CELL-01']);
+    assert.deepEqual(out.already_complete, ['CELL-02']);
+    assert.deepEqual(out.not_found, ['CELL-99']);
+    assert.deepEqual(out.status_refused, [
+      { requirement: 'CELL-03', status: 'In Progress' },
+      { requirement: 'CELL-03', status: 'In Progress' },
+    ]);
+    assert.equal(out.total, 5);
+    assert.equal(out.write_set_complete, false);
+    assert.equal(fs.readFileSync(reqPath(), 'utf-8').replace(/\r\n/g, '\n'), before.replace(/\r\n/g, '\n')
+      .replace('- [ ] **CELL-01**', '- [x] **CELL-01**')
+      .replace('| CELL-01 | Phase 01 | Pending |', '| CELL-01 | Phase 01 | Complete |'));
+  });
+
+  test('mark-complete does not invent a refusal for a row with no Status column (#6651)', () => {
+    const before = requirementsText([['Blocked']])
+      .replace(/^- \[ \] \*\*CELL-01\*\*.*\n/m, '')
+      .replace('| Requirement | Phase | Status |', '| Requirement | Phase |')
+      .replace('|-------------|-------|--------|', '|-------------|-------|')
+      .replace('| CELL-01 | Phase 01 | Blocked |', '| CELL-01 | Phase 01 |');
+    fs.writeFileSync(reqPath(), before);
+    const r = runGsdTools(['requirements', 'mark-complete', 'CELL-01'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepEqual(out.not_found, ['CELL-01']);
+    assert.equal(Object.hasOwn(out, 'status_refused'), false);
+    assert.equal(fs.readFileSync(reqPath(), 'utf-8'), before);
   });
 });
 

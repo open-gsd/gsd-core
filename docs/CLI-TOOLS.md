@@ -1447,6 +1447,13 @@ node gsd-tools.cjs requirements mark-complete <ids>
 # Accepts: REQ-01,REQ-02 or REQ-01 REQ-02 or [REQ-01, REQ-02]
 ```
 
+When a matching traceability row has a Status cell that is neither already
+complete nor eligible to advance, the command leaves the requirement unchanged.
+The JSON report includes `status_refused` only when non-empty. Each entry gives the
+`requirement` ID and the trimmed `status` cell value (which can be empty).
+`not_found` lists IDs with neither a matching Status cell nor a recognized
+requirement checkbox.
+
 **`milestone complete` flags**
 
 | Flag | Description |

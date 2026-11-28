@@ -142,6 +142,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   const updated: string[] = [];
   const alreadyComplete: string[] = [];
   const notFound: string[] = [];
+  const statusRefused: Array<{ requirement: string; status: string }> = [];
   // #2140: IDs reconciled on the checkbox surface only — a traceability table
   // exists but has no row for the ID. Without this bucket the payload for a
   // partial reconcile is byte-identical to a full one, and audit-milestone (which
@@ -157,16 +158,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   // so a missing row only counts as drift when a table actually exists.
   const hasTable = /^\|\s*(?:Requirement(?:\s*ID)?|REQ[-\s]?ID)\s*\|/im.test(reqContent);
 
-  // ADR-2143 §6 per-surface write-set, tracked PER requirement ID: a
-  // multi-ID batch must not OR one ID's surface outcome into another's —
-  // that is the exact #2140 class one level up (an ID whose traceability
-  // row is absent/unmatched must not have its partial write masked by a
-  // different ID in the same invocation that fully reconciled). Reported
-  // additively as `write_set` below — it does not change the existing
-  // marked_complete/already_complete/not_found/table_unmatched/updated
-  // computation, which stays byte-for-behaviour identical (#2140's tactical
-  // fix already surfaces the checkbox-only-partial-write case via
-  // table_unmatched; this only adds the structured ADR-2143 shape on top).
+  // ADR-2143 §6: track each requirement's checkbox and traceability writes
+  // independently, so a successful ID cannot mask another ID's partial write (#2140).
   const writeSet: WriteSet = [];
 
   for (const reqId of reqIds) {
@@ -201,7 +194,9 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // Complete" gate is folded into the newValue callback so one
     // updateTableCell call both probes the current value and writes.
     let tableHit = false;
+    let statusCell = '';
     const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
+      statusCell = current;
       // #2788: accept `Gaps Found` as a forward input too — `revert-phase` (the
       // documented gaps_found response) leaves a row stranded at Gaps Found with
       // no inverse; a genuinely-satisfied requirement must be able to reach
@@ -223,8 +218,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // silently diverge. The checkbox and the row are two representations of the
     // same fact; flipping one while the other rejects the write is the lie.
     let checkboxHit = checkboxFlipped;
-    const rowExistsProbe = tableUpdate;  // ok === a row matched (probes existence)
-    if (checkboxFlipped && rowExistsProbe.ok && !tableHit) {
+    const hasRow = tableUpdate.ok;
+    if (checkboxFlipped && hasRow && !tableHit) {
       reqContent = beforeCheckbox;
       checkboxHit = false;
     }
@@ -239,43 +234,25 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       writeSet.push({ requirement: reqId, surface: 'traceability', applied: tableHit });
     }
 
-    // Coverage of the traceability surface for this ID (computed after any flip).
-    // hasRow keys on the ID's FIRST cell (the requirement-ID column, by position —
-    // see rowMatch above) so a bare mention of the ID in a non-traceability table
-    // does not masquerade as a real row.
-    // Ragged-tolerant (#2245 Blocker 2): same reasoning as the write above — a
-    // sibling row's raggedness must not blind this classification to a row
-    // that genuinely exists. Probe via a no-op updateTableCell write (its own
-    // tolerant scan) instead of findTableWithColumns (whole-table parse gate).
-    let currentStatusCell = '';
-    const statusProbe = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
-      currentStatusCell = current;
-      return current;
-    });
-    const hasRow = statusProbe.ok;
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
-    const doneTable = Boolean(hasRow && leadingRequirementStatus(currentStatusCell, ['complete']) !== null);
-
-    // #2788 defect 2: when a traceability table exists AND this ID has a row in
-    // it, `updated`/`marked_complete` must reflect the ROW moving, not a
-    // checkbox-only flip. Otherwise (`table_unmatched` — no row for this ID, or
-    // no table at all) the checkbox flip is a legitimate partial reconcile / the
-    // sole completion surface, so the #2140 OR semantics are preserved.
-    const rowExists = hasTable && hasRow;
-    const idUpdated = rowExists ? tableHit : (checkboxHit || tableHit);
+    const doneTable = hasRow && leadingRequirementStatus(statusCell, ['complete']) !== null;
+    // Preserve the #2140 summary and write-set rules for files without a
+    // recognized traceability header. A matched Status cell still controls
+    // refusal reporting, just as it controls the checkbox rollback above.
+    const idUpdated = hasTable && hasRow ? tableHit : (checkboxHit || tableHit);
     if (idUpdated) {
       updated.push(reqId);
-    } else if (doneTable || (doneCheckbox && !hasTable)) {
-      // Fully reconciled: the table row is Complete, OR the checkbox is done and
-      // there is no table to reconcile against. (A [x] checkbox with a Pending or
-      // absent row is NOT fully reconciled when a table exists — #2140.)
+    } else if (doneTable) {
       alreadyComplete.push(reqId);
-    } else if (!doneCheckbox && !doneTable) {
+    } else if (hasRow) {
+      statusRefused.push({ requirement: reqId, status: statusCell.trim() });
+    } else if (doneCheckbox && !hasTable) {
+      alreadyComplete.push(reqId);
+    } else if (!doneCheckbox) {
       notFound.push(reqId);
     }
-    // else: doneCheckbox && hasTable && !doneTable — partially reconciled. It is
-    // neither updated, already_complete, nor not_found; the table_unmatched bucket
-    // below carries the truthful partial-reconcile signal.
+    // A checked box with an unmatched row on a recognized table is reported
+    // via table_unmatched, not in a main bucket.
 
     // Surface traceability drift: checkbox reconciled (this run or before) but the
     // table has no row for this ID. This is what makes a partial reconcile
@@ -291,17 +268,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     platformWriteSync(reqPath, reqContent);
   }
 
-  // ADR-2143 §6: `writeSet` above already carries one WriteOutcome per
-  // (requirement, surface) this invocation could have written to — per ID,
-  // not ORed across the batch. `write_set` and `write_set_complete` are
-  // additive: they do not replace or gate `updated` / `marked_complete` /
-  // `already_complete` / `not_found` / `table_unmatched`, which remain
-  // computed exactly as before (see #2140 note above — that fix already
-  // surfaces a checkbox-only partial write via `table_unmatched`;
-  // `write_set_complete` is a structured, ADR-2143-shaped read of the SAME
-  // per-surface, per-ID facts, `false` if ANY id's ANY required surface did
-  // not apply, since `writeSetComplete` requires EVERY entry to have
-  // applied, never an OR across surfaces OR across IDs).
+  // Write-set completeness requires every tracked write to have applied,
+  // independently of the summary buckets.
   output(
     {
       updated: updated.length > 0,
@@ -309,6 +277,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       already_complete: alreadyComplete,
       not_found: notFound,
       table_unmatched: tableUnmatched,
+      ...(statusRefused.length > 0 ? { status_refused: statusRefused } : {}),
       total: reqIds.length,
       write_set: writeSet,
       write_set_complete: writeSetComplete(writeSet),
