@@ -35,6 +35,12 @@ export interface TestReportCase {
  */
 const TEST_FILE_NAME = /\.[cm]?[jt]sx?$/;
 
+/**
+ * pytest's JUnit writer (`_pytest/junitxml.py`) reports a test-body failure as <failure>, but a
+ * collection crash (`append_collect_error`) and a fixture that failed in setup or teardown
+ * (`append_error`) as <error> with these fixed messages. Such an entry asserted nothing (#6641).
+ */
+const PYTEST_HARNESS_ERROR = /^(?:collection failure$|failed on (?:setup|teardown) with ")/;
 /** jest-junit's classNameTemplate for a suite that produced no results (utils/buildJsonResults.js). */
 const JEST_SUITE_FAILED_TO_RUN = 'Test suite failed to run';
 
@@ -269,6 +275,8 @@ function parseJunit(output: string): TestReport {
   const elements: string[] = [];
   const suites: { firstTest: number; planned: number | null }[] = [];
   let current: TestReportCase | null = null;
+  let harnessError = false;
+  let asserted = false;
   parser.on('error', () => { report.issues.push('Malformed XML'); });
   parser.on('doctype', () => { report.issues.push('JUnit reports must not declare a DTD'); });
   parser.on('opentag', (tag) => {
@@ -299,6 +307,8 @@ function parseJunit(output: string): TestReport {
       if (tag.name === 'failure' || tag.name === 'error') {
         if (current.status === TestStatus.Skipped) report.issues.push('Contradictory JUnit status');
         current.status = TestStatus.Failed;
+        if (tag.name === 'error' && PYTEST_HARNESS_ERROR.test(tag.attributes['message'] ?? '')) harnessError = true;
+        else asserted = true;
       }
       if (tag.name === 'skipped') {
         if (current.status === TestStatus.Failed) report.issues.push('Contradictory JUnit status');
@@ -309,8 +319,11 @@ function parseJunit(output: string): TestReport {
   });
   parser.on('closetag', (tag) => {
     if (tag.name === 'testcase' && current) {
-      report.tests.push(current);
+      // A pytest harness error with no assertion failure beside it is a load/fixture failure.
+      report.tests.push(harnessError && !asserted ? { ...current, loadFailure: true } : current);
       current = null;
+      harnessError = false;
+      asserted = false;
     } else if (tag.name === 'testsuite' || tag.name === 'testsuites') {
       const suite = suites.pop();
       if (!suite || (suite.planned !== null && suite.planned !== report.tests.length - suite.firstTest)) {

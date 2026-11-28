@@ -2255,3 +2255,101 @@ describe('#5879: the RED-evidence location named by tdd.md cannot block the wave
     } finally { cleanup(base); }
   });
 });
+
+// ── #6641 — pytest JUnit XML: harness errors are never RED evidence ───────────
+// pytest's `--junitxml` writer marks a test-body failure as <failure>, but a
+// collection crash, a fixture that fails in setup, and a fixture that fails in
+// teardown as <error> with fixed messages (`_pytest/junitxml.py`:
+// `append_collect_error` → "collection failure", `append_error` →
+// 'failed on setup|teardown with "…"'). The JUnit adapter counted every <error>
+// as a failed test, so a passing test whose fixture crashed scored
+// RED_EVIDENCE_OK. Fixtures: real pytest 9.2.0 / CPython 3.14 captures
+// (tests/fixtures/tdd-red-evidence/README.md).
+describe('#6641 — pytest JUnit harness errors are never a RED target', () => {
+  const FIXTURES = path.join(__dirname, 'fixtures', 'tdd-red-evidence');
+  const classifyPytest = (fixture, targetTest, extra = {}) => classifyRedEvidence({
+    command: `python -m pytest -q --junitxml=report.xml (${fixture})`,
+    exitCode: 1,
+    output: fs.readFileSync(path.join(FIXTURES, fixture), 'utf8'),
+    targetTest,
+    ...extra,
+  });
+
+  test('a genuine pytest RED (assertion in the test body) is RED_EVIDENCE_OK by name and by classname#name', () => {
+    for (const target of ['test_target', 'test_evidence#test_target']) {
+      const result = classifyPytest('pytest-red.xml', target, { targetFile: 'test_evidence.py' });
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.evidence.matched_test, 'test_evidence#test_target');
+    }
+  });
+
+  test('a class-based or parametrized pytest RED is named by classname#name exactly as the report writes it', () => {
+    // pytest-class-red.xml: tests/test_widget.py, TestWidget.test_x and test_param[a-1] both assert 1 == 2.
+    for (const [target, matched] of [
+      ['tests.test_widget.TestWidget#test_x', 'tests.test_widget.TestWidget#test_x'],
+      ['test_x', 'tests.test_widget.TestWidget#test_x'],
+      ['tests.test_widget#test_param[a-1]', 'tests.test_widget#test_param[a-1]'],
+      ['test_param[a-1]', 'tests.test_widget#test_param[a-1]'],
+    ]) {
+      const result = classifyPytest('pytest-class-red.xml', target);
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.reason, 'target_test_failed', target);
+      assert.equal(result.evidence.matched_test, matched, target);
+    }
+    // The module path without the class, or a parametrized name without its brackets, names no test.
+    for (const target of ['tests.test_widget#test_x', 'tests.test_widget#test_param', 'test_param']) {
+      const result = classifyPytest('pytest-class-red.xml', target);
+      assert.equal(result.verdict, 'INVALID_RED', target);
+      assert.equal(result.reason, 'no_target_test_failure', target);
+    }
+  });
+
+  test('a fixture that fails in setup is fixture_or_load_failure, not RED', () => {
+    const result = classifyPytest('pytest-setup-error.xml', 'test_target');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'fixture_or_load_failure');
+    assert.equal(result.evidence.matched_test, null);
+  });
+
+  test('a passing test whose fixture fails in teardown is fixture_or_load_failure, not RED', () => {
+    const result = classifyPytest('pytest-teardown-error.xml', 'test_target');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'fixture_or_load_failure');
+  });
+
+  test('a collection crash is fixture_or_load_failure, whether the target names the test or the module', () => {
+    for (const target of ['test_target', 'test_collect']) {
+      const result = classifyPytest('pytest-collection-error.xml', target, { exitCode: 2 });
+      assert.equal(result.verdict, 'INVALID_RED', target);
+      assert.equal(result.reason, 'fixture_or_load_failure', target);
+    }
+  });
+
+  test('a body failure plus a teardown error (two <testcase> entries) still matches the body failure', () => {
+    const result = classifyPytest('pytest-red-teardown-error.xml', 'test_target');
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.evidence.matched_test, 'test_red_teardown#test_target');
+  });
+
+  test('parser: only pytest harness <error> entries become load failures; other <error> entries stay failed tests', () => {
+    const setup = parseTestReport(fs.readFileSync(path.join(FIXTURES, 'pytest-setup-error.xml'), 'utf8'));
+    assert.equal(setup.valid, true);
+    assert.deepEqual(setup.tests.map((t) => [t.status, Boolean(t.loadFailure)]), [['failed', true]]);
+    const surefireError = '<testsuite tests="1"><testcase classname="com.example.AppTest" name="explodes">'
+      + '<error message="boom" type="java.lang.IllegalStateException"/></testcase></testsuite>';
+    const other = parseTestReport(surefireError);
+    assert.deepEqual(other.tests.map((t) => [t.status, Boolean(t.loadFailure)]), [['failed', false]]);
+  });
+
+  test('classifier: a Surefire <error> classifies exactly as before, by method name and by class#method', () => {
+    const output = '<testsuite tests="1"><testcase classname="com.example.AppTest" name="explodes">'
+      + '<error message="boom" type="java.lang.IllegalStateException">java.lang.IllegalStateException: boom\n'
+      + '\tat com.example.App.run(App.java:12)\n\tat com.example.AppTest.explodes(AppTest.java:9)</error>'
+      + '</testcase></testsuite>';
+    for (const target of ['explodes', 'com.example.AppTest#explodes']) {
+      const result = classifyRedEvidence({ command: 'mvn test', exitCode: 1, output, targetTest: target });
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.reason, 'target_test_failed', target);
+    }
+  });
+});

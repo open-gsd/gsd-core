@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="2" time="0.000" timestamp="2026-11-24T00:00:00.000000+00:00" hostname="capture-host"><testcase classname="tests.test_widget.TestWidget" name="test_x" time="0.000"><failure message="assert 1 == 2">self = &lt;test_widget.TestWidget object at 0x0&gt;
+
+    def test_x(self):
+&gt;       assert 1 == 2
+E       assert 1 == 2
+
+tests/test_widget.py:6: AssertionError</failure></testcase><testcase classname="tests.test_widget" name="test_param[a-1]" time="0.000"><failure message="assert 1 == 2">label = 'a', value = 1
+
+    @pytest.mark.parametrize("label,value", [("a", 1)])
+    def test_param(label, value):
+&gt;       assert value == 2
+E       assert 1 == 2
+
+tests/test_widget.py:11: AssertionError</failure></testcase></testsuite></testsuites>

@@ -82,3 +82,33 @@ properties are captured data, not matching criteria.
   `test_known_bug` (`@unittest.expectedFailure`, passes); `add` returns 0.
 - `unittest-load-error.txt`: the same command with a test module whose import
   fails (`import missing_module`).
+
+- `pytest-red.xml`, `pytest-collection-error.xml`, `pytest-setup-error.xml`,
+  `pytest-teardown-error.xml`, `pytest-red-teardown-error.xml`,
+  `pytest-class-red.xml` (#6641): written by `regen-pytest.sh` in this
+  directory, which holds the exact test sources, runs each one alone in a fresh
+  temporary directory with
+  `python -m pytest -q -p no:cacheprovider <file> --junitxml=<report>`
+  (pytest 9.2.0 through `uv`), checks the exit status (1, except 2 for the
+  collection error) and applies the only rewrites: the capture directory to
+  `/tmp/capture`, the interpreter's base prefix to `/usr`, the hostname to
+  `capture-host`, the suite timestamp to `2026-11-24T00:00:00.000000+00:00`,
+  every `time` duration to `0.000`, and an `object at 0x…` address to `0x0`.
+  A rerun with the same pytest reproduces the files byte for byte. The first
+  five were captured on 2026-11-24 with CPython 3.14.9 and are unchanged by the
+  regeneration with CPython 3.14.4 except for the normalised timestamp and
+  durations. Sources: `test_evidence.py` (`test_target` asserts `1 == 2`,
+  `test_other` passes); `test_collect.py` (`from os import NO_SUCH_NAME` at
+  module top); `test_setup.py` (a fixture that raises before `yield`; the test
+  passes); `test_teardown.py` (a fixture that raises after `yield`; the test
+  passes); `test_red_teardown.py` (the same fixture; the test asserts `1 == 2`,
+  so pytest writes two `<testcase>` entries for it); `tests/test_widget.py`
+  (`TestWidget.test_x` and the parametrized `test_param[a-1]` both assert
+  `1 == 2`; classnames `tests.test_widget.TestWidget` and `tests.test_widget`).
+  Minimum pytest: 6.0.0. The `<error>` messages the parser keys on come from
+  `_pytest/junitxml.py`: `collection failure` (`append_collect_error`,
+  unchanged since 2010) and `failed on setup|teardown with "<cause>"`
+  (`append_error`, since pytest 6.0.0, pytest-dev/pytest#7385). Before 6.0.0
+  those two read `test setup failure` and `test teardown failure`; such a
+  report's harness `<error>` stays a plain failed test, so record RED with
+  pytest 6.0 or later.

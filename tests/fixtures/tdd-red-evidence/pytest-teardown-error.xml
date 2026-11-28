@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.000" timestamp="2026-11-24T00:00:00.000000+00:00" hostname="capture-host"><testcase classname="test_teardown" name="test_target" time="0.000"><error message="failed on teardown with &quot;RuntimeError: teardown boom&quot;">@pytest.fixture
+    def td():
+        yield
+&gt;       raise RuntimeError("teardown boom")
+E       RuntimeError: teardown boom
+
+test_teardown.py:5: RuntimeError</error></testcase></testsuite></testsuites>
