@@ -561,20 +561,7 @@ claude --dangerously-skip-permissions
 
 ### Plan Drift Guard
 
-**Default-on.** The plan drift guard (`plan_review.source_grounding: true`) runs during plan review and verifies that every symbol your plans cite — decorators, classes, functions, CLI flags — actually exists in your source tree at review time. This catches hallucinated names before any execution agent runs.
-
-**Two axes, one switch.** The same guard also runs a cross-artifact fact-drift pass: when ROADMAP.md, PLAN.md, STATE.md and CONTEXT.md state the *same* fact in contradictory ways — a phase marked complete in one and in progress in the other, a success criterion the plan restates with a different outcome, a term used against its CONTEXT.md definition — you get an advisory finding in REVIEWS.md naming both locations and which one is authoritative. It keys on contradicting *knowledge*, not on similar-looking text, so a plan that simply restates a criterion in its own words is not flagged. The findings never block convergence.
-
-**What it catches:**
-
-- Functions referenced in a PLAN.md step that don't exist in source
-- Class or decorator names that were renamed or removed since the plan was written
-- CLI flags documented in a plan that are not defined in the argument parser
-- Module paths cited in implementation steps that resolve to no files
-
-**Needs-acknowledgement behavior.** When the guard finds a missing symbol, it emits a `needs-acknowledgement` notice in the plan review output rather than hard-blocking. You can acknowledge and proceed (the symbol may be intentionally new) or request a plan revision. The guard does not auto-reject plans — it surfaces signal for human decision.
-
-**Works without intel.** By default the guard uses `grep`/`ripgrep` to search source files — no pre-indexing required. If you have run `/gsd-map-codebase` with `intel.enabled: true`, set `plan_review.source_grounding_authority: intel` to use the faster pre-built `api-map.json` index instead.
+The guard is on by default. During plan review it checks that every symbol a plan cites (functions, classes, decorators, CLI flags, module paths) exists in your source, and it reports contradictions between ROADMAP.md, PLAN.md, STATE.md and CONTEXT.md. A missing symbol raises a `needs-acknowledgement` notice you can accept or send back for revision; it never auto-rejects a plan.
 
 ```bash
 # Enable/disable (default: on)
@@ -586,7 +573,7 @@ claude --dangerously-skip-permissions
 /gsd-settings plan_review.source_grounding_authority intel  # pre-indexed api-map.json
 ```
 
-Toggle at project setup (`/gsd-new-project` asks during workflow preferences) or any time via `/gsd-settings` (Planning section → Drift Guard).
+What each check covers and each resolver value means: [`plan_review.source_grounding`](CONFIGURATION.md#plan-review-settings) and `plan_review.source_grounding_authority`. Why the guard is shaped this way: [ADR 22](adr/22-plan-drift-guard.md).
 
 ### Quick Bug Fix
 
