@@ -1305,21 +1305,16 @@ For each `*-PLAN.md`: back it up to `*-PLAN.pre-bounce.md`, invoke `${BOUNCE_SCR
 
 ## 13. Requirements Coverage Gate
 
-After plans pass the checker (or checker is skipped), verify that all phase requirements are covered by at least one plan.
+After the checker passes or is skipped, verify each phase requirement has a plan.
 
 **Skip if:** `phase_req_ids` is null or TBD (no requirements mapped to this phase).
 
-**Step 1: Extract requirement IDs claimed by plans**
+**Step 1: Collect the IDs live plans claim**
 ```bash
-# Collect all requirement IDs from plan frontmatter
-PLAN_REQS=$(grep -h "requirements_addressed\|requirements:" ${PHASE_DIR}/*-PLAN.md 2>/dev/null | tr -d '[]' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sort -u)
+PLAN_REQS=$(gsd_run query phase.list-plans ${GSD_WS:+--ws=${GSD_WS##* }} "{phase_number}" | jq -r '.plans[]' | tr -d '\r' | while IFS= read -r p; do gsd_run query frontmatter.get "{project_root}/$p" --field requirements --raw | jq -r '(arrays|.[]),.|strings|splits("[,\\s]+")|select(.!="")'; done | tr -d '\r' | sort -u)
 ```
 
-**Step 2: Compare against phase requirements from ROADMAP**
-
-For each REQ-ID in `phase_req_ids`:
-- If REQ-ID appears in `PLAN_REQS` → covered ✓
-- If REQ-ID does NOT appear in any plan → uncovered ✗
+**Step 2: Compare.** A REQ-ID in `phase_req_ids` is covered ✓ only if it equals a `PLAN_REQS` line exactly, else uncovered ✗.
 
 **Step 3: Check CONTEXT.md features against plan objectives**
 

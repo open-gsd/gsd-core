@@ -35,8 +35,11 @@ function span(relFile, from, through) {
 /**
  * Run `lines` under bash with `gsd_run` stubbed to print `stdout` and return `rc`. `setE` runs them
  * under `set -e`; `preamble` lines (variable seeds) run first; `probe` runs last (read variables).
+ * `timeoutMs` bounds the bash run (PROBE_TIMEOUT_MS when omitted); a block that fans out to several CLI and
+ * jq spawns passes a larger one.
+ * `env` is the environment the run starts from (a test that runs the real CLI passes `isolatedEnv(...)`).
  */
-function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '' } = {}) {
+function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '', timeoutMs, env = process.env } = {}) {
   // A real `jq` on PATH is used as is. Where there is none (the Tester Image has no jq, and a block that
   // calls it dies with exit 127 before the logic under test runs) `jq` is the subset stub, which knows ONLY
   // the filters the gate handler's blocks use (tests/helpers/jq-subset-stub.cjs). Shadowing a real jq with
@@ -53,9 +56,9 @@ function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = ''
   ].join('\n');
   const r = spawnSync('bash', ['-c', script], {
     encoding: 'utf8',
-    timeout: PROBE_TIMEOUT_MS,
+    timeout: timeoutMs ?? PROBE_TIMEOUT_MS,
     env: {
-      ...process.env,
+      ...env,
       STUB_OUT: stdout,
       STUB_RC: String(rc),
       STUB_NODE: process.execPath,

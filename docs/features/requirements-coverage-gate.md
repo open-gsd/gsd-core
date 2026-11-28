@@ -8,7 +8,7 @@ group: Quality Assurance Features
 
 **Requirements:**
 - REQ-COVGATE-01: System MUST extract all requirement IDs assigned to the phase from ROADMAP.md
-- REQ-COVGATE-02: System MUST verify each requirement appears in at least one PLAN.md
+- REQ-COVGATE-02: System MUST verify each requirement exactly matches an ID listed in the `requirements` frontmatter of at least one live PLAN.md
 - REQ-COVGATE-03: Uncovered requirements MUST block planning completion
 - REQ-COVGATE-04: System MUST report which specific requirements lack plan coverage
 
