@@ -158,6 +158,17 @@ describe('#6464 planner-guidance.md names every rule the validator can emit', ()
     });
   }
 
+  test('the R4 contract line names the piped-gate shape and its corrected forms (#6602)', () => {
+    const line = GUIDANCE.split('\n').find((l) => l.includes('**R4**'));
+    assert.ok(line, 'no **R4** line in planner-guidance.md');
+    for (const term of ['`tail`', '`head`', '`grep`', 'out=$(cmd)', 'set -o pipefail', 'PIPESTATUS']) {
+      assert.ok(line.includes(term), `the R4 line must name ${term}: ${line}`);
+    }
+    const piped = scanQuantitativeCriteria(plan('  - see below.', 'pytest -x | tail -n 20'));
+    assert.ok(piped.warnings.some((msg) => msg.includes('[plan-criteria R4]')),
+      `the shape the line names must be the shape the validator flags: ${JSON.stringify(piped)}`);
+  });
+
   test('the guidance states the plan-criteria-allow exit with its required reason', () => {
     assert.ok(GUIDANCE.includes('plan-criteria-allow:'),
       'guidance must give the literal exit marker grammar');

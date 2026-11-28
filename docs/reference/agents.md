@@ -185,6 +185,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Performs reachability check to validate plan steps reference accessible files and APIs (v1.32)
 - Enforces a comment-text discipline HARD GATE at plan-write time (`verify.plan-structure`): a literal that an acceptance criterion negative-greps for (`grep -c 'LIT' file == 0`) must not appear verbatim in an `<action>` body; violations fail plan creation. Use `<!-- planner-discipline-allow: LIT -->` to allowlist a legitimate occurrence. (#429)
 - Records each count/match gate's measured baseline as `[HEAD=<value> EXPECT<op><value>]` beside the gate. `verify.plan-structure` rejects a notation that already holds at HEAD unless it carries `GUARD MUTATION: <ref>` (B1), and the plan-checker blocks on that finding (#4309). See [PLAN.md → Baseline notation](plan-md.md#baseline-notation).
+- Keeps a gating `<automated>` command out of a pipe into `tail`, `head` or `grep`, where the check would report that program's status. `verify.plan-structure` warns on the shape (R4) unless a `set -o pipefail` command comes earlier in the check, the next command reads `$PIPESTATUS`, or the `grep` is fed only by `grep`, `sed`, `awk`, `cat` or `tac`. (#6602)
 
 ---
 

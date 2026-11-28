@@ -5869,6 +5869,355 @@ describe('#4024: verify plan-structure — quantitative criteria gate (e2e)', ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #6602 — R4: a gating command piped into tail, head or grep
+//
+// An <automated> check's status is its pipeline's LAST stage, so
+// `pytest -x | tail -n 20` reports tail's status. R4 warned about the shape
+// for a `git` pipeline. Each row below is one <automated> body.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PIPED_GATE_WARNING = '[plan-criteria R4] A gating command piped into';
+
+describe('#6602: scanQuantitativeCriteria — R4 on a gate piped into tail, head or grep', () => {
+  let scanQuantitativeCriteria;
+
+  // Self-contained bindings, as in the #4024 block above: the enclosing
+  // fold-point scopes own `before` and the fast-check handle.
+  const before = require('node:test').before;
+  const fc = require('./helpers/fast-check-setup.cjs');
+  const VERIFY_CJS_LOCAL = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'verify.cjs');
+
+  before(() => {
+    scanQuantitativeCriteria = require(VERIFY_CJS_LOCAL).scanQuantitativeCriteria;
+  });
+
+  const scanAutomated = (automated) => scanQuantitativeCriteria(makeCriteriaPlan('  - see the task verify.', automated));
+  const pipedWarnings = (result) => result.warnings.filter((w) => w.startsWith(PIPED_GATE_WARNING));
+
+  const WARNS = [
+    // the issue's shapes
+    ['a test run piped into tail', 'pytest -x | tail -n 20'],
+    ['a script piped into head', 'node check.js | head'],
+    ['a test run piped into grep', "npm test 2>&1 | grep -E '[0-9]+ passed'"],
+    ['a |& pipe', 'npm test |& tail -5'],
+    // where the pipeline sits in the body
+    ['a bare ( ) subshell group', '( npm test | tail -5 )'],
+    ['the last && segment', 'npm run build && npm test | tail -5'],
+    ['an earlier && segment', 'npm test | tail -5 && npm run lint'],
+    ['an earlier ; command, with an unlisted last stage after it', 'pytest -x | tail -n 20; echo ok | wc -l'],
+    ['a pipe continued on the next line', 'npm test |\ntail -5'],
+    ['a |& pipe continued on the next line', 'npm test |&\ntail -5'],
+    ['a pipe after a command substitution has closed', 'echo $(date) | tail -1'],
+    ['a pipeline after a substitution that holds &&', 'x=$(cd d && pwd); npm test | tail -5'],
+    ['a # inside a word', 'echo build#3; npm test | tail -5'],
+    ['a # inside a double-quoted argument', 'echo "step # 1"; npm test | tail -5'],
+    ['a # inside a single-quoted argument', "echo 'step # 1'; npm test | tail -5"],
+    ['a # after an escaped quote inside double quotes', 'echo "a \\" # b"; npm test | tail -5'],
+    // how the last stage names the program
+    ['a `command` prefix', 'npm test | command tail -5'],
+    ['a path to the program', 'npm test | /usr/bin/tail -5'],
+    ['an assignment before the program', 'npm test | LC_ALL=C grep -q passed'],
+    ['an `env` prefix', 'npm test | env LC_ALL=C grep -q passed'],
+    ['a backslash before the program', 'npm test | \\tail -5'],
+    ['a double-quoted program name', 'npm test | "tail" -n 5'],
+    ['a single-quoted program name', "npm test | 'tail' -n 5"],
+    ['a ( ) group as the last stage', 'npm test | (tail -5)'],
+    ['a ) right after the program', '(npm test | tail)'],
+    // tail and head, whatever feeds them
+    ['a text filter piped into head', 'grep ERROR build.log | head -5'],
+    ['a negated pipeline into tail', '! npm test | tail -5'],
+    // a grep with a program among the stages feeding it
+    ['a dependency listing piped into grep', "pnpm ls vite | grep -E 'vite@7\\.'"],
+    ['a program, then a filter, then grep', 'npm test | grep -v DEBUG | grep -c FAIL'],
+    ['a filter, then a program, then grep', 'cat notes.md | npm run fmt | grep -q TODO'],
+    ['a negated program piped into grep', '! npm test 2>&1 | grep -q FAIL'],
+    ['a ! joined to the first word', "!sed -n '1,5p' notes.md | grep -q TODO"],
+    // no pipefail switch counted for the pipeline
+    ['pipefail turned on after the pipeline', 'pytest -x | tail -n 20; set -o pipefail'],
+    ['pipefail turned on between two pipelines', 'pytest -x | tail -n 20; set -o pipefail; node a.js | head -5'],
+    ['set +o pipefail', 'set +o pipefail; pytest -x | tail -n 20'],
+    ['pipefail turned on, then off', 'set -o pipefail; set +o pipefail; pytest -x | tail -n 20'],
+    ['pipefail turned on and off by one set command', 'set -o pipefail +o pipefail; npm test | tail -5'],
+    ['shopt -so, then shopt -uo', 'shopt -so pipefail; shopt -uo pipefail; npm test | tail -5'],
+    ['shopt -s without -o', 'shopt -s pipefail; npm test | tail -5'],
+    ['shopt -so with another option', 'shopt -so nullglob; npm test | tail -5'],
+    ['a longer option name', 'set -o pipefailx; npm test | tail -5'],
+    ['shopt -so with a longer option name', 'shopt -so pipefailx; npm test | tail -5'],
+    ['the words in an echoed string', 'echo "set -o pipefail"; pytest -x | tail -n 20'],
+    ['the words in a comment after set', 'set -e # -o pipefail\npytest -x | tail -n 20'],
+    ['pipefail set by a ( ) group of its own', '(set -o pipefail); pytest -x | tail -n 20'],
+    ['pipefail set by a later command of a ( ) group', '(true; set -o pipefail); pytest -x | tail -n 20'],
+    ["another program's -o pipefail argument", 'sort -o pipefail x.txt; pytest -x | tail -n 20'],
+    ['pipefail set by a stage of the pipeline itself', 'set -o pipefail | tail -5'],
+    ['pipefail set by a stage of an earlier pipeline', 'set -o pipefail | cat; npm test | tail -5'],
+    ["zsh's setopt spelling", 'setopt pipefail; npm test | tail -5'],
+    // $PIPESTATUS not in the command written next
+    ['the bare word PIPESTATUS', 'pytest -x | tail -n 20; echo done PIPESTATUS'],
+    ['PIPESTATUS in a comment on the next command', 'pytest -x | tail -n 20; true # ${PIPESTATUS[0]}'],
+    ['PIPESTATUS read one command too late', 'pytest -x | tail -n 20; :; exit ${PIPESTATUS[0]}'],
+    ["a later pipeline's PIPESTATUS read", 'pytest -x | tail -n 20\nnode b.js | wc -l; exit ${PIPESTATUS[0]}'],
+    ["zsh's lowercase pipestatus", 'pytest -x | tail -n 20; exit ${pipestatus[1]}'],
+  ];
+  for (const [label, automated] of WARNS) {
+    test(`warns (never errors) on ${label}`, () => {
+      const result = scanAutomated(automated);
+      assert.strictEqual(pipedWarnings(result).length, 1,
+        `expected one piped-gate R4 warning for ${JSON.stringify(automated)}, got: ${JSON.stringify(result.warnings)}`);
+      assert.deepStrictEqual(result.errors, [],
+        `R4 is warn-only, got errors: ${JSON.stringify(result.errors)}`);
+    });
+  }
+
+  const QUIET = [
+    // no pipe
+    ['the test command alone', 'npm test'],
+    ['an unpiped grep', 'grep -q token src/a.ts'],
+    ['an unpiped tail', 'tail -n 5 log.txt'],
+    // the output captured first, then filtered
+    ['a captured test run, then tail', 'out=$(pytest -x) && tail -n 20 <<<"$out"'],
+    ['a captured listing, then grep', "out=$(pnpm ls vite) && grep -E 'vite@7\\.' <<<\"$out\""],
+    ['a captured test run, then a negated grep', 'out=$(npm test 2>&1) && ! grep -q FAIL <<<"$out"'],
+    // a pipefail switch written earlier, the latest one turning it on
+    ['pipefail on, earlier ; command', 'set -o pipefail; pytest -x | tail -n 20'],
+    ['pipefail on, earlier && segment', 'set -o pipefail && pytest -x | tail -n 20'],
+    ['pipefail on, earlier line (-euo spelling)', 'set -euo pipefail\nnpm run build | tail -5'],
+    ['pipefail on (-o errexit -o pipefail spelling)', 'set -o errexit -o pipefail; npm test | tail -5'],
+    ['pipefail on (shopt -so spelling)', 'shopt -so pipefail; npm test | tail -5'],
+    ['pipefail turned off, then on', 'set +o pipefail; set -o pipefail; pytest -x | tail -n 20'],
+    ['pipefail on inside a { } group', '{ set -o pipefail; npm test | tail -5; }'],
+    ['pipefail on after a ( ) group has closed', '(cd app; true); set -o pipefail; npm test | tail -5'],
+    ['pipefail on, then turned off inside a ( ) group', 'set -o pipefail; (true; set +o pipefail); pytest -x | tail -n 20'],
+    // $PIPESTATUS in the command written next
+    ['PIPESTATUS read by the next ; command', 'pytest -x | tail -n 20; exit ${PIPESTATUS[0]}'],
+    ['PIPESTATUS read by the next && segment', 'pytest -x | tail -n 20 && test ${PIPESTATUS[0]} -eq 0'],
+    ['PIPESTATUS saved by the next command', 'pytest -x | tail -n 20; rc=$PIPESTATUS; exit $rc'],
+    ['PIPESTATUS read on the line after a trailing ;', 'npm test | tail -5;\nexit ${PIPESTATUS[0]}'],
+    // a grep fed by text filters alone
+    ['a negated awk-range gate', "! awk '/^def make_page/,/^def /' app/page.py | grep -Eq 'await .*refresh'"],
+    ['a negated sed-range gate', "! sed -n '12,40p' app/page.py | grep -Eq 'await .*refresh'"],
+    ['a negated sed-range gate in a ( ) group', "( ! sed -n '12,40p' app/page.py | grep -Eq 'await .*refresh' )"],
+    ['grep fed by grep', "grep -v '^#' src/a.ts | grep -c token"],
+    ['grep fed by sed', "sed -n '12,40p' app/page.py | grep -q refresh"],
+    ['grep fed by awk', "awk '/start/,/end/' notes.md | grep -q TODO"],
+    ['grep fed by cat', 'cat notes.md | grep -c TODO'],
+    ['grep fed by tac', 'tac notes.md | grep -q TODO'],
+    ['grep fed by two filters', "cat notes.md | sed -n '1,9p' | grep -q TODO"],
+    // a | that is not this check's pipeline
+    ['a | inside a double-quoted argument', 'grep -c "a | tail -1" notes.md'],
+    ['a | after an escaped quote inside double quotes', 'echo "say \\"hi\\" | tail -1"'],
+    ['a | inside a single-quoted argument', "echo 'x | head -1'"],
+    ['a backslash-escaped |', 'echo a \\| tail -1'],
+    ['a | inside a command substitution', 'test $(ls dist | head -1) = index.js'],
+    ['a | inside a substitution that holds &&', 'test $(cd dist && ls | head -1) = index.js'],
+    ['a | inside a substitution that holds a ( ) group', 'test $( (cd sub; ls) | head -1 ) = x'],
+    ['a | inside an input process substitution', 'diff <(sort a.txt | head -3) expected.txt'],
+    ['a | inside an output process substitution', 'npm test > >(sed s/x/y/ | tail -1)'],
+    ['a | inside a backtick span', 'test "`ls dist | head -1`" = index.js && echo `ls | head -1`'],
+    ['a | inside a trailing comment', 'npm test # avoid | tail -n 20'],
+    ['a | inside a whole-line comment', '# npm test | tail -5\nnpm test'],
+    ['a | inside a comment after a quoted argument', 'echo "x" # avoid | tail -1'],
+    ['a | inside a comment after an escaped quote', 'echo \\" # avoid | tail -1'],
+    ['a | inside a comment right after ;', 'true;# x | tail -5'],
+    // a continued pipe ends with its line
+    ['an unpiped tail on the line after a continued pipe', 'cat notes.md |\ngrep -q TODO\ntail -5 log.txt'],
+    // the last stage is another program
+    ['a pipe into a program off the list', 'npm test | tee out.log'],
+    ['a longer word starting with a listed name', 'npm test | tail-recent'],
+  ];
+  for (const [label, automated] of QUIET) {
+    test(`stays quiet on ${label}`, () => {
+      const result = scanAutomated(automated);
+      assert.deepStrictEqual(result.warnings, [],
+        `${JSON.stringify(automated)} must not warn, got: ${JSON.stringify(result.warnings)}`);
+      assert.deepStrictEqual(result.errors, []);
+    });
+  }
+
+  test("pipefail in one task's check does not carry into another task's check", () => {
+    const twoTasks = makeCriteriaPlan('  - see the task verify.', 'set -o pipefail; npm run build | tail -5') + [
+      '',
+      '<task type="auto">',
+      '  <name>Task 2: Do another thing</name>',
+      '  <files>other/file.ts</files>',
+      '  <action>Do the other thing</action>',
+      '  <verify><automated>pytest -x | tail -n 20</automated></verify>',
+      '  <done>Other thing is done</done>',
+      '</task>',
+    ].join('\n');
+    const result = scanQuantitativeCriteria(twoTasks);
+    assert.strictEqual(pipedWarnings(result).length, 1,
+      `task 2 never set pipefail, got: ${JSON.stringify(result.warnings)}`);
+  });
+
+  test('a `git` gate piped into head reports one R4 warning, the existing one', () => {
+    const result = scanAutomated('git log --oneline | head -5');
+    assert.strictEqual(result.warnings.filter((w) => w.includes('[plan-criteria R4]')).length, 1,
+      JSON.stringify(result.warnings));
+    assert.deepStrictEqual(pipedWarnings(result), []);
+  });
+
+  test('an <acceptance_criteria> line is read, not run: the same text there does not warn', () => {
+    // No inline-code backticks: a backtick span is skipped wherever it sits, so a
+    // backticked criterion would not show which block the rule judges.
+    const result = scanQuantitativeCriteria(
+      makeCriteriaPlan('  - pytest -x | tail -n 20 shows no failures.', ''),
+    );
+    assert.deepStrictEqual(result.warnings, [], JSON.stringify(result.warnings));
+  });
+
+  test('<verify> text outside <automated> is not judged', () => {
+    const plan = makeCriteriaPlan('  - see the task verify.', 'npm test').replace(
+      '</automated></verify>',
+      '</automated><human-check>Confirm a line like example | head -1 appears.</human-check></verify>',
+    );
+    assert.ok(plan.includes('<human-check>'), 'the fixture must carry the human-check text');
+    assert.deepStrictEqual(scanQuantitativeCriteria(plan).warnings, []);
+  });
+
+  test('the allow marker exits it; an empty reason does not', () => {
+    const flagged = makeCriteriaPlan('  - see the task verify.', 'npm ls vite | grep -q vite@7');
+    assert.strictEqual(pipedWarnings(scanQuantitativeCriteria(flagged)).length, 1);
+    const allowed = flagged.replace(
+      '<acceptance_criteria>',
+      '<acceptance_criteria>\n  <!-- plan-criteria-allow: R4 - the grep on the listing is the assertion -->',
+    );
+    assert.deepStrictEqual(scanQuantitativeCriteria(allowed).warnings, []);
+    const emptyReason = flagged.replace(
+      '<acceptance_criteria>',
+      '<acceptance_criteria>\n  <!-- plan-criteria-allow: R4 - -->',
+    );
+    assert.strictEqual(pipedWarnings(scanQuantitativeCriteria(emptyReason)).length, 1);
+  });
+
+  // Three arms in one property, so no constant verdict satisfies it: the same
+  // generated command warns when piped into a listed program, and is quiet
+  // both with pipefail on first and with no pipe at all.
+  test('property: piped → one warning; pipefail first → quiet; unpiped → quiet', () => {
+    const word = fc.stringMatching(/^[a-z][a-z0-9_.-]{0,10}$/);
+    fc.assert(
+      fc.property(
+        word,
+        fc.array(word, { maxLength: 3 }),
+        fc.constantFrom('tail', 'head', 'grep'),
+        fc.array(fc.stringMatching(/^-?[A-Za-z0-9]{1,6}$/), { maxLength: 2 }),
+        (program, args, filter, filterArgs) => {
+          const words = [program, ...args];
+          // Out of this property's reach: a word ending in `git` is the existing
+          // R4 arm's, a grep fed by the five text filters is not flagged, `set` and
+          // `shopt` can switch pipefail, and `env` / `command` are prefixes.
+          fc.pre(!words.some((w) => /(?:^|[^a-z0-9_])git$/.test(w)));
+          fc.pre(!['grep', 'sed', 'awk', 'cat', 'tac', 'set', 'shopt', 'env', 'command'].includes(program));
+          const command = words.join(' ');
+          const piped = `${command} | ${[filter, ...filterArgs].join(' ')}`;
+          assert.strictEqual(pipedWarnings(scanAutomated(piped)).length, 1, piped);
+          assert.deepStrictEqual(pipedWarnings(scanAutomated(`set -o pipefail; ${piped}`)), [], piped);
+          assert.deepStrictEqual(pipedWarnings(scanAutomated(command)), [], command);
+        },
+      ),
+    );
+  });
+});
+
+describe('#6602: verify plan-structure — a piped gate warns and the plan stays valid (e2e)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-test'), { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function verifyPlan(automated) {
+    const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', '01-01-PLAN.md');
+    fs.writeFileSync(planPath, makeCriteriaPlan('  - see the task verify.', automated));
+    return runGsdTools('verify plan-structure .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+  }
+
+  test('`pytest -x | tail -n 20` → valid plan, exit 0, one R4 warning', () => {
+    const result = verifyPlan('pytest -x | tail -n 20');
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.valid, true, `R4 is warn-only, errors: ${JSON.stringify(out.errors)}`);
+    assert.strictEqual(out.warnings.filter((w) => w.startsWith(PIPED_GATE_WARNING)).length, 1,
+      JSON.stringify(out.warnings));
+  });
+
+  test('`set -o pipefail; pytest -x | tail -n 20` → valid plan, no R4 warning', () => {
+    const result = verifyPlan('set -o pipefail; pytest -x | tail -n 20');
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.valid, true);
+    assert.deepStrictEqual(out.warnings.filter((w) => w.includes('[plan-criteria R4]')), []);
+  });
+});
+
+describe('#6602: the planner documents and the rule agree', () => {
+  const PLANNER_MD = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+  const ANTIPATTERNS_MD = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-antipatterns.md');
+  let scanQuantitativeCriteria;
+  const before = require('node:test').before;
+
+  before(() => {
+    scanQuantitativeCriteria = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'verify.cjs'))
+      .scanQuantitativeCriteria;
+  });
+
+  const r4Warnings = (automated) => scanQuantitativeCriteria(makeCriteriaPlan('  - see the task verify.', automated))
+    .warnings.filter((w) => w.includes('[plan-criteria R4]'));
+
+  test('gsd-planner.md states the rule in its Grep gate hygiene paragraph and points at R4', () => {
+    const content = fs.readFileSync(PLANNER_MD, 'utf8');
+    const paragraph = /^\*\*Grep gate hygiene:\*\*.*$/m.exec(content);
+    assert.ok(paragraph, 'gsd-planner.md must carry the Grep gate hygiene paragraph');
+    for (const term of ['piped into `tail`/`head`/`grep`', "that program's status", '(R4)']) {
+      assert.ok(paragraph[0].includes(term), `the Grep gate hygiene paragraph must say ${term}: ${paragraph[0]}`);
+    }
+  });
+
+  test("the planner's own grep-count recipe draws no R4 warning", () => {
+    const recipe = "grep -v '^#' | grep -c token";
+    const content = fs.readFileSync(PLANNER_MD, 'utf8');
+    assert.ok(content.includes(`Use \`${recipe}\`.`),
+      'the Grep gate hygiene paragraph must still prescribe the recipe this row scans');
+    assert.deepStrictEqual(r4Warnings(recipe), []);
+  });
+
+  for (const gate of [
+    "! awk '/^def make_page/,/^def /' app/page.py | grep -Eq 'await .*refresh'",
+    "! sed -n '12,40p' app/page.py | grep -Eq 'await .*refresh'",
+  ]) {
+    test(`planner-antipatterns.md's region-scoped gate draws no R4 warning: ${gate}`, () => {
+      const content = fs.readFileSync(ANTIPATTERNS_MD, 'utf8');
+      assert.ok(content.includes(`<verify><automated>${gate}</automated></verify>`),
+        'planner-antipatterns.md must still give this region-scoped form');
+      assert.deepStrictEqual(r4Warnings(gate), []);
+    });
+  }
+
+  test('planner-antipatterns.md gives the test command alone as the Good form for a test run', () => {
+    const content = fs.readFileSync(ANTIPATTERNS_MD, 'utf8');
+    assert.ok(!content.includes('**Good:** `npm test 2>&1 | grep'),
+      'the Fabricated Numeric Baselines Good example must not pipe the test run into grep');
+    assert.ok(content.includes('**Good:** `npm test`'), 'the Good example is the test command alone');
+  });
+
+  for (const [label, good] of [
+    ['Good', "set -o pipefail; pnpm ls vite | grep -E 'vite@7\\.'"],
+    ['Good (strict)', "set -o pipefail; pnpm ls vite | grep -E '(└|├)── vite@7\\.'"],
+  ]) {
+    test(`planner-antipatterns.md's ${label} dependency-listing form draws no R4 warning`, () => {
+      const content = fs.readFileSync(ANTIPATTERNS_MD, 'utf8');
+      assert.ok(content.includes(`**${label}:** \`${good}\``),
+        `planner-antipatterns.md must give ${good} as its ${label} form`);
+      assert.deepStrictEqual(r4Warnings(good), []);
+    });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // verify verbs: the exit status follows the verdict (#5170, ADR-5057 §4)
 //
 // Real CLI in a child process. The JSON on stdout is the verdict and is

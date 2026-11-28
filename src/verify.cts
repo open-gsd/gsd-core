@@ -360,6 +360,202 @@ function splitShellSegments(line: string): string[] {
   return segments.filter((s) => s !== '');
 }
 
+// ─── #6602: a gating command piped into tail, head or grep ───────────────────
+
+/**
+ * Nesting carried along one line: command/process substitution depth, open
+ * backtick span, and how many bare `( … )` groups are open.
+ */
+interface ShellNest {
+  depth: number;
+  backtick: boolean;
+  group: number;
+}
+
+/**
+ * Split shell text at top-level `sep` — `;` for commands, `|` for pipeline
+ * stages (`|&` included) — QUOTE-AWARE like splitShellSegments. A separator
+ * inside a quoted literal, a command or process substitution (`$( … )`,
+ * `<( … )`, `>( … )`) or a backtick span belongs to a nested command and is
+ * not a boundary. A bare `( … )` group is not nested — its pipeline's status
+ * is the group's own — but open groups are counted for the caller. Each piece
+ * carries the nesting it starts in, and `nest` is advanced to the end of the
+ * text: splitShellSegments cuts at a `&&` inside a substitution, so the caller
+ * carries `nest` into the next segment of the same line. An unquoted `||`
+ * never reaches here.
+ */
+function splitTopLevel(text: string, sep: '|' | ';', nest: ShellNest): { text: string; nest: ShellNest }[] {
+  const pieces: { text: string; nest: ShellNest }[] = [];
+  let current = '';
+  let start: ShellNest = { ...nest };
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      current += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\') {
+        current += ch + (text[i + 1] ?? '');
+        i++;
+        continue;
+      }
+      if (ch === '"') quote = null;
+      current += ch;
+      continue;
+    }
+    if (ch === '\\') {
+      current += ch + (text[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === '\u0060') nest.backtick = !nest.backtick;
+    else if (ch === '(' && (nest.depth > 0 || /[$<>]/.test(text[i - 1] ?? ''))) nest.depth++;
+    else if (ch === '(') nest.group++;
+    else if (ch === ')' && nest.depth > 0) nest.depth--;
+    else if (ch === ')' && nest.group > 0) nest.group--;
+    else if (ch === sep && nest.depth === 0 && !nest.backtick) {
+      pieces.push({ text: current.trim(), nest: start });
+      current = '';
+      if (sep === '|' && text[i + 1] === '&') i++;
+      start = { depth: 0, backtick: false, group: nest.group };
+      continue;
+    }
+    current += ch;
+  }
+  pieces.push({ text: current.trim(), nest: start });
+  return pieces;
+}
+
+/**
+ * Drop an unquoted `#` comment from one shell line: a `#` at the start of the
+ * line, or after whitespace or `;`.
+ */
+function stripShellComment(line: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote !== null) {
+      if (quote === '"' && ch === '\\') i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '\\') i++;
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '#' && (i === 0 || /[\s;]/.test(line[i - 1]))) return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
+ * The program one pipeline stage runs: past a leading `(` or `{`, any
+ * `NAME=value` assignments and an `env` / `command` prefix; without a leading
+ * backslash or quote, and without its directory.
+ */
+function pipelineStageCommand(stage: string): string {
+  const words = stage.replace(/^[\s({]+/, '').split(/\s+/);
+  let i = 0;
+  while (i < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]) || words[i] === 'env' || words[i] === 'command')) i++;
+  const word = (words[i] ?? '').replace(/^[\\'"]+/, '').replace(/[^A-Za-z0-9_.\/+-].*$/, '');
+  return word.slice(word.lastIndexOf('/') + 1);
+}
+
+/**
+ * Whether one command's text switches `pipefail` on (true) or off (false),
+ * else null: `set -o pipefail` and its `-eo` / `-euo` / `-o errexit -o
+ * pipefail` spellings, `set +o pipefail`, and `shopt -so` / `shopt -uo
+ * pipefail`. A command that opens a `( … )` group is not read as a switch.
+ */
+function pipefailSwitch(command: string): boolean | null {
+  if (/^[\s{]*\(/.test(command)) return null;
+  const program = pipelineStageCommand(command);
+  if (program === 'set') {
+    let on: boolean | null = null;
+    for (const m of command.matchAll(/(?:^|\s)([-+])[A-Za-z]*o\s+pipefail\b/g)) on = m[1] === '-';
+    return on;
+  }
+  if (program === 'shopt') {
+    if (!/\spipefail\b/.test(command) || !/\s-[A-Za-z]*o/.test(command)) return null;
+    if (/\s-[A-Za-z]*s/.test(command)) return true;
+    return /\s-[A-Za-z]*u/.test(command) ? false : null;
+  }
+  return null;
+}
+
+// The programs whose status replaces the gating command's.
+const PIPED_GATE_FILTERS: ReadonlySet<string> = new Set(['tail', 'head', 'grep']);
+// Text filters. A `grep` fed by these alone is not flagged: they are the
+// shapes of the #429 `grep -v '^#' | grep -c token` recipe and of the #968
+// region-scoped gate (`sed -n … | grep`, `awk … | grep`; `cat` / `tac` are the
+// file-wide producers that scanner names).
+const TEXT_FILTER_PRODUCERS: ReadonlySet<string> = new Set(['grep', 'sed', 'awk', 'cat', 'tac']);
+// bash's per-stage status array.
+const PIPESTATUS_READ_RE = /\$\{?PIPESTATUS\b/;
+// The existing R4 `git` shape, which keeps its own message.
+// allow-adhoc-markdown: shell pipeline stage boundary, not a table cell (#4024)
+const GIT_PIPELINE_RE = /\bgit\s+[a-z][^\n|]*\|(?!\|)/;
+
+/**
+ * Whether an `<automated>` body pipes a gating command into `tail`, `head` or
+ * `grep` with nothing written to keep that command's status (#6602). The body
+ * is read as text, command by command: a `#` comment is dropped, a line ending
+ * in `|` continues on the next, and `&&`, `||` and `;` separate commands. A
+ * pipeline is flagged when its last stage runs one of the three programs,
+ * unless
+ *   - an earlier command of the same body is a `pipefail` switch outside any
+ *     `( … )` group, and the latest such switch turns it on, or
+ *   - the command written next has `$PIPESTATUS` in it, or
+ *   - the last stage is `grep` and every stage feeding it is a text filter
+ *     (a leading `!` on the pipeline aside).
+ * Nothing is executed and control flow is not followed: a switch written
+ * after `&&` or `||` counts like any other.
+ */
+function hasPipedGate(automated: string): boolean {
+  const commands: { text: string; nest: ShellNest }[] = [];
+  let pending = '';
+  for (const raw of automated.split('\n')) {
+    const line = pending + stripShellComment(raw);
+    const trimmed = line.trimEnd();
+    if (trimmed.endsWith('|') || trimmed.endsWith('|&')) {
+      pending = trimmed + ' ';
+      continue;
+    }
+    pending = '';
+    const nest: ShellNest = { depth: 0, backtick: false, group: 0 };
+    for (const seg of splitShellSegments(line)) {
+      for (const piece of splitTopLevel(seg, ';', nest)) {
+        if (piece.text !== '') commands.push(piece);
+      }
+    }
+  }
+
+  let pipefailOn = false;
+  for (let i = 0; i < commands.length; i++) {
+    const { text, nest } = commands[i];
+    const stages = splitTopLevel(text, '|', { ...nest }).map((piece) => piece.text);
+    const filter = pipelineStageCommand(stages[stages.length - 1]);
+    if (stages.length >= 2 && PIPED_GATE_FILTERS.has(filter) && !GIT_PIPELINE_RE.test(text)) {
+      const feeding = stages.slice(0, -1);
+      feeding[0] = feeding[0].replace(/^([\s({]*)!\s+/, '$1');
+      const textOnly = filter === 'grep' &&
+        feeding.every((stage) => TEXT_FILTER_PRODUCERS.has(pipelineStageCommand(stage)));
+      const statusRead = i + 1 < commands.length && PIPESTATUS_READ_RE.test(commands[i + 1].text);
+      if (!textOnly && !pipefailOn && !statusRead) return true;
+    }
+    // Only a command on its own, outside a ( … ) group, is read as a switch.
+    const turned = stages.length === 1 && nest.group === 0 ? pipefailSwitch(text) : null;
+    if (turned !== null) pipefailOn = turned;
+  }
+  return false;
+}
+
 /**
  * The status-test alternation of a negated grep gate (`grep -q 'LIT' f; test $? -ne 0`): the one
  * definition `statusNegatedTest` (the segment test) and `statusNegatedSpanRe` (the span removal)
@@ -828,6 +1024,9 @@ function scanFileWideNegativeGateConflict(content: string): { warnings: string[]
  *   R4 (warn)  a fallible command (`git …`) in a non-final pipeline stage — the
  *       pipeline reports the LAST stage's status, so the failure is swallowed.
  *       Warn-only: the shape is ambiguous unless the criterion reads the status.
+ *       #6602: in `<automated>`, also a command piped into `tail`, `head` or
+ *       `grep` (hasPipedGate) — quiet when `pipefail` is on, when the next
+ *       command reads `PIPESTATUS`, or when the `grep` is the assertion.
  *   R5 (error) `wc` output compared by string equality (`… | wc -l | grep -x 0`)
  *       — BSD `wc` pads its output, so the comparison never matches.
  *   R6 (error) `git diff`/`git log` with a relative `HEAD~N` anchor — it names
@@ -846,10 +1045,10 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
   // Criteria zones: <acceptance_criteria>, <automated>, <verify>. A <verify>
   // block contains its <automated> child, so the same segment may be harvested
   // twice — dedupe findings by message below.
-  const zones: { text: string; prose: boolean }[] = [];
+  const zones: { text: string; prose: boolean; automated: boolean }[] = [];
   for (const tag of ['acceptance_criteria', 'automated', 'verify'] as const) {
     for (const block of extractTaggedBlocks(content || '', tag)) {
-      zones.push({ text: block, prose: tag === 'acceptance_criteria' });
+      zones.push({ text: block, prose: tag === 'acceptance_criteria', automated: tag === 'automated' });
     }
   }
   if (zones.length === 0) return { errors, warnings };
@@ -1026,6 +1225,23 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
           }
         }
       }
+    }
+
+    // R4 (#6602) — a gating command piped into `tail`, `head` or `grep`: the
+    // check reports that program's status. Judged in `<automated>` only (a
+    // prose criterion is read, not run for its status).
+    if (zone.automated && hasPipedGate(text)) {
+      record(
+        warnings,
+        'R4',
+        '[plan-criteria R4] A gating command piped into `tail`, `head` or `grep` reports that program\'s ' +
+          'status, so a failing command reads as clean. Capture the output first and filter the capture ' +
+          '(`out=$(cmd) && tail -n 20 <<<"$out"`; bash or zsh), or, where the filter only trims output, run ' +
+          'the command unpiped and have it print less. `set -o pipefail` before the pipeline also keeps the ' +
+          'command\'s status when the last stage reads all of its input (`tail`, `grep -c`); not under `!`, ' +
+          'and not with `head`, `grep -q` or `grep -m`, which stop reading early.',
+        seenWarn,
+      );
     }
   }
 
