@@ -65,6 +65,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Read the statusline freshness marker](how-to/read-the-statusline-freshness-marker.md) — turn on `state ~N commits back`, and tell "STATE.md is fresh" apart from "freshness could not be established"
 - [Consume the planning snapshot](how-to/consume-the-planning-snapshot.md) — read `planning inspect` from a dashboard or harness, and tell "nothing to report" apart from "could not look"
 - [Read CI timeout budget signals](how-to/read-ci-timeout-signals.md) — find the near-cap warning on a run, read the accumulated `tests/ci-timeout-budget-history.jsonl` trend, and know which lever (cap, shard balance, shard-1 contents) a repeatedly-near-cap lane calls for
+- [Regenerate the timing table](how-to/regenerate-the-timing-table.md) — rebuild the per-file duration table the chunk packer reads, from a `gsd-test` event stream
 - [Regenerate the win32 timing table](how-to/regenerate-the-win32-timing-table.md) — rebuild `tests/test-timings.win32.json` from the Windows conformance shards' duration artifacts so the win32 shards stay balanced
 - [Split platform-sensitive tests out of a heavy test file](how-to/split-platform-sensitive-tests.md) — move the few tests that need a real OS into a `.platform.test.cjs` sibling so the rest of the file stops running on Windows, and fix the generator's split errors
 - [Consume the state contract](how-to/consume-the-state-contract.md) — read `.planning/state.json` from a workbench or editor extension, gate on the contract version, and tell "nothing to show" apart from "could not look"
@@ -97,6 +98,9 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Interpret scope-conformance warnings](how-to/interpret-scope-conformance-warnings.md) — read the advisory the worktree-wave merge emits when a plan branch commits outside its declared scope
 - [Interpret install-shadow warnings](how-to/interpret-install-shadow-warnings.md) — read the advisory GSD Core emits when a `/gsd-*` trigger is installed at both scopes and one silently wins, and tell "nothing to report" apart from "could not look"
 - [Interpret `state validate` results](how-to/interpret-state-validate-results.md) — read the `scope` reason codes and tell "nothing to report" apart from "could not look"
+- [Park an idea for later](how-to/park-an-idea-for-later.md) — choose between the backlog, a seed and a thread, then park, review, promote or close the idea
+- [Fix a workflow or agent size failure](how-to/fix-a-workflow-or-agent-size-failure.md) — resolve a red size-budget check by justifying the growth with an acknowledgment trailer or shrinking the file
+- [Add a positive control for a new gate](how-to/add-a-gate-positive-control.md) — resolve a `no-control` report from `lint:ci` by adding a `gateControl` call with a red and a green scenario
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
 - [Enable live-DOM verification](how-to/enable-live-dom-verification.md) — opt a project into browser-backed UI acceptance checks during execution, handle the browser-profile lock, and tell "nothing to report" apart from "could not look"
@@ -146,7 +150,9 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [ROADMAP phase-list entry grammar](reference/roadmap-phase-entry.md) — the one accepted form of a `- [ ] **Phase N: Name**` checklist entry, shared by every reader
+- [Custom phase IDs](reference/custom-phase-ids.md) — which custom phase IDs are accepted or refused, the `.phase-id` marker and how readers resolve a directory to its owner
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
+- [Security hooks](reference/security-hooks.md) — the exact rules, limits, bypasses and known gaps of the prompt, workflow, write and secret-read guards
 - [Runtime install contracts](reference/runtime-install-contracts.md) — the installed file layout, the per-runtime install contract matrix, and the upstream docs each row was checked against
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
 - [Templates](reference/templates.md) — every file under `gsd-core/templates/`, the artifact it produces, and what references it
@@ -179,6 +185,11 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Context engineering](explanation/context-engineering.md) — how context rot forms and how GSD Core prevents it
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
 - [Nyquist validation explained](explanation/nyquist-validation.md) — how test coverage is mapped to requirements before code is written, and how `/gsd-validate-phase` fills the gaps afterwards
+- [Quick-task archival explained](explanation/archive-quick-tasks.md) — why archiving `.planning/quick/` is opt-in, bucketed into one milestone and indexed from disk
+- [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md) — why `planning inspect` and the `.planning/state.json` contract each declare their own schema
+- [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md) — why path grounding is a recognizer and why a plan must state its failing direction
+- [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md) — why a reviewer lane refuses an over-window prompt instead of trimming it, and why each review records its model
+- [Effort and fast_mode test strategy](explanation/effort-fast-mode-test-strategy.md) — why the effort and fast_mode engine's tests are shaped as they are: layers, invariants, targets and known gaps
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation

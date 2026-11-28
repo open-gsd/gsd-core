@@ -318,59 +318,13 @@ For the full workflow and flow diagram, see [Spike and sketch](how-to/spike-and-
 
 ## Backlog & Threads
 
-### Backlog Parking Lot
+Three tools keep an idea out of the way until it is ready, and each answers a different question:
 
-Ideas that aren't ready for active planning go into the backlog using 999.x numbering, keeping them outside the active phase sequence.
+- **Backlog** (`/gsd-capture --backlog`): work you might plan someday. It gets a full `999.x` phase directory outside the active sequence, and `/gsd-review-backlog` lets you promote, keep or remove it.
+- **Seeds** (`/gsd-capture --seed`): ideas with a trigger condition. They surface by themselves when `/gsd-new-milestone` runs, and you close them once they have been acted on.
+- **Threads** (`/gsd-thread`): work that spans several sessions but fits no phase.
 
-```bash
-/gsd-capture --backlog "GraphQL API layer"     # Creates 999.1-graphql-api-layer/
-/gsd-capture --backlog "Mobile responsive"     # Creates 999.2-mobile-responsive/
-```
-
-Backlog items get full phase directories, so you can use `/gsd-discuss-phase 999.1` to explore an idea further or `/gsd-plan-phase 999.1` when it's ready. Backlog directories (and the `0-*` pre-milestone directory some projects carry) are excluded from `/gsd-progress`, `/gsd-stats`, and phase listings for the current milestone — they stay out of the active phase sequence for counting purposes too, not just for planning.
-
-**Review and promote** with `/gsd-review-backlog` — it shows all backlog items and lets you promote (move to active sequence), keep (leave in backlog), or remove (delete).
-
-### Seeds
-
-Seeds are forward-looking ideas with trigger conditions. Unlike backlog items, seeds surface automatically when the right milestone arrives.
-
-```bash
-/gsd-capture --seed "Add real-time collab when WebSocket infra is in place"
-```
-
-`/gsd-new-milestone` scans all seeds and presents matches. **Storage:** `.planning/seeds/SEED-YYMMDD-xxx-slug.md`
-
-Once you've parked a few, audit them on demand instead of waiting for the next milestone to surface them:
-
-```bash
-/gsd-capture --list-seeds            # Review every parked seed
-/gsd-capture --list-seeds dormant    # Narrow to one status
-```
-
-This is read-only — it renders an audit table (ID, status, scope, trigger, title) and a per-status summary, and never modifies a seed. Filter by `dormant`, `active`, `triggered`, or `closed` when you only want to see seeds in one state.
-
-**Closing a seed.** A seed is open while its `status` is `dormant`, `active` or `triggered`. Once its idea has been acted on, close it, so it stops coming back at every `/gsd-new-milestone` and in every milestone-close audit:
-
-```bash
-/gsd-capture --seed --close SEED-260315-k3x --promoted PLAT-17    # it became requirement PLAT-17
-/gsd-capture --seed --close SEED-260315-k3x --built 3             # it was built in phase 3
-/gsd-capture --seed --close SEED-260315-k3x --dropped "superseded by the sync engine"
-```
-
-Give exactly one outcome flag. The seed keeps its file and its reasoning; its frontmatter gains `status: closed` and three fields that say what it became: `outcome_kind` (`promoted`, `built` or `dropped`), `outcome_ref` (the requirement id or phase number; absent for a dropped seed) and `outcome` (one line of prose). `/gsd-capture --list-seeds closed` still lists it, with those fields. Closing is not undone by a command: to reopen a seed, set its `status` back to `dormant` by hand.
-
-### Persistent Context Threads
-
-Threads are lightweight cross-session knowledge stores for work that spans multiple sessions but doesn't belong to any specific phase.
-
-```bash
-/gsd-thread                              # List all threads
-/gsd-thread fix-deploy-key-auth          # Resume existing thread
-/gsd-thread "Investigate TCP timeout"    # Create new thread
-```
-
-Threads can be promoted to phases (`/gsd-phase`) or backlog items (`/gsd-capture --backlog`) when they mature. **Storage:** `.planning/threads/{slug}.md`
+The steps for each are in [How to park an idea for later](how-to/park-an-idea-for-later.md); the flags are in [`/gsd-capture`](COMMANDS.md#gsd-capture).
 
 ---
 
@@ -411,16 +365,9 @@ GSD generates markdown files that become LLM system prompts. This means any user
 
 **Prompt Injection Detection:** The `security.cjs` module scans for known injection patterns in user-supplied text before it enters planning artifacts.
 
-**Runtime Hooks:**
+**Runtime hooks:** `gsd-prompt-guard.js` scans writes to `.planning/` for injection patterns (always on, advisory); `gsd-workflow-guard.js` warns on edits outside a GSD workflow (opt-in via `hooks.workflow_guard`); `gsd-write-guard.js` blocks a whole-file `Write` that collapses a curated `.planning/` artifact; `gsd-secret-read-guard.js` blocks reads of `.env` and `.secrets` files. The exact rules, limits, bypasses and known gaps of each are in [Security hooks](reference/security-hooks.md).
 
-- `gsd-prompt-guard.js` — Scans Write/Edit calls to `.planning/` for injection patterns (always active, advisory-only)
-- `gsd-workflow-guard.js` — Warns on file edits outside GSD workflow context (opt-in via `hooks.workflow_guard`)
-- `gsd-write-guard.js` — Hard-blocks a whole-file `Write` that catastrophically shrinks a curated `.planning/` artifact (`ROADMAP.md`, milestone roadmaps, `STATE.md`) below 40% of its on-disk line count; files under 40 lines are exempt. The check is stateless per Write, comparing each payload against the file's *current* on-disk size — a single-shot collapse (the #973 shape) is blocked, but a sequence of individually-tolerated shrinks that erodes the file across several Writes is not detected. For a legitimate milestone reset or large deletion, bypass once with the single-use sentinel — write the target's path into `.planning/.gsd-allow-shrink` (fresh within 15 minutes; consumed by the allowed write) — or, interactively, with `GSD_ALLOW_PLANNING_SHRINK=1` in the runtime's environment. Scope the guarantee accordingly: this stops accidental and single-shot collapse, and is not a defense against a determined agent — the sentinel is a plain file, so anything with shell access can arm one; what it buys is that the bypass becomes a deliberate, path-bound, single-use and auditable action rather than a sentence to reason past (always active, blocking; #2255, fix 3 of #973)
-- `gsd-secret-read-guard.js` — Hard-blocks reads of secret files — `.env`, `.env.<suffix>` and `.secrets`, matched case-insensitively (`.ENV`, `.Secrets`) — through Read (`file_path`), Grep (an explicit `path`, or a `glob` that selects them, judged per brace alternative) and Bash (operands, input redirects, `$( )` / backtick / `<( )` bodies, and `git show <ref>:<path>` shapes). A shell interpreter (`bash`/`sh`/`zsh`/`dash`/`ksh`) has its script scanned however it arrives — `-c '…'`, a `<( )` file operand, a heredoc / here-string, or a pipe from a knowable `echo`/`printf` source (`echo cat .env | bash`) or a bare `cat` printing a heredoc / here-string (`cat <<'EOF' | bash`) — as do `eval`'s joined operands, a `source`/`.` process-substitution operand, and `find … | xargs cat` pipelines (upstream literal names become the sub-command's read operands). Dollar-quoting is read the way the shell reads it: `$'…'` is judged by its decoded value, so `cat $'.e\x6ev'` is a read of `.env`, and a `\'` inside does not close the word. bash, zsh and dash read the same text differently, so a command holding `$'…'`, `$"…"`, `$${`, `$$(`, or a quote with `((` or `$[` is checked under all three readings as well as the plain scan and blocked on any; nothing the plain scan blocks is allowed. A `$'…'` word that never closes or has no single value to check is blocked outright, unless it follows an even run of `$`: `echo $$'x\'; ls` is the PID and a plain quote (#5255). A Bash command longer than 1,048,576 characters (UTF-16 code units, not bytes; a character outside the BMP, such as most emoji, counts as two) is blocked unscanned (`command-too-large`), a command whose nested shells, `$( )` substitutions, backticks or process substitutions go more than 3 levels deep is blocked (`nesting-too-deep`) rather than allowed unscanned, and so is one nested deep enough to overflow the parser, needing more than eight times that much scanning, or producing more than 524,288 separators (`;`, `|`, a newline …) across its scans (`command-too-complex`). Each scan re-reads what it scans, and a nested body is read again at each outer scan, so a script fed to a shell through a heredoc (`bash <<'EOF'`) that holds one of those forms is blocked from about 16,000 to 70,000 characters by shape, and from about 4,000 to 17,000 when that heredoc is itself inside `$( )` or another heredoc. The readings multiply that work, so a commit message written as `git commit -m "$(cat <<'EOF' …` with a `$'\t'` in it, or a quote beside a `((`, is blocked from about 70,000 characters (the budget covers every pass over the command, #5255). A name is exempt when its **final extension** is `example`, `sample`, `template` or `dist`, so `.env.example` and equally `.env.local.example` / `.env.production.sample` stay readable (they are the templates GSD's own phase prompt reads). Stated cost: the exempt set is that unbounded family, not four fixed names — a real secret is not protected if it is named to end in one of those four extensions. Order matters, and only the last segment counts: `.env.example.local` is a secret and stays blocked. Trailing dots and spaces are stripped before the name is judged, because Windows resolves `.env.`, `.env ` and `.secrets.` to the protected file itself. Existence checks (`[ -f .env ]`, `ls .env*`, `test`, `stat`, `rm`, `touch`, `echo`, …) pass, and so do commands that name a secret without printing it: `git check-ignore`, `git ls-files` and `git rm --cached` on its path, and a one-source `cp`/`mv` whose only secret name is the destination (`cp .env.example .env`); an unlisted option (`-X <file>`, `--pathspec-from-file=`, `-t`, `--backup`, …) keeps the whole command checked (#4856). A project can exempt specific committed files with `hooks.secret_read_exempt` — a list of repo-relative paths, honored only while each file is committed in `HEAD` as a regular file; Read and Grep `path` accept a relative or absolute path, Bash only the absolute one and only when every command in the line is one of `cat`/`head`/`tail`/`grep`/`egrep`/`fgrep`/`rg`/`wc`/`diff`/`cmp`/`sort`/`uniq`/`cut`/`nl`/`od`; files in a submodule cannot be exempted (see [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md), #4432). Not covered, by construction: `$VAR` indirection (`bash -c "$CMD"`) and `${…}` defaults (`cat ${x:-.env}`, and `echo ${x:-$(cat .env)}` in a command holding none of those forms, #5523), shell globs (`cat .e*`), interpreter one-liners, a script printed by a command substitution (`bash -c "$(cat <<'EOF' … EOF)"`, `eval "$(cat <<EOF … EOF)"`), a piped script from a source other than `echo`/`printf` or a `cat`/`tee` of a heredoc (`cat gen.sh | bash`, `curl … | sh`), reads inside scripts the agent runs, and a Grep `glob: '*'` reaching a `.env` that is not gitignored — none are statically resolvable by a hook. Shapes found while closing #5255 that a real shell still reads and the guard still allows are tracked in #5945 and #6132. This replaces the `Read(.env)` / `Read(.env.*)` / `Read(.secrets)` permission deny rules the installer used to write: on Claude Code ≥ 2.1.259 any `Read()` deny rule makes every `cd DIR && grep …` compound prompt for approval even in `auto` mode, while a hook denial is not a permission rule and applies in `auto` and `bypassPermissions` alike. The hook fails open on its own failure — a hook error, a shell reading that fails on a command no scan blocked (reported as a `reading-failed` line on stderr), or a stdin that does not close within 3 s allows the call — unless `GSD_SECRET_READ_GUARD_ON_CRASH=deny` is set in the runtime's environment, which blocks all three with code `guard-error`; the opt-in does not change `command-too-complex` or `nesting-too-deep`, which are denied either way; see [Make the secret-read guard fail closed](how-to/make-the-secret-read-guard-fail-closed.md) (always active, blocking; #4221, #5784)
-
-Git configuration supplied through `-c key=value` is also checked for the two command-valued forms in #5045: a shell alias (`alias.*` whose value starts with `!`) and `diff.external`. Their literal command strings are scanned by the same bounded shell analysis, so `git -c alias.x='!cat .env' x` and `git -c diff.external='cat .env' diff` are blocked. Benign scripts, secret-free templates, ordinary config values, and `core.pager` remain subject to the existing checks. Scanning is conservative: every matching value supplied before the Git subcommand is inspected, even if a later setting replaces it or that subcommand does not invoke it. Behind a Git option the guard does not recognize, the subcommand can no longer be located, so every later `-c` value on the command is inspected. This does not resolve config files, values obtained through `--config-env` / `GIT_CONFIG_*`, other command-valued keys (diff drivers, filters, credential helpers, SSH or GPG commands), or scripts hidden behind the existing indirection and nesting limits; those remain documented gaps.
-
-**CI Scanner:** `prompt-injection-scan.security.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
+**CI scanner:** `prompt-injection-scan.security.test.cjs` scans all agent, workflow and command files for embedded injection vectors.
 
 ---
 
@@ -454,27 +401,13 @@ A `[SUS]` or `[ASSUMED]` package makes the planner add a `checkpoint:human-verif
 
 ## Code Review Workflow
 
-After executing a phase, run a structured code review before UAT. See [Set up cross-AI review](how-to/set-up-cross-ai-review.md) for the full workflow.
-
-```bash
-/gsd-code-review 3               # Review all changed files in phase 3
-/gsd-code-review 3 --depth=deep  # Deep cross-file review
-/gsd-code-review 3 --fix         # Fix Critical + Warning findings atomically
-/gsd-code-review 3 --fix --auto  # Fix and re-review until clean (max 3 iterations)
-/gsd-audit-fix                   # Audit + classify + fix (medium+ severity, max 5)
-```
-
-The review step slots in after execution and before UAT:
+After executing a phase, review the changed files before UAT:
 
 ```text
 /gsd-execute-phase N  ->  /gsd-code-review N  ->  /gsd-code-review N --fix  ->  /gsd-verify-work N
 ```
 
-**Optional external source-review lanes (#4209):** `/gsd-code-review` accepts the same reviewer-lane flags as `/gsd-review` (run `gsd_run review-lane flags` to list the flags your installation's roster declares, e.g. `--codex`, `--agy`). Adding one asks that lane to independently review the *same* file scope alongside the internal `gsd-code-reviewer` agent; its findings are unverified corroborating evidence that `gsd-code-reviewer` re-checks against the actual source before writing anything to `REVIEW.md` — there is still exactly one `REVIEW.md`. No reviewer-lane flag is the default and reviews with only the internal agent, unchanged from before #4209. This is separate from `/gsd-review`, which reviews `PLAN.md` files *before* execution, not source code — see [Set up cross-AI review](how-to/set-up-cross-ai-review.md).
-
-```bash
-/gsd-code-review 3 --codex       # Corroborate the internal review with the codex reviewer lane
-```
+The depth, auto-fix and external reviewer-lane flags are in [`/gsd-code-review`](COMMANDS.md#gsd-code-review), and the setup for independent reviewers is in [Set up cross-AI review](how-to/set-up-cross-ai-review.md). `/gsd-review` is a different step: it reviews `PLAN.md` files before execution, not source code.
 
 ---
 
@@ -497,54 +430,13 @@ The asymmetry is deliberate. The worst outcome is auto-passing something broken 
 - **Configuration Reference:** see [`docs/CONFIGURATION.md`](CONFIGURATION.md) for the full `config.json` schema, model-profile table, git branching strategies, and security settings.
 - **Discuss Mode:** see [`docs/workflow-discuss-mode.md`](workflow-discuss-mode.md) for interview vs assumptions mode.
 
-### Graphify capability gate (tri-state, v1.43+)
+### Graphify and intel capability gates
 
-Graphify commands (`graphify status`, `graphify build`, `graphify query`, `graphify diff`) now respect the **full tri-state capability gate**:
-
-1. **Installed** — the `gsd-graphify-*` skills are present in the active install profile.
-2. **Surfaced** — those skills appear on the current runtime surface (e.g., in `~/.claude/commands/gsd/`).
-3. **Config-enabled** — `graphify.enabled: true` is set in `.planning/config.json`.
-
-All three conditions must be true. Setting `graphify.enabled: true` alone is no longer sufficient if graphify has not been installed and surfaced. If graphify commands return `{ disabled: true }` after upgrading, verify that the install profile includes graphify skills (`gsd-tools capability state`) and re-run the installer to surface them.
-
-### Intel capability gate (tri-state, v1.44+)
-
-Intel commands (`intel status`, `intel query`, `intel diff`, `intel snapshot`, `intel validate`, `intel api-surface`) now respect the **full tri-state capability gate** (same resolver as graphify above):
-
-1. **Installed** — the intel capability is present in the active install profile (intel has no skill files, so this is vacuously true for all profiles).
-2. **Surfaced** — the intel capability is on the current runtime surface (vacuously true for all surfaces since intel registers no skill stems).
-3. **Config-enabled** — `intel.enabled: true` is set in `.planning/config.json`.
-
-For intel, conditions 1 and 2 are always satisfied (intel has no skill files). The effective gate is `intel.enabled` in config — the same behaviour as before, but now enforced through the shared `isCapabilityActive('intel', cwd)` resolver rather than a direct config read. This means intel honours the full capability-state pipeline, including any future install-profile or surface restrictions. If intel commands return `{ disabled: true }`, ensure `intel.enabled: true` is set in `.planning/config.json` and verify `gsd-tools capability state` shows intel as active.
+Graphify and intel commands run only when the capability is installed, surfaced on your runtime and enabled in config. The rule and the troubleshooting step for `{ disabled: true }` are in the `graphify.enabled` and `intel.enabled` rows of [Configuration](CONFIGURATION.md#graphify-settings).
 
 ### Compact content mode (`workflow.compact_content`, v4139+)
 
-GSD's own workflow instructions, planning-artifact templates, and (for non-Claude runtimes)
-agent personas are prose — and a large eagerly-loaded instruction body is context the model
-spends on GSD's own orchestration rather than on your code. `workflow.compact_content` (default
-`false`) opts a project into token-minimized variants of that content wherever one has been
-authored, without changing what GSD actually does.
-
-**Why turn it on: finite attention, not price.** The point of this key is not a cheaper
-invocation — with prompt caching, the per-request cost of re-sending a large instruction file
-is already small. The point is what a large always-loaded instruction body costs in *attention*:
-every byte of GSD's own prose sitting in context is a byte not spent reasoning about your
-codebase. That cost is paid whether or not the tokens were cheap to transport. Turn it on when
-you're running long sessions, working in a large codebase that already competes for context, or
-on a runtime with a small context window; leave it off (the default) if you'd rather have every
-elaboration and worked example available up front, or you're evaluating GSD for the first time
-and want full detail while you learn how it thinks.
-
-**What actually changes.** Nothing is compressed at runtime. Every compact variant is a
-hand-authored, reviewed file sitting beside its canonical sibling — the key only chooses which
-one GSD reads. Guardrails, output-format contracts, few-shot examples, and security language are
-never shortened or dropped in a compact variant; only rarely-needed elaboration and restatement
-are. With the key off, behavior is unchanged from before this feature existed.
-
-**How to turn it on:** answer "Yes" to the Compact Content question during `/gsd-new-project`,
-or run `/gsd-settings` (or `/gsd-config` with no flag) on an existing project and toggle
-Compact Content. See [`docs/CONFIGURATION.md`](CONFIGURATION.md#workflow-toggles) for the
-mechanics and [ADR-4139](adr/4139-compact-content-seam.md) for the full design rationale.
+`workflow.compact_content` (default `false`) opts a project into token-minimized variants of GSD's own workflow instructions, templates and agent personas, to spend less of the model's attention on GSD's prose in long sessions, large codebases or small context windows. Nothing is compressed at runtime, and guardrails, output contracts, examples and security language are never shortened. Turn it on by answering "Yes" to the Compact Content question in `/gsd-new-project`, or toggle it in `/gsd-settings`. The mechanics are in the [`workflow.compact_content` row](CONFIGURATION.md#workflow-toggles) and the rationale in [ADR-4139](adr/4139-compact-content-seam.md).
 
 ---
 
@@ -607,20 +499,7 @@ claude --dangerously-skip-permissions
 
 ### Plan Drift Guard
 
-**Default-on.** The plan drift guard (`plan_review.source_grounding: true`) runs during plan review and verifies that every symbol your plans cite — decorators, classes, functions, CLI flags — actually exists in your source tree at review time. This catches hallucinated names before any execution agent runs.
-
-**Two axes, one switch.** The same guard also runs a cross-artifact fact-drift pass: when ROADMAP.md, PLAN.md, STATE.md and CONTEXT.md state the *same* fact in contradictory ways — a phase marked complete in one and in progress in the other, a success criterion the plan restates with a different outcome, a term used against its CONTEXT.md definition — you get an advisory finding in REVIEWS.md naming both locations and which one is authoritative. It keys on contradicting *knowledge*, not on similar-looking text, so a plan that simply restates a criterion in its own words is not flagged. The findings never block convergence.
-
-**What it catches:**
-
-- Functions referenced in a PLAN.md step that don't exist in source
-- Class or decorator names that were renamed or removed since the plan was written
-- CLI flags documented in a plan that are not defined in the argument parser
-- Module paths cited in implementation steps that resolve to no files
-
-**Needs-acknowledgement behavior.** When the guard finds a missing symbol, it emits a `needs-acknowledgement` notice in the plan review output rather than hard-blocking. You can acknowledge and proceed (the symbol may be intentionally new) or request a plan revision. The guard does not auto-reject plans — it surfaces signal for human decision.
-
-**Works without intel.** By default the guard uses `grep`/`ripgrep` to search source files — no pre-indexing required. If you have run `/gsd-map-codebase` with `intel.enabled: true`, set `plan_review.source_grounding_authority: intel` to use the faster pre-built `api-map.json` index instead.
+The guard is on by default. During plan review it checks that every symbol a plan cites (functions, classes, decorators, CLI flags, module paths) exists in your source, and it reports contradictions between ROADMAP.md, PLAN.md, STATE.md and CONTEXT.md. A missing symbol raises a `needs-acknowledgement` notice you can accept or send back for revision; it never auto-rejects a plan.
 
 ```bash
 # Enable/disable (default: on)
@@ -632,7 +511,7 @@ claude --dangerously-skip-permissions
 /gsd-settings plan_review.source_grounding_authority intel  # pre-indexed api-map.json
 ```
 
-Toggle at project setup (`/gsd-new-project` asks during workflow preferences) or any time via `/gsd-settings` (Planning section → Drift Guard).
+What each check covers and each resolver value means: [`plan_review.source_grounding`](CONFIGURATION.md#plan-review-settings) and `plan_review.source_grounding_authority`. Why the guard is shaped this way: [ADR 22](adr/22-plan-drift-guard.md).
 
 ### Quick Bug Fix
 
@@ -719,63 +598,11 @@ Run `/gsd-progress`. It reads all state files and tells you exactly where you ar
 
 ### Model Costs Too High
 
-Switch to budget profile: `/gsd-config --profile budget`. Disable research and plan-check agents via `/gsd-settings` if the domain is familiar.
+Switch to the budget profile: `/gsd-config --profile budget`. Disable research and plan-check agents via `/gsd-settings` if the domain is familiar.
 
-### Tuning model cost by phase (`models`) — added in v1.40
+To spend by phase type (Opus for planning, Sonnet for the rest), by agent, or to start cheap and escalate on failure, follow [How to configure model profiles](how-to/configure-model-profiles.md): it covers the `models` block, `model_overrides`, `dynamic_routing` and the resolution precedence. The keys are in [Per-Phase-Type Models](CONFIGURATION.md#per-phase-type-models-models--added-in-v140) and [Dynamic Routing](CONFIGURATION.md#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140).
 
-Add a `models` block to `.planning/config.json`:
-
-```json
-{
-  "model_profile": "balanced",
-  "models": {
-    "planning": "opus",
-    "discuss": "opus",
-    "research": "sonnet",
-    "execution": "opus",
-    "verification": "sonnet",
-    "completion": "sonnet"
-  }
-}
-```
-
-Need a per-agent exception? Add `model_overrides` alongside — it wins over `models`:
-
-```json
-{
-  "models": { "research": "sonnet" },
-  "model_overrides": {
-    "gsd-codebase-mapper": "haiku"
-  }
-}
-```
-
-For the full mapping table and resolution-precedence rules, see [Per-Phase-Type Models](CONFIGURATION.md#per-phase-type-models-models--added-in-v140).
-
-### Cheap-by-default with `dynamic_routing` — added in v1.40
-
-```json
-{
-  "dynamic_routing": {
-    "enabled": true,
-    "tier_models": {
-      "light":    "haiku",
-      "standard": "sonnet",
-      "heavy":    "opus"
-    },
-    "escalate_on_failure": true,
-    "max_escalations": 1
-  }
-}
-```
-
-For the full agent → tier mapping, see [Dynamic Routing](CONFIGURATION.md#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140).
-
-### Trim MCP servers to reduce per-turn cost
-
-Before tuning `model_profile` or `models.<phase_type>`, audit which **MCP servers** your harness has enabled. Every enabled MCP server injects its tool schema into every turn — heavyweight servers can cost 20k+ tokens each.
-
-This is a **harness setting**, not a GSD setting. The toggle lives in `.claude/settings.json`:
+Before tuning any of those, trim the MCP servers your harness has enabled: each one adds its tool schema to every turn, and the saving applies to every subagent. This is a harness setting, not a GSD setting, in `.claude/settings.json`:
 
 ```json
 {
@@ -784,21 +611,11 @@ This is a **harness setting**, not a GSD setting. The toggle lives in `.claude/s
 }
 ```
 
-Quick audit before a long phase:
-
-- Are any browser / playwright tools enabled when this phase has no UI work?
-- Are any platform-specific tools enabled when not needed?
-- Are any project-specific MCPs from a different project still enabled here?
-
-Each disabled server removes its schema from every subsequent turn. Trimming MCPs **compounds** with `model_profile` tuning — both levers are additive, and MCP savings show up immediately across every subagent the orchestrator spawns.
-
-For the full audit, harness reference, and the composition note with `model_profile`, see [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) in the bundled `context-budget.md` reference.
+The audit and how it composes with `model_profile` are in [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern).
 
 ### Using Non-Claude Runtimes (Codex, OpenCode, Antigravity CLI, Kilo)
 
-> **Codex CLI minimum supported version: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
-
-If you installed GSD for a non-Claude runtime, the installer already configured model resolution. No manual setup is needed — `resolve_model_ids: "omit"` is set automatically as a Claude protection, and your install's recorded runtime identity tells GSD to skip Anthropic model ID resolution and resolve from the runtime's own model tiers instead.
+If you installed GSD for a non-Claude runtime, the installer already configured model resolution. No manual setup is needed: `resolve_model_ids: "omit"` is set automatically as a Claude protection, and your install's recorded runtime identity tells GSD to skip Anthropic model ID resolution and resolve from the runtime's own model tiers instead.
 
 To assign different models on a non-Claude runtime:
 
@@ -813,48 +630,13 @@ To assign different models on a non-Claude runtime:
 }
 ```
 
-#### OpenCode 1.x and 2.x (#5337)
+To switch a project from Claude to Codex with one config change, set `"runtime": "codex"` as described in [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
 
-OpenCode 1.x and 2.x use the same `opencode` command and the same config directories, so GSD tells them apart by running `opencode --version` (5-second limit, no shell). The GSD plugin at `plugins/gsd-core.js` serves both: OpenCode 1.x loads its `server` export and OpenCode 2.x loads its `setup` export, and both run the same GSD guards (secret-read, injection scan, workflow, worktree, write).
+Everything else about a runtime has an owner:
 
-Differences GSD handles for you on 2.x: worktree dispatch sets the working directory of the spawned `opencode run` instead of passing `--dir`, and the reviewer lane carries a configured reasoning effort as a `#variant` suffix on the model (for example `provider/model#high`) instead of `--variant`. If the version cannot be read, set `GSD_OPENCODE_GENERATION=1` or `2` to choose explicitly. Kilo is unaffected and stays on the OpenCode 1.x behavior.
-
-**Moving from OpenCode 1.x to 2.x.** OpenCode 1.x is bug-fix-only for GSD until **2026-12-31** and the installer says so; see [How to move GSD from OpenCode 1.x to OpenCode 2.x](how-to/upgrade-opencode-1-to-2.md). `opencode upgrade --major` (OpenCode 1.19 and newer) replaces 1.x with 2.x (they share the `opencode` command and cannot be installed side by side); older 1.x installs reinstall OpenCode 2 instead. Your GSD files stay where they are, but the plugin installed by an older GSD is rejected by 2.x, so run `npx @opengsd/gsd-core@latest --opencode --global` (or `/gsd-update`) once afterwards; that installs the plugin that serves both generations and converges the `gsd` MCP entry in your config, keeping any comments in `opencode.jsonc`. OpenCode 2.x adds its own session tables to the data directory beside the 1.x ones, so 1.x keeps working there; a data directory that 2.x created from scratch cannot be opened by 1.x, and the installer warns when it sees that combination. Going back to 1.x after using 2.x means reinstalling 1.x, then re-running the GSD installer.
-
-**Uninstalling** (`--opencode --uninstall`, either generation) removes everything GSD installed — commands, agents, skills, the plugin, every hook helper, the install state and journal records, the `gsd` MCP entry, and the `~/.gsd/defaults.json` keys the install set once no other runtime needs them — and leaves your own files, comments and settings exactly as they were. Backups of files you had modified are kept.
-
-**Hooks and statusline on OpenCode.** Besides the guards, the plugin runs the opt-in community hooks (`hooks.community`: commit validation, phase boundary, session state) and the graphify auto-update hook (`graphify.auto_update`) on both generations; advisories from every hook are appended to the tool result the model reads. On 2.x the terminal client also shows GSD's statusline and update banner in the footer (installed as `plugins/gsd-statusline/`, shown inside GSD projects only). Not available on OpenCode: the agent-isolation guard (it enforces harness-managed worktrees, and OpenCode uses orchestrator-managed ones) and LSP-backed features (2.x keeps the `lsp` setting but runs no language servers).
-
-The plugin now starts its hook scripts with Node from `PATH` (override with `GSD_HOOK_RUNTIME`) instead of the OpenCode executable, which ran OpenCode rather than the script and left the guards silently inactive (#4849).
-
-#### Codex skill picker and agent scheduling (#774)
-
-GSD enriches each Codex install with an additional artifact:
-
-- **Flex-tier scheduling** — light-tier agents (haiku-equivalent) emit `service_tier = "flex"` and `model_verbosity = "low"` in their agent TOML. The Codex scheduler routes these agents to the flex tier (lower cost, background processing) and suppresses verbose token output.
-
-GSD skills appear in the Codex `/skills` picker via their `SKILL.md` file, which Codex discovers automatically. No `agents/openai.yaml` sidecar is emitted — doing so caused duplicate autocomplete entries (#1326).
-
-This enrichment is written automatically at install time and requires no manual configuration. Requires Codex CLI ≥ 0.130.0.
-
-#### Switching from Claude to Codex with one config change (#2517)
-
-```json
-{
-  "runtime": "codex",
-  "model_profile": "balanced"
-}
-```
-
-See [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
-
-#### Per-runtime command enrichment
-
-When generating artifacts, the installer adapts GSD commands to each runtime's native command schema:
-
-- **Qwen Code** — main-loop skills carry Qwen's numeric `priority` field so the most-used workflows (e.g. `new-project`, `plan-phase`, `execute-phase`) sort first in the `/skills` list; utility skills are left unset. Higher values sort earlier; the field affects only the `/skills` list order.
-
-See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md) for the full per-runtime details.
+- Per-runtime install steps, the Codex minimum version (0.130.0), Codex agent scheduling and the Qwen skill priority: [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md).
+- Moving from OpenCode 1.x to 2.x, and what changes on 2.x: [How to move GSD from OpenCode 1.x to OpenCode 2.x](how-to/upgrade-opencode-1-to-2.md).
+- How GSD detects the OpenCode generation, the plugin's two entrypoints, hooks and uninstall: [OpenCode 1.x and 2.x](ARCHITECTURE.md#opencode-1x-and-2x).
 
 ### Manual install / no-Node.js setup
 

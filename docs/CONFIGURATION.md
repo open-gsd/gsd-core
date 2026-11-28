@@ -290,39 +290,7 @@ Set `"phase_naming": "custom"` to create phases with explicit identities:
 { "phase_naming": "custom", "project_code": "CCM" }
 ```
 
-`gsd-tools phase add "Product boundary" --id PRODUCT-BOUNDARY` creates
-`.planning/phases/CCM-PRODUCT-BOUNDARY-product-boundary/`. The optional
-`project_code` prefixes the directory; pass the ID without that prefix.
-Add-batch derives custom IDs from its descriptions. Creation validates the
-whole batch before writing any directories or updating the roadmap.
-
-Custom IDs must be nonempty and contain no whitespace, colons, path separators,
-`..` or NUL, and cannot start with `[`. IDs equivalent to an existing recorded
-ID, roadmap declaration or another ID in the batch are refused, including case
-and numeric-padding aliases. Prefix pairs such as `SETUP` and `SETUP-2` are
-allowed when their directory-owned markers establish separate identities.
-IDs in the readers' reserved backlog and icebox ranges are also refused
-(for example `0`, `0.5`, `00-00` and `999`); those phases would be hidden from
-ordinary phase listings. Digit-leading IDs such as `2FA` and `7B` remain valid.
-
-New custom directories contain a regular UTF-8 `.phase-id` file with the exact
-ID, without the project prefix or slug. Readers use that record even after
-roadmap edits or archival. Existing markerless custom directories continue to
-resolve and can be removed when exactly one known owner matches. An ambiguous
-removal or rename refuses and names the candidates; write the correct owning ID
-into that directory's `.phase-id` to resolve the ambiguity. Read-only lookups
-never refuse: when a markerless directory could belong to overlapping IDs such as
-`SETUP` and `SETUP-2`, the longest declared ID that prefixes the directory name
-owns it. Put the exact owning ID, without the project prefix or title slug, in
-the directory's `.phase-id` to pin it. Numeric phases
-without custom identity records, including their inserted decimal children,
-retain numeric renumbering.
-
-`phase add --id` returns a usage error unless effective `phase_naming` is custom;
-previously it wrote a directory that readers could not resolve. A project config
-shadows global defaults, including when that project config is `{}`. Set custom
-naming in the effective project config rather than relying on a shadowed global
-default. A corrupt project config reports its parse failure instead.
+`gsd-tools phase add "Product boundary" --id PRODUCT-BOUNDARY` creates `.planning/phases/CCM-PRODUCT-BOUNDARY-product-boundary/`; the optional `project_code` prefixes the directory. `phase add --id` is a usage error unless the effective `phase_naming` is custom, and a project config (even `{}`) shadows global defaults. Which IDs are accepted or refused, the `.phase-id` marker and how markerless directories resolve: [Custom phase IDs](reference/custom-phase-ids.md).
 
 > **Note:** `granularity` was renamed from `depth` in v1.22.3. Existing configs are auto-migrated.
 
@@ -472,42 +440,19 @@ Example:
 
 ### Parallel reviewer lanes for `/gsd-review` (#3034)
 
-By default `/gsd-review` invokes reviewer lanes one at a time. That is deliberate: concurrent
-invocation can trip provider rate limits, and a lane dropped to a rate limit is a review that
-silently lost an opinion. A pass with several reviewers therefore costs roughly the sum of their
-runtimes.
-
-The lanes within one review pass have no data dependency on one another — they all inspect the
-same immutable plan snapshot. If your providers can accept concurrent requests (independent
-accounts, generous quota, or local model servers), you can opt in:
+By default `/gsd-review` invokes reviewer lanes one at a time, because concurrent invocation can trip provider rate limits. If your providers can take concurrent requests, opt in:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `review.parallel_lanes` | boolean | `false` | When `true`, dispatch independent selected reviewer lanes concurrently within a single `/gsd-review` pass. All lanes are joined before `REVIEWS.md` and consensus are rendered. |
-
-```bash
-gsd config-set review.parallel_lanes true
-/gsd-plan-review-convergence 3 --all
-```
-
-```json
-{
-  "review": {
-    "parallel_lanes": true
-  }
-}
-```
-
-**What this does not change.** Convergence cycles stay sequential — `review → replan → re-review`
-has a real data dependency, so enabling this speeds up each pass, not the number of passes.
-Per-lane timeouts, prompt budgets, diagnostic stubs, explicit-lane failure, trust/egress checks and
-result-file layout are all unchanged.
 
 **Before you enable it.** Every selected lane dispatches at once — there is no concurrency bound.
 Selecting eleven lanes issues eleven concurrent requests. Two reviewer instances backed by the same
 adapter (see below) also dispatch concurrently against that one provider, which is the most likely
 way to hit a limit. If a lane does get rate-limited it fails the way any other failing lane does:
 a diagnostic stub with captured stderr, never a silently dropped review.
+
+The steps, how to tell the outcomes apart and what the key does not speed up are in [How to enable parallel reviewer lanes](how-to/enable-parallel-reviewer-lanes.md).
 
 ### Reviewer instances for `/gsd-review` (#1517)
 
@@ -932,30 +877,14 @@ See [Publish PRs without planning artifacts](how-to/publish-prs-without-planning
 
 ### `commit_docs` Pre-Commit Guard (opt-in)
 
-`planning.commit_docs: false` only stops GSD's own `gsd-tools commit`/`gsd-tools state`
-write path from committing `.planning/`. It does **not** stop a plain `git add -A` +
-`git commit` run by hand, or by a script outside GSD's own tooling, from staging and
-committing `.planning/` anyway.
-
-`gsd-tools commit-docs-guard enable` closes that gap by writing a `.git/hooks/pre-commit`
-hook into the **current repository** that refuses any commit staging `.planning/` files
-while `commit_docs` resolves to `false`. Resolution goes through the same
-[per-phase precedence chain](#per-phase-override-phase_commit_docs) `gsd-tools commit`/`query commit`
-use — a `phase_commit_docs.<phase-id>` override for the staged phase is honored here too, so the
-hook cannot contradict them. It is entirely opt-in — no install path wires it
-automatically:
+`planning.commit_docs: false` only stops GSD's own commit path from committing `.planning/`; a plain `git add -A` and `git commit` still can. `gsd-tools commit-docs-guard enable` writes a `.git/hooks/pre-commit` hook into the current repository that refuses a commit staging `.planning/` files while `commit_docs` resolves to `false` (honoring [`phase_commit_docs`](#per-phase-override-phase_commit_docs)). It is opt-in; no install path wires it.
 
 ```bash
-gsd-tools commit-docs-guard enable   # write the hook (refuses to clobber an existing pre-commit hook)
-gsd-tools commit-docs-guard disable  # remove it (refuses to remove a hook GSD didn't write)
+gsd-tools commit-docs-guard enable   # write the hook
+gsd-tools commit-docs-guard disable  # remove it
 ```
 
-The hook is identified by a stable `# gsd-core:commit-docs-guard` marker line, so `enable`/
-`disable` detect it by presence of that marker rather than by byte-for-byte content — editing
-the file afterward does not make it unrecognizable. `enable` refuses (rather than silently
-writing an inert file) when `core.hooksPath` is already configured, since a hook written to
-`.git/hooks/pre-commit` would never run in that case; wire the guard into the configured hooks
-path by hand instead. See [Keep planning docs out of a shared repo](how-to/keep-planning-docs-private.md#pre-commit-guard-hook-optional) for the full walkthrough, including the linked-worktree case.
+The three refusals (an existing hook you did not get from GSD, `core.hooksPath` set, not a git repository), the marker line and the linked-worktree case are in [Keep planning docs out of a shared repo](how-to/keep-planning-docs-private.md#pre-commit-guard-hook-optional).
 
 ---
 
@@ -1130,7 +1059,7 @@ Toggle optional capabilities via the `features.*` config namespace. Feature flag
 | `features.thinking_partner` | boolean | `false` | Enable thinking partner analysis at workflow decision points |
 | `features.global_learnings` | boolean | `false` | Enable cross-project learnings pipeline (auto-copy at phase completion, planner injection) |
 | `learnings.max_inject` | number | `10` | Maximum number of cross-project learnings injected into each planner prompt. Lower values reduce prompt size; higher values provide broader historical context |
-| `intel.enabled` | boolean | `false` | Enable queryable codebase intelligence system. When `true`, `/gsd-map-codebase --query` commands build and query a JSON index in `.planning/intel/`. Added in v1.34 |
+| `intel.enabled` | boolean | `false` | Enable queryable codebase intelligence system. When `true`, `/gsd-map-codebase --query` commands build and query a JSON index in `.planning/intel/`. Added in v1.34. Intel commands (`intel status`, `query`, `diff`, `snapshot`, `validate`, `api-surface`) use the same installed, surfaced and config-enabled rule through `isCapabilityActive('intel', cwd)`; intel ships no skill files, so the first two conditions always hold and this key is the effective gate |
 
 <a id="plan-review-settings"></a>
 ### Plan Review Settings
@@ -1192,7 +1121,7 @@ gsd-tools query config-set mempalace.cross_project_tunnels true
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `graphify.enabled` | boolean | `false` | Enable the project knowledge graph. When `true`, `/gsd-graphify` builds and queries a graph in `.planning/graphs/`. Added in v1.36 |
+| `graphify.enabled` | boolean | `false` | Enable the project knowledge graph. When `true`, `/gsd-graphify` builds and queries a graph in `.planning/graphs/`. Added in v1.36. Graphify commands (`graphify status`, `build`, `query`, `diff`) run only when all three conditions hold: the `gsd-graphify-*` skills are installed in the active install profile, they are surfaced on the current runtime (for example in `~/.claude/commands/gsd/`), and this key is `true`. Setting the key alone is not enough; if the commands return `{ disabled: true }`, check `gsd-tools capability state` and re-run the installer |
 | `graphify.build_timeout` | number (seconds) | `300` | Maximum seconds allowed for a `/gsd-graphify build` run before it aborts. Added in v1.36 |
 | `graphify.auto_update` | boolean | `false` | **Opt-in (issue #3347).** When `true` (and `graphify.enabled` is also `true`), the bundled PostToolUse hook `hooks/gsd-graphify-update.sh` auto-rebuilds the project knowledge graph in a detached background process after `git commit/merge/pull/rebase --continue/cherry-pick` or an unflagged `query commit` through `gsd_run`, `gsd-tools`, or `gsd-tools.cjs` on the default branch (`git.base_branch` override, else `main`/`master`/`trunk`). Global-flag forms such as `gsd_run --cwd <path> query commit` are intentionally excluded because the hook cannot resolve their target checkout (#5935). The hook returns instantly; the rebuild updates `.planning/graphs/{graph.json,graph.html,GRAPH_REPORT.md}` and writes `.planning/graphs/.last-build-status.json` (`{ts, status: "running"\|"ok"\|"failed", exit_code, duration_ms, head_at_build}`). PID-locked, CI-aware (`$CI` env suppresses), bails silently if `graphify` is not on `PATH`. Default `false` so existing behaviour is unchanged after upgrade. |
 | `graphify.graph_path` | string (path) | _unset_ | **Umbrella/multi-repo support (issue #1825).** Overrides where `/gsd-graphify query\|status\|diff` read the knowledge graph from. Set to a path (relative to the project root, or absolute) pointing at a shared umbrella-level `graph.json` so a single curated cross-repo graph serves every sub-project without N drifting mirror copies. The diff snapshot (`.last-build-snapshot.json`) travels with the configured graph (same directory); the auto-update status sidecar stays project-local. Build stays project-scoped (`.planning/graphs/`) — build the umbrella graph in the umbrella project, then point sub-projects at it. When unset, behaviour is byte-identical to the historical `.planning/graphs/graph.json`. A clear, actionable error is returned when the configured file is missing. |

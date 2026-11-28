@@ -43,6 +43,8 @@ GSD supports OpenCode 1.x and 2.x side by side while both are current. From the 
 | Reasoning effort | `--variant` | `provider/model#variant` |
 | `TodoWrite` | `todowrite` tool | no equivalent tool; GSD workflows do not depend on it |
 | Background subagents | not available | `subagent` with `background: true` |
+| Agent-isolation guard | not available (OpenCode uses orchestrator-managed worktrees, which the guard does not enforce) | not available |
+| LSP-backed features | not available | the `lsp` setting is kept but 2.x runs no language servers |
 
 ## Going back
 
@@ -50,6 +52,6 @@ Reinstall OpenCode 1.x, then re-run the GSD installer. If 2.x created the data d
 
 ## Related
 
-- [OpenCode 1.x and 2.x](../USER-GUIDE.md#opencode-1x-and-2x-5337) — how GSD tells the generations apart
+- [OpenCode 1.x and 2.x](../ARCHITECTURE.md#opencode-1x-and-2x) — how GSD tells the generations apart
 - [Feature verification matrix](../reference/opencode-v2-verification-matrix.md) — what was run on real 1.x and 2.x binaries
 - [Update GSD](update-gsd.md)

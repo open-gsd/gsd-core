@@ -13,7 +13,7 @@ group: v1.7.0 Features
 
 **It never executes command text.** PLAN.md is model-authored, so running it from the checker would be arbitrary code execution — and would trigger the real lint/build as a side effect. The probe only resolves paths and stats directories; a `package.json` it finds is read for script names only.
 
-**Why a recognizer, not a shell parser.** Interpreting shell would mean maintaining a bad shell. Exactly two forms are grounded — a leading `cd <literal>` chain and `npm --prefix <literal>` — and any path carrying a variable, glob, substitution, or `~` returns `unresolvable`, which is a warning and never a blocker. The parser's incompleteness is the specification: it degrades to "cannot prove" rather than growing features. Refusing to guess is the fix, not a limitation of it.
+The reason this is a recognizer and not a shell parser is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md).
 
 **It reports, it never prescribes.** The payload carries the target that failed and what was missing; there is deliberately no `suggestion` field. Choosing the replacement is the planner's job — and the planner now has the prior phase's proven command to reach for.
 
