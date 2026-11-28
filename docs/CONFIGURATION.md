@@ -842,7 +842,9 @@ The isolation hooks resolve their project root through the same walk, so they ke
 
 If none match, the starting directory is returned unchanged. Explicit `--project-dir /path/to/workspace` is idempotent under this resolution.
 
-An explicit `--project-dir` is also the project root for `verification.fingerprint` and the staleness check behind `verification.status` / `phase.complete`, which otherwise derive their root from the phase directory's own ancestor walk-up. This matters when the phase directory is addressed by a path that does not lead back to the project — for example the real path of an externally git-managed `.planning` store. Without the flag the walk-up is unchanged.
+The `verification` verbs (`status`, `all-summarized`, `resolve-file`, `fingerprint`, `append-audit`) take the project root from the context the dispatcher resolved once for the process, so an explicit `--project-dir` is their project root too, including for the staleness check behind `phase.complete`. They no longer walk up from the phase directory. This matters when the phase directory is addressed by a path that does not lead back to the project — for example the real path of an externally git-managed `.planning` store.
+
+Planning artifacts passed by path (`uat render-checkpoint --file`, `uat complete-session`, `verification append-audit`, `summary-extract`, `coverage classify`, `loop render-hooks --after-fingerprint`) are checked against the real location of `.planning/`, so a `.planning` symlinked into a separate repository is accepted while a path that leaves both the project and that store is still refused.
 
 ### Auto-Detection
 

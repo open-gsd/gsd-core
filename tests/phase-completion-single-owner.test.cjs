@@ -40,7 +40,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { isPhaseComplete } = require('../gsd-core/bin/lib/verification.cjs');
+const { isPhaseComplete: isPhaseCompleteWithCtx } = require('../gsd-core/bin/lib/verification.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+// #6820 (ADR-4908 §6): isPhaseComplete requires a ProjectContext.
+const isPhaseComplete = (phaseDir, deps = {}) =>
+  isPhaseCompleteWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...deps });
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const { scanPhasePlans } = require('../gsd-core/bin/lib/plan-scan.cjs');
 const { buildWorkstreamInventory } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');

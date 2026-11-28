@@ -73,7 +73,6 @@ interface SemverModule {
   semverSatisfies: (version: unknown, range: unknown) => boolean;
 }
 interface ProjectRootModule {
-  findProjectRoot: (startDir: string) => string | null;
   /** #1459 IC-01/CB-4: the canonical realpath'd consent project root (RECORD/LOOKUP/revoke parity). */
   consentProjectRoot: (cwd: string) => string;
 }
@@ -343,9 +342,11 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
   const globalCanon = canonicalDir(globalDir);
   let projectRoot: string | null = null;
   try {
+    // #6820 (ADR-4908): the project overlay root comes from the seam's git-free walk; the loader runs
+    // on every CLI call, so it must not start a second git resolution (tests/git-layout-parity).
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-    const projectRootMod: ProjectRootModule = require('./project-root.cjs');
-    projectRoot = projectRootMod.findProjectRoot(cwd);
+    const projectContextMod: { walkUpForPlanning: (startDir: string) => { root: string } } = require('./project-context.cjs');
+    projectRoot = projectContextMod.walkUpForPlanning(cwd).root;
   } catch {
     projectRoot = null;
   }

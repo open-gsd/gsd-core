@@ -53,7 +53,7 @@ reads is inert — the consumption mechanism is what gives an artifact meaning.
 
 ### HANDOFF.json / .continue-here.md
 - **Shape**: Structured pause state (JSON machine-readable + Markdown human-readable). The handoff file is the pause: it belongs to the session that wrote it, and nothing is written to `paused_at` or `status: paused` in STATE.md (ADR-4962)
-- **Lifecycle**: Created on pause → Claimed by atomic rename on resume (role handoffs) → Consumed on resume → Replaced by next pause
+- **Lifecycle**: Created on pause → Claimed on resume by an exclusive claim marker and a rename (role handoffs) → Consumed on resume → Replaced by next pause
 - **Location**: `.planning/HANDOFF.latest.<role_id>.json` (a session with a role), `.planning/HANDOFF.<session_id>.json` (a session without one), or legacy `.planning/HANDOFF.json` (no session id), each with a `.continue-here` file: `.planning/phases/XX-name/.continue-here.latest.<role_id>.md` or `.continue-here.md` (or spike/deliberation path)
 - **Consumed by**: `resume-project` workflow
 

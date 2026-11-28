@@ -8,6 +8,11 @@
  * project-context` prints the resolved context.
  *
  * Failing-first: RED until the seam, the commit refusal and the verb exist.
+ *
+ * #6820 (Phase 2a of #6044): the second half of this file, from the block
+ * marked `#6820` down, covers the resolver consumers: `uat render-checkpoint`
+ * under a symlinked planning store, verification reading `ctx.projectRoot`, and
+ * the retired `--project-dir` global.
  */
 
 const { describe, test, after } = require('node:test');
@@ -339,3 +344,215 @@ describe('project-context CLI: workspace and verb', () => {
     assert.equal(res.output.trim(), wt);
   });
 });
+
+// ─── #6820 (Phase 2a of #6044): the resolver consumers take the ProjectContext ───
+{
+  /**
+   * #6820 (Phase 2a of #6044 / epic #4908, ADR-4908): the resolver consumers take
+   * the ProjectContext. Failing-first suite (matrix: T1-T12).
+   *
+   * Fixtures are real directories in mkdtemp dirs (realpath'd so macOS
+   * /var -> /private/var never skews an equality), cleaned with t.after.
+   */
+
+  const { resolveProjectContext, requirePlanningArtifactPath } = require('../gsd-core/bin/lib/project-context.cjs');
+  const projectRootModule = require('../gsd-core/bin/lib/project-root.cjs');
+  const verification = require('../gsd-core/bin/lib/verification.cjs');
+
+  const UAT_BODY = '---\nstatus: testing\n---\n\n## Current Test\n\nnumber: 1\nname: Login\nexpected: user sees the dashboard\n';
+  const PHASE = '01-x';
+
+  /** repo/.planning is a symlink to ../repo-planning, which holds the phase + UAT file. */
+  function mkSymlinkedPlanning(t) {
+    const base = mkTmp(t);
+    const repo = path.join(base, 'repo');
+    const store = path.join(base, 'repo-planning');
+    fs.mkdirSync(repo, { recursive: true });
+    write(path.join(store, 'phases', PHASE, `${PHASE}-UAT.md`), UAT_BODY);
+    fs.symlinkSync(store, path.join(repo, '.planning'), 'dir');
+    return { base, repo, store };
+  }
+
+  describe('uat render-checkpoint containment for planning artifacts (B9)', () => {
+    test('renderCheckpointAcceptsUatFileUnderSymlinkedPlanningStore', (t) => {
+      const { repo } = mkSymlinkedPlanning(t);
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/${PHASE}-UAT.md`], repo);
+      assert.equal(r.success, true, r.error);
+      assert.match(r.output, /Login/);
+    });
+
+    test('renderCheckpointAcceptsAChildWhoseNameStartsWithTwoDots', (t) => {
+      const { repo, store } = mkSymlinkedPlanning(t);
+      write(path.join(store, 'phases', PHASE, '..odd-UAT.md'), UAT_BODY);
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/..odd-UAT.md`], repo);
+      assert.equal(r.success, true, r.error);
+      assert.match(r.output, /Login/);
+    });
+
+    test('requirePlanningArtifactPathChoosesTheStoreForPlanningPathsAndTheProjectForTheRest', (t) => {
+      const { repo, store } = mkSymlinkedPlanning(t);
+      write(path.join(repo, 'src', 'a.txt'), 'alpha\n');
+      const ctx = resolveProjectContext(repo);
+      const planning = requirePlanningArtifactPath(ctx, `.planning/phases/${PHASE}/${PHASE}-UAT.md`, 'artifact');
+      // `resolved` is the real target, spelled by the JS realpath (the old project-root check's spelling), not by
+      // ctx.planningRoot's realpathSync.native, which expands Windows 8.3 names that cwd keeps.
+      assert.equal(planning.resolved, fs.realpathSync(path.join(repo, '.planning', 'phases', PHASE, `${PHASE}-UAT.md`)));
+      // A path given through the store's own location resolves to that location.
+      const viaStore = requirePlanningArtifactPath(ctx, path.join(store, 'phases', PHASE, `${PHASE}-UAT.md`), 'artifact');
+      assert.equal(viaStore.resolved, path.join(fs.realpathSync.native(store), 'phases', PHASE, `${PHASE}-UAT.md`));
+      assert.equal(planning.display, path.join('.planning', 'phases', PHASE, `${PHASE}-UAT.md`));
+      const project = requirePlanningArtifactPath(ctx, 'src/a.txt', 'artifact');
+      assert.equal(project.resolved, path.join(fs.realpathSync.native(repo), 'src', 'a.txt'));
+      assert.equal(project.display, path.join('src', 'a.txt'));
+      assert.throws(() => requirePlanningArtifactPath(ctx, '../outside/x.md', 'artifact'), /artifact validation failed: Path escapes allowed directory/);
+    });
+
+    test('renderCheckpointStillWorksWithARealPlanningDirectory', (t) => {
+      const repo = path.join(mkTmp(t), 'repo');
+      write(path.join(repo, '.planning', 'phases', PHASE, `${PHASE}-UAT.md`), UAT_BODY);
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/${PHASE}-UAT.md`], repo);
+      assert.equal(r.success, true, r.error);
+      assert.match(r.output, /Login/);
+    });
+
+    test('renderCheckpointRefusesSiblingDirectorySharingThePlanningStorePrefix', (t) => {
+      const { base, repo } = mkSymlinkedPlanning(t);
+      const evil = path.join(base, 'repo-planning-evil', 'x-UAT.md');
+      write(evil, UAT_BODY);
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', evil], repo);
+      assert.equal(r.success, false);
+      assert.match(r.error, /UAT file validation failed: Path escapes allowed directory/);
+    });
+
+    test('renderCheckpointRefusesTraversalOutOfTheProject', (t) => {
+      const { base, repo } = mkSymlinkedPlanning(t);
+      write(path.join(base, 'outside', 'UAT.md'), UAT_BODY);
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', '../outside/UAT.md'], repo);
+      assert.equal(r.success, false);
+      assert.match(r.error, /UAT file validation failed: Path escapes allowed directory/);
+    });
+
+    test('renderCheckpointRefusesSymlinkLeavingBothRoots', (t) => {
+      const { base, repo, store } = mkSymlinkedPlanning(t);
+      const target = path.join(base, 'outside', 'UAT.md');
+      write(target, UAT_BODY);
+      fs.symlinkSync(target, path.join(store, 'phases', PHASE, 'link-UAT.md'), 'file');
+      const r = runGsdTools(['uat', 'render-checkpoint', '--file', `.planning/phases/${PHASE}/link-UAT.md`], repo);
+      assert.equal(r.success, false);
+      assert.match(r.error, /UAT file validation failed: Path escapes allowed directory/);
+    });
+  });
+
+  describe('verification takes the context root, not a walk-up from the phase directory (B1-B3)', () => {
+    function mkProject(root, withFile) {
+      write(path.join(root, '.planning', 'PROJECT.md'), '# p\n');
+      if (withFile) write(path.join(root, 'src', 'a.txt'), 'alpha\n');
+    }
+
+    /**
+     * Project B holds src/a.txt; the phase directory is nested at B/sub, which has its own `.planning`
+     * (and, when `aHasFile`, its own src/a.txt), so a walk-up from the phase directory lands on B/sub
+     * ("A") while the context can name B. The report's digest is taken over B's files. A v4 digest is
+     * only computable for a phase directory inside the root, hence the nesting.
+     */
+    function mkTwoProjects(t, { aHasFile }) {
+      const base = mkTmp(t);
+      const b = path.join(base, 'b');
+      const a = path.join(b, 'sub');
+      mkProject(b, true);
+      mkProject(a, aHasFile);
+      const phaseDir = path.join(a, '.planning', 'phases', PHASE);
+      fs.mkdirSync(phaseDir, { recursive: true }); // the digest enumerates the phase's own artifacts
+      const digest = verification.computeCoveredDigest(b, ['src/a.txt'], 4, { phaseDir });
+      assert.equal(typeof digest, 'string', 'fixture digest must compute over project B');
+      write(
+        path.join(phaseDir, `${PHASE}-VERIFICATION.md`),
+        `---\nstatus: passed\ncovered_files:\n  - src/a.txt\ncovered_digest: ${digest}\n---\n\n# Verification\n`,
+      );
+      return { a, b, phaseDir };
+    }
+
+    test('verificationReadsTheContextRootNotAWalkUpFromThePhaseDir', (t) => {
+      const { b, phaseDir } = mkTwoProjects(t, { aHasFile: false });
+      const ctx = resolveProjectContext(b, { explicit: b });
+      const result = verification.readVerificationStatus(phaseDir, { ctx });
+      assert.equal(result.status, 'passed');
+    });
+
+    test('verificationFailsClosedWhenTheContextRootDoesNotHoldTheCoveredFiles', (t) => {
+      const { a, phaseDir } = mkTwoProjects(t, { aHasFile: false });
+      const ctx = resolveProjectContext(a, { explicit: a });
+      const result = verification.readVerificationStatus(phaseDir, { ctx });
+      assert.equal(result.status, 'stale');
+    });
+
+    test('verificationRefusesToReadWithoutAContext', (t) => {
+      const { phaseDir } = mkTwoProjects(t, { aHasFile: true });
+      // ADR-4908 section 6: ctx is required; there is no phase-dir walk-up fallback to fall into.
+      assert.throws(() => verification.readVerificationStatus(phaseDir), (err) => err instanceof TypeError);
+    });
+
+    test('fingerprintHonorsProjectDirFromAnyCwd', (t) => {
+      const base = mkTmp(t);
+      const p = path.join(base, 'p');
+      const elsewhere = path.join(base, 'elsewhere');
+      mkProject(p, true);
+      fs.mkdirSync(elsewhere, { recursive: true });
+      const phaseDir = path.join(p, '.planning', 'phases', PHASE);
+      fs.mkdirSync(phaseDir, { recursive: true });
+      // `elsewhere` is itself a project holding a DIFFERENT src/a.txt, so a digest taken over the
+      // wrong root is distinguishable from one taken over `p`.
+      mkProject(elsewhere, false);
+      write(path.join(elsewhere, 'src', 'a.txt'), 'different content\n');
+      const args = ['verification', 'fingerprint', phaseDir, 'src/a.txt'];
+      const fromElsewhere = runGsdTools([...args, '--project-dir', p], elsewhere);
+      const fromInside = runGsdTools(args, p);
+      assert.equal(fromElsewhere.success, true, fromElsewhere.error);
+      assert.equal(fromInside.success, true, fromInside.error);
+      const expected = verification.computeCoveredDigest(p, ['src/a.txt'], 4, { phaseDir });
+      const wrongRoot = verification.computeCoveredDigest(elsewhere, ['src/a.txt'], 4, { phaseDir });
+      assert.notEqual(expected, wrongRoot);
+      assert.equal(JSON.parse(fromElsewhere.output).covered_digest, expected);
+      assert.equal(JSON.parse(fromInside.output).covered_digest, expected);
+    });
+
+    test('explicitSourceLivesOnTheContextAndNeverCarriesToTheNextResolution', (t) => {
+      const base = mkTmp(t);
+      const p = path.join(base, 'p');
+      const q = path.join(base, 'q');
+      mkProject(p, false);
+      mkProject(q, false);
+      const first = resolveProjectContext(q, { explicit: p });
+      const second = resolveProjectContext(q);
+      assert.equal(first.provenance.source, 'explicit');
+      assert.equal(first.projectRoot, p);
+      assert.equal(second.provenance.source, 'ancestor');
+      assert.equal(second.projectRoot, q);
+    });
+  });
+
+  describe('the retired root resolvers (B6, B10)', () => {
+    test('retiredRootResolversAreNotExported', () => {
+      const exported = Object.keys(projectRootModule).sort();
+      assert.deepEqual(exported, ['consentProjectRoot']);
+      assert.equal(projectRootModule.findProjectRoot, undefined);
+      assert.equal(projectRootModule.setExplicitProjectRoot, undefined);
+      assert.equal(projectRootModule.resolveProjectRoot, undefined);
+    });
+
+    test('consentProjectRootKeyIsStableAcrossSubdirectories', (t) => {
+      const repo = path.join(mkTmp(t), 'repo');
+      write(path.join(repo, '.planning', 'PROJECT.md'), '# p\n');
+      const sub = path.join(repo, 'a', 'b');
+      fs.mkdirSync(sub, { recursive: true });
+      assert.equal(projectRootModule.consentProjectRoot(sub), fs.realpathSync.native(repo));
+      assert.equal(projectRootModule.consentProjectRoot(repo), fs.realpathSync.native(repo));
+
+      const linked = mkSymlinkedPlanning(t);
+      assert.equal(projectRootModule.consentProjectRoot(linked.repo), fs.realpathSync.native(linked.repo));
+
+      const bare = mkTmp(t);
+      assert.equal(projectRootModule.consentProjectRoot(bare), bare);
+    });
+  });
+}
