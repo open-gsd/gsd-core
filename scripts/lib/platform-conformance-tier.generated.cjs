@@ -313,7 +313,7 @@ module.exports = {
   "tests/shared-install-fixture.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
   "tests/shell-command-projection-md-normalize.test.cjs",
-  "tests/ship-notes-wedged-pr.test.cjs",
+  "tests/ship-note-no-skip-token.test.cjs",
   "tests/shipped-reference-cites.test.cjs",
   "tests/skill-manifest.test.cjs",
   "tests/slug-derivation-drift-guard.test.cjs",

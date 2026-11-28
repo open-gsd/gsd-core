@@ -1792,9 +1792,9 @@ describe('workflow call sites declare --files (#2269)', () => {
       // The live redirect-tail shape, value present: the redirections after
       // the value are consumed by the shell and must not hide the real scope.
       'gsd_run query commit "docs(phase-{X}): revert premature Complete requirements after gaps found" --files .planning/REQUIREMENTS.md >/dev/null 2>&1 || true',
-      // A # INSIDE a quoted message is literal text, not a comment — ship.md
-      // commits with `PR #${PR_NUMBER}` in the message today.
-      'gsd_run query commit "docs: ship phase 4 — PR #42 [ci skip]" --files .planning/STATE.md',
+      // A # INSIDE a quoted message is literal text, not a comment — ship.md's
+      // track_shipping commits `ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER}`.
+      'gsd_run query commit "docs: ship phase 4 — PR #42" --files .planning/STATE.md',
       // Mid-word # is literal too, as in the shell.
       'gsd_run query commit docs:PR#42 --files .planning/STATE.md',
       // #4276: a QUOTED digit run is not an IO number. POSIX recognizes one
@@ -2141,10 +2141,10 @@ describe('workflow call sites declare --files (#2269)', () => {
     );
 
     // commentPortion is the seam, and it agrees with tokenize about where the
-    // command ends — a `#` inside quotes or mid-word is literal (ship.md
-    // commits with `PR #${PR_NUMBER}` in the message today).
+    // command ends — a `#` inside quotes or mid-word is literal (ship.md's
+    // track_shipping commits `ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER}`).
     assert.strictEqual(commentPortion('gsd_run query commit "PR #42" # real'), '# real');
-    assert.strictEqual(commentPortion('gsd_run query commit "PR #42 [ci skip]"'), '');
+    assert.strictEqual(commentPortion('gsd_run query commit "ship phase 4 — PR #42"'), '');
     assert.strictEqual(commentPortion('gsd_run query commit docs:PR#42 --files a.md'), '');
 
     // THE ESCAPED-SEPARATOR BYPASS. A backslash escapes the space, so the shell

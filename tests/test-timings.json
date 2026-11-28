@@ -943,7 +943,7 @@
     "shell-command-projection-dispatch.test.cjs": 1772,
     "shell-command-projection-md-normalize.test.cjs": 1000,
     "shell-command-projection-path-sep.test.cjs": 81,
-    "ship-notes-wedged-pr.test.cjs": 352,
+    "ship-note-no-skip-token.test.cjs": 352,
     "ship-phase-complete-gate.test.cjs": 13607,
     "shipped-reference-cites.test.cjs": 129,
     "skill-frontmatter-contract.test.cjs": 203,
