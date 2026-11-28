@@ -2503,6 +2503,33 @@ describe('stripGsdFromCodexConfig', () => {
     assert.ok(!result.includes(GSD_CODEX_MARKER), 'strips marker');
   });
 
+  for (const [lineEnding, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`#5991: preserves mixed markerless agents as one table with ${lineEnding}`, () => {
+      const content = ['[agents]', 'max_threads = 3', 'hooks = true', ''].join(eol);
+      const result = stripGsdFromCodexConfig(content);
+
+      assert.deepStrictEqual(parseTomlToObject(result).agents, { max_threads: 3, hooks: true });
+      assert.strictEqual(stripGsdFromCodexConfig(result), result);
+      assert.strictEqual(result, content);
+    });
+  }
+
+  test('#5991: restores a known-scalar-only markerless agents table once', () => {
+    const content = '[agents]\nmax_threads = 3\nmax_depth = 1\n';
+    const result = stripGsdFromCodexConfig(content);
+
+    assert.deepStrictEqual(parseTomlToObject(result).agents, { max_threads: 3 });
+    assert.strictEqual(stripGsdFromCodexConfig(result), result);
+  });
+
+  test('#5991: preserves an unknown-key-only markerless agents table', () => {
+    const content = '[agents]\nhooks = true\n';
+    const result = stripGsdFromCodexConfig(content);
+
+    assert.deepStrictEqual(parseTomlToObject(result).agents, { hooks: true });
+    assert.strictEqual(result, content);
+  });
+
   test('removes legacy [agents.gsd-*] map sections (self-heal pre-#2645 configs)', () => {
     const content = `[agents.gsd-executor]\ndescription = "test"\nconfig_file = "agents/gsd-executor.toml"\n\n[agents.custom-agent]\ndescription = "user agent"\n`;
     const result = stripGsdFromCodexConfig(content);

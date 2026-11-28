@@ -4927,13 +4927,20 @@ function stripCodexGsdAgentSections(content) {
     return false;
   });
 
-  return removeContentRanges(
-    content,
-    sections.map((section) => ({
-      start: section.start,
-      end: managedTomlSectionRemovalEnd(content, section),
-    })),
-  );
+  const removedAgentsTable = sections.find((section) => !section.array && section.path === 'agents');
+  const preservedScalars = removedAgentsTable
+    ? extractCodexUserAgentsScalars(content.slice(removedAgentsTable.start, removedAgentsTable.end))
+    : [];
+  return {
+    content: removeContentRanges(
+      content,
+      sections.map((section) => ({
+        start: section.start,
+        end: managedTomlSectionRemovalEnd(content, section),
+      })),
+    ),
+    preservedScalars,
+  };
 }
 
 /** Standalone managed-marker lines, ignoring marker text inside multiline strings. */
@@ -4994,8 +5001,9 @@ function stripGsdFromCodexConfig(content) {
     // [features], and only a table with an empty body loses its header.
     let cleaned = stripCodexHooksFeatureAssignments(content, codexHooksOwnership);
     cleaned = stripInjectedCodexFeatureKeys(cleaned);
-    const preservedScalars = extractCodexUserAgentsScalars(cleaned);
-    cleaned = stripCodexGsdAgentSections(cleaned);
+    // Restore scalars only from a removed table. Mixed user tables stay in place.
+    const { content: withoutGsdAgents, preservedScalars } = stripCodexGsdAgentSections(cleaned);
+    cleaned = withoutGsdAgents;
     cleaned = stripEmptyManagedCodexTables(cleaned);
     cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
     if (preservedScalars.length > 0) {
@@ -5052,7 +5060,7 @@ function stripGsdFromCodexConfig(content) {
   }
 
   // Remove [agents.gsd-*] sections + the managed known-scalar [agents] table.
-  cleaned = stripCodexGsdAgentSections(cleaned);
+  cleaned = stripCodexGsdAgentSections(cleaned).content;
 
   // Remove truly empty managed tables, never look-alike headers in user strings.
   cleaned = stripEmptyManagedCodexTables(cleaned);
