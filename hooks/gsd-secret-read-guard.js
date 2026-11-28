@@ -4331,21 +4331,16 @@ function scanDebuggerSpawn(command) {
 
 // The further reading of `command` (#5779, furtherReading): the secret and
 // debugger-spawn scans again, with the command resolved past the words the plain
-// walk stops at. main runs it last, after scanBashReadings allowed, so it can add
-// a denial and cannot lose one. It reads an `env -S` string as next did before
-// #5514 (the 'unsplit' reading), and judges the #4432 read-only line under that
-// reading. It runs once without bash's
-// subscript joins and, only when that pass saw where a join could start, once more
-// with them. Both passes share a budget of its own, the size the plain scans get,
-// so whether it reads a line never turns on what they spent, and a command's work
-// is bounded at twice theirs. `budget` and `separatorBudget` are for tests. Its
-// verdict is a block or null:
-//   - a stack overflow is `command-too-complex`: findSecretRead returns that block
-//     for its own, and one in the spawn scan is thrown, as from scanDebuggerSpawn;
-//   - a spent budget is `command-too-complex` too: a line it could not finish is
-//     unread, and one that needs both passes is denied from half the plain size;
-//   - any other error is a scan error, as one scanBashReadings catches: null, and
-//     furtherThrew set, so main gives the command the host's crash policy (#5784).
+// walk stops at. main runs it after scanBashReadings allowed, so it can add a
+// denial and cannot lose one. It reads an `env -S` string as next did before #5514
+// (the 'unsplit' reading) and judges the #4432 read-only line under that reading.
+// It runs once without bash's subscript joins and, only when that pass saw where a
+// join could start, once more with them, both on one budget of its own the size
+// the plain scans get (`budget` and `separatorBudget` are for tests). Its verdict:
+//   - a stack overflow or a spent budget is `command-too-complex` (an overflow in
+//     the spawn scan is thrown, as from scanDebuggerSpawn);
+//   - any other error is a scan error: null, and furtherThrew set, so main gives
+//     the command the host's crash policy (#5784).
 // A hook timeout is the adapter's: Claude Code reads it as no decision; Pi refuses.
 let furtherThrew = false;
 function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
