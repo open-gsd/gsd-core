@@ -84,8 +84,8 @@ if (phases.scope !== 'complete') {
 
 ## 4. Handle a withheld percentage
 
-`progress.accepted_phases` and `progress.completed_plans` each carry
-`{completed, total, percent, scope}`. **`percent` is `null` whenever `scope` is
+`progress.accepted_phases`, `progress.completed_plans` and
+`progress.halted_plans` each carry `{completed, total, percent, scope}`. **`percent` is `null` whenever `scope` is
 not `complete`.**
 
 That is deliberate. A percentage computed from a partial phase set is a
@@ -98,7 +98,70 @@ const { percent } = snapshot.progress.completed_plans;
 render(percent === null ? '—' : `${percent}%`);
 ```
 
-`percent: 0` under a `complete` scope is a real 0 and should be rendered.
+`percent: 0` under a `complete` scope is a real 0 and should be rendered. For
+`halted_plans` that holds only while no `summary_unreadable` diagnostic stands:
+a SUMMARY that could not be read counts as not halted (next section).
+
+### Tell a halted plan from a finished one
+
+A plan that stopped at a designed halt (`status: halted` in its SUMMARY) still
+counts toward `completed_plans`, because its SUMMARY is a completion record.
+Read the halt from the fields beside the count rather than calling
+`phase-plan-index` a second time:
+
+```javascript
+const { completed_plans: done, halted_plans: halted } = snapshot.progress;
+const haltUnknown = snapshot.diagnostics.some((d) => d.code === 'summary_unreadable');
+if (done.scope === 'complete' && !haltUnknown) {
+  render(`${done.completed - halted.completed} completed, ${halted.completed} halted, of ${done.total}`);
+}
+
+for (const phase of snapshot.phases) {
+  const haltedIds = new Set(phase.plans.filter((p) => !p.superseded && p.halted).map((p) => p.id));
+  for (const plan of phase.plans) {
+    if (plan.superseded) continue;
+    if (plan.halted) render(`${plan.id}: halted`);
+    else if (plan.blocked_by.length === 0) continue;
+    else if (plan.blocked_by.every((id) => haltedIds.has(id))) render(`${plan.id}: behind halted ${plan.blocked_by.join(', ')}`);
+    else render(`${plan.id}: in or behind a depends_on cycle`);
+  }
+}
+```
+
+The split is skipped while any `summary_unreadable` diagnostic stands: a
+SUMMARY that could not be read reads as not halted, so the plan would be
+counted as completed and not halted when its halt is unknown.
+
+The loop skips superseded rows because `halted` is set on them too, while
+`halted_count` and `progress.halted_plans` leave them out; without the skip, a
+retired plan would be listed as halted beside a count that does not include it.
+
+`blocked_by` names the halted plans upstream of a plan, except in or behind a
+`depends_on` cycle, where a plan that is not halted names its own direct
+`depends_on` plans among the phase's live, canonically named plans instead,
+completed ones included (one that depends on itself names itself). The loop
+therefore prints the ids only when each one is the id of a halted plan in the
+same phase, and prints the cycle line otherwise. A plan in a cycle through a
+halted plan can get the `behind halted` line instead: with `01-01` and `01-02`
+depending on each other and `01-01` halted, the loop prints `01-01: halted` and
+`01-02: behind halted 01-01`, the same lines as when only `01-02` depends on
+`01-01`.
+
+`blocked_by` is incomplete around a PLAN that could not be read, or that
+resolves outside the planning root (a `plan_unreadable` diagnostic names the
+file): that plan's `depends_on` is unknown, so its own `blocked_by` is `[]`,
+and a halt upstream of it does not reach the plans downstream through it.
+
+The new fields also add to `diagnostics[]`: under a scope that is not
+`complete` it carries a `percent_withheld` entry for `progress.halted_plans`,
+so a consumer that counts or matches `percent_withheld` entries sees one more.
+
+`halted: false` is a real answer only when no `summary_unreadable` diagnostic
+names that plan's SUMMARY, and some SUMMARY shapes read as not halted even
+then. See
+[Halted plans](../CLI-TOOLS.md#halted-plans-counted-as-completed-flagged-beside-the-count-5823)
+for the full rules, including where `planning inspect` and `phase-plan-index`
+differ.
 
 ## 5. Read the three kinds of phase evidence separately
 

@@ -14,7 +14,8 @@
  * ordinary incomplete work, available to spawn against.
  *
  * This module is the SINGLE topological-order + halt-propagation engine both
- * readers call, so the two can never re-diverge on this rule again. Each
+ * readers call (and, since #5823, `planning-inspect.cts`'s plan rows), so
+ * they share one propagation rule. Each
  * caller resolves its own raw `depends_on` tokens to canonical plan ids
  * (case-fold + `extractCanonicalPlanId` fallback — the same resolution
  * already performed by phase.cts's `computeDependencyLevels`) before
@@ -39,10 +40,9 @@ const { extractFrontmatter } = frontmatterMod;
 
 /**
  * The one place "does this SUMMARY status value mean halted" is decided.
- * Case-insensitive, trims whitespace. Both `phase.cts`'s `cmdPhasePlanIndex`
- * and `phase-locator.cts`'s `searchPhaseInDir` call this after reading a
- * completed plan's SUMMARY frontmatter `status` field, so the definition of
- * "halted" cannot drift between the two readers.
+ * Case-insensitive, trims whitespace. Every halt reader reaches this through
+ * `isSummaryFileHalted` below, on whichever SUMMARY that reader looked up for
+ * the plan, so the status value that means "halted" cannot drift between them.
  */
 function isHaltedStatus(status: unknown): boolean {
   if (typeof status !== 'string') return false;
@@ -64,11 +64,12 @@ function isHaltedStatus(status: unknown): boolean {
  * (a designed stop, not an ordinary completion). Returns false — never
  * throws — on a missing/unreadable/malformed SUMMARY, so an unreadable file
  * degrades to the pre-#2830 behavior ("has a SUMMARY = complete") rather
- * than breaking either caller.
+ * than breaking any caller.
  *
- * Two callers share this wrapper: `phase.cts`'s `cmdPhasePlanIndex` and
+ * Three callers share this wrapper: `phase.cts`'s `cmdPhasePlanIndex`,
  * `phase-locator.cts`'s `searchPhaseInDir` (the phase-location primitive
- * consumed by ~50 symbols across five command routers). Both previously
+ * consumed by ~50 symbols across five command routers) and, since #5823,
+ * `planning-inspect.cts`'s `readHalted`. The first two previously
  * carried a near-identical local copy (read file -> `extractFrontmatter` ->
  * `isHaltedStatus` -> swallow errors) that this module's own header comment
  * calls out as the exact "two implementations, one drifts" failure mode it
@@ -78,7 +79,7 @@ function isHaltedStatus(status: unknown): boolean {
  * Takes a single resolved `summaryPath` (not a `dir` + `filename` pair) —
  * `phase-locator.cts`'s prior local copy took the two parts separately and
  * `path.join`'d them internally; that caller now does the join itself
- * before calling in, so both callers share one signature.
+ * before calling in, so every caller shares one signature.
  *
  * @param summaryPath - absolute or relative path to a `*-SUMMARY.md` file.
  */
@@ -183,12 +184,15 @@ function readSummaryFrontmatterPrefix(summaryPath: string): string | null {
  * report whether it declares `status: blocked`. Returns false — never throws —
  * on a missing/unreadable/malformed/non-regular SUMMARY, so an unreadable file
  * degrades to the pre-#3345 filename-existence behaviour rather than breaking
- * either caller. Fail-open by design, mirroring `isPlanSuperseded`'s posture.
+ * any caller. Fail-open by design, mirroring `isPlanSuperseded`'s posture.
  *
- * Callers: plan-scan.cts's `scanPhasePlans` (the count side) and phase.cts's
- * `cmdPhasePlanIndex` (the read side) BOTH filter their summary lists through
- * this one predicate, so the count and the `incomplete` list can never
- * re-diverge on the blocked rule.
+ * Callers: plan-scan.cts's `scanPhasePlans` (count side) and phase.cts's
+ * `cmdPhasePlanIndex` (read side) BOTH filter their summary lists through it,
+ * so the count and the `incomplete` list cannot re-diverge on the blocked
+ * rule; state.cts's `scanOutstanding` does the same for its outstanding plans.
+ * Narrower uses: phase-locator.cts's `searchPhaseInDir` for its readiness
+ * evidence only (its `incomplete_plans` list uses unfiltered summaries), and
+ * `planning inspect` for its halt read's pairing and its `summary_count`.
  */
 function isSummaryFileBlocked(summaryPath: string): boolean {
   const content = readSummaryFrontmatterPrefix(summaryPath);

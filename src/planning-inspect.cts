@@ -93,10 +93,21 @@ import markdownTable = require('./markdown-table.cjs');
 const { parseMarkdownTable, matchTableSchema } = markdownTable;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { normalizeLineEndings } = coreUtilsMod;
+const { normalizeLineEndings, extractCanonicalPlanId, findUnsummarizedPlans, countMatchedSummaries } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import securityMod = require('./security.cjs');
 const { tryWithinRoot, PathAcceptance, isContainedIn } = securityMod;
+// #5823: the halt predicate and its propagation come from their #2830 owner,
+// and depends_on tokens resolve through phase-plan-index's own resolver, so
+// this reader and `phase-plan-index` share both rules. Where their answers
+// still differ (a SUMMARY this reader refuses to read, for one), docs/CLI-TOOLS.md
+// lists the cases under "Halted plans".
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5823 the halt engine's compiled CommonJS module, imported like the owners above
+import planDependencyGraphMod = require('./plan-dependency-graph.cjs');
+const { computeHaltPropagation, isSummaryFileHalted, isSummaryFileBlocked, buildSummaryFileIndex } = planDependencyGraphMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5823 phase-plan-index's resolver, from its compiled CommonJS module
+import phaseMod = require('./phase.cjs');
+const { resolveDependencyId, buildShortFormToId, normalizeDependencyToken } = phaseMod;
 
 /**
  * The wire schema version. A consumer MUST reject any value other than this
@@ -649,6 +660,31 @@ interface PlanRow {
   /** Plan-scoped `## Files Created/Modified`. `null` when no SUMMARY exists. */
   changedFiles: string[] | null;
   hasSummary: boolean;
+  /**
+   * #5823 (additive, #2830's model): a designed stop (`status: halted`),
+   * read in `phase-plan-index`'s two steps (see `readHalted`). First, the plan
+   * needs a completion record: `findUnsummarizedPlans` over the SUMMARYs that
+   * are not `status: blocked`; without one it is false. Second, the file whose
+   * `status` is read is looked up by plan id, then by canonical id, the last
+   * match in listing order winning, and blocked SUMMARYs are not skipped, so
+   * it can differ from the file that gave the completion record (and can be a
+   * bare-id SUMMARY written for another plan). False too when `readDocument`
+   * refuses that file (a `summary_unreadable` diagnostic then names it), and
+   * when the predicate's own second read of it fails (no diagnostic). The rules
+   * and their limits: docs/CLI-TOOLS.md, "Which SUMMARY `halted` reads".
+   * `hasSummary` is untouched and keeps its own, older pairing rule.
+   */
+  halted: boolean;
+  /**
+   * #5823 (additive): the halted plan ids transitively upstream of this plan
+   * over the phase's live, canonically named plans — the node set, depends_on
+   * resolution and `computeHaltPropagation` pass `phase-plan-index` uses. Empty
+   * when nothing upstream halted, except in or behind a `depends_on` cycle,
+   * where a non-halted plan names its own direct `depends_on` plans among those
+   * plans instead (see docs/CLI-TOOLS.md, "Halted plans"). Always empty on a row
+   * outside that node set (a superseded or non-canonically named plan).
+   */
+  blocked_by: string[];
   tasks: TaskRow[];
   scope: Scope;
 }
@@ -752,7 +788,18 @@ function buildTaskRows(
   });
 }
 
-function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot: string): { rows: PlanRow[]; scope: Scope } {
+/**
+ * #5823: `counts` is this scan's `plan_count` and `summary_count`, taken from
+ * the same directory read and the same blocked-SUMMARY filter as the rows'
+ * halt read, so a SUMMARY written or rewritten while the command runs cannot
+ * leave `halted_count` above `summary_count`. `null` when this function
+ * returns before its scan (the containment check below).
+ */
+function buildPlanRows(
+  phaseDir: string,
+  diagnostics: Diagnostic[],
+  planningRoot: string,
+): { rows: PlanRow[]; scope: Scope; counts: { planCount: number; summaryCount: number } | null } {
   // GAP 1 (#2790 follow-up security review): `scanPhasePlans` (`plan-scan.cjs`)
   // does its own `readdirSync(phaseDir)`, which FOLLOWS a directory symlink —
   // so a phase directory that is itself a symlink escaping `planningRoot`
@@ -765,12 +812,65 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
   // `isPathContained` comparison `readDocument` uses for files (never a
   // second, hand-rolled boundary check).
   if (!isPathContained(phaseDir, planningRoot)) {
-    return { rows: [], scope: SCOPE.UNREADABLE };
+    return { rows: [], scope: SCOPE.UNREADABLE, counts: null };
   }
   const scan = planScan(phaseDir);
   const supersededSet = new Set(
     scan.allPlanFiles.filter((f: string) => !scan.planFiles.includes(f)),
   );
+
+  // #5823: the halt read pairs a plan with its SUMMARY exactly as
+  // `cmdPhasePlanIndex` (`src/phase.cts`) does — a plan has a completion
+  // record when `findUnsummarizedPlans` (the #3183 rule `summary_count` also
+  // counts by) pairs it with a SUMMARY that is not `status: blocked` (#3345),
+  // and the file read is `buildSummaryFileIndex`'s, by plan id and then by
+  // canonical id. That is deliberately NOT `summaryForPlan`, the older rule
+  // behind `hasSummary`: the two differ on a slug-named plan whose SUMMARY
+  // carries only the bare id (`01-06-scaffolding-PLAN.md` with
+  // `01-06-SUMMARY.md`), and `halted` must agree with `phase-plan-index`
+  // while `hasSummary` keeps its meaning (#2830's back-compat rule).
+  const countableSummaryFiles = scan.summaryFiles.filter(
+    (f: string) => !isSummaryFileBlocked(path.join(phaseDir, f)),
+  );
+  const unsummarizedPlanFiles = new Set(findUnsummarizedPlans(scan.allPlanFiles, countableSummaryFiles));
+  const summaryFileByPlanId = buildSummaryFileIndex(scan.summaryFiles, extractCanonicalPlanId);
+
+  // #5823: what each SUMMARY read established, keyed by SUMMARY file: true
+  // when `readDocument` accepted it (a regular file contained in the planning
+  // root). The row reads below fill it first, so a file they already reported
+  // `summary_unreadable` is never reported again by the halt read.
+  const summaryReadable = new Map<string, boolean>();
+
+  /**
+   * #5823: `isSummaryFileHalted` on the SUMMARY the halt lookup finds for the
+   * plan, called only once `readDocument` has accepted that file. A looked-up
+   * SUMMARY no row read has seen yet is read here, and if `readDocument`
+   * refuses it it gets ONE `summary_unreadable` however many plans look it up,
+   * so `halted: false` is never silently a non-answer for a file
+   * `readDocument` refuses. `isSummaryFileHalted` then opens the file again
+   * by path, as `phase-plan-index` does, and a failure of that read is false
+   * with no diagnostic.
+   */
+  function readHalted(planFile: string): boolean {
+    if (unsummarizedPlanFiles.has(planFile)) return false;
+    const summaryFile =
+      summaryFileByPlanId.get(planIdFromFile(planFile)) ?? summaryFileByPlanId.get(extractCanonicalPlanId(planFile));
+    if (summaryFile === undefined) return false;
+    const summaryPath = path.join(phaseDir, summaryFile);
+    let readable = summaryReadable.get(summaryFile);
+    if (readable === undefined) {
+      readable = readDocument(summaryPath, planningRoot).text !== null;
+      summaryReadable.set(summaryFile, readable);
+      if (!readable) {
+        diagnostics.push({
+          code: INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE,
+          subject: toPosix(summaryFile),
+          detail: 'Summary file could not be read; whether this plan halted is unknown.',
+        });
+      }
+    }
+    return readable && isSummaryFileHalted(summaryPath);
+  }
 
   const rows: PlanRow[] = scan.allPlanFiles.map((planFile: string) => {
     const doc = readDocument(path.join(phaseDir, planFile), planningRoot);
@@ -792,6 +892,10 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
         plannedFiles: [],
         changedFiles: null,
         hasSummary: false,
+        // Filled in after every row is built (see below): the plan body is
+        // unknown, but its SUMMARY's halt is still this plan's own fact.
+        halted: false,
+        blocked_by: [],
         tasks: [],
         scope: SCOPE.UNREADABLE,
       };
@@ -802,6 +906,7 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
     let provenance: SummaryProvenance | null = null;
     if (summaryFile !== null) {
       const summaryDoc = readDocument(path.join(phaseDir, summaryFile), planningRoot);
+      summaryReadable.set(summaryFile, summaryDoc.text !== null);
       if (summaryDoc.text === null) {
         diagnostics.push({
           code: INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE,
@@ -825,12 +930,79 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
       plannedFiles: parsed.filesModified,
       changedFiles: provenance === null ? null : provenance.planFiles,
       hasSummary: summaryFile !== null,
+      halted: false,
+      blocked_by: [],
       tasks: buildTaskRows(planFile, parsed, provenance, diagnostics),
       scope: SCOPE.COMPLETE,
     };
   });
 
-  return { rows, scope: scan.scope };
+  // #5823: the halt read runs after every row's own SUMMARY read, so the
+  // cache above already holds what those reads established.
+  rows.forEach((row, i) => {
+    row.halted = readHalted(scan.allPlanFiles[i]);
+  });
+  assignHaltPropagation(
+    rows
+      .map((row, i) => ({ row, planFile: scan.allPlanFiles[i] }))
+      .filter(({ row, planFile }) => !row.superseded && planScan.isCanonicalPlanFile(planFile)),
+  );
+  return {
+    rows,
+    scope: scan.scope,
+    // `scanPhasePlans`'s own formula, over this function's countable set.
+    counts: {
+      planCount: scan.planFiles.length,
+      summaryCount: countMatchedSummaries(scan.planFiles, countableSummaryFiles),
+    },
+  };
+}
+
+/**
+ * #5823: fill `blocked_by` on the phase's live, canonically named plan rows
+ * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex` (`src/phase.cts`)
+ * does: the same three-tier depends_on resolution (`resolveDependencyId`) and
+ * the same `computeHaltPropagation` pass; a token that resolves to no plan in
+ * the set is dropped, as there. docs/CLI-TOOLS.md ("Halted plans") lists the
+ * differences between the two commands; three arise here. Two because this read
+ * never fails where `phase-plan-index` refuses the phase: on a depends_on cycle
+ * every non-halted plan the shared propagation cannot order gets a non-empty
+ * `blocked_by`, and plan ids that differ only in case resolve by sort order
+ * (body). The third because the shared propagation orders this graph itself,
+ * where `phase-plan-index`'s wave order leaves out an edge to a plan whose id is
+ * empty (a bare `PLAN.md`), so a halt upstream of that plan reaches the plans
+ * whose token resolves to it here, and can miss them there.
+ */
+function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
+  // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both
+  // the canonical-id map (last write wins) and the short-form map (first write
+  // wins) depend on that order when two plans collide, so sort the same way.
+  // On two plan ids that differ only in case, an exact or canonical token
+  // naming either then resolves to the one that sorts last (`planMap` and
+  // `canonicalToId` keep the last write), and a short-form token to the first
+  // plan in sort order with that plan number (`buildShortFormToId` keeps the
+  // first), which can be a third plan.
+  const live = entries
+    .slice()
+    .sort((a, b) => (a.planFile < b.planFile ? -1 : a.planFile > b.planFile ? 1 : 0))
+    .map(({ row }) => row);
+  const planMap = new Map(live.map((row) => [normalizeDependencyToken(row.id), row]));
+  const canonicalToId = new Map(
+    live.map((row) => [normalizeDependencyToken(extractCanonicalPlanId(row.id)), row.id]),
+  );
+  const shortFormToId = buildShortFormToId(live);
+  const { blockedBy } = computeHaltPropagation(
+    live.map((row) => ({
+      id: row.id,
+      resolvedDependsOn: row.dependsOn
+        .map((dep) => resolveDependencyId(String(dep), planMap, canonicalToId, shortFormToId))
+        .filter((id): id is string => id !== null),
+      halted: row.halted,
+    })),
+  );
+  for (const row of live) {
+    row.blocked_by = blockedBy.get(row.id) ?? [];
+  }
 }
 
 // ─── UAT ──────────────────────────────────────────────────────────────────────
@@ -926,7 +1098,7 @@ function buildUatRows(
     // never carry an affirmative `"complete"`. `foldScope` is what is handed to
     // `worstScope` in the caller, and it is the one with teeth — a non-COMPLETE
     // fold raises `phase_scope_degraded` AND, via `phaseScope`/`makeFraction`,
-    // withholds BOTH progress percentages for the WHOLE milestone.
+    // withholds EVERY progress percentage for the WHOLE milestone.
     //
     // The two now agree: EVERY gap class degrades both, including the
     // fence-suppression shortfall. `shortfallBlocks` is not exempted here
@@ -1348,8 +1520,16 @@ function buildPlanningInspectResult(cwd: string): {
         authoritative: false,
       },
       uat: { unresolved: uat.items, scope: uat.scope },
-      plan_count: phase.planCount,
-      summary_count: phase.summaryCount,
+      // #5823: from the plan rows' own scan (`buildPlanRows`'s `counts`), the
+      // read `halted_count` comes from; the snapshot's counts stand where
+      // `buildPlanRows` returned before its scan (`counts: null`).
+      plan_count: plans.counts ? plans.counts.planCount : phase.planCount,
+      summary_count: plans.counts ? plans.counts.summaryCount : phase.summaryCount,
+      // #5823 (additive): live (non-superseded) plans whose `halted` is true.
+      // Which SUMMARY `halted` reads: `PlanRow.halted`, and docs/CLI-TOOLS.md,
+      // "Which SUMMARY `halted` reads".
+      // `summary_count` still counts them (#2830's model).
+      halted_count: plans.rows.filter((row) => !row.superseded && row.halted).length,
       plans: plans.rows,
       scope: folded,
     };
@@ -1374,6 +1554,16 @@ function buildPlanningInspectResult(cwd: string): {
     phaseRows.reduce((sum, p) => sum + p.plan_count, 0),
     phaseScope,
     'progress.completed_plans',
+    diagnostics,
+  );
+  // #5823 (additive): the halted share of the same live plan set. Halted
+  // plans stay inside `completed_plans` (#2830 kept a halted SUMMARY a
+  // completion record); this fraction is how a consumer tells them apart.
+  const haltedPlans = makeFraction(
+    phaseRows.reduce((sum, p) => sum + p.halted_count, 0),
+    phaseRows.reduce((sum, p) => sum + p.plan_count, 0),
+    phaseScope,
+    'progress.halted_plans',
     diagnostics,
   );
 
@@ -1402,6 +1592,7 @@ function buildPlanningInspectResult(cwd: string): {
     progress: {
       accepted_phases: acceptedPhases,
       completed_plans: completedPlans,
+      halted_plans: haltedPlans,
     },
     diagnostics,
   };
