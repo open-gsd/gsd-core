@@ -351,7 +351,10 @@ describe('commit-docs-guard enable/disable (#3588 B1-B15)', () => {
     fs.chmodSync(hookPath, 0o755);
     const result = runGsdTools('commit-docs-guard enable --raw', tmpDir);
     assert.ok(!result.success, 'enable must refuse to overwrite a foreign hook');
-    assert.ok(result.error.includes(hookPath), result.error);
+    // #6821: the verb runs git in ctx.worktreeRoot, which is the canonical checkout path, so the
+    // refusal names the hook under that spelling (Windows 8.3 RUNNER~1 vs runneradmin, macOS /var vs /private/var).
+    const canonicalHookPath = path.join(fs.realpathSync.native(tmpDir), '.git', 'hooks', 'pre-commit');
+    assert.ok(result.error.includes(canonicalHookPath), result.error);
     assert.strictEqual(fs.readFileSync(hookPath, 'utf8'), foreignContent, 'foreign hook must be byte-unchanged');
   });
 
