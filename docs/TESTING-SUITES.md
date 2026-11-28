@@ -302,16 +302,7 @@ module has a **positive control**: a test that drives the gate, through its real
   cannot read, or a source the parser cannot read, is a violation: an inert scan
   does not report a clean tree.
 
-### How-to: you added a gate and `lint:ci` reports `no-control`
-
-1. Add a `gateControl({...})` call to `tests/gate-positive-control.test.cjs`
-   naming your gate, its module and its `evaluate*` function.
-   `expectRed` names the arm the red scenario reaches.
-2. Take `red` from the lint's message (`wrong-red` states what the gate reaches).
-3. Write the red scenario from the input that makes the gate fail, and the green
-   scenario from the nearest input that does not. Reuse the cases in your gate's
-   own unit test; the control asserts the pair through one harness.
-4. Run `npm run lint:gate-positive-control`.
+If `lint:ci` reports `no-control` for a gate you added, follow [How to add a positive control for a new gate](how-to/add-a-gate-positive-control.md).
 
 ## Running suites locally
 
