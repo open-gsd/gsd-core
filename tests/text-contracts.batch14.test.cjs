@@ -3,8 +3,9 @@
 /**
  * #6814: the `plan-phase-coverage-gate` text contract. plan-phase step 13 must keep its null/TBD skip, read the live
  * plan set through phase.list-plans and each plan's `requirements` through frontmatter.get, strip the CR a Windows
- * jq.exe writes (without jq 1.7's -b), never grep or glob plan files, and count a requirement as covered only on an
- * exact line match. The shipped tree passes; each mutation below, made to a copy of plan-phase.md, fails it.
+ * jq.exe writes (without jq 1.7's -b), carry no doubled backslash, never grep or glob plan files, and count a
+ * requirement as covered only on an exact line match. The shipped tree passes; each mutation below, made to a copy of
+ * plan-phase.md, fails it.
  */
 
 const { test, describe } = require('node:test');
@@ -57,6 +58,7 @@ describe('plan-phase-coverage-gate (#6814)', () => {
     ['aPathListWithCr', replaceOnce("'.plans[]' | tr -d '\\r' |", "'.plans[]' |"), /each plan path with/],
     ['anIdListWithCr', replaceOnce("done | tr -d '\\r' | sort", 'done | sort'), /each ID with/],
     ['aJqBinaryFlag', replaceOnce("--raw | jq -r '", "--raw | jq -rb '"), /jq 1\.6 has no such option/],
+    ['aDoubledBackslash', replaceOnce('splits("[,[:space:]]+")', 'splits("[,\\\\s]+")'), /must not carry a doubled backslash/],
     ['aPathReadWithoutIfs', replaceOnce('while IFS= read -r p;', 'while read -r p;'), /read each plan path verbatim/],
     ['anotherField', replaceOnce('--field requirements', '--field requirements_addressed'), /a field the plan format does not have/],
     ['aRootPlanGlob', replaceOnce('**Step 2: Compare.**', '**Step 2: Compare** each `*-PLAN.md`.'), /must not glob root plan files/],

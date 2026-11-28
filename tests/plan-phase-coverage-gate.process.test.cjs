@@ -30,7 +30,7 @@ const JQ_SKIP = skipUnless('jq');
 const PLAN_PHASE = 'gsd-core/workflows/plan-phase.md';
 const STUB = path.join(__dirname, 'helpers', 'jq-subset-stub.cjs');
 const LIST_PLANS = '.plans[]';
-const NORMALIZE = String.raw`(arrays|.[]),.|strings|splits("[,\\s]+")|select(.!="")`;
+const NORMALIZE = '(arrays|.[]),.|strings|splits("[,[:space:]]+")|select(.!="")';
 // The flag the documented line passes to both jq calls.
 const JQ_FLAGS = '-r';
 
@@ -239,11 +239,22 @@ const STREAM_PINS = [
 /** The lines `jq -r` printed, each ended by a newline. */
 const lines = (stdout) => (stdout === '' ? [] : stdout.replace(/\n$/, '').split('\n'));
 const runStub = (filter, input) => processSeam.runNode([STUB, JQ_FLAGS, filter], { input, timeoutMs: PROBE_TIMEOUT_MS });
-const runJq = (filter, input) => processSeam.runHook(JQ_FLAGS, [filter], { interpreter: 'jq', input, timeoutMs: PROBE_TIMEOUT_MS });
+const spawnJq = (filter, input) =>
+  processSeam.runHook(JQ_FLAGS, [filter], { interpreter: 'jq', input, timeoutMs: PROBE_TIMEOUT_MS });
+// A native Windows jq.exe writes each newline as CRLF (text-mode stdout). One probe tells whether this jq does; if it
+// does, mapping CRLF back to LF undoes exactly that, and a CR jq prints inside a value (TEXT below draws one) still has
+// to match the stub's. A jq that writes LF is compared as it prints.
+let jqWritesCrlf;
+const runJq = (filter, input) => {
+  jqWritesCrlf ??= spawnJq('.', '"a"').stdout === 'a\r\n';
+  const r = spawnJq(filter, input);
+  return jqWritesCrlf ? { ...r, stdout: r.stdout.replace(/\r\n/g, '\n') } : r;
+};
 
-// Generated documents of the shapes the two verbs answer with. Strings draw on separators jq's `\s` does and does
-// not split on (U+0085, U+00A0, U+2028 and U+3000 are White_Space; U+200B and U+FEFF are not). Objects never reach
-// `.plans[]`'s output, and numbers never reach either filter's output: those print differently (see the stub's header).
+// Generated documents of the shapes the two verbs answer with. Strings draw on separators jq's `[:space:]` does and
+// does not split on (U+0085, U+00A0, U+2028 and U+3000 are White_Space; U+200B and U+FEFF are not). Objects never
+// reach `.plans[]`'s output, and numbers never reach either filter's output: those print differently (see the stub's
+// header).
 const TEXT = fc.string({
   unit: fc.constantFrom('A', 'b', '-', '1', ',', ' ', '\t', '\n', '\r', '\v', '\f', '\u0085', '\u00a0', '\u2028', '\u3000', '\u200b', '\ufeff', '"', '\\', '/'),
   maxLength: 12,

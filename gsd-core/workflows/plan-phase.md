@@ -1311,7 +1311,7 @@ After the checker passes or is skipped, verify each phase requirement has a plan
 
 **Step 1: Collect the IDs live plans claim**
 ```bash
-PLAN_REQS=$(gsd_run query phase.list-plans ${GSD_WS:+--ws=${GSD_WS##* }} "{phase_number}" | jq -r '.plans[]' | tr -d '\r' | while IFS= read -r p; do gsd_run query frontmatter.get "{project_root}/$p" --field requirements --raw | jq -r '(arrays|.[]),.|strings|splits("[,\\s]+")|select(.!="")'; done | tr -d '\r' | sort -u)
+PLAN_REQS=$(gsd_run query phase.list-plans ${GSD_WS:+--ws=${GSD_WS##* }} "{phase_number}" | jq -r '.plans[]' | tr -d '\r' | while IFS= read -r p; do gsd_run query frontmatter.get "{project_root}/$p" --field requirements --raw | jq -r '(arrays|.[]),.|strings|splits("[,[:space:]]+")|select(.!="")'; done | tr -d '\r' | sort -u)
 ```
 
 **Step 2: Compare.** A REQ-ID in `phase_req_ids` is covered ✓ only if it equals a `PLAN_REQS` line exactly, else uncovered ✗.

@@ -6,8 +6,9 @@
 // missed block-list, nested and bare plans and counted body text and superseded plans. What the documented line
 // captures is tested in tests/plan-phase-coverage-gate.process.test.cjs; this contract holds the step's text: the skip
 // rule, the two verbs, the `tr -d '\r'` after each jq (a native Windows jq.exe ends each line with CR, and a path or
-// an ID that ends in CR matches no plan or requirement; jq 1.7's -b avoids it, but jq 1.6 has no -b), and the
-// exact-match rule of step 2.
+// an ID that ends in CR matches no plan or requirement; jq 1.7's -b avoids it, but jq 1.6 has no -b), no doubled
+// backslash (Git Bash started from a native Windows process, as Node starts it, halves `\\` in a quoted argument, so
+// a jq filter written `"\\s"` reaches jq as `"\s"`, an invalid escape), and the exact-match rule of step 2.
 
 const PLAN = 'gsd-core/workflows/plan-phase.md';
 
@@ -24,6 +25,7 @@ module.exports = {
       .has(`jq -r '.plans[]' | tr -d '\\r' | while`, 'step 13 must strip the CR a native Windows jq.exe ends each plan path with')
       .has(`done | tr -d '\\r' | sort -u)`, 'step 13 must strip the CR a native Windows jq.exe ends each ID with')
       .lacks(/\bjq -[a-z]*b/, 'step 13 must not pass jq -b (jq 1.6 has no such option and exits 2)')
+      .lacks('\\\\', 'step 13 must not carry a doubled backslash (Git Bash from a native Windows process halves it)')
       .lacks('requirements_addressed', 'step 13 must not read a field the plan format does not have')
       .lacks(/\bgrep\b/, "step 13 must not grep plan files' raw lines")
       .lacks('*-PLAN.md', 'step 13 must not glob root plan files (the live plan set comes from phase.list-plans)')

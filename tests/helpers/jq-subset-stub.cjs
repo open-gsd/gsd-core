@@ -81,7 +81,8 @@ const field = (d, key) => {
   if (typeof d !== 'object' || Array.isArray(d)) throw new JqError(`Cannot index ${Array.isArray(d) ? 'array' : typeof d} with string "${key}"`);
   return Object.prototype.hasOwnProperty.call(d, key) ? d[key] : null;
 };
-// jq's `\s` (Oniguruma) is Unicode White_Space: it splits on U+0085 and not on U+FEFF, where JS `\s` does the opposite.
+// jq's `[:space:]` (Oniguruma) is Unicode White_Space: it splits on U+0085 and not on U+FEFF, where JS `\s` does the
+// opposite.
 const ID_SEPARATOR = /[,\p{White_Space}]+/u;
 /** The four characters JSON allows between tokens: stdin made only of them holds no document. */
 const JSON_WHITESPACE = new Set([' ', '\t', '\n', '\r']);
@@ -92,7 +93,7 @@ const STREAMS = new Map([
   // any object, such as frontmatter.get's error answer for a missing key or an unreadable plan, adds nothing.
   ['.plans[]', (d) => iterate(field(d, 'plans'))],
   [
-    String.raw`(arrays|.[]),.|strings|splits("[,\\s]+")|select(.!="")`,
+    '(arrays|.[]),.|strings|splits("[,[:space:]]+")|select(.!="")',
     (d) =>
       [...(Array.isArray(d) ? d : []), d]
         .filter((v) => typeof v === 'string')
