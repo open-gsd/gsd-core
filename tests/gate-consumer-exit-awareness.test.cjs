@@ -320,8 +320,9 @@ describe('jq-subset-stub: jq semantics for the filters the extracted blocks use'
     assert.equal(jq(['-r', MESSAGE], '{"message":{"a":1}}').stdout, '{"a":1}\n', 'jq pretty-prints an object; the stub prints it compact');
   });
 
-  test('invalid JSON exits 2 like jq, and an unsupported filter is refused (exit 3), never passed through', () => {
-    assert.equal(jq(['-e', PASSED], 'not json').status, 2);
+  test('invalid JSON and several documents exit 2, and an unsupported filter is refused (exit 3), never passed through', () => {
+    assert.equal(jq(['-e', PASSED], 'not json').status, 2, 'jq 1.8.1 exits 5: a known divergence (see the stub\'s header)');
+    assert.equal(jq(['-e', PASSED], '{"passed":true}\n{"passed":true}').status, 2, 'jq runs the filter on each document: a known divergence (see the stub\'s header)');
     const unsupported = jq(['-e', '.passed'], '{"passed":true}');
     assert.equal(unsupported.status, 3);
     assert.match(unsupported.stderr, /unsupported filter/);

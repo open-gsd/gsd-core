@@ -409,6 +409,12 @@ const ALWAYS_REAL_OS = new Map([
       'against HOME, which depends on HOME/USERPROFILE resolution on Windows.',
   ],
   [
+    'tests/plan-phase-coverage-gate.process.test.cjs',
+    "Runs plan-phase step 13's documented line under real bash against the real CLI in a sandbox " +
+      "project (its env from isolatedEnv), feeding phase.list-plans' paths to frontmatter.get; the line " +
+      'strips the CR a native Windows jq.exe ends each line with, which only a Windows run shows.',
+  ],
+  [
     'tests/profile-output.test.cjs',
     'Reads files the product resolves under the sandbox home (codexHome/.agents/skills/...), checks ' +
       'the home suffix, and covers blank config-directory cases, all resolved from HOME/USERPROFILE.',
