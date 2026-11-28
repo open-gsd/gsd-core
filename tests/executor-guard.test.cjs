@@ -23,7 +23,10 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 
 const guardModule = require('../gsd-core/bin/lib/executor-guard.cjs');
-const { evaluateGuard, cmdExecutorGuard, resolveLanding, ledgerFileName, GUARD_EXIT_CODE } = guardModule;
+const {
+  evaluateGuard, cmdExecutorGuard, cmdExecutorLedgerRecord, cmdExecutorLedgerRead, resolveLanding, ledgerFileName,
+  GUARD_EXIT_CODE,
+} = guardModule;
 
 const GIT_CFG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-gitcfg-'));
 const EMPTY_GITCONFIG = path.join(GIT_CFG_DIR, 'gitconfig');
@@ -848,6 +851,80 @@ describe('#6216: seams and properties', () => {
     assert.equal(result.ok, true, JSON.stringify(result.checks));
     assert.equal(seen.length, 4, 'the two layout reads, the branch read and the HEAD read');
     for (const opts of seen) assert.deepEqual(opts, { cwd: '/w' });
+  });
+
+  /** stubGit, with the calls whose first two words are `stopWhen` stopped by the seam's timeout. */
+  function stoppingGit(root, stopWhen) {
+    const base = stubGit(root);
+    return (args, opts) => (stopWhen.includes(args.slice(0, 2).join(' '))
+      ? { exitCode: 1, stdout: '', stderr: '', timedOut: true, signal: 'SIGTERM' }
+      : base(args, opts));
+  }
+
+  test('a timed-out worktree read is named as a timeout, not as a directory outside a git worktree', () => {
+    const lines = [];
+    assert.throws(
+      () => cmdExecutorGuard({ projectRoot: '/w' }, { invokedFrom: '/w' }, false, {
+        execGit: stoppingGit('/w', ['rev-parse --show-toplevel']),
+        protectedStatus: unprotectedStatus,
+        realpath: (p) => p,
+        writeDiagnostic: (l) => lines.push(l),
+      }),
+      (err) => err && err.code === GUARD_EXIT_CODE,
+    );
+    const fatal = lines.join('');
+    assert.match(fatal, /FATAL: executor\.guard head-attached: .*'git rev-parse --show-toplevel' timed out/);
+    assert.doesNotMatch(fatal, /is not inside a git worktree/);
+  });
+
+  test('a timed-out HEAD read is named in each check it fails', () => {
+    const result = evaluateGuard({ projectRoot: '/w' }, { invokedFrom: '/w' }, {
+      execGit: stoppingGit('/w', ['symbolic-ref --quiet']),
+      protectedStatus: unprotectedStatus,
+      realpath: (p) => p,
+    });
+    const failedChecks = result.checks.filter((c) => !c.ok);
+    assert.deepEqual(failedChecks.map((c) => c.name), ['head-attached', 'not-protected']);
+    for (const c of failedChecks) assert.match(c.detail, /'git symbolic-ref --quiet HEAD' timed out/, c.name);
+    assert.ok(result.checks.filter((c) => c.ok).every((c) => !/timed out/.test(c.detail)));
+  });
+
+  test('a git call stopped by a signal is named by that signal', () => {
+    const base = stubGit('/w');
+    const result = evaluateGuard({ projectRoot: '/w' }, { invokedFrom: '/w' }, {
+      execGit: (args, opts) => (args[0] === 'symbolic-ref'
+        ? { exitCode: 1, stdout: '', timedOut: false, signal: 'SIGKILL' }
+        : base(args, opts)),
+      protectedStatus: unprotectedStatus,
+      realpath: (p) => p,
+    });
+    assert.match(result.checks.find((c) => c.name === 'head-attached').detail, /was stopped by SIGKILL/);
+  });
+
+  test('the ledger names a timed-out git read in its failure', (t) => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-stop-')));
+    t.after(() => cleanup(root));
+    const call = (fn, stopWhen) => {
+      try {
+        fn({ projectRoot: root }, root, '02', '04', false, { execGit: stoppingGit(root, stopWhen), realpath: (p) => p });
+      } catch (err) {
+        return err;
+      }
+      return null;
+    };
+    const noRoot = call(cmdExecutorLedgerRecord, ['rev-parse --show-toplevel']);
+    assert.equal(noRoot && noRoot.code, 1);
+    assert.match(noRoot.message, /'git rev-parse --show-toplevel' timed out/);
+    assert.doesNotMatch(noRoot.message, /is not inside a git worktree/);
+
+    const noHead = call(cmdExecutorLedgerRecord, ['rev-parse --verify']);
+    assert.equal(noHead && noHead.code, 1);
+    assert.match(noHead.message, /HEAD does not resolve to a commit; nothing to record: 'git rev-parse --verify --quiet HEAD\^\{commit\}' timed out/);
+    assert.ok(!fs.existsSync(path.join(root, '.gsd', 'executor-ledger', '02+04.json')));
+
+    const noCount = call(cmdExecutorLedgerRead, ['merge-base --is-ancestor']);
+    assert.equal(noCount && noCount.code, 1);
+    assert.match(noCount.message, /no ledger record/, 'nothing was recorded, so read stops before git');
   });
 
   const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
