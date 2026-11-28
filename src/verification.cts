@@ -759,13 +759,9 @@ function mappedPhaseDirOf(phaseDir: string, roots: ContainmentRoots): string | n
  *                revised R7).
  *   v4 (#5351) — v3 with each CRLF byte pair hashed as LF. Every other
  *                byte, including a lone CR and non-UTF-8 input, is preserved.
- *   v5 (#6811) — v4 with one more shared planning root: a phase archived in
- *                a scope's `milestones/<v>-phases/` directory keeps that
- *                scope as its own planning root (`phasePlanningRoot`), so a
- *                workstream's `ROADMAP.md` stays shared after
- *                `milestone complete --ws`. v2-v4 keep the `phases/`-only rule,
- *                so a v2-v4 report fingerprinted inside such an archive still
- *                reproduces its digest.
+ *   v5 (#6811) — v4, plus a phase in `<scope>/milestones/<v>-phases/` keeps
+ *                `<scope>` as its planning root (`phasePlanningRoot`), so a
+ *                workstream ROADMAP stays shared after `milestone complete --ws`.
  *
  * A stored digest names its own version (`v<N>:sha256:…`), and
  * `readVerificationStatus` recomputes under the STORED version rather than
@@ -773,11 +769,8 @@ function mappedPhaseDirOf(phaseDir: string, roots: ContainmentRoots): string | n
  * to `stale` on upgrade. A legacy v1/v2/v3 report keeps its own raw-byte
  * semantics (shared documents included for v1; no report filter or artifact
  * union for v1/v2) until it is re-fingerprinted; only a version outside
- * `KNOWN_FINGERPRINT_VERSIONS` is unrecomputable and fails closed.
- *
- * Moving a phase directory changes no version's input: the checker reads the
- * moved files at their new spelling and hashes them under the spelling the
- * report declared (`PhaseRelocation`, #6811).
+ * `KNOWN_FINGERPRINT_VERSIONS` is unrecomputable and fails closed. A moved
+ * phase is recomputed under its old spelling (`PhaseRelocation`, #6811).
  */
 const FINGERPRINT_VERSION = 5;
 const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4, 5]);
@@ -802,6 +795,7 @@ function phasePlanningRoot(phaseRel: string, archives: boolean): string | null {
     root = path.posix.dirname(path.posix.dirname(parent));
   }
   if (root === null || !(root === '.planning' || root.startsWith('.planning/'))) return null;
+  // Both pre-#6811 derivations refused a root with a `..` segment; kept for parity.
   return root.split('/').includes('..') ? null : root;
 }
 
@@ -863,10 +857,10 @@ function isSharedPlanningDoc(rel: string, roots: readonly string[] = ['.planning
  * `phaseArtifactPaths`'s `mappedPhaseDir` — so a workstream/project ROADMAP
  * under an out-of-repo store is still recognized as shared even when
  * `phaseDir` was addressed by its real, non-`.planning`-spelled path (the
- * #4894 `--project-dir` shape). Falls back to the existing absolute-path
- * derivation (`sharedPlanningRoots(projectRoot, phaseDir)`) when no mapped
- * spelling is available — byte-for-behaviour identical to the pre-#5095
- * seam for every caller that has no artifact-derivation step of its own.
+ * #4894 `--project-dir` shape). Falls back to the absolute-path derivation
+ * (`sharedPlanningRoots(projectRoot, phaseDir, version)`) when no mapped
+ * spelling is available. `version` is the fingerprint version being computed:
+ * from v5 a `milestones/<v>-phases/` archive also names its scope (#6811).
  */
 function sharedRootsFor(
   projectRoot: string,
@@ -914,7 +908,6 @@ function isAbsentRel(projectRoot: string, rel: string): boolean {
  *   - `from` -> `to`, the phase directory. Tried only after the declared
  *     spelling misses, so a report that matches where it says is read there.
  *   - `scopeFrom` -> `scopeTo`, the planning root, when the move changed it.
- *     Applied per file, to a declared path that exists at the new spelling.
  */
 interface PhaseRelocation {
   from: string;
@@ -923,17 +916,32 @@ interface PhaseRelocation {
   scopeTo: string | null;
 }
 
-/** #6811: the spelling `rel` lives at now under `relocation`. */
+/**
+ * #6811: the spelling `rel` lives at now under `relocation`. A planning
+ * document of the archive's own scope that is gone is read from the copy
+ * `milestone complete` archived it to, `<scope>/milestones/<v>-<name>`: the
+ * complete-milestone workflow deletes `REQUIREMENTS.md` after the copy. v2+
+ * only validates such a document, so the copy's presence stands in for it.
+ * v1 hashes the copy's bytes, and the archived `REQUIREMENTS.md` gains a header.
+ */
 function relocatedRel(projectRoot: string, rel: string, relocation: PhaseRelocation): string {
   const phaseRest = restUnder(rel, relocation.from);
   if (phaseRest !== null) return relocation.to + phaseRest;
-  if (relocation.scopeFrom !== null && relocation.scopeTo !== null) {
-    const scopeRest = restUnder(rel, relocation.scopeFrom);
-    if (scopeRest !== null && !isAbsentRel(projectRoot, relocation.scopeTo + scopeRest)) {
-      return relocation.scopeTo + scopeRest;
-    }
+  const scopeRest = relocation.scopeFrom === null ? null : restUnder(rel, relocation.scopeFrom);
+  const moved = scopeRest === null || relocation.scopeTo === null ? rel : relocation.scopeTo + scopeRest;
+  const archive = path.posix.dirname(relocation.to);
+  const milestones = path.posix.dirname(archive);
+  const version = /^(.+)-phases$/.exec(path.posix.basename(archive));
+  if (
+    version === null ||
+    path.posix.basename(milestones) !== 'milestones' ||
+    path.posix.dirname(moved) !== path.posix.dirname(milestones) ||
+    !isAbsentRel(projectRoot, moved)
+  ) {
+    return moved;
   }
-  return rel;
+  const copy = `${milestones}/${version[1]}-${path.posix.basename(moved)}`;
+  return isAbsentRel(projectRoot, copy) ? moved : copy;
 }
 
 /**
@@ -972,6 +980,7 @@ function phaseRelocationCandidates(projectRoot: string, phaseDir: string): Phase
   }
   const candidates: PhaseRelocation[] = [];
   for (const from of spellings) {
+    // An archive named `ws-..-<date>` would spell a workstream `..`.
     if (from === current || from.split('/').some((s) => s === '' || s === '.' || s === '..')) continue;
     const fromRoot = phasePlanningRoot(from, true);
     const scopeMoved = fromRoot !== null && fromRoot !== currentRoot;
@@ -1390,10 +1399,11 @@ function defaultPhaseCleanCommitTimesMs(
  * uncommitted or edited since, is newer than the report's own. A file that
  * can no longer be statted counts as moved. Advisory only: it never decides
  * staleness (the digest does), and an unreadable clock yields fewer names,
- * never a wrong status. Timed through the same injectable resolver the
- * legacy mtime check uses, rooted at the project so the covered paths
- * (project-root-relative) resolve. #6811: a moved phase's files are timed and
- * named where they live now, so a file that was only renamed is never named.
+ * never a wrong status. Timed through the legacy mtime check's injectable
+ * resolver, rooted at the project. #6811: a moved phase's files are timed and
+ * named where they live now, so a file that was only renamed is not named.
+ * Until the move is committed the report is timed by its mtime, like any
+ * uncommitted report, so a file committed after that mtime is named too.
  */
 function coveredFilesMovedSinceReport(
   projectRoot: string,
@@ -1421,10 +1431,12 @@ function coveredFilesMovedSinceReport(
   let sharedRoots: string[] = [];
   if (version >= 2) {
     sharedRoots = relocation === null
-      ? sharedRootsFor(projectRoot, phaseDir, mappedPhaseDirOf(phaseDir, resolveContainmentRoots(projectRoot)), version)
+      ? sharedRootsFor(projectRoot, phaseDir, null, version)
       : sharedRootsFor(projectRoot, path.join(projectRoot, relocation.from), relocation.from, version);
   }
   const kept = declared.filter((f) => !isVerificationReportPath(f) && !isSharedPlanningDoc(f, sharedRoots));
+  // A v1 report can declare both a planning document and its archived copy,
+  // which `relocatedRel` reads in its place.
   const files = relocation === null
     ? kept
     : Array.from(new Set(kept.map((f) => relocatedRel(projectRoot, f, relocation)))).sort();

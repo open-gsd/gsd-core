@@ -6,6 +6,7 @@ module.exports = {
   "tests/5100-win32-bare-bash-sentinel.property.test.cjs",
   "tests/6451-tdd-deviation-acceptance.test.cjs",
   "tests/6503-api-coverage-probe-install-lookup.test.cjs",
+  "tests/6811-moved-phase-verification.test.cjs",
   "tests/adr-612-bracket-phase-remove.test.cjs",
   "tests/adr-612-bracket-write-path.test.cjs",
   "tests/adr-index-gate.test.cjs",

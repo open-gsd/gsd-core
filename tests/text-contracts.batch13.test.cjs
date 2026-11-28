@@ -4,6 +4,9 @@
  * #6797: the `handoff-grammar-readers-registered` text contract. A file under hooks/ or src/ that parses the per-session
  * handoff filename grammar must be registered as a follower in tests/fixtures/session-handoff-cases.json; a registered
  * follower file must exist. The shipped tree passes; each rule below fails when its condition is broken.
+ *
+ * #6811: the `verifier-fingerprint-version` text contract. The verifier prompts and the report template show a
+ * covered_digest of the version src/verification.cts emits.
  */
 
 const { test, describe } = require('node:test');
@@ -104,5 +107,58 @@ describe('handoff-grammar-readers-registered (#6797)', () => {
       files: { 'hooks/a.js': PARSER, 'hooks/c.js': "// HANDOFF.json is written by pause-work\nconst x = 'handoff';\n", 'src/x.cts': 'export const x = 1;\n' },
     });
     assert.deepEqual(messages(tree), []);
+  });
+});
+
+describe('verifier-fingerprint-version (#6811)', () => {
+  const FP_CONTRACT = 'verifier-fingerprint-version';
+  const EXAMPLES = ['agents/gsd-verifier.md', 'pi/package-agents/gsd-verifier.md', 'gsd-core/templates/verification-report.md'];
+
+  function makeFpTree(t, { constant = 'const FINGERPRINT_VERSION = 5;\n', examples = {} } = {}) {
+    const root = createTempDir('gsd-fp-version-contract-');
+    t.after(() => cleanup(root));
+    const dir = path.join(root, 'contracts');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'scripts', 'static-checks', 'text-contracts', `${FP_CONTRACT}.cjs`), path.join(dir, `${FP_CONTRACT}.cjs`));
+    const write = (rel, text) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    };
+    write('src/verification.cts', `// emitted version\n${constant}`);
+    for (const rel of EXAMPLES) write(rel, examples[rel] ?? 'covered_digest: "v5:sha256:..."\n');
+    return { root, dir };
+  }
+
+  const files = (tree) => textContracts.run({ ...tree, minContracts: 1 }).map((f) => f.file);
+
+  test('theShippedTreePasses: every example names the emitted version', () => {
+    assert.deepEqual(textContracts.run({ root: ROOT, only: [FP_CONTRACT], minContracts: 1 }), []);
+  });
+
+  test('examplesOfTheEmittedVersionPass', (t) => {
+    assert.deepEqual(files(makeFpTree(t)), []);
+  });
+
+  for (const rel of EXAMPLES) {
+    test(`anExampleOfThePreviousVersionIsReported: ${rel}`, (t) => {
+      const tree = makeFpTree(t, { examples: { [rel]: 'covered_digest: "v4:sha256:..."\n' } });
+      assert.deepEqual(files(tree), [rel, rel]);
+    });
+  }
+
+  test('anExampleBesideTheEmittedOneThatNamesAnotherVersionIsReported', (t) => {
+    const rel = EXAMPLES[0];
+    const tree = makeFpTree(t, { examples: { [rel]: 'covered_digest: "v5:sha256:..."\ncovered_digest: "v15:sha256:..."\n' } });
+    assert.deepEqual(files(tree), [rel]);
+  });
+
+  test('aBumpedVersionWithUnchangedExamplesReportsEveryExample', (t) => {
+    const tree = makeFpTree(t, { constant: 'const FINGERPRINT_VERSION = 6;\n' });
+    assert.deepEqual(files(tree).sort(), [...EXAMPLES, ...EXAMPLES].sort());
+  });
+
+  test('aSourceWithoutTheConstantIsReported', (t) => {
+    const tree = makeFpTree(t, { constant: 'export const FINGERPRINT_VERSION = 5;\n' });
+    assert.deepEqual(files(tree), ['src/verification.cts']);
   });
 });

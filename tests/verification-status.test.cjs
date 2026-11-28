@@ -2437,9 +2437,9 @@ describe('#4623: isSharedPlanningDoc — a repo-wide planning document is a DIRE
     assert.deepEqual(sharedPlanningRoots(root, path.join(root, '.planning')), ['.planning']);
   });
 
-  test('#6811: from v5, a phase in <scope>/milestones/<v>-phases/ shares its scope root; v2-v4 keep their shape', (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6811-roots-'));
-    t.after(() => cleanup(root));
+  test('#6811: from v5, a phase in <scope>/milestones/<v>-phases/ shares its scope root; v2-v4 keep their shape', () => {
+    // Lexical: nothing is read, so the root need not exist.
+    const root = path.join(os.tmpdir(), 'gsd-6811-roots');
     const archived = path.join(root, '.planning', 'workstreams', 'w', 'milestones', 'v1.0-phases', '01-a');
     assert.deepEqual(sharedPlanningRoots(root, archived), ['.planning', '.planning/workstreams/w']);
     assert.deepEqual(sharedPlanningRoots(root, archived, 5), ['.planning', '.planning/workstreams/w']);
@@ -3526,9 +3526,8 @@ describe('#4894 --project-dir reaches verification root resolution', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // #5095 / ADR-5057 Phase 2: the fingerprint's input set is closed and
 // idempotent. Rows below follow .gsd/phase/refactor-5095-fingerprint-input-set/
-// 50-test-matrix.md's numbering (1-21). The v3 input-set contract remains
-// current in v4 (#5351), which additionally normalizes covered CRLF byte pairs,
-// and in v5 (#6811), which adds the milestone-archive shared root:
+// 50-test-matrix.md's numbering (1-21). The v3 input-set contract holds in v4
+// (#5351, CRLF pairs hash as LF) and v5 (#6811, milestone-archive shared root):
 //   - FINGERPRINT_VERSION === 5, digest prefix v5:sha256: for fresh fingerprints
 //   - computeCoveredDigest(projectRoot, coveredFiles, version, {phaseDir}):
 //     unchanged signature; v3 filters report-shaped declared paths
