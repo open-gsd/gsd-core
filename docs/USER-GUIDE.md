@@ -318,59 +318,13 @@ For the full workflow and flow diagram, see [Spike and sketch](how-to/spike-and-
 
 ## Backlog & Threads
 
-### Backlog Parking Lot
+Three tools keep an idea out of the way until it is ready, and each answers a different question:
 
-Ideas that aren't ready for active planning go into the backlog using 999.x numbering, keeping them outside the active phase sequence.
+- **Backlog** (`/gsd-capture --backlog`): work you might plan someday. It gets a full `999.x` phase directory outside the active sequence, and `/gsd-review-backlog` lets you promote, keep or remove it.
+- **Seeds** (`/gsd-capture --seed`): ideas with a trigger condition. They surface by themselves when `/gsd-new-milestone` runs, and you close them once they have been acted on.
+- **Threads** (`/gsd-thread`): work that spans several sessions but fits no phase.
 
-```bash
-/gsd-capture --backlog "GraphQL API layer"     # Creates 999.1-graphql-api-layer/
-/gsd-capture --backlog "Mobile responsive"     # Creates 999.2-mobile-responsive/
-```
-
-Backlog items get full phase directories, so you can use `/gsd-discuss-phase 999.1` to explore an idea further or `/gsd-plan-phase 999.1` when it's ready. Backlog directories (and the `0-*` pre-milestone directory some projects carry) are excluded from `/gsd-progress`, `/gsd-stats`, and phase listings for the current milestone — they stay out of the active phase sequence for counting purposes too, not just for planning.
-
-**Review and promote** with `/gsd-review-backlog` — it shows all backlog items and lets you promote (move to active sequence), keep (leave in backlog), or remove (delete).
-
-### Seeds
-
-Seeds are forward-looking ideas with trigger conditions. Unlike backlog items, seeds surface automatically when the right milestone arrives.
-
-```bash
-/gsd-capture --seed "Add real-time collab when WebSocket infra is in place"
-```
-
-`/gsd-new-milestone` scans all seeds and presents matches. **Storage:** `.planning/seeds/SEED-YYMMDD-xxx-slug.md`
-
-Once you've parked a few, audit them on demand instead of waiting for the next milestone to surface them:
-
-```bash
-/gsd-capture --list-seeds            # Review every parked seed
-/gsd-capture --list-seeds dormant    # Narrow to one status
-```
-
-This is read-only — it renders an audit table (ID, status, scope, trigger, title) and a per-status summary, and never modifies a seed. Filter by `dormant`, `active`, `triggered`, or `closed` when you only want to see seeds in one state.
-
-**Closing a seed.** A seed is open while its `status` is `dormant`, `active` or `triggered`. Once its idea has been acted on, close it, so it stops coming back at every `/gsd-new-milestone` and in every milestone-close audit:
-
-```bash
-/gsd-capture --seed --close SEED-260315-k3x --promoted PLAT-17    # it became requirement PLAT-17
-/gsd-capture --seed --close SEED-260315-k3x --built 3             # it was built in phase 3
-/gsd-capture --seed --close SEED-260315-k3x --dropped "superseded by the sync engine"
-```
-
-Give exactly one outcome flag. The seed keeps its file and its reasoning; its frontmatter gains `status: closed` and three fields that say what it became: `outcome_kind` (`promoted`, `built` or `dropped`), `outcome_ref` (the requirement id or phase number; absent for a dropped seed) and `outcome` (one line of prose). `/gsd-capture --list-seeds closed` still lists it, with those fields. Closing is not undone by a command: to reopen a seed, set its `status` back to `dormant` by hand.
-
-### Persistent Context Threads
-
-Threads are lightweight cross-session knowledge stores for work that spans multiple sessions but doesn't belong to any specific phase.
-
-```bash
-/gsd-thread                              # List all threads
-/gsd-thread fix-deploy-key-auth          # Resume existing thread
-/gsd-thread "Investigate TCP timeout"    # Create new thread
-```
-
-Threads can be promoted to phases (`/gsd-phase`) or backlog items (`/gsd-capture --backlog`) when they mature. **Storage:** `.planning/threads/{slug}.md`
+The steps for each are in [How to park an idea for later](how-to/park-an-idea-for-later.md); the flags are in [`/gsd-capture`](COMMANDS.md#gsd-capture).
 
 ---
 
