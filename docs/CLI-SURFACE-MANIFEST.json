@@ -501,6 +501,7 @@
       ],
       "positionals": 3,
       "flags": {
+        "accomplishments-file": "value-or-bare",
         "archive-phases": "boolean",
         "archive-quick": "boolean",
         "confirm": "boolean",
