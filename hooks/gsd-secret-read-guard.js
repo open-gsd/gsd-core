@@ -169,7 +169,8 @@
 //   `echo $[ \] ' $(cat .env >&2) ' ]` (bash, zsh),
 //   `(( \( ' $(cat .env >&2) ' ))` (bash) and
 //   `(( \) ' $(cat .env >&2) ' ))` (bash, zsh);
-//   and a `$` before a line
+//   a `#` comment in a span that opens `$((`, whose `)` the scan counts
+//   (`echo "$((echo a) # )<newline>cat .env)"`); and a `$` before a line
 //   continuation that opens a `$(` inside "…" or a heredoc body
 //   (`echo "$\<newline>(cat .env)"`). The tests
 //   pin each as allowed, and #5945 and #6132 track them with the further
@@ -1513,8 +1514,8 @@ function readTagSpanClose(str, i, reading) {
 
 function readParenClose(str, i, ctx) {
   descend(ctx);
-  // `$((` / `<((`: bash finds this close by counting parens alone, whether the
-  // text turns out to be arithmetic or a subshell.
+  // `$((` / `<((`: this reader finds the close by counting parens alone, whether
+  // the text turns out to be arithmetic or a subshell.
   const at = str[i] === '(' ? findPlainParenClose(str, i, false, ctx) : scanCommandParenClose(str, i, ctx);
   ctx.depth--;
   return at;

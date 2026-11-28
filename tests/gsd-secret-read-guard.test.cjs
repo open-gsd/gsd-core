@@ -5137,6 +5137,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo $[ \\] ' $(cat .env >&2) ' ]",
       "(( \\( ' $(cat .env >&2) ' ))",
       "(( \\) ' $(cat .env >&2) ' ))",
+      'echo "$((echo a) # )\ncat .env)"',
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
