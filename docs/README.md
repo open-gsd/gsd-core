@@ -185,6 +185,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Quick-task archival explained](explanation/archive-quick-tasks.md) — why archiving `.planning/quick/` is opt-in, bucketed into one milestone and indexed from disk
 - [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md) — why `planning inspect` and the `.planning/state.json` contract each declare their own schema
 - [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md) — why path grounding is a recognizer and why a plan must state its failing direction
+- [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md) — why a reviewer lane refuses an over-window prompt instead of trimming it, and why each review records its model
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
