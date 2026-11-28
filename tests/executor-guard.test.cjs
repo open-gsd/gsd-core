@@ -1082,13 +1082,23 @@ describe('#6216: seams and properties', () => {
       minLength: 0,
       maxLength: 70,
     });
-    const runs = fc.oneof(near, fc.string({ unit: 'grapheme', maxLength: 8 }), fc.string({ unit: fc.constantFrom('a', '1', '.'), minLength: 60, maxLength: 70 }));
+    const runs = fc.oneof(near, fc.string({ unit: 'binary-ascii', maxLength: 70 }), fc.string({ unit: 'grapheme', maxLength: 8 }), fc.string({ unit: fc.constantFrom('a', '1', '.'), minLength: 60, maxLength: 70 }));
     fc.assert(
       fc.property(runs, (value) => {
         assert.equal(isLedgerToken(value), isPlainId(value), JSON.stringify(value));
       }),
       { examples: [['a+b'], ['a'.repeat(64)], ['a'.repeat(65)], [''], ['.a'], ['a/b'], ['a\nb']] },
     );
+  });
+
+  test('each code point from 0 to 0x2FF, and a few beyond, is an id character exactly when the alphabet says so', () => {
+    const extra = [0x3000, 0xfeff, 0xff0b, 0x1f600, 0xd800, 0xdfff];
+    const chars = [...Array.from({ length: 0x300 }, (_, c) => String.fromCharCode(c)), ...extra.map((c) => String.fromCodePoint(c))];
+    for (const ch of chars) {
+      for (const value of [ch, `a${ch}`, `${ch}a`, `a${ch}b`]) {
+        assert.equal(isLedgerToken(value), isPlainId(value), JSON.stringify(value));
+      }
+    }
   });
 
   test('every id the properties below generate is one the ledger accepts', () => {
