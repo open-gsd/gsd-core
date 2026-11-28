@@ -1,6 +1,6 @@
-# ADR-4962: Per-session pause — the handoff file is the marker, the role is the identity [Proposed]
+# ADR-4962: Per-session pause — the handoff file is the marker, the role is the identity [Accepted]
 
-- **Status:** Proposed — ratified to `Accepted` when the ratification conditions below are met.
+- **Status:** Accepted
 - **Date:** 2026-11-27
 - **Issue:** [#4962](https://github.com/open-gsd/gsd-core/issues/4962) (this ADR); the feature it governs is [#4845](https://github.com/open-gsd/gsd-core/issues/4845) (`approved-feature`, condition 1 of its triage verdict).
 - **Builds on:** [ADR-3408](3408-state-write-path-preservation.md) (STATE.md write seam and the field-preservation classification that makes a legacy `paused_at` immortal), [ADR-1769](1769-state-md-transition-module.md) (the Transition Module that preserves it), [ADR-857](857-capability-system.md) (the core-versus-Capability line this ADR places pause/resume on).
@@ -40,7 +40,7 @@ Filename grammar — `src/session-store.cts` is the single owner (Decision 7):
 | `HANDOFF.claimed.<role_id>.<session_id>.json` | resume, mid-claim | a session holds this role's handoff |
 | `HANDOFF.json` + `.continue-here.md` | legacy | still resumable; any session may claim it |
 
-The grammar reserves `latest`, `claimed` and `json` as first segments (`json` was added when #6796 implemented the store: without it `HANDOFF.json.json` would parse as a session named `json` next to the legacy `HANDOFF.json`). A session id whose first segment is reserved is escaped by the store before it is used in a filename, so `HANDOFF.latest.x.json` always parses as role `x`, never as session `latest.x`. Ownership is decided by the **filename** for role-keyed and session-keyed files. A body-recorded `role` is consulted only for a legacy unkeyed file, so two live sessions that share a role label cannot unlink each other's session-keyed handoff.
+The grammar reserves `latest`, `claimed` and `json` as first segments (`json` was added when #6796 implemented the store: without it `HANDOFF.json.json` would parse as a session named `json` next to the legacy `HANDOFF.json`). A session id whose first segment is reserved is escaped by the store before it is used in a filename, so `HANDOFF.latest.x.json` always parses as role `x`, never as session `latest.x`. Ownership is decided by the **filename** for role-keyed and session-keyed files. A body-recorded `role_id` — read only when it is already a valid slug, so a hook-side follower that cannot transliterate free text reads it identically (#6797); a free-text `role` is not read — is consulted only for a legacy unkeyed file, so two live sessions that share a role label cannot unlink each other's session-keyed handoff.
 
 *Failure prevented:* a handoff nobody can recognize after `/clear` (the session-id-only design, implemented first and rejected), and cross-deletion between sessions that merely share a label.
 
@@ -76,9 +76,9 @@ The STATE.md schema, `STATUS_LIFECYCLE_ENUM` and `normalizeStateStatus` are unch
 
 All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
 
-### 7. `src/session-store.cts` owns the filename grammar; the hook-side copies are named and held to it by a parity guard
+### 7. `src/session-store.cts` owns the filename grammar; any hook-side copy is named and held to it by a parity guard
 
-Hooks cannot require the compiled CLI (the #3582 no-new-require seam), so two readers exist outside the module: the statusline's inline `readHandoffs` (`hooks/gsd-statusline.js`) and the `.continue-here` lookup in `hooks/lib/`. They are sanctioned copies, named in `CONTEXT.md` as followers of the module. A **parity guard** holds them to it: one shared case table (filename, body, session id, role → expected `kind`, `role_id`, `is_self`), run against the store and each follower, and it fails when a reader is added without being registered in that table.
+Hooks cannot require the compiled CLI (the #3582 no-new-require seam), so a reader exists outside the module: the statusline's inline `readHandoffs` (`hooks/gsd-statusline.js`). The `.continue-here` lookup in `hooks/lib/` that the proposal named does not exist on `next` and has no consumer, so none was built (#6797); a future one is a registry row plus a test. The copy is sanctioned and named in `CONTEXT.md` as a follower of the module. A follower that runs on every prompt may bound the entries it reads (the statusline reads at most 64 handoff files per render, the caller's own candidates first, and reports `others` as a count of readable entries within that bound); the parity guard covers the grammar, identity and ownership, not that bound. A **parity guard** holds them to it: one shared case table (filename, body, session id, role → expected `kind`, `role_id`, `is_self`), run against the store and each follower, and it fails when a reader is added without being registered in that table.
 
 *Failure prevented:* generative fix divergence. The first implementation attempt shipped a statusline reader and a store reader that disagreed on the same directory (`state sessions` reported `is_self: true` while the statusline showed `⏸1`).
 

@@ -429,10 +429,7 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
     { file: 'gsd-core/workflows/session-report.md', match: /\.planning\/reports/, why: `reports/SESSION_REPORT is ${SHARED}` },
     { file: 'gsd-core/workflows/next.md', match: /\.planning\/\.continue-here\.md/, why: `the root .continue-here.md is ${SHARED}` },
     { file: 'gsd-core/workflows/resume-project.md', match: /\.planning\/\.continue-here/, why: `the root .continue-here*.md is ${SHARED}` },
-    { file: 'gsd-core/workflows/pause-work.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
     { file: 'gsd-core/workflows/resume-project.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
-    { file: 'gsd-core/workflows/next.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
-    { file: 'gsd-core/workflows/progress/steps/forensic-audit.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
     {
       file: 'gsd-core/workflows/pr-branch.md',
       match: /^\s*#|STRUCTURAL_RE=|MILESTONE_PHASES_RE=|MILESTONE_PHASE_DIRS=/,

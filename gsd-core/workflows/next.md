@@ -50,14 +50,21 @@ Print a one-line warning: `⚠ --force: skipping safety gates`
 Then proceed directly to `determine_next_action`. (Route 0 and `prior_phase_completeness` are NOT reached under `--force`.)
 
 **Gate 0: Paused (#6431)**
-`/gsd:pause-work` always writes `.planning/HANDOFF.json`, whichever scope its `.continue-here.md` lands in, and `/gsd:resume-work` deletes it once resumed:
+`/gsd:pause-work` writes a handoff under `.planning/` named for the session that paused (ADR-4962), whichever scope its `.continue-here` file lands in, and `/gsd:resume-work` removes it once resumed. A pause belongs to its session: only this session's own handoff pauses it, and another session's handoff does not. The CLI decides ownership:
 ```bash
-[ -f .planning/HANDOFF.json ]
+# fence=next-paused
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+ROLE=$(printf '%s\n' "$GSD_ARGS" | sed -nE 's/.*--role +(.*)$/\1/p')
+if [ -n "$ROLE" ]; then PAUSED=$(gsd_run state sessions --role "$ROLE" --pick paused); else PAUSED=$(gsd_run state sessions --pick paused); fi
+[ "$PAUSED" = "true" ]
 ```
-If found, or if STATE.md shows `paused_at`, do not route forward: the next action is `/gsd:resume-work` (Route 8). Skip Gate 1 and the other gates and routes and continue at `show_and_execute`.
+A session that paused under a role and wrote no session record (no STATE.md) passes `--role <text>` here as well. If the fence exits 0, or if STATE.md shows `paused_at`, do not route forward: the next action is `/gsd:resume-work` (Route 8). Skip Gate 1 and the other gates and routes and continue at `show_and_execute`.
 
 **Gate 1: Unresolved checkpoint**
-Check if `.planning/.continue-here.md` exists:
+Check if `.planning/.continue-here.md` exists (the unkeyed file; a role's `.continue-here.latest.<role_id>.md` belongs to its handoff and is handled by Gate 0):
 ```bash
 [ -f .planning/.continue-here.md ]
 ```
@@ -277,7 +284,7 @@ If all phases are complete:
 → Next action: `/gsd:complete-milestone`
 
 **Route 8: Paused → resume**
-If `.planning/HANDOFF.json` exists or STATE.md shows paused_at (Gate 0):
+If this session's own handoff exists (`state sessions --pick paused` is `true`) or STATE.md shows paused_at (Gate 0):
 → Next action: `/gsd:resume-work`
 </step>
 

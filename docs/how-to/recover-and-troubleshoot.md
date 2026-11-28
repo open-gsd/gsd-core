@@ -52,7 +52,7 @@ GSD is designed around fresh contexts. Every subagent already gets a clean 200k 
 /gsd-pause-work
 ```
 
-Creates `.planning/HANDOFF.json` with your current position. Add `--report` to also write a post-session summary to `.planning/reports/`:
+Creates a handoff under `.planning/` with your current position, named for your session (`HANDOFF.<session_id>.json`, or `HANDOFF.latest.<role_id>.json` with `--role <text>`; see [Run two sessions with roles](run-two-sessions-with-roles.md)). Add `--report` to also write a post-session summary to `.planning/reports/`:
 
 ```bash
 /gsd-pause-work --report

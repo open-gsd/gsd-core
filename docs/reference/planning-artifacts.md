@@ -146,13 +146,14 @@ See [CONFIGURATION](../CONFIGURATION.md) for the complete schema.
 | **Produced by** | Generated when the number of prior phases exceeds the rolling-read threshold. |
 | **Consumed by** | `discuss-phase` (`load_prior_context` step). |
 
-### `HANDOFF.json` (transient)
+### `HANDOFF*.json` (transient)
 
 | | |
 |---|---|
-| **Purpose** | Machine-readable pause state written when work is interrupted. Contains the resume point, in-progress context, and continuation instructions. Consumed exactly once — on resume. |
+| **Purpose** | Machine-readable pause state written when work is interrupted. Contains the resume point, in-progress context, and continuation instructions, and the `session_id`, `role` and `role_id` it was written under. The file is the pause: it belongs to the session that wrote it. Consumed exactly once — on resume. |
+| **File names** | `HANDOFF.latest.<role_id>.json` (a session with a role); `HANDOFF.<session_id>.json` (a session without one); `HANDOFF.claimed.<role_id>.<session_id>.json` (a role handoff a resuming session has claimed by rename); `HANDOFF.json` (legacy, and a session with no id). The grammar is owned by `src/session-store.cts` (ADR-4962). |
 | **Produced by** | `/gsd-pause-work`. |
-| **Consumed by** | `/gsd-resume-work` (its `consume_handoff` step deletes it, with the `.continue-here.md` checkpoints, and commits the removal); `/gsd-next` and `progress --next` (Gate 0) and the smart-entry classifier read its presence as the recorded pause and route to resume while it exists. |
+| **Consumed by** | `/gsd-resume-work` (claims a role handoff by atomic rename before reading it; its `consume_handoff` step removes the session's own handoff and continue-here files and commits the removal); `/gsd-next` and `progress --next` (Gate 0) and the smart-entry classifier route to resume only for the calling session's own handoff. |
 
 ---
 
@@ -247,7 +248,7 @@ actuals:
 | **Produced by** | `/gsd-audit-uat` (interactive UAT session). |
 | **Consumed by** | `/gsd-audit-uat` (resume a previous UAT session). |
 
-### `.continue-here.md`
+### `.continue-here.md` and `.continue-here.latest.<role_id>.md`
 
 | | |
 |---|---|

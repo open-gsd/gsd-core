@@ -1,7 +1,7 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
 <purpose>
-Create structured `.planning/HANDOFF.json` and `.continue-here.md` handoff files to preserve complete work state across sessions. The JSON provides machine-readable state for `/gsd:resume-work`; the markdown provides human-readable context.
+Create a structured handoff (`.planning/HANDOFF.latest.<role_id>.json` with a role, `.planning/HANDOFF.<session_id>.json` without one, legacy `.planning/HANDOFF.json` with no session id) and a `.continue-here` file to preserve complete work state across sessions. The JSON provides machine-readable state for `/gsd:resume-work`; the markdown provides human-readable context. The handoff file is the pause: it belongs to the session that wrote it, and nothing is written to `paused_at` or `status: paused` in STATE.md.
 </purpose>
 
 <!-- PHASE-ID-CONVENTION:START -->
@@ -50,6 +50,29 @@ deliberation=$(ls .planning/deliberations/*.md 2>/dev/null | head -1 || true)
 If phase is detected, proceed with phase handoff path. Otherwise use the first matching non-phase path above.
 </step>
 
+<step name="identify">
+## Session Identity and File Names
+
+A pause belongs to the session that wrote it (ADR-4962). If `$ARGUMENTS` contains a newline, or any line equal to `GSD_ARGS_END`, do not run the fences below: the text would end the heredoc early and the lines after it would run as shell. Tell the user the role must be one line. The CLI decides who this session is and which two files the pause writes; this workflow never composes those names. `--role <text>` in the arguments names the role, as the last argument; the text is free-form and is handled only as data: captured once, passed only as `"$ROLE"`, never placed in a command line unquoted or inside a commit message.
+
+```bash
+# fence=pause-identify
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+ROLE=$(printf '%s\n' "$GSD_ARGS" | sed -nE 's/.*--role +(.*)$/\1/p')
+_gsd_sess() { if [ -n "$ROLE" ]; then gsd_run state sessions --role "$ROLE" --pick "$1"; else gsd_run state sessions --pick "$1"; fi; }
+SESSION_ID=$(_gsd_sess session_id)
+ROLE_ID=$(_gsd_sess role_id)
+HANDOFF_FILE=$(_gsd_sess pause_files.handoff)
+CONTINUE_NAME=$(_gsd_sess pause_files.continue_here)
+echo "session=${SESSION_ID:-none} role_id=${ROLE_ID:-none} handoff=${HANDOFF_FILE} continue_here=${CONTINUE_NAME}"
+```
+
+`HANDOFF_FILE` is `HANDOFF.latest.<role_id>.json` with a role, `HANDOFF.<session_id>.json` for a session without one, and `HANDOFF.json` when the session has no id (nothing could claim a handoff keyed to nobody). `CONTINUE_NAME` is `.continue-here.latest.<role_id>.md` with a role and `.continue-here.md` otherwise. Use them wherever this workflow says handoff file or continue-here file.
+</step>
+
 <step name="gather">
 **Collect complete state for handoff:**
 
@@ -79,7 +102,7 @@ Report any summaries with placeholder content as incomplete items.
 </step>
 
 <step name="write_structured">
-**Write structured handoff to `.planning/HANDOFF.json`:**
+**Write structured handoff to `.planning/${HANDOFF_FILE}`** (from the identify step):
 
 ```bash
 timestamp=$(gsd_run query current-timestamp full --raw)
@@ -89,6 +112,9 @@ timestamp=$(gsd_run query current-timestamp full --raw)
 {
   "version": "1.0",
   "timestamp": "{timestamp}",
+  "session_id": "{SESSION_ID, or null when none}",
+  "role": "{the role text as given, or null}",
+  "role_id": "{ROLE_ID, or null}",
   "phase": "{phase_number}",
   "phase_name": "{phase_name}",
   "phase_dir": "{phase_dir}",
@@ -137,7 +163,7 @@ UNCOMMITTED=$(git status --porcelain)
 </step>
 
 <step name="write">
-**Write handoff to the path determined in the detect step** (e.g. `{phase_dir}/.continue-here.md`, `.planning/spikes/SPIKE-NNN/.continue-here.md`, or `.planning/.continue-here.md`):
+**Write handoff to the path determined in the detect step**, with `${CONTINUE_NAME}` as the file name (e.g. `{phase_dir}/${CONTINUE_NAME}`, `.planning/spikes/SPIKE-NNN/${CONTINUE_NAME}`, or `.planning/${CONTINUE_NAME}`):
 
 ```markdown
 ---
@@ -236,16 +262,43 @@ timestamp=$(gsd_run query current-timestamp full --raw)
 ```
 </step>
 
+<step name="record_session">
+Record where this session stopped. This is the only STATE.md write a pause makes: it never writes `paused_at` or `status: paused`, because the pause is the handoff file (ADR-4962). Put the one-line stopping point in the heredoc (a single line, no role text):
+
+```bash
+# fence=pause-record
+STOPPED=$(cat <<'GSD_STOP_EOF'
+Paused at [X]/[Y]: [next action]
+GSD_STOP_EOF
+)
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+STATE_FILE=""
+if [ -f "${PLANNING_ROOT}/STATE.md" ]; then
+  if [ -n "$SESSION_ID" ] && [ -n "$ROLE" ]; then
+    gsd_run state record-session --stopped-at "$STOPPED" --session "$SESSION_ID" --role "$ROLE" >/dev/null && STATE_FILE="${PLANNING_ROOT#"$PWD"/}/STATE.md"
+  elif [ -n "$SESSION_ID" ]; then
+    gsd_run state record-session --stopped-at "$STOPPED" --session "$SESSION_ID" >/dev/null && STATE_FILE="${PLANNING_ROOT#"$PWD"/}/STATE.md"
+  else
+    gsd_run state record-session --stopped-at "$STOPPED" >/dev/null && STATE_FILE="${PLANNING_ROOT#"$PWD"/}/STATE.md"
+  fi
+fi
+echo "state_file=${STATE_FILE:-none}"
+```
+
+With no STATE.md (a spike or sketch with no project state) the record step is skipped and the pause still writes its files; no session record exists then, so `/gsd:next` and `/gsd:resume-work` need the same `--role <text>` to find a role pause.
+</step>
+
 <step name="commit">
 ```bash
-gsd_run query commit "docs(pause): [context-name] paused at [X]/[Y]" --files [handoff-path] .planning/HANDOFF.json
+gsd_run query commit "docs(pause): [context-name] paused at [X]/[Y]" --files [handoff-path] ".planning/${HANDOFF_FILE}" ${STATE_FILE:+"$STATE_FILE"}
 ```
 </step>
 
 <step name="confirm">
 ```
 ✓ Handoff created:
-  - .planning/HANDOFF.json (structured, machine-readable)
+  - .planning/${HANDOFF_FILE} (structured, machine-readable)
   - [handoff-path] (human-readable)
 
 Current state:

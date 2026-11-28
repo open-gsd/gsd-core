@@ -275,7 +275,7 @@ Pure doc-only / config-only / test-only tasks return `is_behavior_adding=false` 
 Look for a `.continue-here.md` in the current phase directory:
 
 ```bash
-ls ${phase_dir}/.continue-here.md 2>/dev/null || true
+ls ${phase_dir}/.continue-here*.md 2>/dev/null || true
 ```
 
 If `.continue-here.md` exists, parse its "Critical Anti-Patterns" table for rows with `severity` = `blocking`.
