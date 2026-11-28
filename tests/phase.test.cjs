@@ -23,6 +23,7 @@ const { runGsdTools, runGsdToolsCaptured, createTempProject, cleanup } = require
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('fast-check');
+const { parseRoadmapStatusCell, WIRE_STATUS } = require('../gsd-core/bin/lib/phase-status.cjs');
 
 function normalizePhaseToken(token) {
   return String(token).replace(/\d+/g, (digits) => String(Number(digits)));
@@ -6215,6 +6216,152 @@ describe('letter-suffix phase sorting', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // milestone-scoped next-phase in phase complete
 // ─────────────────────────────────────────────────────────────────────────────
+
+// #6170: `phase complete` keeps the prose in the Progress table's Status cell. It rewrites a leading
+// status token to Complete and keeps the tail, prefixes token-less prose with `Complete - `, and leaves
+// a cell that already reads Complete (or Completed) byte-identical. `roadmap update-plan-progress` shares
+// the token rewrite, so the two verbs agree on the same cell.
+describe('#6170: phase complete keeps the Status cell prose', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-6170-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const roadmapWith = (statusCell) => [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 1: Foundation',
+    '',
+    '### Phase 1: Foundation',
+    '**Goal:** Setup',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '| --- | --- | --- | --- |',
+    `| 1. Foundation | 0/1 | ${statusCell} | - |`,
+    '',
+  ].join('\n');
+
+  function seed(statusCell) {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmapWith(statusCell));
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '# State\n\n**Current Phase:** 01\n**Status:** In progress\n');
+    const p1 = path.join(planning, 'phases', '01-foundation');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+  }
+
+  const statusCellOf = (roadmapText) => {
+    const row = roadmapText.split('\n').find((l) => l.startsWith('| 1. Foundation'));
+    return row.split(/(?<!\\)\|/)[3];
+  };
+  const rawStatusAfterComplete = (statusCell) => {
+    seed(statusCell);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return statusCellOf(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8'));
+  };
+  const statusAfterComplete = (statusCell) => rawStatusAfterComplete(statusCell).trim();
+
+  // Rows tagged `control` also pass on the base (they pin behavior the fix must not move); the rest fail there.
+  const SHAPES = [
+    ['In Progress - waiting on sign-off (decided 2026-11-01)', 'Complete - waiting on sign-off (decided 2026-11-01)', false],
+    ['Waiting on sign-off', 'Complete - Waiting on sign-off', false],
+    ['-', 'Complete', true],
+    ['In Progress', 'Complete', true],
+    ['Complete - signed off by reviewer', 'Complete - signed off by reviewer', true],
+    // Addendum (maintainer ruling 2026-11-13): `Completed` counts as the Complete token and stays as written.
+    ['Completed', 'Completed', false],
+    ['COMPLETED - signed off', 'COMPLETED - signed off', false],
+    ['Deferred - x', 'Complete - x', false],
+    ['complete - x', 'Complete - x', false],
+  ];
+  for (const [before, after, control] of SHAPES) {
+    test(`${control ? '(control) ' : ''}Status cell "${before}" becomes "${after}", and the written cell reads Complete`, () => {
+      const written = statusAfterComplete(before);
+      assert.equal(written, after);
+      assert.equal(parseRoadmapStatusCell(written), WIRE_STATUS.COMPLETE, 'read-back: the progress counters count the phase as complete');
+    });
+  }
+
+  test('(control) an empty Status cell becomes Complete, padded as before', () => {
+    assert.equal(rawStatusAfterComplete(''), ' Complete    ');
+  });
+
+  test('(control) a cell already reading Complete stays byte-identical, padding included (#5165)', () => {
+    assert.equal(rawStatusAfterComplete('Complete'), ' Complete ');
+  });
+
+  test('a bare COMPLETE is re-spelled and re-padded: case normalization is accepted (#6170 addendum)', () => {
+    assert.equal(rawStatusAfterComplete('COMPLETE'), ' Complete    ');
+  });
+
+  test('prose containing a pipe stays escaped', () => {
+    assert.equal(statusAfterComplete('Planned - waiting on the A \\| B crate decision'), 'Complete - waiting on the A \\| B crate decision');
+    assert.equal(statusAfterComplete('A \\| B pending'), 'Complete - A \\| B pending');
+  });
+
+  test('re-running phase complete leaves the Status cell as the first run wrote it', () => {
+    seed('In Progress - waiting on sign-off');
+    assert.ok(runVerifiedPhaseComplete('phase complete 1', tmpDir).success);
+    const first = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.equal(statusCellOf(first).trim(), 'Complete - waiting on sign-off', 'the first run kept the prose');
+    assert.ok(runVerifiedPhaseComplete('phase complete 1', tmpDir).success);
+    const second = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.equal(statusCellOf(second), statusCellOf(first));
+  });
+
+  // Token-less prose is the `Complete - <prose>` arm, the one the maintainer ruled on: generate prose that
+  // starts with a word that is no token (`Completeness`, `Planning`, ...) and carries `|`, `\` and dashes.
+  test('property: token-less prose becomes `Complete - <prose>`, reads Complete, and a re-run changes nothing', () => {
+    const word = fc.constantFrom('Waiting', 'Completeness', 'Planning', 'Deferredx', 'Blocked', 'TBD', 'See');
+    const rest = fc.stringMatching(/^[A-Za-z0-9 ,.()/;:|\\-]{0,24}$/);
+    fc.assert(fc.property(word, rest, (w, r) => {
+      const prose = `${w} ${r}`.trim();
+      // `statusCell` is the file text: `|` and `\` are escaped in it, as updateTableCell reads them.
+      const fileText = prose.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
+      const first = statusAfterComplete(fileText);
+      assert.equal(first, `Complete - ${fileText}`);
+      assert.equal(parseRoadmapStatusCell(first), WIRE_STATUS.COMPLETE);
+      assert.equal(runVerifiedPhaseComplete('phase complete 1', tmpDir).success, true);
+      const again = statusCellOf(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8')).trim();
+      assert.equal(again, first, 're-run is a no-op');
+    }), { numRuns: 12, seed: 42 });
+  });
+
+  // Parity: for a cell with a token, a dash or nothing, both verbs reach the same Status cell, padding included.
+  // Rows tagged `control` also pass on the base.
+  for (const [cell, control] of [['In Progress - waiting on sign-off', false], ['Planned', true], ['Not started - blocked', false], ['-', true], ['', true]]) {
+    test(`${control ? '(control) ' : ''}parity: phase complete and roadmap update-plan-progress agree on "${cell}"`, () => {
+      const viaComplete = rawStatusAfterComplete(cell);
+
+      seed(cell);
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-foundation', '01-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+      const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.equal(JSON.parse(result.output).status, 'Complete', 'fixture: update-plan-progress reports Complete');
+      const viaProgress = statusCellOf(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8'));
+
+      assert.equal(viaComplete, viaProgress);
+    });
+  }
+
+  test('(control) update-plan-progress leaves a Completed cell as written, as it did before Completed was a token', () => {
+    seed('Completed - signed off');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-foundation', '01-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.equal(statusCellOf(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8')), ' Completed - signed off ');
+  });
+});
 
 describe('phase complete milestone-scoped next-phase', () => {
   let tmpDir;

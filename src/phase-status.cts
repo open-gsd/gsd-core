@@ -391,15 +391,17 @@ export function toProgressStatus(status: PhaseStatus, artifacts: { hasResearch: 
 // ─── ROADMAP Status cell reader ────────────────────────────────────────────
 
 // Leading token of a trimmed cell, case-insensitive, a whitespace run allowed
-// inside the two-word tokens, and `(?!\w)` so `Completed` / `Planning` are not
-// tokens. #4925 lets operator prose follow the token; that prose is ignored.
-const CELL_TOKEN_RE = /^(not\s+started|planned|in\s+progress|complete|deferred)(?!\w)/i;
+// inside the two-word tokens, and `(?!\w)` so `Completeness` / `Planning` are not
+// tokens. `Completed` is the one spelling variant: it reads as Complete (#6170).
+// #4925 lets operator prose follow the token; that prose is ignored.
+const CELL_TOKEN_RE = /^(not\s+started|planned|in\s+progress|completed?|deferred)(?!\w)/i;
 
 const TOKEN_BY_KEY: Readonly<Record<string, RoadmapStatusToken>> = Object.freeze({
   'not started': ROADMAP_STATUS_TOKEN.NOT_STARTED,
   planned: ROADMAP_STATUS_TOKEN.PLANNED,
   'in progress': ROADMAP_STATUS_TOKEN.IN_PROGRESS,
   complete: ROADMAP_STATUS_TOKEN.COMPLETE,
+  completed: ROADMAP_STATUS_TOKEN.COMPLETE,
   deferred: ROADMAP_STATUS_TOKEN.DEFERRED,
 });
 
@@ -414,6 +416,30 @@ export function matchRoadmapStatusCell(cell: unknown): { token: RoadmapStatusTok
   if (!m) return null;
   const key = m[1].toLowerCase().replace(/\s+/g, ' ');
   return { token: TOKEN_BY_KEY[key], text: m[1] };
+}
+
+/**
+ * #6170: the one rewrite rule for a Progress-table Status cell's leading status token, shared by
+ * `roadmap update-plan-progress` and `phase complete`. `current` is the trimmed, unescaped cell and
+ * `status` the token to write. Returns the literal cell text to splice (padded, `|` escaped):
+ *   - empty or a dash placeholder -> `status`, padded to 11;
+ *   - a `Completed` cell (any case, any tail) -> `current` itself, whatever `status` is: it already reads Complete;
+ *   - the token already spelled `status` -> `current` itself (the writer's byte-identical no-op);
+ *   - any other leading status token -> the token rewritten to `status` with the tail kept.
+ * Returns null when the cell has no leading token: what to do with token-less prose is the caller's
+ * call (`update-plan-progress` leaves it alone; `phase complete` prefixes it with `Complete - `).
+ */
+export function rewriteRoadmapStatusCell(current: string, status: string): string | null {
+  if (current === '' || /^[-–—]$/.test(current)) return ` ${status.padEnd(11)} `;
+  const m = matchRoadmapStatusCell(current);
+  if (!m) return null;
+  if (m.text === status || m.text.toLowerCase() === 'completed') return current;
+  const rest = current.slice(m.text.length);
+  if (rest === '') return ` ${status.padEnd(11)} `;
+  // Lazy: a top-level markdown-table import would take this module off the load-time-leaf footing.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6170: lazy to keep this module a load-time leaf
+  const { escapeCell } = require('./markdown-table.cjs') as typeof import('./markdown-table.cjs');
+  return ` ${escapeCell(status + rest)} `;
 }
 
 /**

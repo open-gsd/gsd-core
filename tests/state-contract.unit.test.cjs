@@ -366,10 +366,17 @@ describe('state contract — Phase Status Module consumers (#5060)', () => {
     assert.strictEqual(statusFor(tmpDir, 'Deferred — v2'), PHASE_STATUS.PENDING);
   });
 
-  test('mapsCompletedWithoutTrailingEToPending', (t) => {
+  test('mapsCompletedToComplete (#6170: the one spelling variant the reader accepts)', (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
-    assert.strictEqual(statusFor(tmpDir, 'Completed'), PHASE_STATUS.PENDING);
+    assert.strictEqual(statusFor(tmpDir, 'Completed'), PHASE_STATUS.COMPLETE);
+    assert.strictEqual(statusFor(tmpDir, 'COMPLETED - signed off'), PHASE_STATUS.COMPLETE);
+  });
+
+  test('mapsCompletenessToPending (a word that merely begins with Complete is not the token)', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    assert.strictEqual(statusFor(tmpDir, 'Completeness pending'), PHASE_STATUS.PENDING);
   });
 });
 
