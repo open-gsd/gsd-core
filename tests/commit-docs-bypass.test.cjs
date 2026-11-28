@@ -850,6 +850,7 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const commands = require('../gsd-core/bin/lib/commands.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
 const configCli = require('../gsd-core/bin/lib/config.cjs');
 const { loadConfigResolved, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
 const io = require('../gsd-core/bin/lib/io.cjs');
@@ -886,7 +887,7 @@ function captureFdWrite(fd, fn) {
 
 function runCommit(tmpDir, message, files) {
   const out = captureFdWrite(1, () => {
-    cmdCommit(tmpDir, message, files, false, false, false);
+    cmdCommit(resolveProjectContext(tmpDir), message, files, false, false, false);
   });
   return JSON.parse(out);
 }

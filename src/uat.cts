@@ -47,7 +47,7 @@ const { reportStatusOf, isReportContained, VERIFICATION_STATUS } = verificationM
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
 import { sanitizeForDisplay, PathAcceptance } from './security.cjs';
-import { requirePlanningArtifactPath, resolveProjectContext, type ProjectContext } from './project-context.cjs';
+import { requirePlanningArtifactPath, type ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
@@ -775,16 +775,18 @@ function readBaselineAtHead(absPath: string): string | null {
  * still a no-op from git's perspective (see `completeUatSession`'s own doc).
  */
 function cmdUatCompleteSession(
-  cwd: string,
+  ctx: ProjectContext,
   uatPathArg: string | undefined,
   options: { message?: string } = {},
   raw: boolean,
 ): void {
+  // ADR-4908 §3: the UAT path is a project-relative planning artifact; the commit below takes the same context.
+  const cwd = ctx.projectRoot;
   if (!uatPathArg) {
     error('UAT file required: use uat.complete-session <uatPath>');
     return;
   }
-  const resolvedPath = requirePlanningArtifactPath(resolveProjectContext(cwd), uatPathArg, 'UAT file', PathAcceptance.AbsoluteInsideRoot).resolved;
+  const resolvedPath = requirePlanningArtifactPath(ctx, uatPathArg, 'UAT file', PathAcceptance.AbsoluteInsideRoot).resolved;
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${uatPathArg}`);
     return;
@@ -818,7 +820,7 @@ function cmdUatCompleteSession(
 
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const commandsMod = require('./commands.cjs') as {
-    cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void;
+    cmdCommit(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void;
   };
   // `raw: false` — cmdCommit's `raw: true` shape emits only a bare hash/reason
   // STRING (its own `output(result, raw, hash || 'committed')` rawValue arm),
@@ -829,7 +831,7 @@ function cmdUatCompleteSession(
   // so the capture returns its text and this command finishes before it
   // returns (#6333): a synchronous in-process call can serve it.
   const captured = captureStdoutMaybeSync(() => {
-    commandsMod.cmdCommit(cwd, message, [relPath], false, false, false);
+    commandsMod.cmdCommit(ctx, message, [relPath], false, false, false);
   }) as string;
 
   let committed = false;

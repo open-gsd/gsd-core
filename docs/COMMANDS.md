@@ -1811,7 +1811,7 @@ gsd-tools query project-context --project-dir <dir>   # Resolve as if started fr
 }
 ```
 
-`gsd-tools commit` uses the same context: it commits in the checkout it runs in and refuses with `reason: "outside_worktree"` when the working directory or a declared path lies outside that checkout, and with `reason: "not_git_repo"` outside a git repository. Both refusals exit non-zero with `committed: false`.
+`gsd-tools commit` uses the same context: it commits in the checkout it runs in and refuses with `reason: "outside_worktree"` when the working directory or a declared path lies outside that checkout, and with `reason: "not_git_repo"` outside a git repository. Both refusals exit non-zero with `committed: false`. The other git-running verbs of this family (`uat complete-session`, `commit-to-subrepo`, `pr-subrepo`, `check-commit`, `commit-docs-guard`, `stats`) take the same context: git runs in the checkout you are in, and a sub-repo named in `planning.sub_repos` is looked up under the project root, from any subdirectory of the workspace.
 
 ---
 

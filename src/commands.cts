@@ -2103,7 +2103,39 @@ function commitRefusal(
   };
 }
 
-function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[], ctx?: ProjectContext): void {
+/**
+ * #6821 (ADR-4908 §3): a verb that runs git takes the resolved ProjectContext, never a
+ * string root. A caller holding only a directory string fails here, as a TypeError naming
+ * the verb, instead of running git in a root it chose for itself.
+ */
+function requireProjectContext(ctx: unknown, verb: string): asserts ctx is ProjectContext {
+  const candidate = ctx as Partial<ProjectContext> | null | undefined;
+  if (
+    candidate === null || typeof candidate !== 'object' ||
+    typeof candidate.worktreeRoot !== 'string' || typeof candidate.projectRoot !== 'string'
+  ) {
+    throw new TypeError(`${verb}: a ProjectContext is required (resolveProjectContext); got ${typeof ctx}`);
+  }
+}
+
+/**
+ * Declared paths are relative to the project root (where `.planning` lives); git runs in the
+ * worktree root. Equal roots (the common layout) leave every path as the caller wrote it; a
+ * project nested inside the worktree gets its paths re-based so git sees the same files.
+ */
+function rebaseToWorktree(ctx: ProjectContext, declared: string[] | undefined): string[] | undefined {
+  if (!declared || ctx.projectRoot === ctx.worktreeRoot) return declared;
+  return declared.map((p) => (path.isAbsolute(p)
+    ? p
+    : path.relative(ctx.worktreeRoot, path.resolve(ctx.projectRoot, p)).split(path.sep).join('/')));
+}
+
+function cmdCommit(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[]): void {
+  requireProjectContext(ctx, 'cmdCommit');
+  // ADR-4908 §3: git and the commit run in worktreeRoot; `.planning` content and config
+  // resolve against projectRoot.
+  const cwd = ctx.worktreeRoot;
+  const planningCwd = ctx.projectRoot;
   if (!message && !amend) {
     error('commit message required');
   }
@@ -2117,7 +2149,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     sanitizedMessage = sanitizeForPrompt(sanitizedMessage);
   }
 
-  const config = loadConfig(cwd);
+  const config = loadConfig(planningCwd);
 
   // Check commit_docs config — #3587: resolved through the tier 1
   // (phase_commit_docs.<phase-id>) → tier 2 (commit_docs) → tier 3 (.gitignore)
@@ -2128,7 +2160,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   const commitDocsPolicy = resolveCommitDocsPolicy(
     config,
     detectPhaseNumberFromFiles(files),
-    () => isGitIgnored(cwd, '.planning'),
+    () => isGitIgnored(planningCwd, '.planning'),
   );
   if (!commitDocsPolicy.resolved) {
     const result = {
@@ -2143,7 +2175,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
 
   // #6043: refuse before branching or staging, and only AFTER the commit_docs
   // skip above, so a benign skip is never turned into an error.
-  const refusal = ctx ? commitRefusal(ctx, cwd, files, filesRemoved) : null;
+  const refusal = commitRefusal(ctx, planningCwd, files, filesRemoved);
   if (refusal) {
     error(refusal.message, refusal.reason === 'not_git_repo' ? ERROR_REASON.COMMIT_NOT_GIT_REPO : ERROR_REASON.COMMIT_OUTSIDE_WORKTREE, {
       committed: false,
@@ -2151,6 +2183,9 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       hash: null,
     });
   }
+  // Past the refusal, git sees the declared paths relative to the worktree it runs in.
+  files = rebaseToWorktree(ctx, files);
+  filesRemoved = rebaseToWorktree(ctx, filesRemoved);
 
   // Ensure branching strategy branch exists before first commit (#1278).
   // Pre-execution workflows (discuss, plan, research) commit artifacts but the branch
@@ -2181,7 +2216,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // phase — the phase arm must never branch-mutate for it (isSentinelPhaseId
       // is the invariant's single owner, src/phase-id.cts).
       if (phaseNum && !isSentinelPhaseId(phaseNum)) {
-        const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd, config)) as Record<string, unknown> | null;
+        const phaseInfo = findPhaseInternal(planningCwd, phaseNum, undefined, phaseDirectoryOptions(planningCwd, config)) as Record<string, unknown> | null;
         if (phaseInfo) {
           // #4126: shared with init.cts's cmdInitExecutePhase branch_name field
           // via the one canonical renderer (src/phase-id.cts) so an undeliverable
@@ -2195,11 +2230,11 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
           // #4055: findPhaseInternal already returns the directory as a
           // cwd-relative POSIX path.
           const dir = phaseInfo['directory'];
-          if (typeof dir === 'string' && dir !== '') phaseDirRelative = dir;
+          if (typeof dir === 'string' && dir !== '') phaseDirRelative = rebaseToWorktree(ctx, [dir])?.[0] ?? dir;
         }
       }
     } else if (branchingStrategy === 'milestone') {
-      const milestoneInfo = getMilestoneInfo(cwd);
+      const milestoneInfo = getMilestoneInfo(planningCwd);
       // #3216 review Finding 3: explicit scope gate instead of plain truthiness.
       // COMPLETE and TRUNCATED both carry a real `version` (ADR-3180 §7.2 rule
       // 6 — TRUNCATED means the version resolved but the milestone's NAME did
@@ -2963,7 +2998,10 @@ function groupFilesBySubrepo(files: string[], subRepos: string[]): GroupFilesByS
   return { grouped, unmatched };
 }
 
-function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean): void {
+function cmdCommitToSubrepo(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean): void {
+  requireProjectContext(ctx, 'cmdCommitToSubrepo');
+  // ADR-4908 §3: `sub_repos` names are relative to the workspace that holds `.planning`.
+  const cwd = ctx.projectRoot;
   if (!message) {
     error('commit message required');
   }
@@ -3093,12 +3131,15 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
  * so the user's work is not lost; the error includes a retry instruction.
  */
 function cmdPrSubrepo(
-  cwd: string,
+  ctx: ProjectContext,
   repo: string | undefined,
   branch: string | undefined,
   commitMessage: string | undefined,
   raw: boolean,
 ): void {
+  requireProjectContext(ctx, 'cmdPrSubrepo');
+  // ADR-4908 §3: the sub-repo is named relative to the workspace that holds `.planning`.
+  const cwd = ctx.projectRoot;
   if (!repo) {
     error('--repo required');
   }
@@ -3962,7 +4003,11 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
   output({ created: true, path: relPath }, raw, relPath);
 }
 
-function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
+function cmdStats(ctx: ProjectContext, format: string | undefined, raw: boolean): void {
+  requireProjectContext(ctx, 'cmdStats');
+  // ADR-4908 §3: `.planning` reads resolve against projectRoot; the commit-history git calls run in worktreeRoot.
+  const cwd = ctx.projectRoot;
+  const gitCwd = ctx.worktreeRoot;
   const phasesDir = planningPaths(cwd).phases;
   const roadmapPath = planningPaths(cwd).roadmap;
   const reqPath = planningPaths(cwd).requirements;
@@ -4166,14 +4211,14 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
   // Git stats
   let gitCommits = 0;
   let gitFirstCommitDate: string | null = null;
-  const commitCount = execGit(['rev-list', '--count', 'HEAD'], { cwd });
+  const commitCount = execGit(['rev-list', '--count', 'HEAD'], { cwd: gitCwd });
   if (commitCount.exitCode === 0) {
     gitCommits = parseInt(commitCount.stdout, 10) || 0;
   }
-  const rootHash = execGit(['rev-list', '--max-parents=0', 'HEAD'], { cwd });
+  const rootHash = execGit(['rev-list', '--max-parents=0', 'HEAD'], { cwd: gitCwd });
   if (rootHash.exitCode === 0 && rootHash.stdout) {
     const firstCommit = rootHash.stdout.split('\n')[0].trim();
-    const firstDate = execGit(['show', '-s', '--format=%as', firstCommit], { cwd });
+    const firstDate = execGit(['show', '-s', '--format=%as', firstCommit], { cwd: gitCwd });
     if (firstDate.exitCode === 0) {
       gitFirstCommitDate = firstDate.stdout || null;
     }
@@ -4256,8 +4301,11 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
  * entirely and NUL-terminates each path instead, so every staged path is
  * read as literal, unquoted bytes and no unquoting logic is needed.
  */
-function cmdCheckCommit(cwd: string, raw: boolean): void {
-  const config = loadConfig(cwd);
+function cmdCheckCommit(ctx: ProjectContext, raw: boolean): void {
+  requireProjectContext(ctx, 'cmdCheckCommit');
+  // ADR-4908 §3: the staged-files probe runs git in worktreeRoot; config and the ignore check read the project.
+  const cwd = ctx.worktreeRoot;
+  const config = loadConfig(ctx.projectRoot);
 
   // #5548: execGit scrubs the repo-location vars, but inside the pre-commit hook git sets them
   // (GIT_DIR/GIT_WORK_TREE of an explicit --git-dir commit, GIT_INDEX_FILE of a `-a` / `<path>`
@@ -4273,7 +4321,7 @@ function cmdCheckCommit(cwd: string, raw: boolean): void {
       const policy = resolveCommitDocsPolicy(
         config,
         detectPhaseNumberFromFiles(planningFiles),
-        () => isGitIgnored(cwd, '.planning', hookEnv),
+        () => isGitIgnored(ctx.projectRoot, '.planning', hookEnv),
       );
       if (!policy.resolved) {
         error(
@@ -4430,7 +4478,10 @@ function isCommitDocsGuardHook(content: string): boolean {
  * hook, refuses when `core.hooksPath` would make our own write inert, and is
  * idempotent when already enabled.
  */
-function cmdCommitDocsGuardEnable(cwd: string, raw: boolean): void {
+function cmdCommitDocsGuardEnable(ctx: ProjectContext, raw: boolean): void {
+  requireProjectContext(ctx, 'cmdCommitDocsGuardEnable');
+  // ADR-4908 §3: git resolves the shared hooks directory itself, from the checkout it runs in.
+  const cwd = ctx.worktreeRoot;
   const hooksDir = resolveCommitDocsGuardHooksDir(cwd);
   if (!hooksDir.ok || !hooksDir.dir) {
     error('not a git repository (or any of the parent directories)', ERROR_REASON.COMMIT_DOCS_GUARD_NOT_A_REPO);
@@ -4479,7 +4530,9 @@ function cmdCommitDocsGuardEnable(cwd: string, raw: boolean): void {
  * foreign hook (design row 5); a missing hook is a no-op success, not an
  * error (row 6).
  */
-function cmdCommitDocsGuardDisable(cwd: string, raw: boolean): void {
+function cmdCommitDocsGuardDisable(ctx: ProjectContext, raw: boolean): void {
+  requireProjectContext(ctx, 'cmdCommitDocsGuardDisable');
+  const cwd = ctx.worktreeRoot;
   const hooksDir = resolveCommitDocsGuardHooksDir(cwd);
   if (!hooksDir.ok || !hooksDir.dir) {
     error('not a git repository (or any of the parent directories)', ERROR_REASON.COMMIT_DOCS_GUARD_NOT_A_REPO);

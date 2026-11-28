@@ -1267,33 +1267,33 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // unquoted (multi word msg) invocations from different shells
           const head = firstListFlag !== -1 ? args.slice(0, firstListFlag) : args;
           const message = positionalWords(head, spec).join(' ') || undefined;
-          commands.cmdCommit(cwd, message, parsed.files, raw, parsed.amend, parsed['no-verify'], parsed['files-removed'], ctx);
+          commands.cmdCommit(ctx, message, parsed.files, raw, parsed.amend, parsed['no-verify'], parsed['files-removed']);
   }
 
-  function routeCheckCommit({ args, cwd, raw, error }) {
+  function routeCheckCommit({ args, raw, error, ctx }) {
     parseNamedArgsOrExit(args, specFor('check-commit'), error);
-    commands.cmdCheckCommit(cwd, raw);
+    commands.cmdCheckCommit(ctx, raw);
   }
 
-  function routeCommitDocsGuard({ args, cwd, raw, error }) {
+  function routeCommitDocsGuard({ args, raw, error, ctx }) {
     const subcommand = args[1];
     if (subcommand === 'enable') {
       parseNamedArgsOrExit(args, specFor('commit-docs-guard.enable'), error);
-      commands.cmdCommitDocsGuardEnable(cwd, raw);
+      commands.cmdCommitDocsGuardEnable(ctx, raw);
     } else if (subcommand === 'disable') {
       parseNamedArgsOrExit(args, specFor('commit-docs-guard.disable'), error);
-      commands.cmdCommitDocsGuardDisable(cwd, raw);
+      commands.cmdCommitDocsGuardDisable(ctx, raw);
     } else {
       error('Unknown commit-docs-guard subcommand. Available: enable, disable', ERROR_REASON.SDK_UNKNOWN_COMMAND);
     }
   }
 
-  function routeCommitToSubrepo({ args, cwd, raw, error }) {
+  function routeCommitToSubrepo({ args, raw, error, ctx }) {
     const parsed = parseNamedArgsOrExit(args, specFor('commit-to-subrepo'), error);
-          commands.cmdCommitToSubrepo(cwd, args[1], parsed.files, raw);
+          commands.cmdCommitToSubrepo(ctx, args[1], parsed.files, raw);
   }
 
-  function routePrSubrepo({ args, cwd, raw, error }) {
+  function routePrSubrepo({ args, raw, error, ctx }) {
     // #3884: the commit message is an optional leading positional the caller
           // owns (args[1]); when it is OMITTED, args[1] is itself the first flag
           // (e.g. `--repo`). The spec makes words past the verb free, so a flag's own
@@ -1311,7 +1311,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               ERROR_REASON.USAGE,
             );
           }
-          commands.cmdPrSubrepo(cwd, repo, branch, args[1], raw);
+          commands.cmdPrSubrepo(ctx, repo, branch, args[1], raw);
   }
 
   function routeVerifySummary({ args, cwd, raw, error }) {
@@ -4016,16 +4016,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             const uat = require('./lib/uat.cjs');
             const uatPath = args[2];
             const options = parseNamedArgsOrExit(args, specFor('uat.complete-session'), error);
-            return uat.cmdUatCompleteSession(cwd, uatPath, { message: options.message }, raw);
+            return uat.cmdUatCompleteSession(ctx, uatPath, { message: options.message }, raw);
           } else {
             error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage, complete-session', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
-  function routeStats({ args, cwd, raw, error }) {
+  function routeStats({ args, raw, error, ctx }) {
     parseNamedArgsOrExit(args, specFor('stats.json'), error);
     const subcommand = args[1] || 'json';
-          commands.cmdStats(cwd, subcommand, raw);
+          commands.cmdStats(ctx, subcommand, raw);
   }
 
   function routeTodo({ args, cwd, raw, error }) {
