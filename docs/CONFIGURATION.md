@@ -930,30 +930,14 @@ See [Publish PRs without planning artifacts](how-to/publish-prs-without-planning
 
 ### `commit_docs` Pre-Commit Guard (opt-in)
 
-`planning.commit_docs: false` only stops GSD's own `gsd-tools commit`/`gsd-tools state`
-write path from committing `.planning/`. It does **not** stop a plain `git add -A` +
-`git commit` run by hand, or by a script outside GSD's own tooling, from staging and
-committing `.planning/` anyway.
-
-`gsd-tools commit-docs-guard enable` closes that gap by writing a `.git/hooks/pre-commit`
-hook into the **current repository** that refuses any commit staging `.planning/` files
-while `commit_docs` resolves to `false`. Resolution goes through the same
-[per-phase precedence chain](#per-phase-override-phase_commit_docs) `gsd-tools commit`/`query commit`
-use — a `phase_commit_docs.<phase-id>` override for the staged phase is honored here too, so the
-hook cannot contradict them. It is entirely opt-in — no install path wires it
-automatically:
+`planning.commit_docs: false` only stops GSD's own commit path from committing `.planning/`; a plain `git add -A` and `git commit` still can. `gsd-tools commit-docs-guard enable` writes a `.git/hooks/pre-commit` hook into the current repository that refuses a commit staging `.planning/` files while `commit_docs` resolves to `false` (honoring [`phase_commit_docs`](#per-phase-override-phase_commit_docs)). It is opt-in; no install path wires it.
 
 ```bash
-gsd-tools commit-docs-guard enable   # write the hook (refuses to clobber an existing pre-commit hook)
-gsd-tools commit-docs-guard disable  # remove it (refuses to remove a hook GSD didn't write)
+gsd-tools commit-docs-guard enable   # write the hook
+gsd-tools commit-docs-guard disable  # remove it
 ```
 
-The hook is identified by a stable `# gsd-core:commit-docs-guard` marker line, so `enable`/
-`disable` detect it by presence of that marker rather than by byte-for-byte content — editing
-the file afterward does not make it unrecognizable. `enable` refuses (rather than silently
-writing an inert file) when `core.hooksPath` is already configured, since a hook written to
-`.git/hooks/pre-commit` would never run in that case; wire the guard into the configured hooks
-path by hand instead. See [Keep planning docs out of a shared repo](how-to/keep-planning-docs-private.md#pre-commit-guard-hook-optional) for the full walkthrough, including the linked-worktree case.
+The three refusals (an existing hook you did not get from GSD, `core.hooksPath` set, not a git repository), the marker line and the linked-worktree case are in [Keep planning docs out of a shared repo](how-to/keep-planning-docs-private.md#pre-commit-guard-hook-optional).
 
 ---
 
