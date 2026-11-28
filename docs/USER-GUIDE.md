@@ -104,33 +104,9 @@ How to verify:
 
 ### Why there are no drawn borders
 
-Earlier releases framed stage banners between two 53-character runs
-of `━`, and checkpoints were a 62-column box drawn with `╔`, `║` and `╚`. Those
-runs are ordinary text to whatever renders GSD's output. In a pane narrower than
-the run, the rule wraps and the leftover glyphs land on a second line — so the
-border comes apart from the heading it was framing, and the output looks broken
-rather than merely narrow. Reported against the Codex desktop interface in
-[#3028](https://github.com/open-gsd/gsd-core/issues/3028).
+Earlier releases framed banners and checkpoints with fixed-width runs of box-drawing characters. In a pane narrower than the run the rule wraps and the frame comes apart from its heading, so the output looked broken ([#3028](https://github.com/open-gsd/gsd-core/issues/3028), against the Codex desktop interface). A Markdown heading and a thematic break carry the same structure at any width. Every runtime gets the same output; if a host reads worse with headings than it did with boxes, report it. Single-cell tokens (`✓ ✗ ◆ ○ ⚠`, the `GSD ►` prefix and the ten-cell progress gauge) do not wrap and are unchanged.
 
-A Markdown heading and a thematic break carry the same structure without
-committing to a width, so they read correctly in a narrow pane and a wide one.
-
-This is unconditional: every runtime gets the same output. The alternative — a
-capability flag that kept line-art for terminal-oriented runtimes — was weighed
-and rejected, because it leaves two output conventions to keep in sync forever
-for a gain that is aesthetic rather than structural. What a terminal loses is the
-drawn frame; what it keeps is the title, the hierarchy and the break, none of
-which depended on the frame. The reasoning is recorded in
-`gsd-core/references/ui-brand.md § Why this is unconditional, not per-runtime`.
-If you run GSD in a host where the heading form reads worse than the old boxes
-did, that is worth reporting — it is the evidence that would justify the flag.
-
-Single-cell tokens are unaffected and unchanged: the status symbols
-(`✓ ✗ ◆ ○ ⚠`), the `GSD ►` prefix, and the ten-cell progress gauge
-(`Progress: ████████░░ 80%`) are not runs and do not wrap.
-
-The convention is specified in `gsd-core/references/ui-brand.md` and enforced
-against all shipped content by `tests/responsive-separators.test.cjs`.
+The convention and the reasoning for making it unconditional are in [`ui-brand.md`](../gsd-core/references/ui-brand.md), and `tests/responsive-separators.test.cjs` enforces it against all shipped content.
 
 ---
 
@@ -257,56 +233,19 @@ Until the first close, while `ROADMAP.md` carries no version token, the mileston
 
 ### Validation Architecture (Nyquist Layer)
 
-During plan-phase research, GSD maps automated test coverage to each phase requirement before any code is written. The researcher detects your existing test infrastructure, maps each requirement to a specific test command, and identifies any test scaffolding that must be created before implementation begins (Wave 0 tasks). The plan-checker enforces this as an 8th verification dimension: plans where tasks lack automated verify commands will not be approved.
-
-**Output:** `{phase}-VALIDATION.md` — the feedback contract for the phase.
-
-**Disable:** Set `workflow.nyquist_validation: false` in `/gsd-settings` for rapid prototyping phases where test infrastructure isn't the focus.
+During plan-phase research, GSD maps automated test coverage to each phase requirement before any code is written, and the plan-checker refuses plans whose tasks lack an automated verify command. The result is `{phase}-VALIDATION.md`. Set `workflow.nyquist_validation: false` in `/gsd-settings` for rapid prototyping phases. How the layer works: [Nyquist validation explained](explanation/nyquist-validation.md).
 
 ### Retroactive Validation (`/gsd-validate-phase`)
 
-For phases executed before Nyquist validation existed, or for existing codebases with only traditional test suites, retroactively audit and fill coverage gaps:
-
-```text
-  /gsd-validate-phase N
-         |
-         +-- Detect state (VALIDATION.md exists? SUMMARY.md exists?)
-         |
-         +-- Discover: scan implementation, map requirements to tests
-         |
-         +-- Analyze gaps: which requirements lack automated verification?
-         |
-         +-- Present gap plan for approval
-         |
-         +-- Spawn auditor: generate tests, run, debug (max 3 attempts)
-         |
-         +-- Update VALIDATION.md
-               |
-               +-- COMPLIANT -> all requirements have automated checks
-               +-- PARTIAL -> some gaps escalated to manual-only
-```
-
-The auditor never modifies implementation code — only test files and VALIDATION.md. If a test reveals an implementation bug, it's flagged as an escalation for you to address.
+For phases executed before the Nyquist layer existed, or codebases with only traditional test suites, `/gsd-validate-phase N` audits coverage and generates the missing tests without touching implementation code. The flow and its COMPLIANT and PARTIAL outcomes are in [Nyquist validation explained](explanation/nyquist-validation.md#retroactive-validation-with-gsd-validate-phase).
 
 ### Assumptions Discussion Mode
 
-By default, `/gsd-discuss-phase` asks open-ended questions about your implementation preferences. Assumptions mode inverts this: GSD reads your codebase first, surfaces structured assumptions about how it would build the phase, and asks only for corrections.
-
-**Enable:** Set `workflow.discuss_mode` to `'assumptions'` via `/gsd-settings`.
-
-See [docs/workflow-discuss-mode.md](workflow-discuss-mode.md) for the full discuss-mode reference.
+By default `/gsd-discuss-phase` asks open-ended questions about your implementation preferences. Assumptions mode inverts this: GSD reads your codebase first, surfaces structured assumptions about how it would build the phase, and asks only for corrections. Turn it on with `workflow.discuss_mode: 'assumptions'` via `/gsd-settings`. The steps are in [How to discuss a phase](how-to/discuss-a-phase.md), and the full reference is [workflow-discuss-mode.md](workflow-discuss-mode.md).
 
 ### Decision Coverage Gates
 
-The discuss-phase captures implementation decisions in CONTEXT.md under a `<decisions>` block as numbered bullets (`- **D-01:** …`). Two gates ensure those decisions survive into plans and shipped code.
-
-**Plan-phase translation gate (blocking).** After planning, GSD refuses to mark the phase planned until every trackable decision appears in at least one plan's scanned surfaces: front-matter `must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective` heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>` tag body.
-
-**Verify-phase validation gate (non-blocking).** During verification, GSD searches plans, SUMMARY.md, modified files, and recent commit messages for each trackable decision. Misses are logged to VERIFICATION.md as a warning section; verification status is unchanged.
-
-**Opting a decision out.** Move it under the `### Claude's Discretion` heading inside `<decisions>`, or tag it: `- **D-08 [informational]:** …`, `- **D-09 [folded]:** …`, `- **D-10 [deferred]:** …`.
-
-**Disabling the gates.** Set `workflow.context_coverage_gate: false` in `.planning/config.json` (or via `/gsd-settings`). Default is `true`. The key must sit under `workflow`; a top-level `context_coverage_gate` is ignored and the gates stay on.
+Decisions captured in CONTEXT.md as numbered bullets (`- **D-01:** …`) are checked twice: a blocking gate after planning refuses to mark the phase planned until every trackable decision appears in a plan, and a non-blocking gate during verification logs misses to VERIFICATION.md. What the gates scan, how to write decisions they accept, and how to opt a decision out are in [Decision coverage gates explained](explanation/decision-coverage-gates.md). To turn both gates off, set `workflow.context_coverage_gate: false` (the key must sit under `workflow`); see [`workflow.context_coverage_gate`](CONFIGURATION.md#decision-coverage-gates-workflowcontext_coverage_gate).
 
 ### Execution Wave Coordination
 
@@ -487,7 +426,7 @@ Git configuration supplied through `-c key=value` is also checked for the two co
 
 ### Package Legitimacy Gate (v1.42.1)
 
-AI coding tools hallucinate package names. Attackers pre-register those names on npm, PyPI, and crates.io with malicious post-install scripts — a technique called *slopsquatting*. v1.42.1 adds a three-layer gate that stops this before it reaches your shell.
+Every package a phase recommends is checked against the live npm, PyPI and crates.io registries before it can reach your shell, so a hallucinated name that an attacker has pre-registered (*slopsquatting*) is stopped at research. The threat, the three pipeline stages, the ecosystem coverage and what happens when a registry cannot be reached are in [Layer 1 of the security model](explanation/security-model.md#layer-1--supply-chain-protection-the-package-legitimacy-gate).
 
 **In RESEARCH.md** — every phase that recommends external packages includes a `## Package Legitimacy Audit` table:
 
@@ -501,11 +440,7 @@ AI coding tools hallucinate package names. Attackers pre-register those names on
 | api-bridge | npm | 6 mo | 1.2k/wk | github.com/user/api-bridge | [SUS] | Flagged |
 ```
 
-`[SLOP]` packages are removed from RESEARCH.md entirely and never reach the planner.
-
-**In PLAN.md** — `[SUS]` or `[ASSUMED]` packages trigger a `checkpoint:human-verify` task before the install.
-
-**During execution** — if an install fails, the executor surfaces a checkpoint and stops rather than silently trying an alternative.
+A `[SUS]` or `[ASSUMED]` package makes the planner add a `checkpoint:human-verify` task before the install, and a failed install stops the executor at a checkpoint.
 
 **Legitimacy verdicts:**
 
@@ -514,11 +449,6 @@ AI coding tools hallucinate package names. Attackers pre-register those names on
 | `[OK]` | Passes all legitimacy checks | Proceeds — no checkpoint added |
 | `[SUS]` | Suspicious signals | Flagged; planner adds `checkpoint:human-verify` |
 | `[SLOP]` | High-confidence hallucination | Removed from RESEARCH.md; never reaches planner |
-
-Verdicts are computed from live registry APIs (npm, PyPI, crates.io) — there
-is no separate tool to install. `slopcheck` is an optional escalate-only
-adapter (it can raise a verdict but never lower one); no shipped
-configuration wires it, and its absence does not change the gate's behavior.
 
 ---
 
