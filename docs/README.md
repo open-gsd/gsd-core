@@ -147,6 +147,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [CONTEXT.md schema](reference/context-md.md) — field-by-field reference for `.planning/phases/<N>/CONTEXT.md`
 - [PLAN.md schema](reference/plan-md.md) — field-by-field reference for `.planning/phases/<N>/PLAN.md`
 - [ROADMAP phase-list entry grammar](reference/roadmap-phase-entry.md) — the one accepted form of a `- [ ] **Phase N: Name**` checklist entry, shared by every reader
+- [Custom phase IDs](reference/custom-phase-ids.md) — which custom phase IDs are accepted or refused, the `.phase-id` marker and how readers resolve a directory to its owner
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
 - [Security hooks](reference/security-hooks.md) — the exact rules, limits, bypasses and known gaps of the prompt, workflow, write and secret-read guards
 - [Runtime install contracts](reference/runtime-install-contracts.md) — the installed file layout, the per-runtime install contract matrix, and the upstream docs each row was checked against
