@@ -85,6 +85,7 @@ describe('#4976: config-new-project resolves the global-defaults store through G
 
   beforeEach(() => {
     tmpDir = createTempProject('gsd-4976-project-');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Platform Fixture\n');
     gsdHome = createTempDir('gsd-4976-gsd-home-');
     decoyHome = createTempDir('gsd-4976-os-home-');
   });
@@ -219,6 +220,7 @@ describe('#4976: config-new-project resolves the global-defaults store through G
   // stores are empty, i.e. from the built-in defaults alone.
   function builtInDefaultsConfig(t) {
     const baselineDir = createTempProject('gsd-4976-baseline-');
+    fs.writeFileSync(path.join(baselineDir, '.planning', 'PROJECT.md'), '# Platform Fixture\n');
     t.after(() => cleanup(baselineDir));
     const baseline = runGsdTools(['config-new-project', '{}'], baselineDir, storeEnv());
     assert.ok(baseline.success, `Baseline config-new-project failed: ${baseline.error}`);

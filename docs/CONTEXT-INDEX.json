@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "count": 327,
+  "count": 330,
   "classes": {
     "ARCH": 1,
     "CI": 2,
-    "CONFIG": 5,
+    "CONFIG": 7,
     "EXEC": 8,
     "GSD-RESEARCH": 6,
     "LEARNING": 1,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 54,
+    "SEAM": 55,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -65,6 +65,16 @@
       "id": "CONFIG.SEAM.loadConfig-context",
       "klass": "CONFIG",
       "value": "loadConfig(cwd,{workstream}) replaces env-mutation fallback; no temporary process.env GSD_WORKSTREAM rewrites"
+    },
+    {
+      "id": "CONFIG.derived-project-code",
+      "klass": "CONFIG",
+      "value": "new bracket projects derive at most six characters from the first unfenced PROJECT.md title when present, otherwise the directory name"
+    },
+    {
+      "id": "CONFIG.phase-naming-alias",
+      "klass": "CONFIG",
+      "value": "sequential is a case-insensitive deprecated alias for generated; writes warn and reads silently normalize"
     },
     {
       "id": "EXEC.CLASSIFY.classes",
@@ -1285,6 +1295,11 @@
       "id": "SEAM.criterion-replay.owns",
       "klass": "SEAM",
       "value": "opt-in replay of criterion baseline commands under the no-shell argv quarantine, and its observed-value derivation (#4310, ADR-4310)"
+    },
+    {
+      "id": "SEAM.custom-bracket-add",
+      "klass": "SEAM",
+      "value": "phase add --id validates the full active project+milestone+phase+subphase identity; add-batch requires individual phase add --id commands"
     },
     {
       "id": "SEAM.dispatch-isolation-vocabulary.enforced-by",

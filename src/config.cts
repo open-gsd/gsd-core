@@ -9,6 +9,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5067 CJS bounded-read diagnostics
+import configFileRead = require('./config-file-read.cjs');
+const { printablePath } = configFileRead;
+import { parsePhaseId, normalizePhaseNaming } from './phase-id.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
@@ -162,7 +167,8 @@ function encodeConfigValue(kp: string, value: unknown, sourceText?: string): { j
 }
 
 function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: string): void {
-  const { json, text } = encodeConfigValue(kp, value, sourceText);
+  const projected = kp === 'phase_naming' ? normalizePhaseNaming(value) : value;
+  const { json, text } = encodeConfigValue(kp, projected, projected === value ? sourceText : undefined);
   output(json, raw, text);
 }
 
@@ -289,6 +295,38 @@ interface NewProjectConfigPlan {
   defaultsRewrite: { path: string; contents: string } | null;
 }
 
+/** Deterministic project abbreviation; collisions across projects are possible. */
+function deriveProjectCode(name: string): string {
+  const words = name.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2').match(/[A-Za-z0-9]+/g) || [];
+  let code = (words.length > 1 ? words.map(word => word[0]).join('') : words[0] || '').toUpperCase().slice(0, 6);
+  if (/^[0-9]/.test(code)) code = `P${code}`;
+  return code.slice(0, 6) || 'PROJ';
+}
+
+/** Read only a bounded regular-file prefix; a planted link or FIFO supplies no title. */
+function newProjectTitle(root: string): string | null {
+  const projectPath = path.join(planningDir(root, null), 'PROJECT.md');
+  let fd: number | undefined;
+  try {
+    const before = fs.lstatSync(projectPath);
+    if (!before.isFile()) return null;
+    fd = fs.openSync(projectPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) return null;
+    const prefix = Buffer.alloc(4096);
+    const length = fs.readSync(fd, prefix, 0, prefix.length, 0);
+    let text = prefix.subarray(0, length).toString('utf8');
+    // A heading cut by the byte bound is not a complete title.
+    if (opened.size > length) text = text.slice(0, text.lastIndexOf('\n') + 1);
+    return tokenizeHeadings(text).find(heading => heading.level === 1)?.text.trim() || null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 /**
  * Plan a fully-materialized config object for a new project. Writes nothing:
  * the user defaults rewrite comes back as data, for the caller to persist once
@@ -304,8 +342,12 @@ interface NewProjectConfigPlan {
  * Uses the canonical `git` namespace for branching keys (consistent with VALID_CONFIG_KEYS
  * and the settings workflow). loadConfig() handles both flat and nested formats, so this
  * is backward-compatible with existing projects that have flat keys.
+ *
+ * `newProjectRoot` is passed only by config-new-project (#5067): a new project then
+ * defaults to `phase_id_convention: 'bracket'` and derives its `project_code` from that
+ * root. Config repair (ensureConfigFile) omits it, so an existing project stays legacy.
  */
-function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectConfigPlan {
+function planNewProjectConfig(userChoices: Record<string, unknown>, newProjectRoot?: string): NewProjectConfigPlan {
   const choices = userChoices || {};
   let defaultsRewrite: NewProjectConfigPlan['defaultsRewrite'] = null;
   // #4976: the GSD-owned store resolves exactly as the config loader resolves
@@ -412,7 +454,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
       context_warnings: true,
     },
     project_code: null,
-    phase_naming: 'sequential',
+    phase_naming: 'generated',
+    ...(newProjectRoot ? { phase_id_convention: 'bracket' } : {}),
     agent_skills: {},
     claude_md_path: './.claude/CLAUDE.md',
     plan_review: {
@@ -472,6 +515,28 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     },
   };
 
+  if (typeof config['phase_naming'] === 'string' && config['phase_naming'].toLowerCase() === 'sequential') {
+    process.stderr.write('Warning: phase_naming "sequential" is deprecated; use "generated".\n');
+    config['phase_naming'] = normalizePhaseNaming(config['phase_naming']);
+  }
+  if (newProjectRoot && config['phase_id_convention'] === 'bracket') {
+    const derive = (): string => deriveProjectCode(newProjectTitle(newProjectRoot) ?? path.basename(newProjectRoot));
+    if (config['project_code'] == null) config['project_code'] = derive();
+    try {
+      const id = parsePhaseId(`${String(config['project_code'])}.01-01`);
+      if (id.project !== config['project_code']) throw new Error('Invalid project code');
+    } catch {
+      const fromChoices = Object.prototype.hasOwnProperty.call(choices, 'project_code');
+      const optOut = 'Set phase_id_convention: "sequential" to keep a legacy code.';
+      if (!fromChoices) {
+        config['project_code'] = derive();
+        const source = printablePath(globalDefaultsPath);
+        process.stderr.write(`Warning: Invalid project_code from global defaults (${source}); derived ${String(config['project_code'])}. ${optOut}\n`);
+      } else {
+        error(`Invalid project_code from choices for bracket: start with an uppercase ASCII letter, followed by uppercase ASCII letters, digits or underscores. ${optOut}`, ERROR_REASON.USAGE);
+      }
+    }
+  }
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
   return { config, defaultsRewrite };
 }
@@ -664,7 +729,7 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     return;
   }
 
-  const plan = planNewProjectConfig(checkedChoices);
+  const plan = planNewProjectConfig(checkedChoices, cwd);
   const config = plan.config;
 
   if (dryRun) {
@@ -1164,6 +1229,10 @@ function normalizeSecretReadExemptEntry(entry: unknown): string | null {
  * to persist, so it is refused through `error()` instead.
  */
 function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val: string): unknown {
+  if (kp === 'phase_naming' && typeof parsedValue === 'string' && parsedValue.toLowerCase() === 'sequential') {
+    process.stderr.write('Warning: phase_naming "sequential" is deprecated; use "generated".\n');
+    return 'generated';
+  }
   // #1581: project_code is an identifier, and config-set stores it as the text
   // typed. Through config-set this never fires; it holds a JSON choice (#5268)
   // to the type config-set stores, rather than writing a number readers cast

@@ -275,7 +275,7 @@ Generated from `CONFIG_DEFAULTS` (configuration.cjs) and `VALID_CONFIG_KEYS` (co
 | `granularity` | string | (none) | `"coarse"`, `"standard"`, `"fine"` | Planning depth for phase plans (migrated from deprecated `depth`) |
 | `commit_docs` | boolean | `true` | `true`, `false` | Commit .planning/ artifacts to git (auto-false if .planning/ is gitignored) |
 | `search_gitignored` | boolean | `false` | `true`, `false` | Include gitignored paths in broad rg searches via `--no-ignore` |
-| `phase_naming` | string | `"sequential"` | `"sequential"`, `"custom"` | Phase numbering: auto-increment or arbitrary string IDs |
+| `phase_naming` | string | `"generated"` | `"generated"`, `"custom"`, deprecated `"sequential"` | Allocate IDs or accept caller-owned IDs; reads silently normalize the alias, setters warn and persist generated |
 | `project_code` | string\|null | `null` | Any short string | Prefix for phase dirs (e.g., `"CK"` produces `CK-01-foundation`) |
 | `response_language` | string\|null | `null` | Any language name | Language for user-facing prompts (e.g., `"Portuguese"`, `"Japanese"`) |
 | `context_window` | number | `200000` | `200000`, `1000000` | Context window size; set `1000000` for 1M-context models |
@@ -515,7 +515,7 @@ Several config fields affect each other or trigger special behavior:
   "context_window": 1000000,
   "commit_docs": true,
   "project_code": "MEGA",
-  "phase_naming": "sequential",
+  "phase_naming": "generated",
   "git": {
     "branching_strategy": "milestone",
     "milestone_branch_template": "gsd/{milestone}-{slug}"

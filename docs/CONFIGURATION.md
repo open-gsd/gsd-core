@@ -191,15 +191,15 @@ A section that is present but is not an object (for example, `"git": null`) is a
 | `dynamic_routing.escalate_on_failure` | boolean | `true`, `false` | `true` | When `false`, escalation is disabled even if `enabled: true` — every attempt uses the default tier. Added in v1.40 |
 | `dynamic_routing.max_escalations` | integer | `0`, `1`, `2`, … | `1` | Hard cap on retries per agent invocation. Beyond the cap the resolver returns the cap-tier model. Also caps `provider_escalation`. Added in v1.40 |
 | `dynamic_routing.provider_escalation` | string[] | ordered model IDs | (none) | Opt-in fallback providers tried when a run dies on a quota / rate limit — see [provider escalation](#provider-escalation-on-quota-exceeded--added-in-v143). Added in v1.43 ([#2296](https://github.com/open-gsd/gsd-core/issues/2296)) |
-| `project_code` | string | any short string | (none) | Prefix for phase directory names (e.g., `"ABC"` produces `ABC-01-setup/`). Added in v1.31. `check evaluation-scope --plan` resolves a coded plan id (`ABC-01-01`) to its commits when the value starts with a letter, continues with letters, digits, `_`, `.` or `-`, and is at most 32 characters (`"ABC"`, `"gsd"` and `"AUTH-X"` all qualify); an empty value, one with whitespace or control characters, or a longer one is ignored and a coded id is matched literally, so a plan whose commits use the bare `01-01` spelling resolves an empty scope ([#5271](https://github.com/open-gsd/gsd-core/issues/5271)). |
-| `phase_id_convention` | enum | `"sequential"`, `"milestone-prefixed"`, `"bracket"`, `null` | `null` | Phase ID naming convention. `null` and `"sequential"` use legacy numeric IDs (`Phase 1`, `Phase 2`). `"milestone-prefixed"` uses globally unique IDs that encode the enclosing milestone (`Phase 1-01`, `Phase 1-02`). Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate an existing ROADMAP.md. `"bracket"` carries the milestone ahead of the phase number — heading `### [GSD.02] 05: Name`, directory `GSD.02-05-name` — per [ADR-612](adr/612-bracket-phase-id-convention.md) and the [compact convention card](../gsd-core/references/phase-id-convention.md). `config-set` accepts only these exact strings (or `null` to unset the key). Behavior, write-path refusals, migration and the cost of opting in are in [Bracket phase IDs](reference/bracket-phase-ids.md). ([#2761](https://github.com/open-gsd/gsd-core/issues/2761), [#3638](https://github.com/open-gsd/gsd-core/issues/3638)) |
+| `project_code` | string | any short string | (none) | New bracket projects derive this code from the PROJECT.md title when it exists, otherwise from the directory name; explicit codes must match `[A-Z][A-Z0-9_]*`. Legacy conventions retain verbatim codes. Prefix for phase directory names (e.g., `"ABC"` produces `ABC-01-setup/`). Added in v1.31. `check evaluation-scope --plan` resolves a coded plan id (`ABC-01-01`) to its commits when the value starts with a letter, continues with letters, digits, `_`, `.` or `-`, and is at most 32 characters (`"ABC"`, `"gsd"` and `"AUTH-X"` all qualify); an empty value, one with whitespace or control characters, or a longer one is ignored and a coded id is matched literally, so a plan whose commits use the bare `01-01` spelling resolves an empty scope ([#5271](https://github.com/open-gsd/gsd-core/issues/5271)). |
+| `phase_id_convention` | enum | `"sequential"`, `"milestone-prefixed"`, `"bracket"`, `null` | `null` | Phase ID naming convention. New-project initialization defaults to `"bracket"`; existing configs and repair retain the `null` fallback. Explicit `"sequential"` opts out during initialization; a null choice is not an opt-out. `null` and `"sequential"` use legacy numeric IDs (`Phase 1`, `Phase 2`). `"milestone-prefixed"` uses globally unique IDs that encode the enclosing milestone (`Phase 1-01`, `Phase 1-02`). Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate an existing ROADMAP.md. `"bracket"` carries the milestone ahead of the phase number — heading `### [GSD.02] 05: Name`, directory `GSD.02-05-name` — per [ADR-612](adr/612-bracket-phase-id-convention.md) and the [compact convention card](../gsd-core/references/phase-id-convention.md). `config-set` accepts only these exact strings (or `null` to unset the key). Behavior, write-path refusals, migration and the cost of opting in are in [Bracket phase IDs](reference/bracket-phase-ids.md). ([#2761](https://github.com/open-gsd/gsd-core/issues/2761), [#3638](https://github.com/open-gsd/gsd-core/issues/3638)) |
 | `response_language` | string | language code | (none) | Language for agent responses (e.g., `"pt"`, `"ko"`, `"ja"`). Propagates to all spawned agents for cross-phase language consistency. Added in v1.32. UAT checkpoint frames (`/gsd-verify-work`) render a localized banner/instruction for English, Spanish, French, German, Portuguese, Japanese, Chinese, Korean, Italian, Dutch, Polish, Russian, Ukrainian, Turkish, Hindi, Arabic, Vietnamese, and Indonesian (endonyms and ISO codes also accepted); any other value falls back to the English frame. One deliberate exception: the `spec-phase` edge-completeness probe is fed an English translation of each requirement's text, because its shape cues are English-only — the SPEC itself stays in this language. See [Spec-Phase Edge-Completeness Probe](FEATURES.md#144-spec-phase-edge-completeness-probe). Every workflow is required to carry a directive honouring this setting, including for inter-tool narration; authors add or fix one per [response-language coverage](contributing/response-language-coverage.md), and `npm run lint:response-language` enforces it. |
 | `context_window` | number | any integer | `200000` | Context window size in tokens. Set `1000000` for 1M-context models (e.g., `claude-fable-5`). Values `>= 500000` enable adaptive context enrichment (full-body reads of prior SUMMARY.md, deeper anti-pattern reads). Configured via `/gsd-config --advanced`. |
 | `context_profile` | string | `dev`, `research`, `review` | (none) | Execution context preset that applies a pre-configured bundle of mode, model, and workflow settings for the current type of work. Added in v1.34 |
 | `claude_md_path` | string | any file path | `./.claude/CLAUDE.md` | Custom output path for the generated CLAUDE.md file. Useful for monorepos or projects that need CLAUDE.md in a non-root location. Defaults to `./.claude/CLAUDE.md` — a valid project-scoped memory location that keeps GSD-generated content from polluting a hand-crafted repo-root `CLAUDE.md` ([#1098](https://github.com/open-gsd/gsd-core/issues/1098)). An existing file without GSD markers is never overwritten unless `--force` is passed. Default changed from `./CLAUDE.md` in v1.5. Added in v1.36 |
 | `claude_md_assembly.mode` | enum | `embed`, `link` | `embed` | Controls how managed sections are written into CLAUDE.md. `embed` (default) inlines content between GSD markers. `link` writes `@.planning/<source-path>` instead — Claude Code expands the reference at runtime, reducing CLAUDE.md size by ~65% on typical projects. `link` only applies to sections that have a real source file; `workflow` and fallback sections always embed. Per-block overrides: `claude_md_assembly.blocks.<section>` (e.g. `claude_md_assembly.blocks.architecture: link`). Added in v1.38 |
 | `context` | string | any text | (none) | Custom context string injected into every agent prompt for the project. Use to provide persistent project-specific guidance (e.g., coding conventions, team practices) that every agent should be aware of |
-| `phase_naming` | string | `"sequential"`, `"custom"` | `"sequential"` | Directory naming policy. `"custom"` (case-insensitive) enables explicit phase IDs; see [custom phase directories](#custom-phase-directories). Other values retain numeric allocation. |
+| `phase_naming` | string | `"generated"`, `"custom"`, deprecated `"sequential"` (case-insensitive) | `"generated"` | Directory naming policy. `"custom"` (case-insensitive) enables explicit phase IDs; see [custom phase directories](#custom-phase-directories). Other values retain numeric allocation. |
 | `brave_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Brave Search API availability. When unset, GSD checks for `BRAVE_API_KEY` env var or `$GSD_HOME/.gsd/brave_api_key` file |
 | `firecrawl` | boolean | `true`/`false` | auto-detected | Override auto-detection of Firecrawl API availability. When unset, GSD checks for `FIRECRAWL_API_KEY` env var or `$GSD_HOME/.gsd/firecrawl_api_key` file |
 | `exa_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Exa Search API availability. When unset, GSD checks for `EXA_API_KEY` env var or `$GSD_HOME/.gsd/exa_api_key` file |
@@ -212,7 +212,46 @@ A section that is present but is not an object (for example, `"git": null`) is a
 | `resolve_model_ids` | string | `omit` | (unset) | `omit` keeps GSD from resolving Claude-tier model IDs, so a Claude session sharing a machine with a defaults file written for another runtime does not pick up that runtime's models. The installer sets it to `omit` in `~/.gsd/defaults.json` when GSD is installed for a non-Claude runtime; see [Non-Claude runtimes](#non-claude-runtimes-codex-opencode-antigravity-cli-kilo). |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
+### New-project identity defaults
+
+`config-new-project` writes `phase_id_convention: "bracket"` and
+`phase_naming: "generated"`. Only initialization changes the convention default;
+existing configs and `config-ensure-section` remain legacy. Set the convention to
+`"sequential"` explicitly to opt out; null choices are dropped before layering.
+
+An explicit project code always wins. Otherwise it derives from the scoped,
+workstream-independent PROJECT.md title when it exists, otherwise from the directory name.
+The title is the first unfenced level-one heading in the first 4 KiB of a regular,
+non-symlink PROJECT.md. Invalid codes inherited from global defaults are replaced
+with a derived code and a warning; invalid choices name their source and the
+`phase_id_convention: "sequential"` opt-out.
+Split on ASCII non-alphanumeric characters and camel-case boundaries; multiple
+words contribute uppercase initials (at most six), while one word contributes its
+first six uppercase characters. Prefix a digit-leading result with `P` and truncate the complete code to six characters, or use
+`PROJ` when nothing usable remains. Examples: Northwind Trading Company → NTC,
+gsd-core → GC, Lighthouse → LIGHTH, 007 → P007. Collisions across projects are
+possible; choose an explicit code when needed. Preview with `--dry-run` creates
+no files and uses the same derivation.
+
+The naming and convention axes are independent: generated naming allocates an
+ID, custom naming accepts a caller-owned ID, and the convention controls its
+spelling. The deprecated naming alias `"sequential"` remains accepted case-insensitively: writers
+warn on stderr and persist `"generated"`; config-get, loader and directory reads normalize silently in memory
+without changing the file. Convention `"sequential"` is unchanged.
+
 ### Custom phase directories
+
+Under bracket, pass `phase add "Auth" --id CK.02-05` (or `--id "[CK.02] 05"`)
+with custom naming. The supplied identity must be canonical, belong to the active
+project and milestone, and have no plan suffix or trailing slug. Bare numbers,
+unpadded forms, foreign identities and malformed input fail with reason `usage`
+before writes. Supplied IDs are never reallocated; output fields have the same
+meaning as generated bracket adds, and inferred dependencies are omitted.
+Custom bracket add without `--id`, and custom bracket add-batch, refuse with
+instructions to pass a canonical bracket id to `phase add --id`.
+
+The following arbitrary custom-ID rules apply to legacy and milestone-prefixed
+conventions:
 
 Set `"phase_naming": "custom"` to create phases with explicit identities:
 

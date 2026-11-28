@@ -726,8 +726,11 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
 
   // A bare directory: no .planning/, so a refusal that created anything shows.
   function bareDir() {
-    const dir = createTempDir();
-    dirs.push(dir);
+    const root = createTempDir();
+    dirs.push(root);
+    // #5067: equivalent config comparisons need the same directory-derived code.
+    const dir = path.join(root, 'sample-project');
+    fs.mkdirSync(dir);
     return dir;
   }
 
@@ -845,7 +848,7 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
     assertNothingWritten(refused);
 
     const accepted = bareDir();
-    assert.ok(newProject([JSON.stringify({ project_code: '007' })], accepted).success);
+    assert.ok(newProject([JSON.stringify({ project_code: '007', phase_id_convention: 'sequential' })], accepted).success);
     assert.strictEqual(readProjectConfig(accepted).project_code, '007');
   });
 

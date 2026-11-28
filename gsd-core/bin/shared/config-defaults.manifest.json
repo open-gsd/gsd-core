@@ -9,7 +9,7 @@
   "exa_search": false,
   "resolve_model_ids": false,
   "context_window": 200000,
-  "phase_naming": "sequential",
+  "phase_naming": "generated",
   "project_code": null,
   "phase_id_convention": null,
   "mode": "interactive",
