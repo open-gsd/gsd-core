@@ -17,7 +17,7 @@ group: v1.7.0 Features
 - REQ-INSP-06: `accepted_phases` and `completed_plans` are independent fractions. `percent` is `null` whenever the scope is not `complete`, per the same rule the roadmap and progress surfaces follow.
 - REQ-INSP-07: Payloads over ~50 KB use the existing `@file:` spill channel, resolved transparently before stdout.
 
-**Why it does not simply serialize the internal snapshot.** `PlanningSnapshot` (the diagnostic-rule subject introduced by ADR-3180 §8.1) is deliberately additive and still growing — four fields at Phase 10, twenty-plus by Phase 12. Handing that shape to external consumers would freeze an internal contract by accident. `planning inspect` declares its own flat schema and maps into it, so a field added to `PlanningSnapshot` never changes what this command emits.
+The reason `planning inspect` maps into its own flat schema rather than serializing the internal snapshot is in [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md).
 
 **Composed, never re-derived.** Milestone identity and phase enumeration arrive via `buildPlanningSnapshot`; completion from `isPhaseComplete` (disk-strict); live-plan counting from `scanPhasePlans`; the percentage arithmetic from `clampPercent`; STATE fields from `stateFieldValue`; plan bodies from the Plan Document Module; requirement IDs from `parseRequirements`; UAT items from `parseUatItems`. Markdown structure is read through the Markdown Sectionizer and Markdown Table Model seams, so the Traceability table is resolved by column name against its registered schema rather than by a position-anchored regex.
 

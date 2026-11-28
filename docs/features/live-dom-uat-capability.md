@@ -10,15 +10,12 @@ group: v1.7.0 Features
 
 **Behavior:** A default-off capability owns one boolean key, one agent, and one additive step. When the key is on, `gsd-dom-verifier` runs at `execute:wave:post` and writes `{phase}-DOM-VERIFY.md`; the orchestrator's `automated_ui_verification` step additionally considers `mcp__chrome-devtools__*` / `mcp__claude-in-chrome__*` when present.
 
-**The executor's tool surface is unchanged in every configuration.** Widening it was the reported proposal and was refused: for a first-party agent the static `tools:` list is the only control that exists — no capability can grant tools to one ([ADR-1244](adr/1244-capability-ecosystem.md) D2), no hook kind grants tool permissions ([ADR-857](adr/857-capability-system.md) D4), and there is no per-dispatch override. Browser reach lives in one purpose-built agent that carries no `Bash`.
-
-**Two independent gates, both fail-closed.** The capability's `activationKey` makes it resolve inactive when the key is off — `resolveLoopHooks` renders a hook only on `state.active === true` — and the step carries its own `when` guard. Tool presence alone never activates it: a browser MCP configured for unrelated work is not driven by default.
-
-**The pre-existing Playwright path is untouched.** `mcp__playwright__*` keeps the gating it already had (presence plus an active UI phase). Pulling it behind a new default-off key would have silently removed working behavior from current users on upgrade; the key gates only the newly added families.
-
-**It tolerates the browser-profile lock rather than coordinating it.** `chrome-devtools-mcp` holds an exclusive lock on its profile, so parallel waves collide. `--isolated` is a flag on the operator's own MCP server registration — GSD neither launches that server nor passes its arguments — so the verifier reports `could_not_look` / `profile_locked`, names the flag, and stops. No retry, no held-up wave.
-
-**`nothing_to_report` is never conflated with `could_not_look`.** A report claiming no issues when it never opened a browser is worse than no report; the artifact carries a closed reason enum so the two are always distinguishable.
+**Design points (the arguments are in [The live-DOM UAT capability](../explanation/live-dom-uat-capability.md)):**
+- The executor's tool surface is unchanged in every configuration; browser reach lives in one purpose-built agent that carries no `Bash`.
+- Two independent fail-closed gates: the capability's `activationKey` and the step's own `when` guard. Tool presence alone never activates it.
+- The pre-existing `mcp__playwright__*` path keeps its gating; the key gates only the newly added families.
+- A browser-profile lock is tolerated, not coordinated: the verifier reports `could_not_look` / `profile_locked`, names `--isolated`, and stops.
+- `nothing_to_report` is never conflated with `could_not_look`; the artifact carries a closed `reason` enum.
 
 **Known limits:** no sandbox — once enabled, nothing constrains which origins are reached ([ADR-1244](adr/1244-capability-ecosystem.md) D5); DOM observation only, no screenshot diffing, accessibility audit, or performance tracing.
 

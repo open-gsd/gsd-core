@@ -326,9 +326,9 @@ describe('shipped prompts and docs for closing a seed (#4647)', () => {
     for (const field of ['outcome_kind', 'outcome_ref', 'outcome']) {
       assert.ok(cli.includes(field), `CLI-TOOLS.md must document ${field}`);
     }
-    const guide = normalize(readShippedText('docs/USER-GUIDE.md'));
-    const seeds = section(guide, /^### Seeds/m, /^### (?!Seeds)/m);
-    assert.ok(seeds.includes('closed') && seeds.includes('--close'), 'USER-GUIDE Seeds must explain closing a seed');
+    // The procedure moved out of the user guide into the how-to that owns it (#6833).
+    const howTo = normalize(readShippedText('docs/how-to/park-an-idea-for-later.md'));
+    assert.ok(howTo.includes('closed') && howTo.includes('--close'), 'the park-an-idea how-to must explain closing a seed');
     const commands = normalize(readShippedText('docs/COMMANDS.md'));
     const row = commands.split('\n').find(l => l.startsWith('| Seeds |'));
     assert.ok(row, 'the pre-close audit table must keep its Seeds row');

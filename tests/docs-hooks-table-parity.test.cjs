@@ -38,8 +38,9 @@ const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const ROOT = path.join(__dirname, '..');
 const SURFACE_PATH = path.join(ROOT, 'src', 'runtime-hooks-surface.cts');
 
+// docs/ARCHITECTURE.md links to INVENTORY.md#hooks instead of repeating the
+// table (#6774), so INVENTORY.md is the one English table under parity.
 const DOC_TABLES = [
-  'docs/ARCHITECTURE.md',
   'docs/INVENTORY.md',
   'docs/ja-JP/ARCHITECTURE.md',
   'docs/ja-JP/INVENTORY.md',

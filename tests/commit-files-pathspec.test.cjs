@@ -484,6 +484,7 @@ const path = require('path');
 const LIB = ${JSON.stringify(LIB)};
 const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
 const { cmdCommit } = require(path.join(LIB, 'commands.cjs'));
+const { resolveProjectContext } = require(path.join(LIB, 'project-context.cjs'));
 const failFor = ${JSON.stringify(failFor)};
 const stderrText = ${JSON.stringify(stderr)};
 const timeoutShape = ${JSON.stringify(timeoutShape)};
@@ -515,7 +516,7 @@ projection.execGit = (args, opts) => {
 process.on('exit', () => {
   require('fs').writeFileSync(${JSON.stringify(callsOut)}, JSON.stringify(calls));
 });
-cmdCommit(${JSON.stringify(cwd)}, 'docs: map existing codebase', ${JSON.stringify(files)}, false, ${JSON.stringify(amend)}, false);
+cmdCommit(resolveProjectContext(${JSON.stringify(cwd)}), 'docs: map existing codebase', ${JSON.stringify(files)}, false, ${JSON.stringify(amend)}, false);
 `;
 
   const run = spawnSync(process.execPath, ['-e', script], {
@@ -557,6 +558,7 @@ const path = require('path');
 const LIB = ${JSON.stringify(LIB)};
 const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
 const { cmdCommitToSubrepo } = require(path.join(LIB, 'commands.cjs'));
+const { resolveProjectContext } = require(path.join(LIB, 'project-context.cjs'));
 const failFor = ${JSON.stringify(failFor)};
 const timeoutShape = ${JSON.stringify(timeoutShape)};
 const real = projection.execGit;
@@ -576,7 +578,7 @@ projection.execGit = (args, opts) => {
   }
   return real(args, opts);
 };
-cmdCommitToSubrepo(${JSON.stringify(cwd)}, 'feat: subrepo change', ${JSON.stringify(files)}, false);
+cmdCommitToSubrepo(resolveProjectContext(${JSON.stringify(cwd)}), 'feat: subrepo change', ${JSON.stringify(files)}, false);
 `;
   const run = spawnSync(process.execPath, ['-e', script], {
     encoding: 'utf8',
@@ -3312,6 +3314,7 @@ const path = require('path');
 const LIB = ${JSON.stringify(LIB)};
 const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
 const { cmdCommit } = require(path.join(LIB, 'commands.cjs'));
+const { resolveProjectContext } = require(path.join(LIB, 'project-context.cjs'));
 const timeoutShape = ${JSON.stringify(timeoutShape)};
 const stderrText = ${JSON.stringify(stderr)};
 const real = projection.execGit;
@@ -3323,7 +3326,7 @@ projection.execGit = (args, opts) => {
   }
   return real(args, opts);
 };
-cmdCommit(${JSON.stringify(cwd)}, 'docs: probe', ${JSON.stringify(files)}, false, false, false);
+cmdCommit(resolveProjectContext(${JSON.stringify(cwd)}), 'docs: probe', ${JSON.stringify(files)}, false, false, false);
 `;
     const run = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     if (run.exitCode !== 0 && !run.stdout) {
@@ -3373,6 +3376,7 @@ const path = require('path');
 const LIB = ${JSON.stringify(LIB)};
 const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
 const { cmdCommit } = require(path.join(LIB, 'commands.cjs'));
+const { resolveProjectContext } = require(path.join(LIB, 'project-context.cjs'));
 const real = projection.execGit;
 projection.execGit = (args, opts) => {
   if (args[0] === 'commit') {
@@ -3382,7 +3386,7 @@ projection.execGit = (args, opts) => {
   }
   return real(args, opts);
 };
-cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);
+cmdCommit(resolveProjectContext(${JSON.stringify(tmpDir)}), 'docs: probe', ['.planning/STATE.md'], false, false, false);
 `;
     const run = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(run.outcome, OUTCOME.EXITED, `probe did not exit: ${run.summary}`);
@@ -3397,6 +3401,7 @@ const path = require('path');
 const LIB = ${JSON.stringify(LIB)};
 const projection = require(path.join(LIB, 'shell-command-projection.cjs'));
 const { cmdCommit } = require(path.join(LIB, 'commands.cjs'));
+const { resolveProjectContext } = require(path.join(LIB, 'project-context.cjs'));
 const real = projection.execGit;
 projection.execGit = (args, opts) => {
   if (args[0] === 'commit') {
@@ -3404,7 +3409,7 @@ projection.execGit = (args, opts) => {
   }
   return real(args, opts);
 };
-cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);
+cmdCommit(resolveProjectContext(${JSON.stringify(tmpDir)}), 'docs: probe', ['.planning/STATE.md'], false, false, false);
 `;
     const run = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(run.outcome, OUTCOME.EXITED, `probe did not exit: ${run.summary}`);

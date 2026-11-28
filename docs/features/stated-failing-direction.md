@@ -17,7 +17,7 @@ group: v1.7.0 Features
 
 `gsd-planner` emits it; `gsd-tools check verify-failure-directions <N>` verifies it deterministically; `/gsd-plan-phase` runs the probe before the plan-check pass and hands the JSON to `gsd-plan-checker`, whose check 8f blocks on `severity`.
 
-**Why this shape and not the two obvious alternatives.** *Validating command shape* — teaching the checker Cargo's `--lib`/`--bin` target resolution, then pytest's node-ids, then the next one — always trails the newest toolchain. *Executing each command at plan time* is the strongest signal but means running planner-invented commands, with whatever side effects they carry, during planning. Requiring a stated failing direction needs no toolchain knowledge at all, and it is the only one of the three that catches the dangerous case: the motivating command exited non-zero, so it failed loudly, but the same class of error with a command that exits 0 on a no-op passes green and silently. Naming the failure signal is what makes that visible.
+The reason for this shape, rather than validating command shape or executing commands at plan time, is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md#why-a-stated-failing-direction-and-not-the-two-obvious-alternatives).
 
 **Presence, not quality — deliberately split.** The probe is deterministic and owns the blockers: a statement is missing, blank, or a whole-value placeholder (`TBD`, `TODO`, `N/A`, `NA`, `none`, `unknown`, `TBA`, `?`, `-`). Whether the statement names the *right* signal is prose judgment, so `gsd-plan-checker` raises a vacuous statement (*"the command fails"*) as a WARNING only. Every BLOCKER stays reproducible; judgment stays advisory.
 

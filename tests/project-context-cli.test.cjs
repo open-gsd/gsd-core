@@ -556,3 +556,178 @@ describe('project-context CLI: workspace and verb', () => {
     });
   });
 }
+
+// ─── #6821 (Phase 2b-1 of #6044): the git verbs of commands.cts take the ProjectContext ───
+{
+  /**
+   * #6821 (Phase 2b-1 of #6044 / epic #4908, ADR-4908 §3): the committing and
+   * git-running verbs take a ProjectContext and run git in a named context
+   * field, never a hand-resolved string root. Failing-first (matrix T5-T7, T16).
+   */
+
+  const commands = require('../gsd-core/bin/lib/commands.cjs');
+
+  const commitCount = (dir) => Number(git(['rev-list', '--count', 'HEAD'], dir));
+
+  describe('#6821 the git verbs take a ProjectContext, not a string root', () => {
+    const STRING_ROOT = path.join(os.tmpdir(), 'gsd-6821-not-a-context');
+
+    // Every verb migrated in tranche 2b-1 receives a string where a ProjectContext is required.
+    const verbs = [
+      ['cmdCommit', () => commands.cmdCommit(STRING_ROOT, 'm', ['.planning/x.md'], false, false, false)],
+      ['cmdCommitToSubrepo', () => commands.cmdCommitToSubrepo(STRING_ROOT, 'm', ['api/a.txt'], false)],
+      ['cmdPrSubrepo', () => commands.cmdPrSubrepo(STRING_ROOT, 'api', 'b', 'm', false)],
+      ['cmdStats', () => commands.cmdStats(STRING_ROOT, undefined, false)],
+      ['cmdCheckCommit', () => commands.cmdCheckCommit(STRING_ROOT, false)],
+      ['cmdCommitDocsGuardEnable', () => commands.cmdCommitDocsGuardEnable(STRING_ROOT, false)],
+    ];
+
+    for (const [name, call] of verbs) {
+      test(`${name}RefusesAStringRootWithATypeError`, () => {
+        assert.equal(typeof commands[name], 'function', `${name} must stay exported`);
+        assert.throws(call, (err) => err instanceof TypeError && /ProjectContext/.test(err.message));
+      });
+    }
+  });
+
+  describe('#6821 verbs run git in the field ADR-4908 §3 names', () => {
+    test('uatCompleteSessionFromALinkedWorktreeNeverCommitsIntoTheMainCheckout', (t) => {
+      const tmp = mkTmp(t);
+      const main = fs.realpathSync.native(mkRepo(path.join(tmp, 'main')));
+      const wt = addWorktree(main, path.join(tmp, 'wt'), 'feat-a');
+      // `.planning` exists ONLY in the main checkout, as in the executor-worktree layout of #4885.
+      write(path.join(main, '.planning', 'config.json'), COMMIT_DOCS_ON);
+      const rel = path.join('.planning', 'phases', '01-foo', '01-UAT.md');
+      write(path.join(main, rel), [
+        '---', 'status: testing', 'phase: 01-foo', 'started: 2026-01-01T00:00:00Z', 'updated: 2026-01-01T00:00:00Z', '---', '',
+        '## Current Test', '', '### 2. Submit Button', 'expected: Submitting shows loading state', '',
+        '## Tests', '', '### 1. Login Form', 'expected: Form displays', 'result: pass', '',
+        '### 2. Submit Button', 'expected: Submitting shows loading state', 'result: pass', '',
+      ].join('\n'));
+      const sub = path.join(wt, 'src', 'deep');
+      fs.mkdirSync(sub, { recursive: true });
+      const before = commitCount(main);
+
+      const res = run(['query', 'uat.complete-session', rel], sub, tmp);
+
+      assert.equal(commitCount(main), before, `the main checkout must not receive the commit: ${JSON.stringify(res)}`);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      const o = outcome(res);
+      assert.equal(o.committed, false);
+      assert.equal(o.reason, 'outside_worktree');
+    });
+
+    test('uatCompleteSessionOutsideAGitRepositoryReportsTheRefusalAndExitsZero', (t) => {
+      const dir = mkTmp(t);
+      const rel = path.join('.planning', 'phases', '01-foo', '01-UAT.md');
+      write(path.join(dir, '.planning', 'config.json'), COMMIT_DOCS_ON);
+      write(path.join(dir, rel), [
+        '---', 'status: testing', 'phase: 01-foo', 'started: 2026-01-01T00:00:00Z', 'updated: 2026-01-01T00:00:00Z', '---', '',
+        '## Current Test', '', '### 2. Submit Button', 'expected: Submitting shows loading state', '',
+        '## Tests', '', '### 1. Login Form', 'expected: Form displays', 'result: pass', '',
+        '### 2. Submit Button', 'expected: Submitting shows loading state', 'result: pass', '',
+      ].join('\n'));
+
+      const res = run(['query', 'uat.complete-session', rel], dir, dir);
+
+      // The UAT file is written, so the session completed: the commit refusal is data, not a failure.
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      const o = outcome(res);
+      assert.equal(o.changed, true);
+      assert.equal(o.committed, false);
+      assert.equal(o.reason, 'not_git_repo');
+    });
+
+    test('uatCompleteSessionWithCommitDocsOffOutsideAGitRepositoryReportsTheSkipNotTheRefusal', (t) => {
+      const dir = mkTmp(t);
+      const rel = path.join('.planning', 'phases', '01-foo', '01-UAT.md');
+      write(path.join(dir, '.planning', 'config.json'), JSON.stringify({ commit_docs: false }));
+      write(path.join(dir, rel), [
+        '---', 'status: testing', 'phase: 01-foo', 'started: 2026-01-01T00:00:00Z', 'updated: 2026-01-01T00:00:00Z', '---', '',
+        '## Current Test', '', '### 2. Submit Button', 'expected: Submitting shows loading state', '',
+        '## Tests', '', '### 1. Login Form', 'expected: Form displays', 'result: pass', '',
+        '### 2. Submit Button', 'expected: Submitting shows loading state', 'result: pass', '',
+      ].join('\n'));
+
+      const res = run(['query', 'uat.complete-session', rel], dir, dir);
+
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      const o = outcome(res);
+      assert.equal(o.committed, false);
+      assert.equal(o.reason, 'skipped_commit_docs_false', 'the commit_docs skip wins over the refusal, as in cmdCommit');
+    });
+
+    test('commitToSubrepoFromAWorkspaceSubdirectoryCommitsInTheNamedSubRepo', (t) => {
+      const tmp = mkTmp(t);
+      const workspace = path.join(tmp, 'workspace');
+      write(path.join(workspace, '.planning', 'config.json'), JSON.stringify({ sub_repos: ['api'], commit_docs: true }));
+      const api = mkRepo(path.join(workspace, 'api'));
+      write(path.join(api, 'a.txt'), 'alpha\n');
+      const docs = path.join(workspace, 'docs');
+      fs.mkdirSync(docs, { recursive: true });
+      const before = commitCount(api);
+
+      const res = run(['commit-to-subrepo', 'add a', '--files', 'api/a.txt'], docs, tmp);
+
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(api), before + 1, 'the commit lands in <projectRoot>/api, found from a subdirectory of the workspace');
+      assert.equal(git(['log', '-1', '--format=%s'], api), 'add a');
+    });
+  });
+
+  describe('#6821 a project nested inside the worktree commits the same files git sees', () => {
+    // repo/sub holds `.planning`, so projectRoot (repo/sub) differs from worktreeRoot (repo).
+    function mkNested(t) {
+      const tmp = mkTmp(t);
+      const repo = fs.realpathSync.native(mkRepo(path.join(tmp, 'repo')));
+      write(path.join(repo, 'sub', '.planning', 'config.json'), COMMIT_DOCS_ON);
+      git(['add', '-A'], repo);
+      git(['commit', '-q', '-m', 'planning'], repo);
+      write(path.join(repo, 'sub', '.planning', 'STATE.md'), '# state\n');
+      return { tmp, repo, sub: path.join(repo, 'sub') };
+    }
+
+    test('commitWithExplicitFilesFromANestedProjectStagesTheProjectRelativePath', (t) => {
+      const { tmp, repo, sub } = mkNested(t);
+      const before = commitCount(repo);
+      const res = run(['commit', 'nested state', '--files', '.planning/STATE.md'], sub, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(repo), before + 1);
+      assert.match(git(['show', '--name-only', '--format=', 'HEAD'], repo), /^sub\/\.planning\/STATE\.md$/m);
+    });
+
+    test('commitWithTheDefaultScopeFromANestedProjectStagesItsPlanningDirectory', (t) => {
+      const { tmp, repo, sub } = mkNested(t);
+      const before = commitCount(repo);
+      const res = run(['commit', 'nested default scope'], sub, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(repo), before + 1, 'the default .planning/ scope resolves against the project root, not the worktree root');
+      assert.match(git(['show', '--name-only', '--format=', 'HEAD'], repo), /^sub\/\.planning\/STATE\.md$/m);
+    });
+
+    const skip = process.platform === 'win32' ? 'creating symlinks needs privileges on win32' : false;
+    test('commitThroughASymlinkedSpellingOfTheProjectRootStagesTheSameFiles', { skip }, (t) => {
+      const tmp = mkTmp(t);
+      const repo = fs.realpathSync.native(mkRepo(path.join(tmp, 'repo')));
+      write(path.join(repo, 'sub', '.planning', 'config.json'), COMMIT_DOCS_ON);
+      git(['add', '-A'], repo);
+      git(['commit', '-q', '-m', 'planning'], repo);
+      write(path.join(repo, 'sub', '.planning', 'STATE.md'), '# state\n');
+      const link = path.join(tmp, 'link');
+      fs.symlinkSync(repo, link, 'dir');
+      const before = commitCount(repo);
+      // --project-dir keeps the caller's spelling (through the link); worktreeRoot is canonical.
+      const res = run(['commit', 'via link', '--files', '.planning/STATE.md', '--project-dir', path.join(link, 'sub')], tmp, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(repo), before + 1);
+      assert.match(git(['show', '--name-only', '--format=', 'HEAD'], repo), /^sub\/\.planning\/STATE\.md$/m);
+    });
+  });
+
+  test('cmdCommitDocsGuardDisableRefusesAStringRootWithATypeError', () => {
+    assert.throws(
+      () => commands.cmdCommitDocsGuardDisable(path.join(os.tmpdir(), 'gsd-6821-not-a-context'), false),
+      (err) => err instanceof TypeError && /ProjectContext/.test(err.message),
+    );
+  });
+}

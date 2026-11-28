@@ -23,13 +23,7 @@ modifications and deletions are drift inside it.
 - Modified file inside a mapped directory (`modified`; a typechange counts here)
 - Deleted file inside a mapped directory (`deleted`; a rename's old path counts here, its new path as an addition)
 
-**Why the rule is inverted.** A new directory is by definition outside what
-the map describes, so an addition is drift where the map is silent. An edit or
-deletion can only matter where the map does speak: a map that names a
-directory describes its contents, and changing or removing them makes the
-description stale. Counting modifications outside mapped territory would flag
-every ordinary edit; counting only additions, as the gate did before #5134,
-never flagged a map that went stale through edits or deletions.
+**Why the rule is inverted.** An addition is drift where the map is silent; an edit or deletion only matters where the map speaks. The reasoning is in [Why the codebase drift gate is built the way it is](../explanation/codebase-drift-gate-design.md#why-the-rule-is-inverted).
 
 **Mapped territory is the whole map.** The gate reads all seven
 `.planning/codebase/*.md` documents, not only `STRUCTURE.md`. A directory is
