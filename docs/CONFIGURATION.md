@@ -251,17 +251,21 @@ API key fields accept a string value (the key itself). They can also be set to t
 
 ### Code-review CLI routing
 
-`review.models.<cli>` maps a reviewer flavor to a bare model id, which is injected into the CLI's own model flag (`--model`, `-m`, …) when the reviewer is invoked.
+`review.models.<key>` sets the model a reviewer lane uses: a CLI lane passes it to the CLI's own model flag (`--model`, `-m`), and a local-server lane sends it as the request's `model`. Every shipped key defaults to `""` (unset).
 
 The key suffix is **not** always the lane slug. Each lane declares the config key it reads, and one shipped lane already differs: the Antigravity lane's slug is `antigravity` but its key is `review.models.agy`, after the CLI's own name. Consult the table below rather than deriving the key from the flag.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `review.models.claude` | string | (session model) | Model id for Claude-flavored review. Defaults to the session model when unset |
-| `review.models.codex` | string | `null` | Model id for Codex review (injected into --model), e.g. `"gpt-5"` |
-| `review.models.opencode` | string | `null` | Model id for OpenCode review (injected into --model), e.g. `"claude-sonnet-4"` |
-| `review.models.cursor` | string | `null` | Model id for Cursor review (injected into --model), e.g. `"cursor-grok-4.5-high"` |
-| `review.models.kimi-code` | string | `null` | Model id for Kimi Code review (injected into -m) |
+| `review.models.claude` | string | `""` | Model id for Claude review (`--model`). Unset → the CLI's own default |
+| `review.models.codex` | string | `""` | Model id for Codex review (`--model`), e.g. `"gpt-5"`. Unset → the CLI's own default |
+| `review.models.opencode` | string | `""` | Model id for OpenCode review (`--model`), e.g. `"claude-sonnet-4"`. Unset → the CLI's own default |
+| `review.models.cursor` | string | `""` | Model id for Cursor review (`--model`), e.g. `"cursor-grok-4.5-high"`. Unset → the CLI's own default |
+| `review.models.kimi-code` | string | `""` | Model id for Kimi Code review (`-m`). Unset → the CLI's own default |
+| `review.models.agy` | string | `""` | Model id for the Antigravity lane (`--antigravity` / `--agy`; `--model`). The key suffix is the CLI's name, not the lane slug. Unset → the CLI's own default |
+| `review.models.ollama` | string | `""` | Model sent to the Ollama server. Unset → the server's first listed model (`data[0].id`) when usable, else the lane's fallback `llama3` |
+| `review.models.lm_studio` | string | `""` | Model sent to LM Studio. Unset → the server's first listed model (`data[0].id`) when usable, else the lane's fallback `local-model` |
+| `review.models.llama_cpp` | string | `""` | Model sent to llama.cpp. Unset → the server's first listed model (`data[0].id`) when usable, else the lane's fallback `local-model` |
 
 ### Resolved model recording (#2295)
 
@@ -287,11 +291,7 @@ config schema — `review.models.ollama` belongs to the `ollama` capability, `re
 to the same, and so on. Key names and existing `.planning/config.json` files are unchanged; only
 which schema validates them moved.
 
-One consequence follows: `<cli>` must now name a **declared reviewer lane**. Previously any slug
-matching `[a-zA-Z0-9_-]+` was accepted, so a typo or a key left over from a removed reviewer
-validated silently and was never read. Such a key is now rejected by `config-set`. The declared
-lanes are `claude`, `codex`, `opencode`, `cursor`, `agy` (the Antigravity lane — its key suffix is
-the CLI's own name, not the lane slug), `ollama`, `lm_studio` and `llama_cpp`.
+One consequence follows: `config-set` accepts a `review.models.<key>` only when a loaded capability declares that exact key. Previously any slug matching `[a-zA-Z0-9_-]+` was accepted, so a typo or a key left over from a removed reviewer validated silently and was never read; such a key is now rejected. The shipped model keys are `claude`, `codex`, `opencode`, `cursor`, `kimi-code`, `agy` (the Antigravity lane — its key suffix is the CLI's own name, not the lane slug), `ollama`, `lm_studio` and `llama_cpp`; an installed capability can declare its own. `qwen` and `coderabbit` declare none, so `review.models.qwen` is rejected.
 
 The same applies to `review.max_prompt_tokens_per_reviewer.<slug>` and
 `review.context_window_tokens.<slug>`. `review.max_prompt_tokens`
@@ -312,7 +312,7 @@ value), so raising `review.timeouts.antigravity` raises both bounds together —
 a reviewer lane being killed mid-run on a large plan set: `gsd config-set review.timeouts.antigravity 900`.
 Two lanes — `qwen` and `coderabbit` — take neither a model flag nor a host and do not federate a
 timeout key either, matching the same narrow key-ownership invariant their `review.models.*`/host
-keys already follow (each owns only its own prompt-budget key). `cursor` gained a model flag
+keys already follow (`coderabbit` owns only its prompt-budget key; `qwen` owns its prompt-budget and context-window keys). `cursor` gained a model flag
 (`review.models.cursor`, #3653) but still owns no federated timeout key of its own.
 
 ### Reviewer lane reasoning effort (`review.effort.*`, #4255)
@@ -1208,15 +1208,15 @@ Configure per-CLI model selection for `/gsd-review`. When set, overrides the CLI
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `review.models.claude` | string | (CLI default) | Model used when `--claude` reviewer is invoked |
-| `review.models.codex` | string | (CLI default) | Model used when `--codex` reviewer is invoked |
-| `review.models.opencode` | string | (CLI default) | Model used when `--opencode` reviewer is invoked |
-| `review.models.cursor` | string | (CLI default) | Model used when the `--cursor` reviewer is invoked (injected into `--model`) |
-| `review.models.agy` | string | (CLI default) | Model used when the `--antigravity` / `--agy` reviewer is invoked. The key suffix is the CLI's own name (`agy`), not the lane slug — the lane declares which key it reads, so the two need not match |
-| `review.models.kimi-code` | string | (CLI default) | Model used when the `--kimi-code` reviewer is invoked (injected into `-m`) |
-| `review.models.ollama` | string | (server default) | Model name passed to Ollama when `--ollama` reviewer is invoked. If unset, the first available model reported by the server is used (e.g. `llama3`). Set to a specific tag: `gsd config-set review.models.ollama codellama` |
-| `review.models.lm_studio` | string | (server default) | Model name passed to LM Studio when `--lm-studio` reviewer is invoked. If unset, the first available model reported by the server is used. |
-| `review.models.llama_cpp` | string | (server default) | Model name passed to llama.cpp when `--llama-cpp` reviewer is invoked. If unset, the first model reported by `/v1/models` is used. |
+| `review.models.claude` | string | `""` | Model used when `--claude` reviewer is invoked. Unset → the CLI's own default |
+| `review.models.codex` | string | `""` | Model used when `--codex` reviewer is invoked. Unset → the CLI's own default |
+| `review.models.opencode` | string | `""` | Model used when `--opencode` reviewer is invoked. Unset → the CLI's own default |
+| `review.models.cursor` | string | `""` | Model used when the `--cursor` reviewer is invoked (injected into `--model`). Unset → the CLI's own default |
+| `review.models.agy` | string | `""` | Model used when the `--antigravity` / `--agy` reviewer is invoked. The key suffix is the CLI's own name (`agy`), not the lane slug — the lane declares which key it reads, so the two need not match. Unset → the CLI's own default |
+| `review.models.kimi-code` | string | `""` | Model used when the `--kimi-code` reviewer is invoked (injected into `-m`). Unset → the CLI's own default |
+| `review.models.ollama` | string | `""` | Model name passed to Ollama when `--ollama` reviewer is invoked. Unset → the server's first listed model (`data[0].id`) when usable, else the lane's fallback `llama3`. Set to a specific tag: `gsd config-set review.models.ollama codellama` |
+| `review.models.lm_studio` | string | `""` | Model name passed to LM Studio when `--lm-studio` reviewer is invoked. Unset → the server's first listed model (`data[0].id`) when usable, else the lane's fallback `local-model` |
+| `review.models.llama_cpp` | string | `""` | Model name passed to llama.cpp when `--llama-cpp` reviewer is invoked. Unset → the server's first listed model (`data[0].id`) when usable, else the lane's fallback `local-model` |
 | `review.default_reviewers` | string[] \| null | (all detected reviewers) | Default reviewer subset for no-flag `/gsd-review`. Example: `["codex","claude"]`. May include configured `review.reviewer_instances` names. Explicit flags and `--all` override this setting. |
 | `review.max_prompt_tokens` | number\|null | null | Prompt cap, in estimated tokens, for every reviewer lane whose own `review.max_prompt_tokens_per_reviewer.<slug>` is unset. A lane whose prompt is over its cap is refused, not trimmed. `0` turns the cap off for every lane that inherits it, including the default derived from the lane's context window. null = no global cap, so each lane falls back to its context-window default. |
 | `review.max_prompt_tokens_per_reviewer` | object | {} | Per-lane prompt caps. Keys are reviewer slugs; every declared reviewer lane accepts one (`claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). `-1` (the default) means unset: the lane inherits `review.max_prompt_tokens`. `0` turns the cap off for that lane. Any other number is that lane's own cap. |
@@ -1239,7 +1239,7 @@ Every prompt-fed reviewer lane has a prompt cap. Each lane resolves its cap in t
 
 When the review prompt is larger than the cap, **the lane does not run.** It reports the reason `prompt_exceeds_context` and writes a stub that starts `<slug> review did not run: prompt exceeds this lane's context cap`. The stub names the estimated size, the cap, where the cap came from, and the key to change. REVIEWS.md lists the lane under `refused_reviewers` in its frontmatter. If every selected lane is refused, no REVIEWS.md is written. The prompt is never trimmed. A trimmed prompt produced a review that read exactly like a clean pass on material the model never saw, so a refusal you can act on is the safer failure.
 
-Prompt size is an estimate with 35% headroom (see [Why the lane budget is an estimate](explanation/cross-ai-review-decisions.md#why-the-lane-budget-is-an-estimate)). The declared windows are the smallest that each CLI's default model can resolve to. If your plan or pinned model has a larger window, raise `review.context_window_tokens.<slug>`. To see each lane's resolved cap and its source, run `gsd-tools review-lane plan --selected <slug> --json` and read `promptBudget` and `promptCapSource`. To act on a refused lane, see [Fix a reviewer lane that refused an oversized prompt](how-to/fix-a-refused-reviewer-lane.md).
+Prompt size is an estimate with 35% headroom (see [Why the lane budget is an estimate](explanation/cross-ai-review-decisions.md#why-the-lane-budget-is-an-estimate)). The declared windows are the smallest that each CLI's default model can resolve to. If your plan or pinned model has a larger window, raise `review.context_window_tokens.<slug>`. To see each lane's resolved cap and its source, run `gsd-tools review-lane plan --selected <slug>` (it prints a JSON array, one row per lane) and read `promptBudget` and `promptCapSource`. To act on a refused lane, see [Fix a reviewer lane that refused an oversized prompt](how-to/fix-a-refused-reviewer-lane.md).
 
 ### Example
 
@@ -1247,14 +1247,14 @@ Prompt size is an estimate with 35% headroom (see [Why the lane budget is an est
 {
   "review": {
     "models": {
-      "gemini": "gemini-2.5-pro",
-      "qwen": "qwen-max"
+      "codex": "gpt-5",
+      "ollama": "codellama"
     }
   }
 }
 ```
 
-Falls back to each CLI's configured default when a key is absent. Added in v1.35.0 (#1849).
+An unset key leaves the choice to the lane, as the table above describes. Added in v1.35.0 (#1849).
 
 ---
 
