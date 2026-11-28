@@ -352,6 +352,7 @@ module.exports = {
   "tests/vscode-browser-no-node-api.test.cjs",
   "tests/windows-powershell-hook-runner.test.cjs",
   "tests/windsurf-hooks-bridge.test.cjs",
+  "tests/workflow-audit-milestone-status.process.test.cjs",
   "tests/workflow-guard.test.cjs",
   "tests/workflow-shell-pinning.test.cjs",
   "tests/workstream-inventory.test.cjs",
