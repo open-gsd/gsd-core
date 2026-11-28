@@ -5037,7 +5037,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
 
     test('in process: a case-block script a shell reads from a heredoc is first denied at 26,539 characters', () => {
-      // One of the shapes behind the user guide's examples. Every pass re-tokenizes the
+      // One of the shapes behind the security-hooks reference's examples. Every pass re-tokenizes the
       // script, so with a reading trigger (the `$((` beside a quote) each
       // character is charged several separators, and the separator budget stops
       // it before the character budget would. The `$((` also starts the grammar
@@ -5058,7 +5058,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
 
     test('in process: a strict-mode script inside `$( )` is first denied at 3,031 characters', () => {
-      // One of the shapes behind the user guide's examples. A body nested one level deeper is
+      // One of the shapes behind the security-hooks reference's examples. A body nested one level deeper is
       // read again at each outer pass, so a strict-mode script of `(( n += K ))`
       // lines given to `bash <<'EOF'` inside `$( )` is charged about 130
       // separators a character, and the `$( )` adds the grammar scan (#5267):
@@ -5106,7 +5106,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
 
     test('in process: a commit message holding a reading trigger is first denied at 52,445 characters', () => {
-      // The user guide's "about 52,000": two levels, eight scans each, #5513's heredoc
+      // The security-hooks reference's "about 52,000": two levels, eight scans each, #5513's heredoc
       // passes, and the grammar scan the `$( )` starts (#5267) put main()'s
       // boundary (checkBashCommand) at 52,445 characters, a message of 52,394, against
       // 69,921 without that scan.
