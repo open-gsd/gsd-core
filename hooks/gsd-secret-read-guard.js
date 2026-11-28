@@ -79,7 +79,7 @@
 //   (`echo cat .env | bash`) or a bare `cat` printing a heredoc / here-string
 //   (`cat <<'EOF' | bash`, `bash <(cat <<< 'cat .env')`, #6182); `eval` scans
 //   its joined operands; `source`/`.` scans a `<( )` operand; and `find … | xargs cat` infers the upstream
-//   segment's names as the sub-command's read operands.
+//   segment's names as the sub-command's read operands, as `xargs cat <<< .env` does a here-string's words.
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -128,18 +128,15 @@
 //   `watch -x env -S 'cat .env'`), though the secret-read scan does read a
 //   shell script there (#6114; the debugger-spawn check reads none of these
 //   sub-commands, #6147); the sub-command's own words are still checked as
-//   operands. A shell reserved word before a command (`if`,
+//   operands. An `env -S` string behind a shell reserved word (`if`,
 //   `then`, `elif`, `else`,
 //   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
-//   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
-//   wrapper walk, a shell script, an `env -S` string and the debugger-spawn
-//   check behind it are not reached (`if true; then env -S 'cat .env'; fi`,
+//   `nocorrect`, `noglob` and `-`) can go unread
+//   (`if true; then env -S 'cat .env'; fi`,
 //   `for i in 1; do env -S 'cat .env'; done`, `! env -S 'cat .env'`, which
 //   bash 5.2 and dash 0.5.12 run; `coproc env -S 'cat .env'`, which bash 5.2
 //   runs; `repeat 1 env -S 'cat .env'` and `noglob env -S 'cat .env'`, which
-//   zsh 5.9 runs; `if true; then sh -c 'cat .env'; fi`;
-//   `if true; then claude --agent gsd-debugger -p x; fi`); the command's own
-//   operands are still checked. `env -S`
+//   zsh 5.9 runs); the command's own operands are still checked. `env -S`
 //   strings are
 //   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
 //   backslash before a blank is that blank) and uutils env's (a
@@ -230,6 +227,15 @@
 //        overflow the parser's stack, or one that needs more than the scan's
 //        work budget, is denied as `command-too-complex` (#5255), because
 //        failing open there allows a read the scan had not yet reached.
+//        Any other error in one of the readings that run beside the plain
+//        one — the dollar-quoting readings (#5255) — is a bug, and the hook
+//        fails open on it as on a crash: that reading's denials are lost, the
+//        other readings' stand, and when nothing denies the command the hook
+//        writes one `reading-failed` line on stderr (DIAGNOSTIC.READING_FAILED).
+//        An error in a scan of the further reading (#5779) is taken as one in
+//        a scan of an `env -S` reading (#5514) is: that scan finds nothing,
+//        the scans after it still run, and a command nothing denies gets the
+//        host's crash policy.
 //        A host may opt in to failing closed instead with
 //        GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): a hook error, a shell
 //        reading that fails on a command no scan blocked (its
@@ -394,7 +400,7 @@ function lineIsReadOnlyUnder(command, reading) {
 function isExemptSecret(tok) {
   if (exemption.root === null) return false;
   if (exemption.bashLine !== null) {
-    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
+    if (exemption.bashReadOnly === null) exemption.bashReadOnly = underPlainReading(() => lineIsReadOnly(exemption.bashLine));
     if (exemption.bashReadOnly !== true) return false;
   }
   try {
@@ -449,6 +455,77 @@ const WRAPPERS = new Map([
   ['flock', { short: 'wE', long: ['--timeout', '--wait', '--conflict-exit-code'], operands: 1 }],
   ['exec', { short: 'a' }],
 ]);
+
+// A further reading of a segment's command (#5779). The WRAPPERS walk stops at a
+// word it does not know and takes it for the command, so `then curl …`, `! bash
+// -c …` and `time ! cat …` hide the command behind it. This reading walks past
+// those words, as a scan of its own (furtherReading) after the plain scans found
+// nothing. It only adds, so what the plain scans deny stays denied (`if [ -f .env ];
+// then`, a script named `repeat`).
+//   keyword  a shell keyword, so a keyword or an assignment may follow (`time ! cmd`)
+//   count    the next word is a count, whatever it looks like (`repeat -1+2 cmd`)
+//   assigns  the wrapper's rule for a word that sets a variable: env takes any word
+//            holding `=`, sudo's parse_args one not starting `/` or `=`; doas none
+//   dashDashEndsAssigns  a word right after `--` is no assignment: sudo's
+//            `got_end_of_args` tests whether the previous word is `--`, so
+//            `sudo -- A=b cmd` runs a program named `A=b`. env still assigns there
+//   dash     a lone `-` is an option (env's `-i`)
+const FURTHER_WRAPPERS = new Map([
+  ...WRAPPERS,
+  ['sudo', {
+    ...WRAPPERS.get('sudo'),
+    assigns: /^[^/=][^=]*=/,
+    dashDashEndsAssigns: true,
+  }],
+  ['env', { ...WRAPPERS.get('env'), assigns: /=/, dash: true }],
+  ['builtin', {}],
+  ['noglob', {}],
+  ['nocorrect', { keyword: true }],
+  ['-', {}],
+  ['repeat', { count: true, keyword: true }],
+  ['time', { ...WRAPPERS.get('time'), keyword: true }],
+]);
+// Homebrew's coreutils, findutils and gnu-time install these under a `g` name.
+for (const name of ['env', 'nice', 'nohup', 'timeout', 'stdbuf']) {
+  FURTHER_WRAPPERS.set(`g${name}`, FURTHER_WRAPPERS.get(name));
+}
+FURTHER_WRAPPERS.set('gtime', WRAPPERS.get('time')); // a program, not a keyword
+
+// Shell reserved words a command can follow in its segment: `then cmd`,
+// `do cmd`, `if cmd`, `! cmd`, `coproc cmd`. A word the tokenizer saw quoted is
+// a command name.
+const SHELL_COMMAND_KEYWORDS = new Set(['!', 'if', 'elif', 'else', 'then', 'while', 'until', 'do', 'coproc']);
+// Words after which bash still takes an assignment in front of the command.
+const ASSIGNMENT_PREFIX_WORDS = new Set([...SHELL_COMMAND_KEYWORDS, 'time']);
+// Loop heads a body can follow with no separator: `for i do cmd`, and zsh's
+// `for a b do cmd`. The first word is the variable, whatever it spells; an `in`
+// after it starts a word list, which only a separator ends.
+const LOOP_HEADS = new Set(['for', 'select']);
+
+let furtherReading = false;
+// The further reading runs once without bash's subscript joins (`a[x y]=1` as
+// one word) and, only when that pass allowed and saw a place a join could
+// start (joinCandidate), once more with them. A join swallows text into one
+// word, so it is kept out of the pass whose denials it could otherwise lose.
+let subscriptJoins = false;
+let joinCandidate = false;
+
+// Runs `read` with this file's further-reading state off, then restores it.
+// #4432 decides once per command whether every command on the line is a
+// read-only reader (`exemption.bashReadOnly`), on the first secret-named token
+// it meets. When that token is first met in the further reading, the decision
+// must still be the plain reading's, or this reading could grant an exemption
+// the plain one withholds.
+function underPlainReading(read) {
+  const saved = [furtherReading, subscriptJoins, joinCandidate];
+  furtherReading = false;
+  subscriptJoins = false;
+  try {
+    return read();
+  } finally {
+    [furtherReading, subscriptJoins, joinCandidate] = saved;
+  }
+}
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -546,8 +623,9 @@ const SHELL_VALUE_FLAGS = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-f
 
 // Value-taking `xargs` flags (long `--flag=value` forms are single words).
 // `-a`/`--arg-file` additionally replaces stdin, so it suppresses the pipeline
-// inference below.
-const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-i', '-L', '-l', '-P', '-s', '-d', '-E', '-a']);
+// inference below. `-i` and `-l` are not here: GNU xargs takes their value only
+// attached (`-iR`, `-l1`), so the word after a bare one is the command.
+const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-L', '-P', '-s', '-d', '-E', '-a']);
 
 // Probe names a Grep glob alternative is matched against. `.env` and
 // `.secrets` are the exact names; the rest stand in for the open-ended
@@ -1293,8 +1371,9 @@ const ENV_S_READINGS = Object.freeze([
 ].map((r) => Object.freeze(r)));
 
 // The `env -S` reading the scans apply (named apart from the `reading`
-// parameter the #5255 scanners take, which is a shell's): set only by the Bash
-// path's loop over ENV_S_READINGS, and the GNU split until then. What the scans
+// parameter the #5255 scanners take, which is a shell's): set by the Bash
+// path's loop over ENV_S_READINGS and by scanFurtherReading (ENV_S_READINGS[0],
+// then the GNU split again), and the GNU split until then. What the scans
 // report back:
 //  - splitSeen: a scan met a split option, so the readings that run on 'split' run.
 //  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
@@ -1675,6 +1754,30 @@ function tokenize(str, reading) {
   let orphanQueue = [];
   let expectTag = null;
   let unreadable = null;
+  // Under the further reading only: whether the next word stands where bash
+  // takes an assignment, which is where bash reads a subscript whole
+  // (subscriptClose): a command's start, after a reserved word, `time -p` or an
+  // assignment, and after a redirection only while nothing but redirections
+  // came before it (bash's PST_REDIRLIST: `>f a[x y]=1 cmd` joins, `A=b >f
+  // a[x y]=1 cmd` runs `a[x`). A reserved word counts only before any
+  // assignment or redirection (`x=1 if …` runs a program named `if`). An
+  // unclosed subscript ends bash's parse.
+  let atCommandStart = true;
+  let onlyRedirects = true;
+  let reservedOk = true;
+  let redirectTarget = false;
+  // The rest of the further reading's state, in one object a closure below
+  // holds, so it lives outside tokenize's stack frame: `afterTime` is 1 after
+  // `time` and 2 after `time -p`; `closes` holds the `)` closing each `((`'s
+  // inner paren (dparenClose); `subscriptsOpen` turns false at an unclosed
+  // subscript, which ends bash's parse; `close` is scratch for the subscript
+  // just read.
+  const further = {
+    afterTime: 0,
+    closes: new Map(),
+    subscriptsOpen: true,
+    close: -1,
+  };
   orphanHeredocs = [];
 
   const flush = () => {
@@ -1689,10 +1792,35 @@ function tokenize(str, reading) {
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
       tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
+      if (furtherReading) noteCommandPosition();
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
+  };
+  // The word in `buf`, just pushed, moves the further reading's command position.
+  const noteCommandPosition = () => {
+    const wasAfterTime = further.afterTime;
+    further.afterTime = 0;
+    if (redirectTarget) {
+      redirectTarget = false;
+      reservedOk = false;
+      if (!onlyRedirects) atCommandStart = false;
+    } else if (!atCommandStart) {
+      // the command word is behind us
+    } else if (reservedOk && quoted === 'none' && ASSIGNMENT_PREFIX_WORDS.has(buf)) {
+      onlyRedirects = true;
+      further.afterTime = buf === 'time' ? 1 : 0;
+    } else if (wasAfterTime === 1 && quoted === 'none' && buf === '-p') {
+      further.afterTime = 2;
+    } else if (wasAfterTime !== 0 && quoted === 'none' && buf === '--') {
+      // `time -p --` and `time --` still take a command
+    } else if (FURTHER_ASSIGNMENT_RE.test(buf)) {
+      onlyRedirects = false;
+      reservedOk = false;
+    } else {
+      atCommandStart = false;
+    }
   };
   // #6438: `{` and `}` are reserved words, which open or close a group only where a command may start. Anywhere else they
   // are ordinary words (`printf '%s|' cat { x }` prints `cat|{|x|}|`; `cat { .env` runs cat on `{` and `.env`), so the word
@@ -1754,9 +1882,15 @@ function tokenize(str, reading) {
     flush();
     tokens.push({ kind: 'sep', text, quoted: 'none', seg });
     seg++;
+    atCommandStart = true;
+    onlyRedirects = true;
+    reservedOk = true;
+    further.afterTime = 0;
+    redirectTarget = false;
   };
   const op = (text, read, dup) => {
     tokens.push({ kind: 'op', text, quoted: 'none', seg, read, dup });
+    if (!dup) redirectTarget = true;
   };
 
   let i = 0;
@@ -1977,7 +2111,13 @@ function tokenize(str, reading) {
 
     if (ch === '<' || ch === '>' || (ch === '&' && str[i + 1] === '>')) {
       let fd = '';
-      if (hasWord && quoted === 'none' && /^\d+$/.test(buf)) {
+      // bash also takes a named fd, `{fd}>file`, under the further reading, and
+      // only right before `<` or `>` (`{fd}&>f` keeps `{fd}` a word). bash tests
+      // the raw word, so a quote, a backslash or a substitution in it (`{f\d}`)
+      // leaves a word.
+      if (hasWord && quoted === 'none'
+          && (/^\d+$/.test(buf)
+            || (furtherReading && ch !== '&' && isNamedFd(buf) && isRawWordBefore(str, i, buf)))) {
         fd = buf;
         buf = '';
         hasWord = false;
@@ -2047,6 +2187,14 @@ function tokenize(str, reading) {
     if (ch === '(' || ch === ')') {
       sep(ch);
       i++;
+      // `((` opens arithmetic, where bash reads no assignment, when a `))`
+      // closes it; otherwise bash reads two subshells (parse_dparen), and a
+      // command starts after them. The tokens are the same two seps either way.
+      if (ch === '(' && furtherReading && str[i] === '(') {
+        sep('(');
+        i++;
+        if (str[dparenCloseFor(str, i, further) + 1] === ')') atCommandStart = false;
+      }
       continue;
     }
     // A brace where a heredoc tag is due is the tag (`<<}; cat .env` is tag `}`,
@@ -2066,12 +2214,262 @@ function tokenize(str, reading) {
       // else: a brace among a command's arguments is an ordinary word (#6438), read below like any other.
     }
 
+    // bash's token_is_ident reads the RAW word: a name spelled through a quote,
+    // a backslash or a substitution (`\a[`, `$(x)a[`) takes no subscript.
+    if (ch === '[' && furtherReading && atCommandStart && !redirectTarget && further.subscriptsOpen
+        && quoted === 'none' && isRawNameBefore(str, i, buf.length)) {
+      if (!subscriptJoins) {
+        joinCandidate = true;
+      } else {
+        further.close = subscriptClose(str, i);
+        if (further.close === -1) {
+          further.subscriptsOpen = false;
+        } else {
+          buf += str.slice(i, further.close + 1);
+          i = further.close + 1;
+          continue;
+        }
+      }
+    }
+
     hasWord = true;
     buf += ch;
     i++;
   }
   flush();
   return { tokens, nested, unreadable };
+}
+
+// Whether a word is a named fd to bash: `{name}`, or `{name[sub]}` with a
+// non-empty subscript whose `]` is the last one (valid_array_reference), so
+// `{a[]}`, `{a[0]]}` and `{a[0][1]}` are words.
+function isNamedFd(word) {
+  const m = /^\{([A-Za-z_][A-Za-z0-9_]*)(\[[\s\S]*\])?\}$/.exec(word);
+  if (!m) return false;
+  if (!m[2]) return true;
+  const sub = m[2];
+  if (sub.length < 3) return false;
+  let depth = 0;
+  for (let k = 0; k < sub.length; k++) {
+    if (sub[k] === '[') depth++;
+    else if (sub[k] === ']' && --depth === 0) return k === sub.length - 1;
+  }
+  return false;
+}
+
+// What ends a raw word to bash: a blank (space or tab), a newline, or one of
+// `;&|(<>`. Not every `\s`: a carriage return is part of a word to bash, so in
+// `env -u\r{fd}>f` the word is `-u\r{fd}` and there is no named fd.
+const RAW_WORD_BREAK_RE = /[ \t\n;&|(<>]/;
+
+// Whether `name` is the whole raw word in front of `i`: the same characters,
+// with any backslash-newline (removed before bash reads a word; the backslash
+// itself unescaped) skipped, and starting the word (at the start, or after a
+// RAW_WORD_BREAK_RE character).
+function isRawWordBefore(str, i, name) {
+  let k = i;
+  let n = name.length;
+  const continuation = () => continuationBefore(str, k);
+  while (n > 0) {
+    if (continuation()) { k -= 2; continue; }
+    if (k < 1 || str[k - 1] !== name[n - 1]) return false;
+    k--;
+    n--;
+  }
+  while (continuation()) k -= 2;
+  return k === 0 || RAW_WORD_BREAK_RE.test(str[k - 1]);
+}
+
+// Whether a backslash-newline whose backslash is itself unescaped ends at `k`.
+function continuationBefore(str, k) {
+  if (k < 2 || str[k - 1] !== '\n') return false;
+  let j = k - 2;
+  while (j >= 0 && str[j] === '\\') j--;
+  return (k - 2 - j) % 2 === 1;
+}
+
+// Whether the raw word in front of `i` is a shell name `len` characters long,
+// any backslash-newline skipped: bash's token_is_ident reads the raw word, so
+// a name spelled through a quote, a backslash or a substitution is none. The
+// scan goes back over name characters only, so a run of `[` costs one each.
+function isRawNameBefore(str, i, len) {
+  let k = i;
+  let n = 0;
+  let first = '';
+  for (;;) {
+    if (continuationBefore(str, k)) { k -= 2; continue; }
+    if (k < 1 || !/[A-Za-z0-9_]/.test(str[k - 1])) break;
+    if (++n > len) return false;
+    first = str[--k];
+  }
+  return n === len && n > 0 && !/[0-9]/.test(first)
+    && (k === 0 || RAW_WORD_BREAK_RE.test(str[k - 1]));
+}
+
+// Index of the `)` closing the paren opened just before `i`, as bash's
+// parse_matched_pair reads a `((` body (parse_dparen): quotes hide a paren, `$'…'`
+// and backquotes honour a backslash, and no heredoc body is skipped; str.length
+// when none does. It records in `dparen.closes`, keyed by the index after each
+// nested `(`, the close of every paren it passes, so a command's `((` cost one scan.
+// A scan that meets an unclosed quote walks to the end and records nothing, so each
+// later `((` walks again (a run of `((x "${"(`: 139 s at 990 KB). So each scan
+// charges its distance to the further reading's reader budget (chargeReader), and
+// a command that spends it is denied as `command-too-complex` (findSecretRead).
+// The further reading's scanners (dparenClose, subscriptClose) can reach this
+// inside a `${…}` the plain tokenizer skips, and it recurses once per `"$(`, so a
+// long run overflows the stack in that reading alone. The RangeError is not caught
+// here: either guess at an unknown close can change how the rest of the line
+// reads, so the line is denied as unfinished instead.
+
+// The tokenizer's further-reading lookup, kept out of tokenize so its stack
+// frame stays small (see curlOperandOpensSecret).
+function dparenCloseFor(str, i, dparen) {
+  let close = dparen.closes.get(i);
+  if (close === undefined) close = dparenClose(str, i, dparen);
+  return close;
+}
+
+function dparenClose(str, i, dparen) {
+  const start = i;
+  const opens = [];
+  let close = str.length;
+  while (i < str.length) {
+    const c = str[i];
+    if (c === '\\') { i += 2; continue; }
+    let end = -2;
+    if (c === "'") end = str.indexOf("'", i + 1);
+    else if (c === '$' && str[i + 1] === "'") end = ansiCQuoteClose(str, i + 2);
+    else if (c === '"') end = doubleQuoteClose(str, i + 1);
+    else if (c === '`') end = backquoteClose(str, i + 1);
+    if (end !== -2) {
+      if (end === -1) break;
+      i = end + 1;
+      continue;
+    }
+    if (c === '(') {
+      opens.push(i + 1);
+    } else if (c === ')') {
+      if (opens.length === 0) { close = i; break; }
+      dparen.closes.set(opens.pop(), i);
+    }
+    i++;
+  }
+  chargeReader(close - start);
+  for (const o of opens) dparen.closes.set(o, str.length);
+  return close;
+}
+
+// Index of the backquote closing a backquote span whose body starts at `k`,
+// or -1: a backslash escapes the next character, a backquote included.
+function backquoteClose(str, k) {
+  for (; k < str.length; k++) {
+    if (str[k] === '\\') k++;
+    else if (str[k] === '`') return k;
+  }
+  return -1;
+}
+
+// Index of the `'` closing an ANSI-C quote `$'…'` whose body starts at `k`, or
+// -1: a backslash escapes the next character, `\'` included.
+function ansiCQuoteClose(str, k) {
+  for (; k < str.length; k++) {
+    if (str[k] === '\\') k++;
+    else if (str[k] === "'") return k;
+  }
+  return -1;
+}
+
+// Index of the `]` that closes the subscript bash reads from the `[` at `i`
+// (`a[x y]=1 cmd` is one word to bash), or -1 when none does, which bash
+// reports as an unexpected end of input. Quotes (`$'…'` included), a
+// backslash, `$(…)`, `${…}` and backquotes hide a `]`; a nested `[` takes its own.
+function subscriptClose(str, i) {
+  let depth = 0;
+  for (let k = i; k < str.length; k++) {
+    const c = str[k];
+    if (c === '\\') {
+      k++;
+    } else if (c === '$' && str[k + 1] === "'") {
+      k = ansiCQuoteClose(str, k + 2);
+      if (k === -1) return -1;
+    } else if (c === "'") {
+      k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '`') {
+      k = backquoteClose(str, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '"') {
+      k = doubleQuoteClose(str, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '$' && str[k + 1] === '(') {
+      k = findParenClose(str, k + 2);
+      if (k >= str.length) return -1;
+    } else if (c === '$' && str[k + 1] === '{') {
+      k = braceClose(str, k + 2);
+      if (k === -1) return -1;
+    } else if (c === '[') {
+      depth++;
+    } else if (c === ']' && --depth === 0) {
+      return k;
+    }
+  }
+  return -1;
+}
+
+// Index of the `}` closing a `${` opened just before `k`, or -1. Quotes, a
+// backslash and `$(…)` hide a `}`; a nested `${` takes its own.
+function braceClose(str, k) {
+  return quotedSpanClose(str, k, '}');
+}
+
+// Index of the `"` closing a double-quoted span that starts at `k`, or -1.
+// `$(…)`, `${…}` and backquotes hide a `"`.
+function doubleQuoteClose(str, k) {
+  return quotedSpanClose(str, k, '"');
+}
+
+// The one loop behind braceClose and doubleQuoteClose: `open` holds the spans
+// still open, innermost last, each as the character that closes it. Inside
+// `"…"` a `'` is literal; inside `${…}` it quotes, and a `"` opens a span of
+// its own. An explicit stack, so a long run of `"${` costs no call depth.
+function quotedSpanClose(str, k, first) {
+  const open = [first];
+  while (k < str.length) {
+    const c = str[k];
+    const inBrace = open[open.length - 1] === '}';
+    if (c === open[open.length - 1]) {
+      open.pop();
+      if (open.length === 0) return k;
+      k++;
+    } else if (c === '\\') {
+      k += 2;
+    } else if (c === '$' && str[k + 1] === '(') {
+      k = findParenClose(str, k + 2);
+      if (k >= str.length) return -1;
+      k++;
+    } else if (c === '$' && str[k + 1] === '{') {
+      open.push('}');
+      k += 2;
+    } else if (c === '`') {
+      k = backquoteClose(str, k + 1);
+      if (k === -1) return -1;
+      k++;
+    } else if (inBrace && c === '$' && str[k + 1] === "'") {
+      k = ansiCQuoteClose(str, k + 2);
+      if (k === -1) return -1;
+      k++;
+    } else if (inBrace && c === "'") {
+      k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+      k++;
+    } else if (inBrace && c === '"') {
+      open.push('"');
+      k++;
+    } else {
+      k++;
+    }
+  }
+  return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -2420,6 +2818,564 @@ function operandWordNamesSecret(text) {
   return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
+const CURL_COMMANDS = new Set(['curl', 'curl.exe']);
+
+// curl's two blank sets: ISSPACE, which its -F parser skips and trims before
+// 8.13, and ISBLANK, from 8.13.
+function isCurlSpace(ch) {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\v' || ch === '\f';
+}
+
+function isCurlBlank(ch) {
+  return ch === ' ' || ch === '\t';
+}
+
+// namesSecret judges only a name's last path segment (and the part of it after
+// a `:`), so the segment is cut out here first: one pass, where lastSegment's
+// trailing-separator regex backtracks on a long run of separators. A name it
+// judges secret is kept in curlOpened, so a block reports the file curl opens
+// rather than the option word that holds it (`.env`, not `-d@.env`).
+function curlNameIsSecret(name) {
+  let end = name.length;
+  while (end > 0 && (name[end - 1] === '/' || name[end - 1] === '\\')) end--;
+  let seg = end;
+  while (seg > 0 && name[seg - 1] !== '/' && name[seg - 1] !== '\\') seg--;
+  const last = name.slice(seg, end);
+  if (!last.includes('.') || !namesSecret(last)) return false;
+  curlOpened = name;
+  return true;
+}
+
+// The secret name the curl reading last found (curlNameIsSecret). Every curl
+// reader returns as soon as curlNameIsSecret says yes, so right after a reader
+// returns true this is the name that decided it.
+let curlOpened = '';
+
+// The grammars curl's -F parser (src/tool_formparse.c) has shipped. They open
+// different files for some values, so a value is judged under each:
+//   through 8.11  ISSPACE blanks; type= split by sscanf("%127[^/ ]/%127[^;, \n]")
+//   8.12          ISSPACE blanks; type= ends at a MIME tspecial
+//   from 8.13     ISBLANK blanks; type= ends at a MIME tspecial
+// Through 8.20 a file list goes on after any character a part ends at; from
+// 8.21 only after `,`, which opens a subset of what 8.13 opens.
+const CURL_FORM_GRAMMARS = [
+  { blank: isCurlSpace, sscanfType: true },
+  { blank: isCurlSpace, sscanfType: false },
+  { blank: isCurlBlank, sscanfType: false },
+];
+const CURL_TYPE_TSPECIALS = '()<>@,;:\\"[]?=\r\n ';
+
+// For each index i of `text`, the index of the first quote at or after i that
+// closes a quoted word, or -1. curl's get_param_word skips `\\` and `\"` pairs,
+// so a quote closes a word when the run of backslashes before it is even. A
+// scan always enters that run from its start, so where it began does not
+// matter, and one pass serves every word: no quote is scanned for twice.
+function curlQuoteClosers(text) {
+  const n = text.length;
+  const next = new Int32Array(n + 1);
+  next[n] = -1;
+  let run = 0;
+  const closes = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    if (text[i] === '"' && run % 2 === 0) closes[i] = 1;
+    run = text[i] === '\\' ? run + 1 : 0;
+  }
+  for (let i = n - 1; i >= 0; i--) next[i] = closes[i] ? i : next[i + 1];
+  return next;
+}
+
+// Whether curl's -F parser, under grammar `g`, opens a secret file for the
+// value `text` (formparse, get_param_part and get_param_word, ported): a file
+// of an `@` list, a `<` file, or a `headers=@` / `headers=<` file. Each
+// character is read a bounded number of times.
+function curlFormOpensSecret(text, g, closers) {
+  const n = text.length;
+  const at = (k) => (k < n ? text[k] : '');
+  // get_param_word: [value, index it stops at, quoted]. A word starting with
+  // `"` that a later quote closes is quoted (its trailing data, up to `;` or
+  // the end character, is skipped); otherwise it runs to `;` or the end
+  // character, quote and all.
+  function word(p, endchar) {
+    if (text[p] === '"' && closers && closers[p + 1] !== -1) {
+      const close = closers[p + 1];
+      let k = close + 1;
+      while (k < n && text[k] !== ';' && text[k] !== endchar) k++;
+      return [text.slice(p + 1, close).replace(/\\([\\"])/g, '$1'), k, true];
+    }
+    let k = p;
+    while (k < n && text[k] !== ';' && text[k] !== endchar) k++;
+    return [text.slice(p, k), k, false];
+  }
+  // An unquoted word loses its trailing blanks.
+  function value(w) {
+    if (w[2]) return w[0];
+    let e = w[0].length;
+    while (e > 0 && g.blank(w[0][e - 1])) e--;
+    return w[0].slice(0, e);
+  }
+  function skipBlanks(p) {
+    while (p < n && g.blank(text[p])) p++;
+    return p;
+  }
+  function hasPrefix(p, s) {
+    return text.slice(p, p + s.length).toLowerCase() === s;
+  }
+  // get_param_part: the part's data word, then its `;` parameters. Returns
+  // { data, sep, end }, { hit } when a headers file is a secret, or { failed }
+  // when curl refuses the part (no file of it is opened).
+  function part(p, endchar) {
+    const d = word(skipBlanks(p), endchar);
+    const data = value(d);
+    p = d[1];
+    let sep = at(p);
+    let inType = false;
+    while (sep === ';') {
+      p = skipBlanks(p + 1);
+      if (!inType && hasPrefix(p, 'type=')) {
+        p = skipBlanks(p + 5);
+        if (g.sscanfType) {
+          const major = p;
+          while (p < n && p - major < 127 && text[p] !== '/' && text[p] !== ' ') p++;
+          if (p === major || text[p] !== '/') return { failed: true };
+          // The minor's 127-character cut moves nothing: curl goes on from it
+          // to the same `;` or end character, which the minor's own stop set
+          // holds, so only an empty minor differs.
+          p++;
+          if (p === n || ';, \n'.includes(text[p])) return { failed: true };
+          while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
+        } else {
+          while (p < n && !CURL_TYPE_TSPECIALS.includes(text[p])) p++;
+        }
+        inType = true;
+      } else if (hasPrefix(p, 'filename=') || hasPrefix(p, 'encoder=')) {
+        inType = false;
+        p = word(skipBlanks(p + (text[p] === 'f' || text[p] === 'F' ? 9 : 8)), endchar)[1];
+      } else if (hasPrefix(p, 'headers=')) {
+        inType = false;
+        p += 8;
+        if (text[p] === '@' || text[p] === '<') {
+          const w = word(skipBlanks(p + 1), endchar);
+          if (curlNameIsSecret(value(w))) return { hit: true };
+          p = w[1];
+        } else {
+          p = word(skipBlanks(p), endchar)[1];
+        }
+      } else if (inType) {
+        while (p < n && text[p] !== ';' && text[p] !== endchar) p++;
+      } else {
+        p = word(p, endchar)[1];
+      }
+      sep = at(p);
+    }
+    return { data, sep, end: p };
+  }
+
+  const eq = text.indexOf('=');
+  if (eq === -1) return false;
+  let p = eq + 1;
+  if (text[p] === '@') {
+    for (;;) {
+      const r = part(p + 1, ',');
+      if (r.hit) return true;
+      if (r.failed) return false;
+      if (curlNameIsSecret(r.data)) return true;
+      if (r.sep === '') return false;
+      p = r.end;
+    }
+  }
+  if (text[p] === '<') {
+    const r = part(p + 1, '');
+    return r.hit === true || (!r.failed && curlNameIsSecret(r.data));
+  }
+  return part(p, '').hit === true;
+}
+
+const CURL_VARIABLE_FILE_RE = /^%?[A-Za-z0-9_]+(?:\[[0-9]*-[0-9]*\])?@/;
+
+// Whether a curl option outside -F reads a secret file from the value `v`:
+// after a leading `@` (-d and the other --data forms, --json, -H, -w,
+// --url), after the first `@` when the value holds no `=` (--data-urlencode,
+// --url-query), after `name@` or `name[range]@` (--variable), or after
+// `ecl:@` (--ech). The name is the rest of the value, unchanged.
+function curlAtValueOpensSecret(v) {
+  if (v[0] === '@' && curlNameIsSecret(v.slice(1))) return true;
+  const a = v.indexOf('@');
+  if (a !== -1 && v.indexOf('=') === -1 && curlNameIsSecret(v.slice(a + 1))) return true;
+  const m = CURL_VARIABLE_FILE_RE.exec(v);
+  if (m && curlNameIsSecret(v.slice(m[0].length))) return true;
+  return v.startsWith('ecl:@') && curlNameIsSecret(v.slice(5));
+}
+
+// curl opens a file named inside an option value as well as one given as its own
+// `@file` word (#5779): `-d@f`, `-H@f`, `--data-urlencode name@f`, `--variable
+// name@f`, `-F name=@f`, `-F name=<f`, `-F 'k=v;headers=@f'`. Holding no table of
+// curl's options, the guard reads each curl argument both as a -F value, under
+// every grammar curl has shipped, and as a value of the options that read `@file`.
+// A value attached to short options (`-d@f`, `-sd@f`, `-Fk=@f`) needs no reading of
+// its own: option letters hold no `=` or `@`, and where an `=` stops the first-`@`
+// reading (`-d@a=b/f`), the file's last path segment is the word's, judged as every
+// operand is. curl 8.23's `--option=value` is read the same way after the `--name=`
+// (`--form=k=@f`), and as the whole word. The cost is a fail-safe denial where a
+// word is read another way than its option gives it (`-d k=@.env`, a URL's `user@`
+// part, `--form-string f=@.env`, `--data-urlencode n=@.env`), pinned in tests. A
+// value the shell builds when it runs the line, from a variable, a command
+// substitution or a glob (`curl -d @$f`, `curl -T .e*`), is judged as written, as
+// every operand is (Documented gaps).
+function curlValueNamesSecret(text) {
+  const option = CURL_LONG_OPTION_RE.exec(text);
+  return curlWordNamesSecret(text) || (option !== null && curlWordNamesSecret(text.slice(option[0].length)));
+}
+
+const CURL_LONG_OPTION_RE = /^--[A-Za-z0-9-]+=/;
+
+function curlWordNamesSecret(text) {
+  const closers = text.includes('"') ? curlQuoteClosers(text) : null;
+  for (const g of CURL_FORM_GRAMMARS) {
+    if (curlFormOpensSecret(text, g, closers)) return true;
+  }
+  return curlAtValueOpensSecret(text);
+}
+
+// curl's --cert (-E) and --proxy-cert take `file:password`. Unlike the values
+// above, a `file:password` reading would find a file in data curl sends
+// (`-d 'mount=/app/.env:ro'`) or in a URL, so it is applied only to the value
+// of one of those options: the word after `--cert`, `--proxy-cert` or a short
+// cluster ending in `E` (`-E`, `-sE`, `-#E`), the rest of a cluster after its
+// `E` (`-Ef:pw`, `-s#Ef:pw`), or the part after `=` (`--cert=f:pw`, 8.23).
+// Every prefix of either long name shorter than the name is ambiguous with
+// `--cert-type` / `--proxy-cert-type` where curl takes abbreviations (8.5).
+// curl reads `--expand-<option>` as `<option>`, so `--expand-cert` is one too,
+// and through 8.5 it matched long names in any case (`--CERT`).
+const CURL_CERT_OPTIONS = new Set(['--cert', '--proxy-cert']);
+const CURL_CERT_CLUSTER_RE = /^-[A-Za-z0-9#:]*?E/;
+
+function isCurlCertOption(name) {
+  const n = name.toLowerCase();
+  return CURL_CERT_OPTIONS.has(n.startsWith('--expand-') ? '--' + n.slice(9) : n);
+}
+
+// The value a cert option holds within `text`, or null.
+function curlAttachedCertValue(text) {
+  const eq = text.indexOf('=');
+  if (eq !== -1 && isCurlCertOption(text.slice(0, eq))) return text.slice(eq + 1);
+  const m = CURL_CERT_CLUSTER_RE.exec(text);
+  return m && m[0].length < text.length ? text.slice(m[0].length) : null;
+}
+
+// Whether `text` is a cert option whose value is the next word.
+function curlTakesCertValue(text) {
+  if (isCurlCertOption(text)) return true;
+  const m = CURL_CERT_CLUSTER_RE.exec(text);
+  return m !== null && m[0].length === text.length;
+}
+
+// The file a cert value names, read as curl's parse_cert_parameter
+// (src/tool_getparam.c) reads it: up to the first `:` not escaped by `\`, with
+// `\:` and `\\` standing for `:` and `\`, and a `pkcs11:` URI kept whole. On
+// Windows a drive letter's colon (`C:\f:pw`) is part of the name; the guard
+// does not know the platform, so it judges both names.
+function curlCertNamesSecret(v) {
+  if (/^pkcs11:/i.test(v)) return curlNameIsSecret(v);
+  let name = '';
+  for (let i = 0; i < v.length; i++) {
+    const ch = v[i];
+    if (ch === '\\') {
+      const next = v[i + 1];
+      if (next === undefined) {
+        name += '\\';
+      } else {
+        name += next === '\\' || next === ':' ? next : '\\' + next;
+        i++;
+      }
+    } else if (ch !== ':') {
+      name += ch;
+    } else if (i === 1 && (v[2] === '\\' || v[2] === '/') && /[A-Za-z]/.test(v[0])) {
+      if (curlNameIsSecret(name)) return true;
+      name += ':';
+    } else {
+      break;
+    }
+  }
+  return curlNameIsSecret(name);
+}
+
+// Whether curl, given words[k] as an argument, opens a secret through a cert
+// option's value in it or in the word before it.
+function curlCertOpensSecret(words, k) {
+  let v = curlAttachedCertValue(words[k].text);
+  if (v === null && k > 0 && curlTakesCertValue(words[k - 1].text)) v = words[k].text;
+  return v !== null && curlCertNamesSecret(v);
+}
+
+// find's actions that run the words after them, up to `;` (or `+` after
+// `{}`), as a command. bfs takes find's actions.
+const FIND_EXEC_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+const FIND_COMMANDS = new Set(['find', 'gfind', 'find.exe', 'bfs']);
+const XARGS_COMMANDS = new Set(['xargs', 'gxargs', 'xargs.exe']);
+
+// Commands whose documented job is to run another command, other than the
+// wrappers resolveCommand unwraps and xargs/find, whose command position is
+// read exactly. Their options differ per command, so under them curl's
+// arguments start after the first operand whose last segment is curl, as for
+// every command before #5779's review narrowed the rule to commands that run
+// curl. A command that runs one only through a subcommand or an option
+// (`uv run`, `kubectl exec`, `docker compose exec`, `fd -x`) names those
+// words, and a curl word counts only after one of them: `uv pip install curl …`
+// runs no curl. A subcommand counts only as the command's first operand (or
+// first two, `compose exec`) past its options, so `kubectl get exec curl …`
+// runs none; an option's run word counts anywhere. Keys are matched without a
+// Windows `.exe`, `.cmd` or `.bat` suffix (`docker.exe`, `npx.cmd`).
+const CURL_WORD_LAUNCHERS = new Map([
+  // Run their operands as a command.
+  ...[
+    // process, scheduling, privilege and namespace runners
+    'watch', 'ionice', 'taskset', 'chrt', 'flock', 'nsenter', 'unshare', 'chroot', 'gchroot',
+    'runuser', 'setpriv', 'pkexec', 'run0', 'gosu', 'su-exec', 'systemd-run',
+    'systemd-inhibit', 'systemd-nspawn', 'bwrap', 'flatpak-spawn', 'prlimit',
+    'numactl', 'cpulimit', 'setarch', 'arch', 'caffeinate', 'sandbox-exec', 'chpst',
+    'tini', 'dumb-init', 'faketime', 'eatmydata', 'unbuffer', 'chronic',
+    'catchsegv', 'xvfb-run', 'wsl', 'wine',
+    // tracers, debuggers and profilers
+    'strace', 'ltrace', 'valgrind', 'heaptrack',
+    // job runners and file-event runners
+    'parallel', 'sem', 'entr', 'busybox',
+    // network wrappers
+    'torsocks', 'torify', 'tsocks', 'proxychains', 'proxychains4', 'trickle',
+    'firejail',
+    // package runners that take the command as their operands
+    'npx', 'bunx', 'uvx',
+  ].map((name) => [name, null]),
+  // Run a command only after one of these words.
+  ['gdb', new Set(['--args', '-args'])],
+  ['perf', new Set(['record', 'stat', 'trace'])],
+  ['rr', new Set(['record'])],
+  ['fd', new Set(['-x', '--exec', '-X', '--exec-batch'])],
+  ['fdfind', new Set(['-x', '--exec', '-X', '--exec-batch'])],
+  ['pueue', new Set(['add'])],
+  ['scl', new Set(['enable'])],
+  ['toolbox', new Set(['run'])],
+  ['distrobox', new Set(['enter'])],
+  // Container runners: a word pair is a subcommand group's subcommand.
+  ...['docker', 'podman', 'nerdctl'].map((name) => [name, new Set([
+    'exec', 'run', 'compose exec', 'compose run', 'container exec', 'container run',
+    ...(name === 'podman' ? ['unshare'] : []),
+  ])]),
+  ['docker-compose', new Set(['exec', 'run'])],
+  ['podman-compose', new Set(['exec', 'run'])],
+  ['lxc', new Set(['exec'])],
+  ['incus', new Set(['exec'])],
+  ['kubectl', new Set(['exec', 'run', 'debug', 'alpha debug'])],
+  ['oc', new Set(['exec', 'run', 'debug', 'alpha debug', 'rsh'])],
+  ['dotenv', new Set(['run', '--'])],
+  ['dotenvx', new Set(['run'])],
+  ['op', new Set(['run'])],
+  ['doppler', new Set(['run'])],
+  ['infisical', new Set(['run'])],
+  ['aws-vault', new Set(['exec'])],
+  ['direnv', new Set(['exec'])],
+  ['mise', new Set(['exec', 'x'])],
+  ['asdf', new Set(['exec'])],
+  ['npm', new Set(['exec', 'x'])],
+  ['pnpm', new Set(['exec', 'dlx'])],
+  // `yarn workspace <name> exec` names a workspace before the run word, so the
+  // group word itself counts; `workspaces foreach` runs a command in each.
+  ['yarn', new Set(['exec', 'dlx', 'workspace', 'workspaces foreach'])],
+  ['bun', new Set(['x'])],
+  ['uv', new Set(['run', 'tool run'])],
+  ['poetry', new Set(['run'])],
+  ['pipenv', new Set(['run'])],
+  ['pdm', new Set(['run'])],
+  ['hatch', new Set(['run', 'env run'])],
+  ['rye', new Set(['run'])],
+  ['pixi', new Set(['run', 'exec'])],
+  ['pipx', new Set(['run'])],
+  ['conda', new Set(['run'])],
+  ['mamba', new Set(['run'])],
+  ['micromamba', new Set(['run'])],
+  ['bundle', new Set(['exec'])],
+  ['nix', new Set(['run', 'shell', 'develop'])],
+]);
+
+// Which operands curl takes as its arguments (#5779): every one when curl is
+// the segment's command, and those after a curl that a launcher runs as a
+// command — xargs's sub-command, or the command of a find -exec / -execdir /
+// -ok / -okdir action, each past the wrappers resolveCommand unwraps
+// (`xargs sudo curl …`) — and, under a CURL_WORD_LAUNCHERS command, those
+// after its first curl word (`watch -n 5 curl …`), or after the first curl
+// word past the word it runs a command by (`uv run curl …`). Only those
+// operands get curl's value reading. A `curl` word anywhere else is an operand
+// (`grep curl …`, `apt-get install curl …`), so the words after it are judged
+// as before.
+// Whether operand `k` is one of curl's arguments that opens a secret. The
+// argument map is built once per operand list. A helper, not a local in
+// scanCommand, so that function's stack frame stays next's size and the plain
+// reading overflows, which denies a command as `command-too-complex`, at the
+// depth next's does.
+const curlArgumentsByOperands = new WeakMap();
+function curlOperandOpensSecret(base, operands, k) {
+  let args = curlArgumentsByOperands.get(operands);
+  if (args === undefined) {
+    args = curlArguments(base, operands);
+    curlArgumentsByOperands.set(operands, args);
+  }
+  return Boolean(args[k]) && (curlValueNamesSecret(operands[k].text) || curlCertOpensSecret(operands, k));
+}
+
+function curlArguments(base, operands) {
+  const marks = new Uint8Array(operands.length);
+  markCurlArguments(base, operands, 0, operands.length, marks, 0);
+  return marks;
+}
+
+// Marks words[from..to) when `base`, the command they belong to, is curl, and
+// follows a launcher to the command it runs. Each level handles a range of the
+// segment's words once, and MAX_NESTING_DEPTH bounds the levels.
+function markCurlArguments(base, words, from, to, marks, depth) {
+  if (CURL_COMMANDS.has(base)) {
+    marks.fill(1, from, to);
+    return;
+  }
+  if (depth >= MAX_NESTING_DEPTH) return;
+  if (XARGS_COMMANDS.has(base)) {
+    const sub = xargsCommandIndex(words, from, to);
+    if (sub !== -1) markLaunchedCurl(words, sub, to, marks, depth + 1);
+  } else if (CURL_WORD_LAUNCHERS.has(launcherKey(base))) {
+    // Options differ per launcher, so the command is the first curl word,
+    // after the subcommand or option, if any, that the launcher runs it by.
+    const key = launcherKey(base);
+    const start = launcherRunIndex(words, from, to, CURL_WORD_LAUNCHERS.get(key), LAUNCHER_PAIR_OPTIONS.get(key));
+    if (start === -1) return;
+    const container = CONTAINER_LAUNCHERS.has(key);
+    for (let k = start; k < to; k++) {
+      if (CURL_COMMANDS.has(launchedCurlName(words[k].text, container))) {
+        marks.fill(1, k + 1, to);
+        return;
+      }
+    }
+  } else if (FIND_COMMANDS.has(base)) {
+    for (let j = from; j < to; j++) {
+      if (!FIND_EXEC_ACTIONS.has(words[j].text)) continue;
+      let end = j + 1;
+      while (end < to && !isFindExecEnd(words, end)) end++;
+      markLaunchedCurl(words, j + 1, end, marks, depth + 1);
+      j = end;
+    }
+  }
+}
+
+function launcherKey(base) {
+  return base.replace(/\.(exe|cmd|bat)$/, '');
+}
+
+// Index of the first of words[from..to) that a launcher with `runWords` may
+// run as a command, or -1. With no run words, every operand may be. Otherwise
+// an option run word (`--args`, `-x`) counts anywhere, and a subcommand run
+// word only as the first operand past the options, or the second after a
+// subcommand group (`compose exec`). An operand right after an option with no
+// `=` may be that option's value (`kubectl -n ns exec`), so the subcommand may
+// still follow it; an option whose value is itself a run word
+// (`docker --context run …`) is read as running a command, the safe side.
+// `pairOptions` names the options that take two values (`nix --option k v`).
+function launcherRunIndex(words, from, to, runWords, pairOptions) {
+  if (runWords === null) return from;
+  let group = '';
+  let subcommand = true;
+  let optionValues = 0;
+  for (let k = from; k < to; k++) {
+    const t = words[k].text;
+    if (t.length > 1 && t[0] === '-') {
+      if (runWords.has(t)) return k + 1;
+      optionValues = pairOptions && pairOptions.has(t) ? 2 : t.includes('=') ? 0 : 1;
+      continue;
+    }
+    if (!subcommand) continue;
+    const sub = group + t;
+    if (runWords.has(sub)) return k + 1;
+    if (isRunWordGroup(runWords, sub)) {
+      group = sub + ' ';
+      optionValues = 0;
+    } else if (optionValues > 0) {
+      optionValues--;
+    } else {
+      subcommand = false;
+    }
+  }
+  return -1;
+}
+
+function isRunWordGroup(runWords, sub) {
+  for (const w of runWords) {
+    if (w.length > sub.length && w[sub.length] === ' ' && w.startsWith(sub)) return true;
+  }
+  return false;
+}
+
+// Launcher options that take two values, so two operands after one may be
+// its values rather than the subcommand.
+const LAUNCHER_PAIR_OPTIONS = new Map([
+  ['nix', new Set(['--option', '--arg', '--argstr', '--override-input', '--override-flake'])],
+]);
+
+// Container runners: an operand may be an image, `--entrypoint=` names the
+// command, and kubectl's and oc's `--image=` names the image they run.
+const CONTAINER_LAUNCHERS = new Set(['docker', 'podman', 'nerdctl', 'docker-compose', 'podman-compose', 'kubectl', 'oc']);
+const CONTAINER_VALUE_PREFIXES = ['--entrypoint=', '--image='];
+
+// A launched command word's name. Under a container runner the value of
+// `--entrypoint=` or `--image=` counts as the word, and an image reference
+// (a word with a `/` repository path) loses its `:tag` or `@digest`
+// (`docker run curlimages/curl:8.5.0 …`, `kubectl run t
+// --image=curlimages/curl:8.5.0 -- …` run curl). Any other word is read whole
+// (`scp curl@host:f` names no curl).
+function launchedCurlName(text, container) {
+  if (!container) return commandName(text);
+  const prefix = CONTAINER_VALUE_PREFIXES.find((p) => text.startsWith(p));
+  const word = prefix ? text.slice(prefix.length) : text;
+  const name = commandName(word);
+  if (!word.includes('/')) return name;
+  const cut = name.search(/[:@]/);
+  return cut > 0 ? name.slice(0, cut) : name;
+}
+
+// `;` ends a find action's command, and so does `+` right after `{}`.
+function isFindExecEnd(words, k) {
+  const t = words[k].text;
+  return t === ';' || (t === '+' && words[k - 1].text === '{}');
+}
+
+// words[from..to) is a command a launcher runs: find its command word past the
+// wrappers resolveCommand unwraps, and mark that command's arguments.
+function markLaunchedCurl(words, from, to, marks, depth) {
+  const c = launchedCommandIndex(words, from, to);
+  if (c !== -1) markCurlArguments(commandName(words[c].text), words, c + 1, to, marks, depth);
+}
+
+// Index of the command word in words[from..to) that a launcher runs, past the
+// wrappers resolveCommand unwraps and their own options, or -1. Unlike a
+// shell, a launcher execs a leading `VAR=value` word, so none is skipped.
+function launchedCommandIndex(words, from, to) {
+  const wrappers = furtherReading ? FURTHER_WRAPPERS : WRAPPERS;
+  const pending = words.slice(from, to).reverse();
+  while (pending.length) {
+    const spec = wrappers.get(commandName(pending[pending.length - 1].text));
+    if (!spec) break;
+    pending.pop();
+    skipWrapperArgs(pending, spec, false);
+  }
+  return pending.length ? to - pending.length : -1;
+}
+
+// lastSegment(text).toLowerCase(), read by hand in one pass: lastSegment's
+// trailing-separator regex backtracks on a long run of separators, and the
+// launched-command words reach here.
+function commandName(text) {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === '/' || text[end - 1] === '\\')) end--;
+  let seg = end;
+  while (seg > 0 && text[seg - 1] !== '/' && text[seg - 1] !== '\\') seg--;
+  return text.slice(seg, end).toLowerCase();
+}
+
 // #5825: request tools that open a file named after an `@` in a field or request item and send its contents.
 //   gh api -F/--field key=@path   (`-f`/`--raw-field` never reads a file; `@-` is stdin)
 //   http / https (httpie) items   key=@path  key:=@path  key==@path  Header:@path  key@path[;type=…]
@@ -2497,6 +3453,13 @@ function requestItemSecretRead(base, operands) {
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// The further reading's prefix assignment: bash and zsh also take `NAME+=value`
+// and a subscripted `NAME[sub]=value` / `NAME[sub]+=value` in front of a command
+// and run the command. A subscript may hold brackets (`a[b[1]]=x`), so the
+// bracket span is greedy; one word, so the span ends inside it. bash keeps a
+// subscript's blanks in the word (`a[x y]=1`): the tokenizer's `[` branch
+// joins those under this reading (subscriptClose).
+const FURTHER_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\+?=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
 const DASH_C_RE = /^-[A-Za-z]*c$/;
@@ -2653,24 +3616,38 @@ function pushSplitWords(pending, value, source) {
 // read with the next one last. The walk is the one before #5514, with one
 // addition: `env -S STRING` puts the words STRING splits into where the option
 // stood, and env goes on reading options (#5514).
-function skipWrapperArgs(pending, spec) {
+// `splitting` is false for a walk that must keep word indices (launchedCommandIndex).
+function skipWrapperArgs(pending, spec, splitting = envSReading.split) {
+  if (spec.count) {
+    pending.pop();
+    return;
+  }
   const top = () => pending[pending.length - 1].text;
+  const assigns = spec.assigns === true ? ASSIGNMENT_RE : spec.assigns;
+  let previous = null; // the word popped last (dashDashEndsAssigns)
+  const pop = () => {
+    const word = pending.pop();
+    if (word) previous = word.text;
+    return word;
+  };
   let optionsEnded = false;
   while (pending.length) {
     const text = top();
-    if (spec.assigns && ASSIGNMENT_RE.test(text)) {
-      pending.pop();
+    if (assigns && !(spec.dashDashEndsAssigns && previous === '--') && assigns.test(text)) {
+      pop();
+    } else if (spec.dash && text === '-') {
+      pop();
     } else if (!optionsEnded && text === '--') {
       optionsEnded = true;
-      pending.pop();
+      pop();
     } else if (!optionsEnded && text.length > 1 && text.startsWith('-')) {
-      const word = pending.pop();
+      const word = pop();
       const split = splitOptionValue(text, spec);
       if (split !== undefined) splitSeen = true;
-      if (split === undefined || !envSReading.split) {
-        if (wrapperOptionWidth(text, spec) === 2) pending.pop();
+      if (split === undefined || !splitting) {
+        if (wrapperOptionWidth(text, spec) === 2) pop();
       } else if (split === null) {
-        const value = pending.pop();
+        const value = pop();
         if (value) pushSplitWords(pending, value.text, value);
       } else {
         pushSplitWords(pending, split, word);
@@ -2684,6 +3661,52 @@ function skipWrapperArgs(pending, spec) {
   if (spec.operands && pending.length && top() === '--') pending.pop();
 }
 
+// Pops the words in front of a command off `pending`: `VAR=val` assignments and,
+// under the further reading, the reserved words in front of them and the wider
+// assignment forms (`A+=b`, `a[0]=x`).
+function skipShellPrefixes(pending) {
+  if (furtherReading) pending.length -= reservedWordCount(pending);
+  const assignment = furtherReading ? FURTHER_ASSIGNMENT_RE : ASSIGNMENT_RE;
+  while (pending.length && assignment.test(pending[pending.length - 1].text)) pending.pop();
+}
+
+// How many words from the top of `pending` (the next word last) are reserved
+// words a command can follow.
+function reservedWordCount(pending) {
+  const at = (p) => pending[pending.length - 1 - p];
+  let p = 0;
+  while (p < pending.length && at(p).quoted === 'none') {
+    const text = at(p).text;
+    if (SHELL_COMMAND_KEYWORDS.has(text)) {
+      p++;
+    } else if (LOOP_HEADS.has(text)) {
+      const body = bareWordPosition(pending, p + 2, 'do', 'in');
+      if (body === -1) break;
+      p = body + 1;
+    } else if (text === '[[') {
+      // zsh's short form runs the word after the test: `if [[ x ]] cmd`.
+      const close = bareWordPosition(pending, p + 1, ']]');
+      if (close === -1) break;
+      p = close + 1;
+    } else {
+      break;
+    }
+  }
+  return p;
+}
+
+// Position from the top of `pending` of the first unquoted `text` from `start`,
+// or -1, or -1 at a `stop` first.
+function bareWordPosition(pending, start, text, stop) {
+  for (let p = start; p < pending.length; p++) {
+    const word = pending[pending.length - 1 - p];
+    if (word.quoted !== 'none') continue;
+    if (word.text === text) return p;
+    if (word.text === stop) return -1;
+  }
+  return -1;
+}
+
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
 // `timeout -s KILL 5`, `nice -n 5`, `env -S 'cmd …'`, …), or null when nothing
@@ -2692,13 +3715,15 @@ function skipWrapperArgs(pending, spec) {
 // command word as written: after a split string it can be one of that string's
 // words, which `words` does not hold.
 function resolveCommand(words) {
+  const wrappers = furtherReading ? FURTHER_WRAPPERS : WRAPPERS;
   const pending = words.slice().reverse();
-  while (pending.length && ASSIGNMENT_RE.test(pending[pending.length - 1].text)) pending.pop();
+  skipShellPrefixes(pending);
   while (pending.length) {
-    const spec = WRAPPERS.get(lastSegment(pending[pending.length - 1].text).toLowerCase());
+    const spec = wrappers.get(lastSegment(pending[pending.length - 1].text).toLowerCase());
     if (!spec) break;
     pending.pop();
     skipWrapperArgs(pending, spec);
+    if (spec.keyword) skipShellPrefixes(pending);
   }
   if (!pending.length) return null;
   const head = pending.pop();
@@ -2905,6 +3930,22 @@ function searchOperandIndices(spec, operands) {
   return exempt;
 }
 
+// A short-option cluster whose replace-string flag is its last letter
+// (`-0I {}`, `-tI {}`, `-rI {}`): the next word is the replace string, as for
+// a bare `-I`. A letter before it that takes a value takes the rest of the
+// cluster instead (XARGS_SHORT_VALUE, XARGS_SHORT_ATTACHED). xargsSubCommand
+// skips that word only where xargsCommandIndex puts the command after it, so
+// a cluster that is itself an option's value, or follows `--`, is not read so.
+function clusterEndsInReplaceFlag(t) {
+  if (t.length < 3 || t[0] !== '-' || t[1] === '-') return false;
+  for (let c = 1; c < t.length; c++) {
+    if (XARGS_SHORT_ATTACHED.includes(t[c]) || XARGS_SHORT_VALUE.includes(t[c])) {
+      return t[c] === 'I' && c === t.length - 1;
+    }
+  }
+  return false;
+}
+
 // `xargs <sub-command words>`: the word index of the sub-command, or -1.
 // `argFile` is true when `-a`/`--arg-file` replaces stdin.
 function xargsSubCommand(operands) {
@@ -2914,6 +3955,7 @@ function xargsSubCommand(operands) {
     if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
     if (t.startsWith('--arg-file=')) { argFile = true; continue; }
     if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
+    if (clusterEndsInReplaceFlag(t) && xargsCommandIndex(operands, 0, operands.length) > m + 1) { m++; continue; }
     if (t.startsWith('--') && t.includes('=')) continue;
     if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
     return { subIdx: m, argFile };
@@ -3287,6 +4329,62 @@ function scanDebuggerSpawn(command) {
   }
 }
 
+// The further reading of `command` (#5779, furtherReading): the secret and
+// debugger-spawn scans again, with the command resolved past the words the plain
+// walk stops at. main runs it after scanBashReadings allowed, so it can add a
+// denial and cannot lose one. It reads an `env -S` string as next did before #5514
+// (the 'unsplit' reading) and judges the #4432 read-only line under that reading.
+// It runs once without bash's subscript joins and, only when that pass saw where a
+// join could start, once more with them, both on one budget of its own the size
+// the plain scans get (`budget` and `separatorBudget` are for tests). Its verdict:
+//   - a stack overflow or a spent budget is `command-too-complex` (an overflow in
+//     the spawn scan is thrown, as from scanDebuggerSpawn);
+//   - any other error is a scan error: null, and furtherThrew set, so main gives
+//     the command the host's crash policy (#5784).
+// A hook timeout is the adapter's: Claude Code reads it as no decision; Pi refuses.
+let furtherThrew = false;
+function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+  setCommandBudget(budget, separatorBudget);
+  furtherThrew = false;
+  budgetHeld = true;
+  envSReading = ENV_S_READINGS[0];
+  exemption.bashReadOnly = null;
+  furtherReading = true;
+  joinCandidate = false;
+  // Each scan runs under its own catch, as scanBashReadings runs its own, so one
+  // that throws leaves the scans and the pass after it their say.
+  const attempt = (scan) => {
+    try {
+      return scan();
+    } catch (e) {
+      if (e instanceof RangeError || e === SCAN_BUDGET_SPENT) throw e;
+      furtherThrew = true;
+      return null;
+    }
+  };
+  try {
+    for (const joins of [false, true]) {
+      if (joins && !joinCandidate) break;
+      subscriptJoins = joins;
+      const hit = attempt(() => findSecretRead(command, 0)) || attempt(() => findSecretReadUnderOtherReadings(command));
+      if (hit !== null) return hit;
+      const spawn = attempt(() => findDebuggerCliSpawnEitherWay(command));
+      if (spawn !== null) return { code: 'debugger-cli-spawn', text: spawn };
+    }
+    return null;
+  } catch (e) {
+    if (e instanceof RangeError) throw e;
+    if (e === SCAN_BUDGET_SPENT) return { code: 'command-too-complex', text: '' };
+    furtherThrew = true;
+    return null;
+  } finally {
+    budgetHeld = false;
+    furtherReading = false;
+    subscriptJoins = false;
+    envSReading = ENV_S_READINGS[1];
+  }
+}
+
 // The work the last scan charged against the budgets it had: characters to
 // scanCommand's (`scan`) and the readers' (`reader`), separators to
 // separatorSteps (`separators`), and whether a charge found one spent
@@ -3646,7 +4744,7 @@ function scanCommand(command, depth, reading) {
     }
 
     // xargs turns stdin file names into a sub-command's operands.
-    if (base === 'xargs') {
+    if (XARGS_COMMANDS.has(base)) {
       const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading);
       if (hit) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
@@ -3688,7 +4786,8 @@ function scanCommand(command, depth, reading) {
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
       const named = operandSecretMatch(operands[k].text);
-      if (named !== null) return secretRead(named);
+      if (named !== null) return secretRead(curlOperandOpensSecret(base, operands, k) ? curlOpened : named);
+      if (curlOperandOpensSecret(base, operands, k)) return secretRead(curlOpened);
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
@@ -3839,11 +4938,8 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     }
 
     if (SHELL_INTERPRETERS.has(base)) {
-      const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
-      if (cIdx !== -1 && operands[cIdx + 1] && depth < MAX_NESTING_DEPTH) {
-        const hit = findDebuggerCliSpawn(operands[cIdx + 1].text, depth + 1);
-        if (hit) return hit;
-      }
+      const hit = depth < MAX_NESTING_DEPTH ? dashCScriptSpawnsDebugger(operands, depth) : null;
+      if (hit) return hit;
       continue;
     }
 
@@ -3860,15 +4956,29 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
   return null;
 }
 
+// The debugger spawn in the script of a shell's `-c`, read past its options as
+// scanShellInterpreter reads it (dashCScriptIndices), at each index
+// dashCIndices gives, or null.
+function dashCScriptSpawnsDebugger(operands, depth) {
+  const cIdxs = dashCIndices(operands);
+  for (let i = 0; i < cIdxs.length; i++) {
+    for (const k of dashCScriptIndices(operands, cIdxs[i])) {
+      const hit = findDebuggerCliSpawn(operands[k].text, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 // A shell interpreter's script comes from `-c`, a file operand, or stdin.
 function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
   const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
-  if (cIdx !== -1) {
-    // Mode c: the next operand is the script; stdin is DATA (not scanned).
-    const script = operands[cIdx + 1];
-    if (script) return findSecretReadWithDefaults(script.text, depth + 1);
-    return null;
-  }
+  // Mode c: the script follows -c's options (dashCScriptIndices); stdin is DATA (not scanned).
+  // A cluster's `-c` before it is read too (`bash -ce 'cat .env' -c`: bash runs the cluster's script).
+  if (cIdx !== -1) return dashCScriptReadsSecret(operands, cIdx, depth) || clusteredDashCReadsSecret(operands, depth);
+  // A `-c` inside a cluster is read too; with nothing found the reading goes on as before.
+  const clustered = clusteredDashCReadsSecret(operands, depth);
+  if (clustered) return clustered;
   let fileTok;
   let stdinScript = false;
   for (let m = 0; m < operands.length; m++) {
@@ -3899,9 +5009,102 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   return null;
 }
 
+// The operands a shell's `-c` at `cIdx` may run as its script: the word right
+// after a `-c` DASH_C_RE matches, which is the one read before, and the first
+// word past the options that may follow it (after a cluster, only that one:
+// its next word can be an option's value, as in `bash -co x`). bash, dash and zsh run that one (`bash -c -- 'cat .env'`,
+// `sh -c -euo pipefail '…'`, `bash -c + '…'`): `--` or a lone `-` ends the
+// options, each `o` or `O` in a cluster takes the next word, and any other
+// word starting with `-` or `+` is an option. Reading both keeps every denial
+// the first made.
+function dashCScriptIndices(operands, cIdx) {
+  const out = cIdx + 1 < operands.length && DASH_C_RE.test(operands[cIdx].text) ? [cIdx + 1] : [];
+  const k = dashCScriptIndex(operands, cIdx);
+  if (k < operands.length && (out.length === 0 || k !== cIdx + 1)) out.push(k);
+  return out;
+}
+
+// The index of the first word past the options after a shell's `-c` at
+// `cIdx`, or operands.length when none is left.
+function dashCScriptIndex(operands, cIdx) {
+  let k = cIdx + 1 + shortOptionValues(operands[cIdx].text);
+  while (k < operands.length) {
+    const t = operands[k].text;
+    if (t === '--' || t === '-') return k + 1;
+    if (t[0] !== '-' && t[0] !== '+') return k;
+    k += 1 + shortOptionValues(t);
+  }
+  return operands.length;
+}
+
+// The words a shell's short-option cluster takes as its values: one for each
+// `o` or `O` in it (`-o errexit`, `-euo pipefail`, `-oo a b`, `-co x`); a long
+// option (`--norc`) takes none here.
+function shortOptionValues(t) {
+  if (t.length < 2 || t[1] === '-') return 0;
+  let n = 0;
+  for (let i = 1; i < t.length; i++) if (t[i] === 'o' || t[i] === 'O') n++;
+  return n;
+}
+
+// The indexes of a shell's `-c`: the word DASH_C_RE matches, as before, and a
+// cluster holding `c` (`bash -ce '…'`, `-co errexit`, `+c`) among the options
+// before the first other word, where the shell stops reading options (a
+// script file's arguments are not options). Both are read: a later word
+// DASH_C_RE matches does not hide a cluster's `-c` before it, so in
+// `bash -ce 'cat .env' -c` the cluster's script is read (`-c` is `$0`).
+function dashCIndices(operands) {
+  const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
+  const kIdx = dashCClusterIndex(operands);
+  const out = cIdx === -1 ? [] : [cIdx];
+  if (kIdx !== -1 && kIdx !== cIdx) out.push(kIdx);
+  return out;
+}
+const SHORT_CLUSTER_RE = /^[-+][A-Za-z]+$/;
+const SHELL_LONG_OPTIONS = new Set(['norc', 'noprofile', 'noediting', 'login', 'posix', 'verbose', 'debugger',
+  'restricted', 'help', 'version', 'pretty-print', 'dump-strings', 'dump-po-strings', 'wordexp', 'protected']);
+function dashCClusterIndex(operands) {
+  let k = 0;
+  while (k < operands.length) {
+    const t = operands[k].text;
+    if (t === '--' || t === '-' || (t[0] !== '-' && t[0] !== '+')) return -1;
+    // bash takes its long options after one dash too (`-rcfile f`, `-norc`).
+    const name = t.replace(/^--?/, '');
+    if (name === 'rcfile' || name === 'init-file') k += 2;
+    else if (SHELL_LONG_OPTIONS.has(name) || t[1] === '-') k++;
+    else if (SHORT_CLUSTER_RE.test(t) && t.includes('c', 1)) return k;
+    else k += 1 + shortOptionValues(t);
+  }
+  return -1;
+}
+
+// The block for a secret read in the script of a `-c` written inside a
+// cluster (dashCClusterIndex), or null.
+function clusteredDashCReadsSecret(operands, depth) {
+  const cIdx = dashCClusterIndex(operands);
+  return cIdx === -1 ? null : dashCScriptReadsSecret(operands, cIdx, depth);
+}
+
+// The block for a secret read in the script of a shell's `-c` at `cIdx`, or null.
+function dashCScriptReadsSecret(operands, cIdx, depth) {
+  for (const k of dashCScriptIndices(operands, cIdx)) {
+    const hit = findSecretReadWithDefaults(operands[k].text, depth + 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 // The statically-knowable text piped into segment `s`: the nearest upstream segment's, looking through `tee` and a bare
-// `cat` that only pass their own stdin along (#6182). Each hop moves to an earlier segment, so the walk ends.
+// `cat` that only pass their own stdin along (#6182). Each hop moves to an earlier segment, so the walk ends. It is
+// found once per segment: `find` can run a shell reading it once per action.
+const pipeSourceTextBySegMap = new WeakMap();
 function pipeSourceText(s, bySeg, sepAfter) {
+  let found = pipeSourceTextBySegMap.get(bySeg);
+  if (!found) pipeSourceTextBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) found.set(s, findPipeSourceText(s, bySeg, sepAfter));
+  return found.get(s);
+}
+function findPipeSourceText(s, bySeg, sepAfter) {
   let seg = s;
   for (;;) {
     const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
@@ -3920,6 +5123,93 @@ function pipeSourceText(s, bySeg, sepAfter) {
   }
 }
 
+// xargs's options as GNU findutils 4.9 reads them, for finding the command it
+// runs: these short options take a value attached or as the next word (BSD's
+// -J, -R and -S too), `-e`, `-i` and `-l` take one only attached, and these
+// long options take one as `=value` or as the next word (any unambiguous
+// prefix). xargsSubCommand keeps next's reading for the shell and
+// non-reading checks.
+const XARGS_SHORT_VALUE = 'adEILnPsJRS';
+const XARGS_SHORT_ATTACHED = 'eil';
+const XARGS_LONG_VALUE = ['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'];
+
+// Index of the command xargs runs among operands[from..to), or -1.
+function xargsCommandIndex(operands, from, to) {
+  for (let m = from; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--') return m + 1 < to ? m + 1 : -1;
+    if (t.length < 2 || t[0] !== '-') return m;
+    if (t.startsWith('--')) {
+      if (!t.includes('=') && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) m++;
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+      if (XARGS_SHORT_VALUE.includes(t[c])) {
+        if (c === t.length - 1) m++;
+        break;
+      }
+    }
+  }
+  return -1;
+}
+
+// The string xargs replaces with each input among its options in
+// operands[from..to): `-I R`, `-IR`, BSD `-J R`, `-i` / `-iR` and
+// `--replace[=R]` (any unambiguous prefix; `{}` when no R), unless a later
+// `-L`, `-l`, `--max-lines`, or `-n` / `--max-args` with a count other than
+// 1, cancels it. null when xargs appends the input
+// after the command's words. With `cancels` false, nothing cancels it
+// (xargsReplaceStrs).
+function xargsReplaceString(operands, from, to, cancels = true) {
+  let rep = null;
+  for (let m = from; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--' || t.length < 2 || t[0] !== '-') break;
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      if (name.length >= 3 && '--replace'.startsWith(name)) {
+        rep = eq === -1 ? '{}' : t.slice(eq + 1);
+      } else if (name.length >= 7 && '--max-lines'.startsWith(name)) {
+        if (cancels) rep = null;
+      } else if (name.length >= 7 && '--max-args'.startsWith(name)) {
+        const v = eq !== -1 ? t.slice(eq + 1) : m + 1 < to ? operands[m + 1].text : '';
+        if (v !== '1' && cancels) rep = null;
+        if (eq === -1) m++;
+      } else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) {
+        m++;
+      }
+      continue;
+    }
+    for (let c = 1; c < t.length; c++) {
+      if (t[c] === 'i') {
+        rep = t.slice(c + 1) || '{}';
+        break;
+      }
+      if (t[c] === 'I' || t[c] === 'J') {
+        if (c < t.length - 1) rep = t.slice(c + 1);
+        else if (m + 1 < to) rep = operands[++m].text;
+        break;
+      }
+      // GNU lets the last of -I/-i/--replace and -L/-l/--max-lines/-n win: a
+      // later -L, or -n with any count but 1, puts xargs back to appending
+      // its input.
+      if ((t[c] === 'L' || t[c] === 'l') && cancels) rep = null;
+      if (t[c] === 'n') {
+        const v = c < t.length - 1 ? t.slice(c + 1) : m + 1 < to ? operands[m + 1].text : '';
+        if (v !== '1' && cancels) rep = null;
+      }
+      if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+      if (XARGS_SHORT_VALUE.includes(t[c])) {
+        if (c === t.length - 1) m++;
+        break;
+      }
+    }
+  }
+  return rep === '' ? null : rep;
+}
+
 // `find … | xargs cat`: the upstream segment's operands become file names the
 // sub-command reads. Only inferred across a real pipe and when stdin is not
 // redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
@@ -3927,12 +5217,17 @@ function pipeSourceText(s, bySeg, sepAfter) {
 // mode c whether or not a pipe feeds it.
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   const { subIdx, argFile } = xargsSubCommand(operands);
-  if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
+  // The command xargs runs as GNU xargs reads its options, past the wrappers
+  // resolveCommand unwraps (#5779): the curl reading below follows it even
+  // where next's walk above finds another word or none (`xargs -l curl -s …`).
+  const curl = xargsCurlTarget(operands);
+  if (subIdx === -1 && curl === null) return null; // no sub-command: xargs defaults to echo
 
   // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
   // `xargs timeout 5 sh -c '…'`, `xargs env sh -c '…'`, #6114); nothing but wrappers left reads as the bare word.
-  const resolvedSub = resolveCommand(operands.slice(subIdx));
-  const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
+  // With no sub-command next's walk finds, only the curl reading below runs (#5779).
+  const resolvedSub = subIdx === -1 ? null : resolveCommand(operands.slice(subIdx));
+  const writtenBase = subIdx === -1 ? '' : lastSegment(operands[subIdx].text).toLowerCase();
   const subBase = resolvedSub ? resolvedSub.base : writtenBase;
   const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
   const subIsShell = SHELL_INTERPRETERS.has(subBase);
@@ -3944,48 +5239,523 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
   // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
   // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
-  if (NON_READING_COMMANDS.has(writtenBase)) return null;
-
+  if (curl === null && NON_READING_COMMANDS.has(writtenBase)) return null;
   // The words xargs reads on stdin: every one is a candidate file name — the NON_READING exemption is bypassed for it,
   // but the `.env.example|…` suffix exemption in isSecretBasename still holds.
   const judgeStdinWords = (words) => {
     if (subIsShell) {
       // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
       // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-      const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), words, depth);
+      const hit = scanXargsShellScripts(subOperands, xargsReplaceStrs(operands, subIdx), words, depth);
       if (hit) return hit;
     }
-    for (const w of words) {
-      if (operandNamesSecret(w.text)) return secretRead(w.text);
-      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-      const received = xargsUnquoted(w.text);
-      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
-    }
-    return null;
+    // Each word as written and as xargs hands it on, kept per word list (pipedWordsReadSecret).
+    return pipedWordsReadSecret(words, false, false);
   };
+  const { hereWords, bodyWords } = ownFeedWords(s, bySeg);
 
   // A here-string feeds xargs its text as stdin (`xargs cat <<< .env`, #6433): each word of it is a candidate.
-  const hereWords = hereStringTargets(bySeg.get(s) || []).flatMap((text) => splitOutsideParams(text)).map((text) => ({ text }));
   if (hereWords.length) {
     const hit = judgeStdinWords(hereWords);
     if (hit) return hit;
   }
   // A heredoc is stdin the same way: its body's words are the names xargs reads.
-  const bodyWords = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || [])
-    .flatMap((h) => splitOutsideParams(h.text)).map((text) => ({ text }));
   if (bodyWords.length) {
     const hit = judgeStdinWords(bodyWords);
     if (hit) return hit;
   }
 
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
+  const fed = xargsFedReadsSecret(operands, subIdx, subIsShell ? subOperands : null, s, bySeg, sepAfter, curl, depth);
+  if (fed) return fed;
+
+  const { op, prevSeg } = xargsPrecedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
   if (prevSeg < 0) return null;
 
-  const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
+  const prevCmd = upstreamCommand(prevSeg, bySeg);
   if (!prevCmd) return null;
-  return judgeStdinWords(prevCmd.operands);
+  const printer = xargsPrinter(prevSeg, bySeg, sepAfter);
+  if (subIsShell) {
+    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+    const hit = pipedShellScriptsRead(operands, subIdx, subOperands, prevCmd, printer, depth);
+    if (hit) return hit;
+  }
+  return xargsPipedReadsSecret(operands, prevCmd, curl, printer);
+}
+
+// The block for a word piped into `xargs … SHELL -c` that the shell runs as
+// its script or with the word put into it (scanXargsShellScripts), or null:
+// the upstream command's words as written, then the words a printf or echo
+// prints (printedWords: `printf 'env\n' | xargs -I{} sh -c 'cat .{}'`), also
+// when a `tee` or a bare `cat` passes them on (xargsPrinter).
+function pipedShellScriptsRead(operands, subIdx, subOperands, prev, printer, depth) {
+  const replaceStrs = xargsReplaceStrs(operands, subIdx);
+  return scanXargsShellScripts(subOperands, replaceStrs, prev.operands, depth)
+    || (printer !== null && scanXargsShellScripts(subOperands, replaceStrs, printedWords(printer, operands, xargsCommandIndex(operands, 0, operands.length)), depth))
+    || null;
+}
+
+// The printf or echo whose output an xargs reads from segment `prevSeg`: that
+// segment's command, or the one upstream of each `tee` or bare `cat` that
+// passes its stdin on (passesStdinThrough: `printf 'env\n' | tee f | xargs …`),
+// or null. It is found once per segment, and each segment walked is charged to
+// the reader budget.
+const xargsPrinterBySegMap = new WeakMap();
+function xargsPrinter(prevSeg, bySeg, sepAfter) {
+  let found = xargsPrinterBySegMap.get(bySeg);
+  if (!found) xargsPrinterBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(prevSeg)) found.set(prevSeg, findXargsPrinter(prevSeg, bySeg, sepAfter));
+  return found.get(prevSeg);
+}
+function findXargsPrinter(prevSeg, bySeg, sepAfter) {
+  let seg = prevSeg;
+  for (;;) {
+    const cmd = upstreamCommand(seg, bySeg);
+    if (!cmd) return null;
+    if (cmd.base === 'printf' || cmd.base === 'echo') return cmd;
+    const tokens = bySeg.get(seg) || [];
+    chargeReader(tokens.length);
+    const words = resolveCommand(commandWords(tokens));
+    const feeds = {
+      heredocs: ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(seg) || []).map((h) => h.text),
+      hereStrings: hereStringTargets(tokens),
+    };
+    if (!words || !passesStdinThrough(words, feeds)) return null;
+    const { op, prevSeg: up } = precedingOp(seg, bySeg, sepAfter);
+    if (!((op === '|' || op === '|&') && up >= 0)) return null;
+    seg = up;
+  }
+}
+
+// precedingOp for an xargs segment, found once per segment: `find` runs many
+// xargs in one segment, and precedingOp walks every wordless segment before it.
+const xargsPrecedingOpBySegMap = new WeakMap();
+function xargsPrecedingOp(s, bySeg, sepAfter) {
+  let found = xargsPrecedingOpBySegMap.get(bySeg);
+  if (!found) xargsPrecedingOpBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) found.set(s, precedingOp(s, bySeg, sepAfter));
+  return found.get(s);
+}
+
+// The command of segment `prevSeg`, resolved once per segment: `find` runs
+// many xargs in one segment, and each reads the same piped words, so the
+// readings of those words (pipedWordsReadSecret, certOptionPiped) are kept by
+// the word list this returns.
+const upstreamCommandBySegMap = new WeakMap();
+function upstreamCommand(prevSeg, bySeg) {
+  let found = upstreamCommandBySegMap.get(bySeg);
+  if (!found) upstreamCommandBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(prevSeg)) found.set(prevSeg, resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word')));
+  return found.get(prevSeg);
+}
+
+// The curl that `xargs` runs, as { runs, subCmd } (the index of the command
+// xargs runs, and of the curl behind its wrappers), or null. The xargs-to-curl
+// reading lives in this helper and the next, not in scanXargsPipe, so that
+// function's stack frame stays next's size: it is on the stack under a piped
+// sub-shell's scan (see curlOperandOpensSecret).
+function xargsCurlTarget(operands) {
+  const runs = xargsCommandIndex(operands, 0, operands.length);
+  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
+  return subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text)) ? { runs, subCmd } : null;
+}
+
+// The block for a piped word that names a secret the xargs sub-command
+// reads (secretRead), or null. `prev` is the upstream command: its operands
+// are the piped words as written, and the words `printer` prints are judged
+// too (printedWords): `prev` itself where it is `printf` or `echo`, or one
+// upstream of a `tee` or bare `cat` (xargsPrinter).
+function xargsPipedReadsSecret(operands, prev, curl, printer = prev) {
+  const piped = prev.operands;
+  // They become curl's arguments when that command is curl: `xargs sudo curl`.
+  // A piped word is a cert option's value where the sub-command's cert option
+  // has its value slot open to the input: the option is the last word (xargs
+  // appends the input), or its value holds the replace string
+  // (`xargs -I{} curl --cert {}`, `-E{}`).
+  const toCurl = curl !== null;
+  const subCmd = toCurl ? curl.subCmd : -1;
+  const rep = toCurl ? xargsReplaceString(operands, 0, curl.runs) : null;
+  let certPiped = false;
+  for (let k = toCurl ? subCmd + 1 : operands.length; k < operands.length && !certPiped; k++) {
+    const t = operands[k].text;
+    const v = curlAttachedCertValue(t);
+    if (rep !== null && v !== null && v.includes(rep)) certPiped = true;
+    else if (curlTakesCertValue(t)) {
+      const next = operands[k + 1];
+      certPiped = rep === null ? !next : next !== undefined && next.text.includes(rep);
+    }
+  }
+  // And where a piped word is such an option put in by the replace string, the
+  // sub-command word after that string is its value
+  // (`printf -E | xargs -I{} curl {} f:pw`), quoted or not (`echo '"-E"'`).
+  const printed = printer === null ? [] : printedWords(printer, operands, toCurl ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  if (toCurl && rep !== null && (certOptionPiped(piped) || certOptionPiped(printed))) {
+    for (let k = subCmd + 1; k + 1 < operands.length; k++) {
+      if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return secretRead(curlOpened);
+    }
+  }
+  return pipedWordsReadSecret(piped, toCurl, certPiped) || pipedWordsReadSecret(printed, toCurl, certPiped);
+}
+
+// Whether one of `words` is a cert option, as written or as xargs hands it
+// on, kept per word list.
+const certOptionPipedByWords = new WeakMap();
+function certOptionPiped(words) {
+  if (!certOptionPipedByWords.has(words)) {
+    certOptionPipedByWords.set(words, words.some((w) => curlTakesCertValue(w.text) || curlTakesCertValue(xargsUnquoted(w.text))));
+  }
+  return certOptionPipedByWords.get(words);
+}
+
+// The block for one of `words`, piped into xargs, that names a secret its
+// sub-command reads (curl's when `toCurl`), or null; kept per word list and
+// flags, since each xargs that `find` runs reads the same words.
+const pipedWordsVerdicts = new WeakMap();
+function pipedWordsReadSecret(words, toCurl, certPiped) {
+  let found = pipedWordsVerdicts.get(words);
+  if (!found) pipedWordsVerdicts.set(words, (found = new Map()));
+  const key = (toCurl ? 2 : 0) + (certPiped ? 1 : 0);
+  if (!found.has(key)) found.set(key, findPipedWordSecret(words, toCurl, certPiped));
+  return found.get(key);
+}
+function findPipedWordSecret(words, toCurl, certPiped) {
+  for (let j = 0; j < words.length; j++) {
+    const w = words[j];
+    if (operandNamesSecret(w.text)) return secretRead(w.text);
+    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+    const received = xargsUnquoted(w.text);
+    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+    if (!toCurl) continue;
+    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(words, j)) return secretRead(curlOpened);
+    // curl reads the quote-removed word's value too (`-d@".env"`, `--cert ".env":pw`).
+    if (received !== w.text && (curlValueNamesSecret(received) || (certPiped && curlCertNamesSecret(received)))) return secretRead(curlOpened);
+    if (curlCertOpensSecretUnquoted(words, j)) return secretRead(curlOpened);
+    if (certPiped && curlCertNamesSecret(w.text)) return secretRead(curlOpened);
+  }
+  return null;
+}
+
+// curlCertOpensSecret over the words as xargs hands them on, quotes and
+// backslashes removed (`--cert ".env":pw`, `-E .env\:pw`); false where neither
+// word had any to remove, which curlCertOpensSecret has already judged.
+function curlCertOpensSecretUnquoted(words, k) {
+  const t = xargsUnquoted(words[k].text);
+  const prev = k > 0 ? xargsUnquoted(words[k - 1].text) : null;
+  if (t === words[k].text && (prev === null || prev === words[k - 1].text)) return false;
+  let v = curlAttachedCertValue(t);
+  if (v === null && prev !== null && curlTakesCertValue(prev)) v = t;
+  return v !== null && curlCertNamesSecret(v);
+}
+
+// The text an xargs in segment `s` reads on stdin from a here-string or a
+// heredoc: its own (`xargs cat <<< .env`, `xargs curl x <<EOF`), or one that a
+// bare `cat` upstream prints, through any `tee` or bare `cat` that passes it
+// on (`cat <<EOF | xargs curl x`), as { text, own }, `own` true for the
+// first; null for any other stdin. A pipe from printf or echo is read as
+// printedWords reads it, and a file (`xargs cat < list`) is not read.
+// It is found once per segment (xargsFedTextBySegMap): `find` runs many xargs
+// in one segment, and each would walk the same tokens again.
+const xargsFedTextBySegMap = new WeakMap();
+function xargsFedText(s, bySeg, sepAfter) {
+  let found = xargsFedTextBySegMap.get(bySeg);
+  if (!found) xargsFedTextBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) found.set(s, findXargsFedText(s, bySeg, sepAfter));
+  return found.get(s);
+}
+function findXargsFedText(s, bySeg, sepAfter) {
+  const own = segmentFedText(s, bySeg);
+  if (own !== null) return { text: own, own: true };
+  let seg = s;
+  for (;;) {
+    const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
+    if (!((op === '|' || op === '|&') && prevSeg >= 0)) return null;
+    const cmd = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
+    if (!cmd || (cmd.base !== 'cat' && cmd.base !== 'tee')) return null;
+    const fed = segmentFedText(prevSeg, bySeg);
+    if (fed !== null) return cmd.base === 'tee' || catPrintedText(cmd, { heredocs: [fed], hereStrings: [] }) !== null ? { text: fed, own: false } : null;
+    if (cmd.base === 'cat' && !cmd.operands.every((w) => w.text.startsWith('-'))) return null;
+    seg = prevSeg;
+  }
+}
+
+// The heredoc bodies and here-string words given to segment `s`, joined, or
+// null. Each token walked is charged to the reader budget.
+function segmentFedText(s, bySeg) {
+  chargeReader((bySeg.get(s) || []).length);
+  const heredocs = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []).map((h) => h.text);
+  return fedText({ heredocs, hereStrings: hereStringTargets(bySeg.get(s) || []) });
+}
+
+// The block for a word xargs reads from the text xargsFedText finds, read as
+// a piped word is (xargsPipedReadsSecret), and as a shell's script when xargs
+// runs a shell (`shellOperands`, else null); null when there is no such text.
+// Each character is charged to the reader budget for the words cut from it,
+// as printed text is (PRINTED_WORD_COST).
+function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter, curl, depth) {
+  const words = xargsFedWords(operands, s, bySeg, sepAfter, curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  if (words === null) return null;
+  const hit = shellOperands === null ? null : scanXargsShellScripts(shellOperands, xargsReplaceStrs(operands, subIdx), words, depth);
+  return hit || xargsPipedReadsSecret(operands, { base: '', operands: words }, curl);
+}
+
+// The words of segment `s`'s own here-strings and heredoc bodies, as { hereWords, bodyWords }, found once per
+// segment.
+const ownFeedWordsBySegMap = new WeakMap();
+function ownFeedWords(s, bySeg) {
+  let found = ownFeedWordsBySegMap.get(bySeg);
+  if (!found) ownFeedWordsBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) {
+    found.set(s, {
+      hereWords: hereStringTargets(bySeg.get(s) || []).flatMap((text) => splitOutsideParams(text)).map((text) => ({ text })),
+      bodyWords: ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || [])
+        .flatMap((h) => splitOutsideParams(h.text)).map((text) => ({ text })),
+    });
+  }
+  return found.get(s);
+}
+
+// What a knowable `printf` or `echo` upstream of xargs prints, cut into the
+// words xargs could read from it, as { text } objects; [] for any other
+// command. The words as written miss what only the printing makes: the
+// escapes in printf's format and in its `%b` arguments, and in echo's operands
+// (`printf -- '-d\n@.env\n' | xargs curl x`, `printf '.env\n' | xargs cat`).
+// The text is cut at blanks, newlines and NULs and at a `-d` delimiter, and
+// each line counts as a word too (`-I`, `-L`), which is every way xargs splits
+// it and more, so a reading this adds can deny a command xargs would hand an
+// argument other than the one judged; the words as written are still judged
+// (xargsPipedReadsSecret), so nothing denied before is allowed now. echo is
+// read with its escapes on unless `-E` is its last such option: zsh's echo
+// and bash's under `xpg_echo` decode them without `-e`. The printed text is
+// charged to the reader budget (chargeReader), since printf repeats its format
+// while arguments are left.
+const printedWordsByPrev = new WeakMap();
+function printedWords(prev, operands, runs) {
+  if (prev.base !== 'printf' && prev.base !== 'echo') return [];
+  let found = printedWordsByPrev.get(prev);
+  if (!found) {
+    found = { text: prev.base === 'printf' ? printfOutput(prev.operands) : echoOutput(prev.operands), cuts: new Map() };
+    printedWordsByPrev.set(prev, found);
+  }
+  if (found.text === null) return [];
+  const to = runs === -1 ? operands.length : runs;
+  const key = JSON.stringify([xargsDelimiter(operands, to), xargsReplaceString(operands, 0, to) !== null]);
+  if (!found.cuts.has(key)) {
+    // Each cut after the first is charged as the first was when it was printed.
+    if (found.cuts.size > 0) chargeReader(found.text.length * (1 + PRINTED_WORD_COST));
+    found.cuts.set(key, xargsReadWords(found.text, operands, runs));
+  }
+  return found.cuts.get(key);
+}
+
+// The words xargs could read from `text` on its stdin, cut as printedWords
+// describes, as { text } objects. `runs` is the index of the command xargs
+// runs in `operands`, or -1.
+function xargsReadWords(text, operands, runs) {
+  const to = runs === -1 ? operands.length : runs;
+  const delimiter = xargsDelimiter(operands, to);
+  const lines = xargsReplaceString(operands, 0, to) !== null;
+  // The text was charged as it was printed (printfOutput, echoOutput); under
+  // -I its lines are judged as words too, and are charged again for that.
+  if (lines) chargeReader(text.length * PRINTED_WORD_COST);
+  // Blanks, and the delimiter -d names, end a word; a newline or a NUL ends a line too.
+  const sep = delimiter === null ? /[ \t]/ : new RegExp(`[ \t${delimiter.replace(/[\\\]^-]/g, '\\$&')}]`);
+  const words = [];
+  const cut = (part) => { if (part !== '') words.push({ text: part }); };
+  for (const line of text.split(/[\n\0]/)) {
+    const pieces = line.split(sep);
+    // A line is a word of its own only under -I, and only where it holds more than one piece.
+    if (lines && pieces.length > 1) cut(line.replace(/^[ \t]+/, ''));
+    for (const piece of pieces) cut(piece);
+  }
+  return words;
+}
+
+// The reader-budget charge per character of printed text, on top of one for
+// printing it, for judging the words cut from it (printedWords): each is read
+// as an operand and, under curl, as a -F value under three grammars and as an
+// @file value. At this rate a line whose printed text could hold the most
+// words is denied as too complex in well under a second, before the text is
+// held whole.
+const PRINTED_WORD_COST = 16;
+
+// What printf prints for `operands` (bash's builtin: escapes in the format,
+// `%s`/`%q`/`%b`/`%c` conversions with a precision, the format repeated while
+// arguments are left, `%(fmt)T`'s text), or null when it is given
+// no format or its first word is an option. A numeric
+// conversion prints a number, which names no file, so it is read as `0`; a
+// conversion bash refuses ends the output, as bash's error does.
+function printfOutput(operands) {
+  let i = 0;
+  if (i < operands.length && operands[i].text === '--') i++;
+  if (i >= operands.length) return null;
+  // bash and zsh read a first word starting with `-` as an option, and print
+  // nothing for it: `-v var` prints into a variable, any other is refused.
+  if (i === 0 && operands[0].text.length > 1 && operands[0].text[0] === '-') return null;
+  const format = operands[i].text;
+  const args = operands.slice(i + 1).map((w) => w.text);
+  let out = '';
+  let a = 0;
+  // Each use of the format is charged, and the text it printed, as it is printed.
+  const charged = (start) => chargeReader((out.length - start) * (1 + PRINTED_WORD_COST));
+  for (;;) {
+    chargeReader(format.length);
+    const from = a;
+    const start = out.length;
+    let k = 0;
+    while (k < format.length) {
+      const ch = format[k];
+      if (ch === '\\') {
+        const e = printfEscape(format, k, 'format');
+        out += e.text;
+        k = e.next;
+        continue;
+      }
+      if (ch !== '%') { out += ch; k++; continue; }
+      let j = k + 1;
+      if (format[j] === '%') { out += '%'; k = j + 1; continue; }
+      while (j < format.length && "-+ #0'".includes(format[j])) j++;
+      if (format[j] === '*') { a++; j++; } else while (j < format.length && format[j] >= '0' && format[j] <= '9') j++;
+      let precision = -1;
+      if (format[j] === '.') {
+        j++;
+        // A negative `*` precision is taken as none, as bash takes it.
+        if (format[j] === '*') { precision = parseInt(args[a] || '0', 10) || 0; if (precision < 0) precision = -1; a++; j++; } else {
+          const p = j;
+          while (j < format.length && format[j] >= '0' && format[j] <= '9') j++;
+          precision = parseInt(format.slice(p, j) || '0', 10);
+        }
+      }
+      while (j < format.length && 'hlLjzt'.includes(format[j])) j++;
+      // `%(fmt)T` prints the time as strftime writes `fmt`: its text as it is,
+      // each conversion a number or a name of the date, read as `0`.
+      if (format[j] === '(') {
+        const close = format.indexOf(')T', j);
+        if (close === -1) { charged(start); return out; }
+        out += format.slice(j + 1, close).replace(/%(.?)/g, (m, c) => (c === '%' ? '%' : '0'));
+        a++;
+        k = close + 2;
+        continue;
+      }
+      const conv = format[j];
+      const arg = a < args.length ? args[a] : '';
+      const cutTo = (t) => (precision >= 0 ? t.slice(0, precision) : t);
+      if (conv === 's' || conv === 'q' || conv === 'Q') { out += cutTo(arg); a++; } else if (conv === 'b') {
+        const e = printfEscapes(arg, 'b');
+        out += cutTo(e.text);
+        a++;
+        if (e.stop) { charged(start); return out; }
+      } else if (conv === 'c') { out += arg.slice(0, 1); a++; } else if (conv !== undefined && 'diouxXeEfFgGaA'.includes(conv)) {
+        out += '0';
+        a++;
+      } else {
+        charged(start);
+        return out;
+      }
+      k = j + 1;
+    }
+    charged(start);
+    if (a >= args.length || a === from) break;
+  }
+  return out;
+}
+
+// What echo prints for `operands`: its leading `-n`/`-e`/`-E` words are
+// options, and its escapes are decoded unless the last of `-e`/`-E` is `-E`.
+function echoOutput(operands) {
+  let start = 0;
+  let decode = true;
+  while (start < operands.length && /^-[neE]+$/.test(operands[start].text)) {
+    const t = operands[start].text;
+    const e = t.lastIndexOf('e');
+    const E = t.lastIndexOf('E');
+    if (e !== -1 || E !== -1) decode = e > E;
+    start++;
+  }
+  const text = operands.slice(start).map((w) => w.text).join(' ');
+  chargeReader(text.length * (1 + PRINTED_WORD_COST));
+  return decode ? printfEscapes(text, 'echo').text : text;
+}
+
+// `text` with its backslash escapes decoded, as { text, stop }, the way bash
+// decodes them for `mode`: 'format', printf's format (`\nnn` octal, `\c`
+// kept); 'echo', echo -e's operands (`\0nnn` octal); 'b', a printf `%b`
+// argument (`\0nnn` and `\nnn` octal). Under 'echo' and 'b' a `\c` ends all
+// output (stop).
+function printfEscapes(text, mode) {
+  let out = '';
+  let k = 0;
+  while (k < text.length) {
+    if (text[k] !== '\\') { out += text[k++]; continue; }
+    if (mode !== 'format' && text[k + 1] === 'c') return { text: out, stop: true };
+    const e = printfEscape(text, k, mode);
+    out += e.text;
+    k = e.next;
+  }
+  return { text: out, stop: false };
+}
+
+const PRINTF_ESCAPES = new Map([
+  ['a', '\x07'], ['b', '\b'], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'],
+  ['t', '\t'], ['v', '\v'], ['\\', '\\'], ['"', '"'], ["'", "'"], ['?', '?'],
+]);
+
+// The escape at text[k] (a backslash) under `mode` (printfEscapes): { text,
+// next }. An escape bash does not know keeps its backslash.
+function printfEscape(text, k, mode) {
+  const c = text[k + 1];
+  if (c === undefined) return { text: '\\', next: k + 1 };
+  const simple = PRINTF_ESCAPES.get(c);
+  if (simple !== undefined) return { text: simple, next: k + 2 };
+  const octal = (ch) => ch !== undefined && ch >= '0' && ch <= '7';
+  if (mode === 'echo' ? c === '0' : octal(c)) {
+    let j = mode !== 'format' && c === '0' ? k + 2 : k + 1;
+    let v = 0;
+    for (let n = 0; n < 3 && octal(text[j]); n++) v = v * 8 + (text.charCodeAt(j++) - 48);
+    return { text: String.fromCharCode(v & 0xff), next: j };
+  }
+  const hexMax = c === 'x' ? 2 : c === 'u' ? 4 : c === 'U' ? 8 : 0;
+  if (hexMax > 0) {
+    let j = k + 2;
+    let v = 0;
+    while (j - k - 2 < hexMax && /[0-9A-Fa-f]/.test(text[j] || '')) v = v * 16 + parseInt(text[j++], 16);
+    if (j === k + 2) return { text: '\\' + c, next: k + 2 };
+    return { text: v <= 0x10ffff ? String.fromCodePoint(v) : '', next: j };
+  }
+  return { text: '\\' + c, next: k + 2 };
+}
+
+// The delimiter xargs's `-d` / `--delimiter` (any unambiguous prefix) sets
+// among its options operands[0..to), as GNU xargs reads them (one character, or
+// a C escape), or null.
+function xargsDelimiter(operands, to) {
+  let d = null;
+  for (let m = 0; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--' || t.length < 2 || t[0] !== '-') break;
+    let v = null;
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      if (name.length >= 3 && '--delimiter'.startsWith(name)) v = eq !== -1 ? t.slice(eq + 1) : m + 1 < to ? operands[++m].text : null;
+      else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) m++;
+    } else {
+      for (let c = 1; c < t.length; c++) {
+        if (t[c] === 'd') {
+          v = c < t.length - 1 ? t.slice(c + 1) : m + 1 < to ? operands[++m].text : null;
+          break;
+        }
+        if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+        if (XARGS_SHORT_VALUE.includes(t[c])) {
+          if (c === t.length - 1) m++;
+          break;
+        }
+      }
+    }
+    if (v !== null && v !== '') d = printfEscapes(v, 'format').text.slice(0, 1) || null;
+  }
+  return d;
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -3993,35 +5763,108 @@ function xargsUnquoted(text) {
   return text.replace(/["'\\]/g, '');
 }
 
-// xargs's replace string: `-I STR`, `-ISTR`, `-i[STR]`, `--replace[=STR]` (default `{}`), or null without one.
-function xargsReplaceStr(operands, subIdx) {
-  for (let i = 0; i < subIdx; i++) {
-    const t = operands[i].text;
-    if (t === '-I') return operands[i + 1] ? operands[i + 1].text : null;
-    if (t.startsWith('-I') && t.length > 2) return t.slice(2);
-    if (t === '-i' || t === '--replace') return '{}';
-    if (t.startsWith('-i') && t.length > 2 && !t.startsWith('--')) return t.slice(2);
-    if (t.startsWith('--replace=')) return t.slice('--replace='.length) || '{}';
+// The replace strings a shell script under xargs is read with, from the
+// options before the sub-command (xargsReplaceString, so a cluster holding one
+// counts: `-0I{}`, `-tI{}`, `-rI{}`): as GNU xargs reads them, where a later
+// `-L` or `-n` cancels one, and with nothing cancelling it (`-I{} -L1`).
+// null among them is xargs appending its input.
+function xargsReplaceStrs(operands, subIdx) {
+  const gnu = xargsReplaceString(operands, 0, subIdx);
+  const kept = xargsReplaceString(operands, 0, subIdx, false);
+  return gnu === kept ? [gnu] : [gnu, kept];
+}
+
+// The words xargsReadWords cuts from the fed text of segment `s`, kept per
+// segment and cut (delimiter, -I) and charged per cut, or null with no fed
+// text: `find` can run many xargs in one segment. A word of xargs's own feed
+// that judgeStdinWords has put into a shell's script already (ownFeedWords)
+// is marked `judged` and not put in again; a whole line under -I, a word cut
+// at a -d delimiter and every word a bare `cat` or `tee` passes on are.
+const xargsFedWordsBySegMap = new WeakMap();
+function xargsFedWords(operands, s, bySeg, sepAfter, runs) {
+  const fed = xargsFedText(s, bySeg, sepAfter);
+  if (fed === null) return null;
+  const { text } = fed;
+  let bySegCuts = xargsFedWordsBySegMap.get(bySeg);
+  if (!bySegCuts) xargsFedWordsBySegMap.set(bySeg, (bySegCuts = new Map()));
+  const to = runs === -1 ? operands.length : runs;
+  const key = JSON.stringify([s, xargsDelimiter(operands, to), xargsReplaceString(operands, 0, to) !== null]);
+  if (!bySegCuts.has(key)) {
+    chargeReader(text.length * PRINTED_WORD_COST);
+    const words = xargsReadWords(text, operands, runs);
+    if (fed.own) markJudgedWords(words, s, bySeg);
+    bySegCuts.set(key, words);
   }
-  return null;
+  return bySegCuts.get(key);
+}
+
+// Marks each of `words` that ownFeedWords also cut from segment `s`'s own feed.
+function markJudgedWords(words, s, bySeg) {
+  const { hereWords, bodyWords } = ownFeedWords(s, bySeg);
+  const judged = new Set(hereWords.concat(bodyWords).map((w) => w.text));
+  for (const w of words) if (judged.has(w.text)) w.judged = true;
 }
 
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
-// (quotes and backslashes removed), is read as the script, or substituted into it.
-function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
-  const cIdx = shellOperands.findIndex((w) => DASH_C_RE.test(w.text));
-  if (cIdx === -1) return null;
-  const script = shellOperands[cIdx + 1];
-  for (const w of upstream) {
-    const word = xargsUnquoted(w.text);
-    let text = null;
-    if (!script || (replaceStr !== null && script.text === replaceStr)) text = word;
-    else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) text = script.text.split(replaceStr).join(word);
-    if (text !== null) {
-      const hit = findSecretRead(text, depth + 1);
+// (quotes and backslashes removed), is read as the script, or substituted into it, for each of `replaceStrs`.
+function scanXargsShellScripts(shellOperands, replaceStrs, upstream, depth) {
+  const cIdxs = dashCIndices(shellOperands);
+  for (let r = 0; r < replaceStrs.length; r++) {
+    for (let i = 0; i < cIdxs.length; i++) {
+      const hit = xargsShellScriptsAt(shellOperands, cIdxs[i], replaceStrs[r], upstream, depth);
       if (hit) return hit;
     }
+  }
+  return null;
+}
+
+// scanXargsShellScripts for the `-c` at `cIdx`: the word after it, then the
+// one past its options, as dashCScriptIndices reads them; with none past them,
+// each piped word is the script (`… | xargs sh -c --`).
+function xargsShellScriptsAt(shellOperands, cIdx, replaceStr, upstream, depth) {
+  const after = DASH_C_RE.test(shellOperands[cIdx].text);
+  const first = after ? xargsShellScriptsRead(shellOperands[cIdx + 1], replaceStr, upstream, depth) : null;
+  if (first !== null) return first;
+  const k = dashCScriptIndex(shellOperands, cIdx);
+  return after && k === cIdx + 1 ? null : xargsShellScriptsRead(shellOperands[k], replaceStr, upstream, depth);
+}
+
+// scanXargsShellScripts for one `script` operand (undefined: none). The
+// script is tested for the replace string once, not once per word, and the
+// verdict is kept per word list, script and replace string, since `find` can
+// run the same xargs once per action. A word that is the whole script is
+// charged as printed text is; a script the word is put into is read as next
+// reads it.
+const xargsShellScriptVerdicts = new WeakMap();
+function xargsShellScriptsRead(script, replaceStr, upstream, depth) {
+  let found = xargsShellScriptVerdicts.get(upstream);
+  if (!found) xargsShellScriptVerdicts.set(upstream, (found = new Map()));
+  const key = JSON.stringify([depth, replaceStr, script ? script.text : null]);
+  if (!found.has(key)) found.set(key, findXargsShellScriptRead(script, replaceStr, upstream, depth));
+  return found.get(key);
+}
+function findXargsShellScriptRead(script, replaceStr, upstream, depth) {
+  const whole = !script || (replaceStr !== null && script.text === replaceStr);
+  const parts = whole || replaceStr === null || replaceStr === '' ? null : script.text.split(replaceStr);
+  if (!whole && (parts === null || parts.length < 2)) return null;
+  // Past the nesting limit a script is not read, only held as too deep
+  // (readEachWay): the first one that is not blank does that, and a blank one
+  // nothing. So there no script is built: a part or word that is not blank is
+  // held in its place, and a blank word put into blank parts is skipped.
+  const deep = depth >= MAX_NESTING_DEPTH;
+  const blankParts = whole || parts.every((p) => p.trim() === '');
+  const seen = new Set();
+  for (const w of upstream) {
+    if (!whole && w.judged) continue;
+    const word = xargsUnquoted(w.text);
+    if (seen.has(word)) continue;
+    seen.add(word);
+    if (whole) chargeReader((word.length + 1) * PRINTED_WORD_COST);
+    if (deep && blankParts && word.trim() === '') continue;
+    const read = deep && !blankParts ? parts.find((p) => p.trim() !== '') : whole || deep ? word : parts.join(word);
+    const hit = findSecretRead(read, depth + 1);
+    if (hit || deep) return hit;
   }
   return null;
 }
@@ -4375,6 +6218,8 @@ function main() {
       exemption.bashLine = command;
       const { block, threw } = scanBashReadings(command);
       if (block !== null) emitBlock(block.code, tool, block.text);
+      const further = scanFurtherReading(command);
+      if (further !== null) emitBlock(further.code, tool, further.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
         // A reading that failed is a hook error the catch below never sees, so
@@ -4383,9 +6228,9 @@ function main() {
         crashFor(GUARD_ERROR_CAUSE.READING_FAILED, 'a shell reading failed');
       }
       // An error in a scan that is not an overflow is a hook error that
-      // scanBashReadings caught before the catch below could see it, so it takes
-      // the host's crash policy as that catch does (#5784).
-      if (threw) crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
+      // scanBashReadings or scanFurtherReading caught before the catch below could
+      // see it, so it takes the host's crash policy as that catch does (#5784).
+      if (threw || furtherThrew) crashFor(GUARD_ERROR_CAUSE.HOOK_ERROR, 'internal error');
       allow(undefined);
     } catch (e) {
       // A stack overflow is a limit, not a bug: failing open on it allows a
@@ -4402,8 +6247,8 @@ function main() {
 }
 
 module.exports = {
-  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanBashReadings, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  GUARD_ERROR_CAUSE, MAX_SCAN_CHARACTERS, STDIN_TIMEOUT_MS,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanBashReadings, scanDebuggerSpawn, scanFurtherReading, tokenize, workSpent, MAX_SCAN_SEPARATORS,
+  GUARD_ERROR_CAUSE, MAX_SCAN_CHARACTERS, PRINTED_WORD_COST, STDIN_TIMEOUT_MS,
 };
 
 if (require.main === module) main();
