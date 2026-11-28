@@ -2112,7 +2112,8 @@ function requireProjectContext(ctx: unknown, verb: string): asserts ctx is Proje
   const candidate = ctx as Partial<ProjectContext> | null | undefined;
   if (
     candidate === null || typeof candidate !== 'object' ||
-    typeof candidate.worktreeRoot !== 'string' || typeof candidate.projectRoot !== 'string'
+    typeof candidate.worktreeRoot !== 'string' || typeof candidate.projectRoot !== 'string' ||
+    candidate.provenance === null || typeof candidate.provenance !== 'object'
   ) {
     throw new TypeError(`${verb}: a ProjectContext is required (resolveProjectContext); got ${typeof ctx}`);
   }
@@ -2124,10 +2125,23 @@ function requireProjectContext(ctx: unknown, verb: string): asserts ctx is Proje
  * project nested inside the worktree gets its paths re-based so git sees the same files.
  */
 function rebaseToWorktree(ctx: ProjectContext, declared: string[] | undefined): string[] | undefined {
-  if (!declared || ctx.projectRoot === ctx.worktreeRoot) return declared;
+  if (!declared) return declared;
+  // Compared as real paths: the resolver keeps the caller's spelling of projectRoot (a symlinked
+  // /tmp, a symlinked checkout) while worktreeRoot is canonical, so the strings can differ for
+  // one directory. A lexical relative() across the two spellings yields `..`-prefixed paths.
+  const real = (p: string): string => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return p;
+    }
+  };
+  const projectReal = real(ctx.projectRoot);
+  const worktreeReal = real(ctx.worktreeRoot);
+  if (projectReal === worktreeReal) return declared;
   return declared.map((p) => (path.isAbsolute(p)
     ? p
-    : path.relative(ctx.worktreeRoot, path.resolve(ctx.projectRoot, p)).split(path.sep).join('/')));
+    : path.relative(worktreeReal, path.resolve(projectReal, p)).split(path.sep).join('/')));
 }
 
 function cmdCommit(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[]): void {
@@ -2360,7 +2374,8 @@ function cmdCommit(ctx: ProjectContext, message: string | undefined, files: stri
   // `.planning/` sweep, which would commit everything under it.
   const removedDeclared = filesRemoved ?? [];
   const explicitFiles = (files && files.length > 0) || removedDeclared.length > 0;
-  const filesToStage = explicitFiles ? (files ?? []) : ['.planning/'];
+  // The default scope is a project-relative path too: rebase it like the declared ones.
+  const filesToStage = explicitFiles ? (files ?? []) : (rebaseToWorktree(ctx, ['.planning/']) ?? ['.planning/']);
   const stagedPaths: string[] = [];
   // #2608: a `git add` that fails must abort the commit, not be skipped.
   // #2523 stopped a failed path entering the commit pathspec, but skipping it

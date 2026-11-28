@@ -630,4 +630,60 @@ describe('project-context CLI: workspace and verb', () => {
       assert.equal(git(['log', '-1', '--format=%s'], api), 'add a');
     });
   });
+
+  describe('#6821 a project nested inside the worktree commits the same files git sees', () => {
+    // repo/sub holds `.planning`, so projectRoot (repo/sub) differs from worktreeRoot (repo).
+    function mkNested(t) {
+      const tmp = mkTmp(t);
+      const repo = fs.realpathSync.native(mkRepo(path.join(tmp, 'repo')));
+      write(path.join(repo, 'sub', '.planning', 'config.json'), COMMIT_DOCS_ON);
+      git(['add', '-A'], repo);
+      git(['commit', '-q', '-m', 'planning'], repo);
+      write(path.join(repo, 'sub', '.planning', 'STATE.md'), '# state\n');
+      return { tmp, repo, sub: path.join(repo, 'sub') };
+    }
+
+    test('commitWithExplicitFilesFromANestedProjectStagesTheProjectRelativePath', (t) => {
+      const { tmp, repo, sub } = mkNested(t);
+      const before = commitCount(repo);
+      const res = run(['commit', 'nested state', '--files', '.planning/STATE.md'], sub, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(repo), before + 1);
+      assert.match(git(['show', '--name-only', '--format=', 'HEAD'], repo), /^sub\/\.planning\/STATE\.md$/m);
+    });
+
+    test('commitWithTheDefaultScopeFromANestedProjectStagesItsPlanningDirectory', (t) => {
+      const { tmp, repo, sub } = mkNested(t);
+      const before = commitCount(repo);
+      const res = run(['commit', 'nested default scope'], sub, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(repo), before + 1, 'the default .planning/ scope resolves against the project root, not the worktree root');
+      assert.match(git(['show', '--name-only', '--format=', 'HEAD'], repo), /^sub\/\.planning\/STATE\.md$/m);
+    });
+
+    const skip = process.platform === 'win32' ? 'creating symlinks needs privileges on win32' : false;
+    test('commitThroughASymlinkedSpellingOfTheProjectRootStagesTheSameFiles', { skip }, (t) => {
+      const tmp = mkTmp(t);
+      const repo = fs.realpathSync.native(mkRepo(path.join(tmp, 'repo')));
+      write(path.join(repo, 'sub', '.planning', 'config.json'), COMMIT_DOCS_ON);
+      git(['add', '-A'], repo);
+      git(['commit', '-q', '-m', 'planning'], repo);
+      write(path.join(repo, 'sub', '.planning', 'STATE.md'), '# state\n');
+      const link = path.join(tmp, 'link');
+      fs.symlinkSync(repo, link, 'dir');
+      const before = commitCount(repo);
+      // --project-dir keeps the caller's spelling (through the link); worktreeRoot is canonical.
+      const res = run(['commit', 'via link', '--files', '.planning/STATE.md', '--project-dir', path.join(link, 'sub')], tmp, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(commitCount(repo), before + 1);
+      assert.match(git(['show', '--name-only', '--format=', 'HEAD'], repo), /^sub\/\.planning\/STATE\.md$/m);
+    });
+  });
+
+  test('cmdCommitDocsGuardDisableRefusesAStringRootWithATypeError', () => {
+    assert.throws(
+      () => commands.cmdCommitDocsGuardDisable(path.join(os.tmpdir(), 'gsd-6821-not-a-context'), false),
+      (err) => err instanceof TypeError && /ProjectContext/.test(err.message),
+    );
+  });
 }
