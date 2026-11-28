@@ -88,6 +88,7 @@ module.exports = {
   "tests/emitted-attribution.test.cjs",
   "tests/eslint-no-verification-status-literal.test.cjs",
   "tests/execute-mvp-tdd-gate.test.cjs",
+  "tests/execute-phase-cross-block-state.test.cjs",
   "tests/execute-plan-update-codebase-map-diff-base.test.cjs",
   "tests/executed-plan.test.cjs",
   "tests/executor-mvp-tdd-section.test.cjs",
