@@ -46,7 +46,8 @@ const { reportStatusOf, isReportContained, VERIFICATION_STATUS } = verificationM
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import pristineBaseline = require('./pristine-baseline.cjs');
 const { gitExec } = pristineBaseline;
-import { requireSafePath, sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import { sanitizeForDisplay, PathAcceptance } from './security.cjs';
+import { requirePlanningArtifactPath, resolveProjectContext, type ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
 const { loadConfig } = configLoader;
@@ -432,13 +433,14 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
 
 // ─── cmdRenderCheckpoint ──────────────────────────────────────────────────────
 
-function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: boolean): void {
+function cmdRenderCheckpoint(ctx: ProjectContext, options: { file?: string } = {}, raw: boolean): void {
   const filePath = options.file;
   if (!filePath) {
     error('UAT file required: use uat render-checkpoint --file <path>');
+    return;
   }
 
-  const resolvedPath = requireSafePath(filePath, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  const { resolved: resolvedPath, display } = requirePlanningArtifactPath(ctx, filePath, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${filePath}`);
   }
@@ -450,11 +452,11 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
     error('UAT session is already complete; no pending checkpoint to render');
   }
 
-  const config = loadConfig(cwd);
+  const config = loadConfig(ctx.projectRoot);
   const responseLanguage = typeof config.response_language === 'string' ? config.response_language : undefined;
   const checkpoint = buildCheckpoint(currentTest as Required<Omit<CurrentTest, 'complete'>> & { complete: false }, responseLanguage);
   output({
-    file_path: toPosixPath(path.relative(cwd, resolvedPath)),
+    file_path: toPosixPath(display),
     test_number: currentTest.number,
     test_name: currentTest.name,
     checkpoint,
@@ -782,7 +784,7 @@ function cmdUatCompleteSession(
     error('UAT file required: use uat.complete-session <uatPath>');
     return;
   }
-  const resolvedPath = requireSafePath(uatPathArg, cwd, 'UAT file', PathAcceptance.AbsoluteInsideRoot);
+  const resolvedPath = requirePlanningArtifactPath(resolveProjectContext(cwd), uatPathArg, 'UAT file', PathAcceptance.AbsoluteInsideRoot).resolved;
   if (!fs.existsSync(resolvedPath)) {
     error(`UAT file not found: ${uatPathArg}`);
     return;

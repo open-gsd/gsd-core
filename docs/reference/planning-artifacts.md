@@ -19,26 +19,57 @@ The `.planning/` directory is GSD Core's shared memory for a project. Every work
 ├── DECISIONS-INDEX.md                  # Rolling summary of prior decisions (optional)
 ├── METHODOLOGY.md                      # Reusable interpretive frameworks (optional)
 ├── HANDOFF.json                        # Machine-readable pause state (transient)
-├── codebase/                           # Codebase maps (optional)
-│   ├── architecture.md
-│   ├── stack.md
-│   └── ...
+├── research/                           # Domain research from /gsd-new-project (optional)
+│   ├── SUMMARY.md
+│   ├── STACK.md
+│   ├── FEATURES.md
+│   ├── ARCHITECTURE.md
+│   └── PITFALLS.md
+├── codebase/                           # Codebase maps (from /gsd-map-codebase or /gsd-onboard, optional); YAML frontmatter in each carries last_mapped_commit (#2003)
+│   ├── STACK.md
+│   ├── INTEGRATIONS.md
+│   ├── ARCHITECTURE.md
+│   ├── STRUCTURE.md                    # The post-execute drift gate compares new structure against this map
+│   ├── CONVENTIONS.md
+│   ├── TESTING.md
+│   └── CONCERNS.md
 ├── onboarding/                         # Brownfield onboarding summary (optional)
 │   └── SUMMARY.md
 ├── intel/                              # Queryable symbol index (optional, intel.enabled)
 │   └── API-SURFACE.md
-└── phases/
-    └── <NN>-<slug>/                    # One directory per phase
-        ├── <NN>-CONTEXT.md             # Implementation decisions (discuss-phase)
-        ├── <NN>-DISCUSSION-LOG.md      # Human-readable discussion audit (discuss-phase)
-        ├── <NN>-RESEARCH.md            # Technical research findings (plan-phase)
-        ├── <NN>-VALIDATION.md          # Nyquist test-coverage strategy (plan-phase)
-        ├── <NN>-PATTERNS.md            # Codebase analog map (plan-phase, optional)
-        ├── <NN>-<PP>-PLAN.md           # Executable plan (plan-phase, one per plan)
-        ├── <NN>-<PP>-SUMMARY.md        # Execution record (execute-phase, one per plan)
-        ├── <NN>-VERIFICATION.md        # Phase goal verification report (verify-phase)
-        ├── <NN>-UAT.md                 # Persistent UAT session state (execute-phase)
-        └── .continue-here.md           # Resume instructions after pause (pause-work)
+├── phases/
+│   └── <NN>-<slug>/                    # One directory per phase
+│       ├── <NN>-CONTEXT.md             # Implementation decisions (discuss-phase)
+│       ├── <NN>-DISCUSSION-LOG.md      # Human-readable discussion audit (discuss-phase)
+│       ├── <NN>-RESEARCH.md            # Technical research findings (plan-phase)
+│       ├── <NN>-VALIDATION.md          # Nyquist test-coverage strategy (plan-phase)
+│       ├── <NN>-PATTERNS.md            # Codebase analog map (plan-phase, optional)
+│       ├── <NN>-<PP>-PLAN.md           # Executable plan (plan-phase, one per plan)
+│       ├── <NN>-<PP>-SUMMARY.md        # Execution record (execute-phase, one per plan)
+│       ├── <NN>-VERIFICATION.md        # Phase goal verification report (verify-phase)
+│       ├── <NN>-UI-SPEC.md             # UI design contract (ui-phase)
+│       ├── <NN>-UI-REVIEW.md           # Visual audit scores (ui-review)
+│       ├── <NN>-UAT.md                 # Persistent UAT session state (execute-phase)
+│       └── .continue-here.md           # Resume instructions after pause (pause-work, phase scope)
+├── quick/                              # Quick tasks (from /gsd-quick)
+│   └── YYMMDD-xxx-slug/
+│       ├── <quick_id>-PLAN.md
+│       └── <quick_id>-SUMMARY.md
+├── todos/                              # Captured todos (from /gsd-capture, default mode)
+│   ├── pending/                        # Open captures
+│   └── completed/                      # Completed todos
+├── threads/                            # Persistent context threads (from /gsd-thread)
+├── seeds/                              # Forward-looking ideas (from /gsd-capture --seed)
+├── debug/                              # Active debug sessions (from /gsd-debug)
+│   ├── *.md                            # Active sessions
+│   ├── resolved/                       # Archived sessions
+│   └── knowledge-base.md               # Persistent debug learnings
+├── spikes/                             # Spike artifacts (from /gsd-spike)
+├── sketches/                           # Sketch artifacts (from /gsd-sketch)
+├── deliberations/                      # Deliberation records (pause-work scope)
+├── async-jobs/                         # Durable background job manifests (from the scheduler-adapter capability; core never writes them)
+├── ui-reviews/                         # Screenshots from /gsd-ui-review (gitignored)
+└── .continue-here.md                   # pause-work handoff for research or default scope
 ```
 
 ---
@@ -115,13 +146,14 @@ See [CONFIGURATION](../CONFIGURATION.md) for the complete schema.
 | **Produced by** | Generated when the number of prior phases exceeds the rolling-read threshold. |
 | **Consumed by** | `discuss-phase` (`load_prior_context` step). |
 
-### `HANDOFF.json` (transient)
+### `HANDOFF*.json` (transient)
 
 | | |
 |---|---|
-| **Purpose** | Machine-readable pause state written when work is interrupted. Contains the resume point, in-progress context, and continuation instructions. Consumed exactly once — on resume. |
+| **Purpose** | Machine-readable pause state written when work is interrupted. Contains the resume point, in-progress context, and continuation instructions, and the `session_id`, `role` and `role_id` it was written under. The file is the pause: it belongs to the session that wrote it. Consumed exactly once — on resume. |
+| **File names** | `HANDOFF.latest.<role_id>.json` (a session with a role); `HANDOFF.<session_id>.json` (a session without one); `HANDOFF.claimed.<role_id>.<session_id>.json` (a role handoff a resuming session has claimed by rename); `HANDOFF.json` (legacy, and a session with no id). The grammar is owned by `src/session-store.cts` (ADR-4962). |
 | **Produced by** | `/gsd-pause-work`. |
-| **Consumed by** | `/gsd-resume-work` (its `consume_handoff` step deletes it, with the `.continue-here.md` checkpoints, and commits the removal); `/gsd-next` and `progress --next` (Gate 0) and the smart-entry classifier read its presence as the recorded pause and route to resume while it exists. |
+| **Consumed by** | `/gsd-resume-work` (claims a role handoff by an exclusive claim marker and a rename before reading it; its `consume_handoff` step removes the session's own handoff and continue-here files and commits the removal); `/gsd-next` and `progress --next` (Gate 0) and the smart-entry classifier route to resume only for the calling session's own handoff. |
 
 ---
 
@@ -216,11 +248,11 @@ actuals:
 | **Produced by** | `/gsd-audit-uat` (interactive UAT session). |
 | **Consumed by** | `/gsd-audit-uat` (resume a previous UAT session). |
 
-### `.continue-here.md`
+### `.continue-here.md` and `.continue-here.latest.<role_id>.md`
 
 | | |
 |---|---|
-| **Purpose** | Human-readable resume instructions written when work on a phase is paused. Contains context for resuming agents: critical anti-patterns, blocking issues, required reading, and the exact command to resume. |
+| **Purpose** | Human-readable resume instructions written when work is paused. Contains context for resuming agents: critical anti-patterns, blocking issues, required reading, and the exact command to resume. Scope decides where it lands: the phase directory for phase work; `.planning/spikes/SPIKE-NNN/`, `.planning/sketches/` or `.planning/deliberations/` for those scopes; `.planning/.continue-here.md` for research or undetermined scope (pause-work's scope detection). |
 | **Produced by** | `/gsd-pause-work`. |
 | **Consumed by** | Any workflow that starts on a phase — `discuss-phase` and `plan-phase` both check for this file at entry and require the agent to demonstrate understanding of any `blocking` anti-patterns before proceeding. |
 

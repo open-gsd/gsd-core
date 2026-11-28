@@ -126,6 +126,8 @@ percentages are then Claude Code's own, against the model window.
 
 GSD's `/gsd-pause-work` command saves execution state. The WARNING message suggests using it. The CRITICAL message instructs immediate state save.
 
+At CRITICAL in a GSD project the hook also records a `Stopped At` breadcrumb (`context exhaustion at N% (date)`) once per session by running `state record-session --stopped-at <text> --session <session_id>` (#6797). The `--session` argument is the hook payload's `session_id`; it attributes the breadcrumb to the session that ran out of context, so `.planning/sessions/<session_id>.json` carries it and a second session on the same `.planning/` is not read as the one that exhausted. The STATE.md `## Session` block is written exactly as before. See [CLI-TOOLS.md](CLI-TOOLS.md#state-commands) for the per-session pause verbs.
+
 ## Setup
 
 Both hooks are registered automatically during `npx @opengsd/gsd-core` installation — no manual steps are needed under normal circumstances. For hook configuration details, threshold overrides, and manual registration examples, see [Configuration](CONFIGURATION.md).

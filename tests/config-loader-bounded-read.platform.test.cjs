@@ -1217,7 +1217,7 @@ describe('#5759 every other rerouted reader returns on a FIFO config.json', { sk
       'm.resolveConfigKey("security_enforcement", { config: {}, cwd, registry: {} })'],
     ['capability-writer setCapabilityState', 'capability-writer', 'm.setCapabilityState(cwd, { id: "x", enabled: true })'],
     ['configuration migrateOnDisk', 'configuration', 'm.migrateOnDisk(cwd, require("node:path").join(cwd, ".planning", "config.json"))'],
-    ['project-root findProjectRoot', 'project-root', 'm.findProjectRoot(require("node:path").join(cwd, "sub", "dir"))'],
+    ['project-context resolveProjectContext', 'project-context', 'm.resolveProjectContext(require("node:path").join(cwd, "sub", "dir"))'],
     ['planning-snapshot buildConfigField', 'planning-snapshot', 'm.buildPlanningSnapshot(cwd)'],
     ['phase-locator phaseDirectoryOptions', 'phase-locator', 'm.phaseDirectoryOptions(cwd)'],
     ['stale-bake-guard _readRuntimeConfig (warnIfStaleBake)', 'stale-bake-guard', 'm.warnIfStaleBake(cwd)'],

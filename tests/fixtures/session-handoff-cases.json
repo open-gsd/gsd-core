@@ -1,0 +1,355 @@
+{
+  "description": "Shared case table for the per-session handoff filename grammar and ownership rule (ADR-4962 Decisions 2 and 7). The store (src/session-store.cts) is the owner; every follower listed in `followers` is held to it by tests/session-handoff-parity.test.cjs, and the text contract handoff-grammar-readers-registered fails when a file that reads the grammar is not listed.",
+  "followers": [
+    {
+      "id": "statusline",
+      "file": "hooks/gsd-statusline.js",
+      "why": "a hook cannot require the compiled CLI (#3582), so it carries an inline copy of the grammar"
+    }
+  ],
+  "cases": [
+    {
+      "name": "latest slot, caller holds the role",
+      "file": "HANDOFF.latest.coordinator.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": "coordinator"
+      },
+      "expect": {
+        "kind": "latest",
+        "role_id": "coordinator",
+        "session_id": null,
+        "is_self": true
+      }
+    },
+    {
+      "name": "latest slot, caller holds another role",
+      "file": "HANDOFF.latest.coordinator.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": "implementer"
+      },
+      "expect": {
+        "kind": "latest",
+        "role_id": "coordinator",
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "latest slot, caller has no role",
+      "file": "HANDOFF.latest.coordinator.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": "latest",
+        "role_id": "coordinator",
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "session-keyed, same session",
+      "file": "HANDOFF.s1.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": "session",
+        "role_id": null,
+        "session_id": "s1",
+        "is_self": true
+      }
+    },
+    {
+      "name": "session-keyed, other session whose body names the caller's role (body role never owns a keyed file)",
+      "file": "HANDOFF.s1.json",
+      "body": {
+        "role_id": "coordinator",
+        "role": "coordinator"
+      },
+      "identity": {
+        "session_id": "s2",
+        "role_id": "coordinator"
+      },
+      "expect": {
+        "kind": "session",
+        "role_id": null,
+        "session_id": "s1",
+        "is_self": false
+      }
+    },
+    {
+      "name": "session id with dots is one session id",
+      "file": "HANDOFF.a.b.c.json",
+      "body": {},
+      "identity": {
+        "session_id": "a.b.c",
+        "role_id": null
+      },
+      "expect": {
+        "kind": "session",
+        "role_id": null,
+        "session_id": "a.b.c",
+        "is_self": true
+      }
+    },
+    {
+      "name": "claimed, same role and session",
+      "file": "HANDOFF.claimed.coordinator.s1.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": "coordinator"
+      },
+      "expect": {
+        "kind": "claimed",
+        "role_id": "coordinator",
+        "session_id": "s1",
+        "is_self": true
+      }
+    },
+    {
+      "name": "claimed, same role other session",
+      "file": "HANDOFF.claimed.coordinator.s1.json",
+      "body": {},
+      "identity": {
+        "session_id": "s2",
+        "role_id": "coordinator"
+      },
+      "expect": {
+        "kind": "claimed",
+        "role_id": "coordinator",
+        "session_id": "s1",
+        "is_self": false
+      }
+    },
+    {
+      "name": "legacy, body names no role",
+      "file": "HANDOFF.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": true
+      }
+    },
+    {
+      "name": "legacy, body role_id matches caller",
+      "file": "HANDOFF.json",
+      "body": {
+        "role_id": "reviewer"
+      },
+      "identity": {
+        "session_id": "s1",
+        "role_id": "reviewer"
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": true
+      }
+    },
+    {
+      "name": "legacy, body role_id names another role",
+      "file": "HANDOFF.json",
+      "body": {
+        "role_id": "reviewer"
+      },
+      "identity": {
+        "session_id": "s1",
+        "role_id": "implementer"
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "legacy, body role text only is not read, so it names no role",
+      "file": "HANDOFF.json",
+      "body": {
+        "role": "Reviewer A"
+      },
+      "identity": {
+        "session_id": "s1",
+        "role_id": "implementer"
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": true
+      }
+    },
+    {
+      "name": "legacy, body role_id is not a slug, so it names no role",
+      "file": "HANDOFF.json",
+      "body": {
+        "role_id": "Not A Slug!"
+      },
+      "identity": {
+        "session_id": "s1",
+        "role_id": "implementer"
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": true
+      }
+    },
+    {
+      "name": "legacy, body names a role and caller has none",
+      "file": "HANDOFF.json",
+      "body": {
+        "role_id": "reviewer"
+      },
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "no session id owns nothing (legacy)",
+      "file": "HANDOFF.json",
+      "body": {},
+      "identity": {
+        "session_id": null,
+        "role_id": null
+      },
+      "expect": {
+        "kind": "legacy",
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "no session id owns nothing (latest, role given)",
+      "file": "HANDOFF.latest.coordinator.json",
+      "body": {},
+      "identity": {
+        "session_id": null,
+        "role_id": "coordinator"
+      },
+      "expect": {
+        "kind": "latest",
+        "role_id": "coordinator",
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "latest without a role is not a session named latest",
+      "file": "HANDOFF.latest.json",
+      "body": {},
+      "identity": {
+        "session_id": "latest",
+        "role_id": null
+      },
+      "expect": {
+        "kind": null,
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "doubled extension is not a handoff",
+      "file": "HANDOFF.json.json",
+      "body": {},
+      "identity": {
+        "session_id": "json",
+        "role_id": null
+      },
+      "expect": {
+        "kind": null,
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "empty session segment is not a handoff",
+      "file": "HANDOFF..json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": null,
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "claimed without a session is not a handoff",
+      "file": "HANDOFF.claimed.coordinator.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": "coordinator"
+      },
+      "expect": {
+        "kind": null,
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "wrong case prefix is not a handoff",
+      "file": "handoff.s1.json",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": null,
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    },
+    {
+      "name": "backup suffix is not a handoff",
+      "file": "HANDOFF.s1.json.bak",
+      "body": {},
+      "identity": {
+        "session_id": "s1",
+        "role_id": null
+      },
+      "expect": {
+        "kind": null,
+        "role_id": null,
+        "session_id": null,
+        "is_self": false
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-# ADR-4962: Per-session pause — the handoff file is the marker, the role is the identity [Proposed]
+# ADR-4962: Per-session pause — the handoff file is the marker, the role is the identity [Accepted]
 
-- **Status:** Proposed — ratified to `Accepted` when the ratification conditions below are met.
+- **Status:** Accepted
 - **Date:** 2026-11-27
 - **Issue:** [#4962](https://github.com/open-gsd/gsd-core/issues/4962) (this ADR); the feature it governs is [#4845](https://github.com/open-gsd/gsd-core/issues/4845) (`approved-feature`, condition 1 of its triage verdict).
 - **Builds on:** [ADR-3408](3408-state-write-path-preservation.md) (STATE.md write seam and the field-preservation classification that makes a legacy `paused_at` immortal), [ADR-1769](1769-state-md-transition-module.md) (the Transition Module that preserves it), [ADR-857](857-capability-system.md) (the core-versus-Capability line this ADR places pause/resume on).
@@ -40,19 +40,21 @@ Filename grammar — `src/session-store.cts` is the single owner (Decision 7):
 | `HANDOFF.claimed.<role_id>.<session_id>.json` | resume, mid-claim | a session holds this role's handoff |
 | `HANDOFF.json` + `.continue-here.md` | legacy | still resumable; any session may claim it |
 
-The grammar reserves `latest` and `claimed` as first segments. A session id whose first segment is reserved is escaped by the store before it is used in a filename, so `HANDOFF.latest.x.json` always parses as role `x`, never as session `latest.x`. Ownership is decided by the **filename** for role-keyed and session-keyed files. A body-recorded `role` is consulted only for a legacy unkeyed file, so two live sessions that share a role label cannot unlink each other's session-keyed handoff.
+The grammar reserves `latest`, `claimed` and `json` as first segments (`json` was added when #6796 implemented the store: without it `HANDOFF.json.json` would parse as a session named `json` next to the legacy `HANDOFF.json`). A session id whose first segment is reserved is escaped by the store before it is used in a filename, so `HANDOFF.latest.x.json` always parses as role `x`, never as session `latest.x`. Ownership is decided by the **filename** for role-keyed and session-keyed files. A body-recorded `role_id` — read only when it is already a valid slug, so a hook-side follower that cannot transliterate free text reads it identically (#6797); a free-text `role` is not read — is consulted only for a legacy unkeyed file, so two live sessions that share a role label cannot unlink each other's session-keyed handoff.
 
 *Failure prevented:* a handoff nobody can recognize after `/clear` (the session-id-only design, implemented first and rejected), and cross-deletion between sessions that merely share a label.
 
-### 3. Resume claims by atomic rename before reading
+### 3. Resume claims by exclusive marker, then rename, before reading
 
-`resume-project.md` renames `HANDOFF.latest.<role_id>.json` to `HANDOFF.claimed.<role_id>.<session_id>.json` **before** reading it. Rename is atomic on one filesystem, so exactly one of two racing sessions succeeds. The loser finds no `.latest` file and is told so. The consumed files are then removed, and committed when `commit_docs` is on.
+`resume-project.md` first creates the claim marker `.planning/.handoff-claim.<role_id>` with an exclusive create (`set -o noclobber`), and only the session whose create succeeds renames `HANDOFF.latest.<role_id>.json` to `HANDOFF.claimed.<role_id>.<session_id>.json` **before** reading it. It removes the marker in the same block, whether or not the rename succeeded. The loser finds the marker held or no `.latest` file and is told so. The consumed files are then removed, and committed when `commit_docs` is on. The marker holds its creation time; one older than a day is a crash leftover, and the claim block removes it.
 
-*Failure prevented:* two sessions resuming the same role and both acting on one handoff. A lock file would add a second artifact that can itself go stale; the rename needs none.
+*Failure prevented:* two sessions resuming the same role and both acting on one handoff.
+
+*Amendment (#6820, from the Windows conformance lane of #6824).* This decision first read: rename is atomic on one filesystem, so exactly one of two racing sessions succeeds, and a lock file was rejected as a second artifact that can go stale. On Windows two concurrent renames of one source can both succeed: in run 46072480563 (shard 6/6) both sessions' `mv` returned 0 and the first session's `cat` then failed on a file the second had moved. The marker is exclusive on every platform, lives for one block, and its one stale case has the day-old sweep above.
 
 ### 4. Session identity comes from `--session` or a runtime-issued env key — never the terminal
 
-The session id resolves from `--session`, else from the first set key in this ordered list: `GSD_SESSION_KEY`, `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, `OPENCODE_SESSION_ID`, `GEMINI_SESSION_ID`, `CURSOR_SESSION_ID`, `WINDSURF_SESSION_ID`. This is a strict subset of `WORKSTREAM_SESSION_ENV_KEYS` (`src/active-workstream-store.cts`). The terminal-identity keys (`TERM_SESSION_ID`, `WT_SESSION`, `TMUX_PANE`, `ZELLIJ_SESSION_NAME`, `CLAUDE_CODE_SSE_PORT`) and the controlling-TTY probe are excluded. With no `--session` and no runtime key, the verbs report `session_id: null` and delete nothing.
+The session id resolves from `--session`, else from the first set key of `WORKSTREAM_SESSION_ENV_KEYS` (`src/active-workstream-store.cts`) in that list's own order, with the terminal-identity keys removed: `GSD_SESSION_KEY`, `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, `CLAUDE_CODE_SESSION_ID`, `OPENCODE_SESSION_ID`, `GEMINI_SESSION_ID`, `CURSOR_SESSION_ID`, `WINDSURF_SESSION_ID`. The store derives its list from the workstream list (a parity test pins it) instead of copying it, so one session never gets different ids for its workstream pointer and its handoff. The terminal-identity keys (`TERM_SESSION_ID`, `WT_SESSION`, `TMUX_PANE`, `ZELLIJ_SESSION_NAME`, `CLAUDE_CODE_SSE_PORT`) and the controlling-TTY probe are excluded. With no `--session` and no runtime key, the verbs report `session_id: null` and delete nothing.
 
 This deliberately **narrows** `getWorkstreamSessionKey()` for this module's own use. That function falls back to a terminal token because a workstream pointer wrongly shared by two panes is recoverable. Here a wrong "this is mine" deletes another session's handoff, and two panes of one terminal are two sessions.
 
@@ -74,11 +76,11 @@ The STATE.md schema, `STATUS_LIFECYCLE_ENUM` and `normalizeStateStatus` are unch
 | `milestone.lock` (`src/milestone-lock.cts`, #3311) | `(phase, session)` with a TTL | two sessions advancing **different phases** of one milestone | pause state; resuming |
 | Session store (`src/session-store.cts`, this ADR) | `role_id`, else session id | **whose handoff** a session may resume; who is paused | phase ownership; workstream selection |
 
-All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
+All three are advisory: best-effort fs operations that never throw into a CLI command, warn rather than steal. A new coordination problem picks the primitive whose key matches what it must distinguish; it does not add a fourth without an ADR. The Decision 3 claim marker is that decision's own one-block mechanism, not a coordination primitive between sessions: it lives for one block and keys on `role_id`. No ADR governs `milestone.lock`; this table states its boundary without recording a decision on its behalf.
 
-### 7. `src/session-store.cts` owns the filename grammar; the hook-side copies are named and held to it by a parity guard
+### 7. `src/session-store.cts` owns the filename grammar; any hook-side copy is named and held to it by a parity guard
 
-Hooks cannot require the compiled CLI (the #3582 no-new-require seam), so two readers exist outside the module: the statusline's inline `readHandoffs` (`hooks/gsd-statusline.js`) and the `.continue-here` lookup in `hooks/lib/`. They are sanctioned copies, named in `CONTEXT.md` as followers of the module. A **parity guard** holds them to it: one shared case table (filename, body, session id, role → expected `kind`, `role_id`, `is_self`), run against the store and each follower, and it fails when a reader is added without being registered in that table.
+Hooks cannot require the compiled CLI (the #3582 no-new-require seam), so a reader exists outside the module: the statusline's inline `readHandoffs` (`hooks/gsd-statusline.js`). The `.continue-here` lookup in `hooks/lib/` that the proposal named does not exist on `next` and has no consumer, so none was built (#6797); a future one is a registry row plus a test. The copy is sanctioned and named in `CONTEXT.md` as a follower of the module. A follower that runs on every prompt may bound the entries it reads (the statusline reads at most 64 handoff files per render, the caller's own candidates first, and reports `others` as a count of readable entries within that bound); the parity guard covers the grammar, identity and ownership, not that bound. A **parity guard** holds them to it: one shared case table (filename, body, session id, role → expected `kind`, `role_id`, `is_self`), run against the store and each follower, and it fails when a reader is added without being registered in that table.
 
 *Failure prevented:* generative fix divergence. The first implementation attempt shipped a statusline reader and a store reader that disagreed on the same directory (`state sessions` reported `is_self: true` while the statusline showed `⏸1`).
 
@@ -118,7 +120,8 @@ The implementation of [#4845](https://github.com/open-gsd/gsd-core/issues/4845) 
 | Session-id-keyed files only | the id changes on every `/clear`, so files were never reclaimed (implemented first, rejected) |
 | One workstream per session | workstreams isolate areas, not sessions on one area; handoffs are not workstream-scoped |
 | Terminal / tmux-derived identity | two panes of one terminal are two sessions; a wrong guess deletes another session's handoff |
-| A lock file for the claim | a second artifact that can itself go stale; atomic rename needs none |
+| Rename alone as the claim | not exclusive on Windows: two renames of one source can both succeed (amendment to Decision 3) |
+| A long-lived lock file for the claim | a lock held across the resume can go stale; the marker lives for one block and is swept after a day |
 | A Capability under ADR-857 | see Decision 8 |
 
 ## Ratification conditions

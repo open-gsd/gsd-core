@@ -515,6 +515,9 @@ function applyResolvedWorkstreamEnv(
 
 export = {
   validateWorkstreamName,
+  // #6796: exported so src/session-store.cts derives its runtime-key list from this one
+  // (the terminal-identity entries filtered out) instead of keeping a second copy.
+  WORKSTREAM_SESSION_ENV_KEYS,
   getWorkstreamSessionKey,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
