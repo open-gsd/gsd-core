@@ -107,6 +107,9 @@ GSD reads these but does not expect you to set them.
 | `CLAUDE_PROJECT_DIR` | local-install hook commands | Project directory that local hook paths are anchored on. |
 | `CLAUDE_CODE_DISABLE_WORKFLOWS` | Claude orchestration capability | Claude Code's workflow kill switch, read together with the `disableWorkflows` and `enableWorkflows` settings keys to decide whether the workflow backend is available. |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | teams status | Claude Code's agent-teams switch, read to report teams status. |
+| `GEMINI_API_KEY` | context monitor | Detected to switch the hook event name. |
+| `WSL_DISTRO_NAME` | installer | Detected for WSL path handling. |
+| `NODE_DISABLE_COMPILE_CACHE` | `gsd-tools` and hooks that load `gsd-core/bin/lib` | Set (to any value) to turn off Node's compile cache, which they enable to start faster. The cache lives in `node-compile-cache` under the OS temp directory, or in `NODE_COMPILE_CACHE` if you set it. Node reads both variables itself. |
 | `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `gsd-statusline.js` | Claude Code's auto-compact settings, read so the statusline's context bar matches the compact threshold. |
 
 ## State files
