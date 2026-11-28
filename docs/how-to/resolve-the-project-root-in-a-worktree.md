@@ -38,7 +38,7 @@ For the worktree top level alone, add `--raw`.
 
 ## Fix an `outside_worktree` refusal
 
-`gsd-tools commit` writes only inside the checkout it runs in. It exits non-zero with `committed: false` and `reason: "outside_worktree"` when the working directory, a `--files` path, or the planning project it would write to is outside that checkout. The message names the offending path.
+`gsd-tools commit` (and `uat complete-session`, which commits through the same code) writes only inside the checkout it runs in. It exits non-zero with `committed: false` and `reason: "outside_worktree"` when the working directory, a `--files` path, or the planning project it would write to is outside that checkout. The message names the offending path.
 
 This happens when the worktree has no `.planning/` of its own and `source` is `main-checkout`, or when the worktree lives inside a `planning.sub_repos` workspace whose `.planning/` is outside the worktree.
 

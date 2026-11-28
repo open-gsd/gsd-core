@@ -75,44 +75,7 @@ defaulting to `open`:
 
 `open` means recorded but not yet triaged, and it is the only value the gate assigns on its own.
 
-**Where the reconciliation happens, which is not where you might expect.** The in-phase gate runs
-immediately after review, and at that moment `<NN>-REVIEW-FIX.md` does not exist — the gate invokes
-review with neither `--fix` nor `--auto` — so every row it writes is `open`. The `fixed` and
-`skipped` outcomes are reconciled by `/gsd-code-review <N> --fix`, which records them once the fix
-report is on disk. Running the gate alone therefore tells you what was found; running `--fix` is
-what records what happened to it.
-
-**`--auto`'s iterations are reconciled too, and that takes reading more than the final report.**
-The loop overwrites `REVIEW-FIX.md` on every pass and the re-review stops reporting a finding once
-it is fixed, so a finding closed in iteration 1 appears in neither final artifact. The gate
-therefore also reads the per-iteration backups the loop writes (`<NN>-REVIEW-FIX.iterN.md`), newest
-first, so the most recent statement about an ID wins; the backups are removed after the ledger has
-read them, not before. Without this a fully successful multi-iteration run recorded its early fixes
-as `open (not in the current review)` — indistinguishable from a finding that vanished for an
-unrelated reason, which is the one distinction this ledger exists to make. A finding a fix report
-decided but the current review no longer reports gets a row of its own, carrying that decision and
-marked *(not in the current review)*.
-
-A converged `--auto` run also reaches the gate with a clean review and, on a direct
-`/gsd-code-review` invocation, no ledger from the in-phase gate. A fix report on disk is reason
-enough to record: without that, a run in which every finding was fixed and committed produced no
-disposition record at all.
-
-**A decision belongs to a finding, not to an ID.** IDs are reused across re-reviews — `--auto`
-renumbers — so the ledger records each finding's title alongside its disposition, and a recorded
-decision is carried forward only while the ID still names the same finding. Without that, a prior
-`CR-01 fixed` would be inherited by a brand-new `CR-01`, which is a false decision in the one
-artifact whose purpose is telling triaged from forgotten.
-
-**The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
-is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
-the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
-on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
-row carried only by a fix report (#5802).
-A prior row still sitting at `open` is replaced silently (see [why the replacement is silent](../explanation/review-pipeline-design.md)).
-Recovery is the ledger's own git history where `commit_docs` is on — which is why the console
-reports the drop rather than pointing at a commit that may not exist.
+**Reconciliation and identity (the arguments are in [About the code-review pipeline's design choices](../explanation/review-pipeline-design.md#how-the-disposition-ledger-reconciles-and-what-it-cannot-prove)).** The in-phase gate runs before `<NN>-REVIEW-FIX.md` exists, so every row it writes is `open`; `/gsd-code-review <N> --fix` records `fixed` and `skipped`. `--auto` iterations are reconciled from the `<NN>-REVIEW-FIX.iterN.md` backups, newest first, which are removed after the ledger has read them. A decision is carried forward only while the ID still names the same finding (the ledger records each title); a reused ID is recorded `open` and the earlier decision loses its row, reported on the console (#5802).
 
 **Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
 `<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
@@ -127,11 +90,7 @@ read case-insensitively (`Deferred` is `deferred`). Two rows for one id are name
 console names are masked for control characters and capped. A frontmatter `- id:` entry outside the grammar ends
 the previous entry, so its `title:` is never attributed to another finding.
 
-**Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
-recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
-every decision in every existing ledger, which is the loss the guard exists to prevent. And two
-genuinely distinct findings that share both an ID and a title are indistinguishable to this key.
-Separating them needs a second identity scheme, which is the thing that was just withdrawn.
+**Residuals:** a ledger written before titles were recorded inherits decisions on the ID alone, and two distinct findings sharing both ID and title are indistinguishable to the key.
 
 Reconciliation applies an outcome only when the fix report names the **same** finding, because
 finding IDs are reused across re-reviews and a stale report would otherwise declare a brand-new
@@ -181,19 +140,7 @@ renumbered finding shows under both IDs until the old row is decided; the marker
 A run that changes nothing rewrites nothing, so a re-executed phase does not produce a docs commit
 with no content.
 
-One residual is concurrency: the ledger is read, rebuilt and written whole, with no lock. Two
-dispatchers can run this step (`code_review_gate` and `code-review-fix`'s `record_disposition`) and
-a human is invited to hand-edit the file, so two writers overlapping would lose one's update. This is
-the shape #3780 reported for `WINDOWS.md` under parallel executors, closed there by a cross-process
-lock (#4681); the disposition step does not take that lock. No lost update has been reproduced; the
-window is stated so it is not mistaken for a guarantee.
-
-Not to be confused with the **Review Dispositions Ledger** of reviews-mode planning
-([ADR-3806](../adr/3806-review-dispositions-ledger.md), `docs/features/review-dispositions-ledger.md`):
-that one is a `## Review Dispositions Ledger` section inside `PLAN.md`, append-only per round, over
-`REVIEWS.md` findings. This artifact is a sibling file beside `REVIEW.md`, rewritten idempotently
-with rows carried. Same word, different inputs, writers, files and durability rules; neither governs
-the other.
+The ledger is read, rebuilt and written whole with no lock, so two overlapping writers could lose an update; no lost update has been reproduced. It is not the Review Dispositions Ledger of reviews-mode planning ([ADR-3806](../adr/3806-review-dispositions-ledger.md)).
 
 The record is a sibling artifact rather than a section inside REVIEW.md (see [why a sibling file](../explanation/review-pipeline-design.md)).
 The gate remains advisory throughout: it reports and records, and never blocks phase completion.

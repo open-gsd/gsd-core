@@ -39,23 +39,7 @@ declaration through the versioned exit contract ([ADR-3889](../adr/3889-process-
   [ADR-2980](../adr/2980-payload-carried-error-is-a-degraded-result.md)'s compatibility boundary,
   deliberately preserved, not a bug to reconcile.
 
-**Explanation — why this is the shape it is:**
-
-ADR-2980 ratified `output({error})`'s exit-0 population on measured blast radius (`output` has 170
-direct callers) and Hyrum's Law grounds — a CLI exit code has no `/v2/` of its own, so normalizing
-it in place would have broken every caller already treating exit `0` as a soft signal. Its own
-"Revisit if" clause named the missing piece: *"a future `gsd-tools` major version provides a
-compatibility boundary that a CLI exit code otherwise lacks."* ADR-3889 §4 built exactly that
-boundary — a versioned projection selected by flag or env var, defaulting to today's behavior — and
-this phase is what wires `error()` and `output()` onto it. Declaring an outcome is unconditional and
-immediate; only its *projection* onto an integer is deferred behind the version switch, so the
-population ADR-2980 ratified keeps exiting `0` until a caller explicitly asks for something else.
-
-The count matters here too: an AST re-measure for this phase found **64** `output({error})` call
-sites across the same nine modules ADR-2980 named — not the 60 that ADR itself recorded, the drift
-concentrated in `frontmatter.cts`, `phase.cts`, and `roadmap.cts`. The `v2` projection is asserted
-over the enumerated 64, not a restated 60; see ADR-2980's amendment for the module-by-module
-breakdown.
+**Why this shape:** declaring an outcome is unconditional; only its projection onto an integer is deferred behind the version switch. The reasoning, the Hyrum's Law grounds, and the 64-site re-measure are in [ADR-2980](../adr/2980-payload-carried-error-is-a-degraded-result.md) (including its amendment) and [ADR-3889](../adr/3889-process-exit-contract.md) §4.
 
 See [Adopt the v2 exit contract](../how-to/adopt-the-v2-exit-contract.md) for how to opt in and what
 it means for a CI gate, [`docs/json-errors.md`](../json-errors.md#outcome-declaration-and-the-versioned-exit-contract-adr-3889-4-3912)

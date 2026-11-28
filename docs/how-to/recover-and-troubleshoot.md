@@ -130,16 +130,26 @@ Probes the context-window utilisation guard. Warns at 60 %, critical at 70 %. If
 
 ### If an executor gets "Permission denied" on Bash commands
 
-GSD's `gsd-executor` subagents need write-capable Bash access. Add the required patterns to `~/.claude/settings.json` under `permissions.allow`. At minimum:
+GSD's `gsd-executor` subagents need write-capable Bash access. Add the required patterns to `~/.claude/settings.json` under `permissions.allow`. Core patterns needed for all stacks:
 
 ```json
 "Bash(git add:*)",
 "Bash(git commit:*)",
 "Bash(git merge:*)",
-"Bash(git checkout:*)"
+"Bash(git worktree:*)",
+"Bash(git rebase:*)",
+"Bash(git reset:*)",
+"Bash(git checkout:*)",
+"Bash(git switch:*)",
+"Bash(git restore:*)",
+"Bash(git stash:*)",
+"Bash(git rm:*)",
+"Bash(git mv:*)",
+"Bash(git fetch:*)",
+"Bash(git cherry-pick:*)",
+"Bash(git apply:*)",
+"Bash(gh:*)"
 ```
-
-For stack-specific patterns (Rails, Python, Node, Rust), see the full table in `docs/USER-GUIDE.md` under "Executor Subagent Gets Permission denied".
 
 Per-project alternative: add the same block to `.claude/settings.local.json` in your project root.
 
