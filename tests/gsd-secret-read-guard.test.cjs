@@ -39,10 +39,160 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fc = require('fast-check');
-const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { runHook: runHookSeam, runNode } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
+// In process: the limits rows below sit on either side of, and the Bash
+// leg with a count of the span readers' work.
+// A hook with no `require.main` guard runs when required, and its stdin handler exits this
+// process at rc 0 with the file unfinished. The Self-test report runs this file against
+// the base as well, so ask a throwaway process first. The in-process rows then fail on
+// such a base rather than ending the run.
+const inProcess = runNode(['-p', `typeof require(${JSON.stringify(HOOK_PATH)}).scanBashCommand`], {
+  input: '',
+  timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+}).stdout.trim() === 'function';
+const hookApi = inProcess ? require(HOOK_PATH) : {};
+const { spanReaderSteps, MAX_COMMAND_LENGTH } = hookApi;
+// The Bash leg's verdict as main() reaches it (scanBashReadings): in each env -S reading,
+// the secret scan, the debugger-spawn check, then both again with spans closed by bash 5's
+// grammar.
+const checkBashCommand = (cmd) => hookApi.scanBashReadings(cmd).block;
+// The grammar scan's own verdict and reader steps, run on what main()'s first two scans leave
+// of the command's budgets. Since #6136 the first scan denies a nest more than three levels
+// deep as `nesting-too-deep`, and main() stops there. The grammar scan still meets such a nest
+// where the counting scans do not enter it (behind a `)` in a comment), so the rows that pin
+// its depth limit and its step bound read it here too. A stack overflow is
+// `command-too-complex`, as main() makes it.
+const grammarScan = (cmd) => {
+  const run = (scan) => {
+    try {
+      return scan(cmd);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      return { code: 'command-too-complex', text: '' };
+    }
+  };
+  run(hookApi.scanBashCommand);
+  run(hookApi.scanDebuggerSpawn);
+  const before = hookApi.spanReaderSteps();
+  const verdict = run(hookApi.scanBashByGrammar);
+  return { verdict, steps: hookApi.spanReaderSteps() - before };
+};
+// Run in a child process by countInChild, never in this file's process: it patches the array
+// builtins, and an iterator patch leaves V8's array-iterator fast path off for the rest of the
+// process. It scans `cmd` as the hook does on a large budget and reports the verdict, the array
+// elements the builtins copied or walked, and the bytes the scan allocated. Each call of slice,
+// concat, flat, toSpliced, toSorted, toReversed, with, Array.from and structuredClone is charged
+// the elements it returns; map, filter and an iterator over an array (spread, for...of,
+// destructuring) the elements of the array they walk. Past `cap` a charge throws, so a quadratic
+// copy stops early. A copy written as a hand loop calls none of them and is not counted. The
+// bytes are the heap's growth up to each collection (v8.GCProfiler's statistics, returned when it
+// stops) plus its growth since the last one: what the code allocated, however often the engine
+// collects, with no wait for an event to arrive.
+function measureInChild(hookPath, cmd, cap) {
+  const v8 = require('node:v8');
+  const hook = require(hookPath);
+  const AP = Array.prototype;
+  const CAP = new Error('array elements past the cap');
+  let elements = 0;
+  let counting = true;
+  const charge = (n) => {
+    if (!counting) return;
+    elements += n;
+    if (elements > cap) throw CAP;
+  };
+  const countReturned = (name) => {
+    const original = AP[name];
+    if (typeof original !== 'function') return;
+    AP[name] = function () {
+      const out = original.apply(this, arguments);
+      charge(out.length);
+      return out;
+    };
+  };
+  for (const name of ['slice', 'concat', 'flat', 'toSpliced', 'toSorted', 'toReversed', 'with']) countReturned(name);
+  for (const name of ['map', 'filter']) {
+    const original = AP[name];
+    AP[name] = function () {
+      charge(this.length);
+      return original.apply(this, arguments);
+    };
+  }
+  const values = AP[Symbol.iterator];
+  AP[Symbol.iterator] = function () {
+    charge(this.length);
+    return values.call(this);
+  };
+  const from = Array.from;
+  Array.from = function () {
+    const out = from.apply(this, arguments);
+    charge(out.length);
+    return out;
+  };
+  const clone = globalThis.structuredClone;
+  globalThis.structuredClone = function () {
+    const out = clone.apply(this, arguments);
+    if (Array.isArray(out)) charge(out.length);
+    return out;
+  };
+  const big = 64 * hook.MAX_SCAN_CHARACTERS;
+  const heapUsed = () => v8.getHeapStatistics().used_heap_size;
+  const profiler = new v8.GCProfiler();
+  const start = heapUsed();
+  profiler.start();
+  let verdict = null;
+  let capped = false;
+  try {
+    verdict = hook.scanBashCommand(cmd, big, big) || hook.scanDebuggerSpawn(cmd) || hook.scanBashByGrammar(cmd);
+  } catch (e) {
+    if (e !== CAP) throw e;
+    capped = true;
+  }
+  const end = heapUsed();
+  counting = false;
+  let allocated = 0;
+  let previous = start;
+  for (const { beforeGC, afterGC } of profiler.stop().statistics) {
+    allocated += Math.max(0, beforeGC.heapStatistics.usedHeapSize - previous);
+    previous = afterGC.heapStatistics.usedHeapSize;
+  }
+  allocated += Math.max(0, end - previous);
+  process.stdout.write(JSON.stringify({ verdict, elements, capped, allocated }));
+}
+// The command `build` returns, measured by measureInChild in a child process with coverage off
+// (an inherited NODE_V8_COVERAGE slows the scan and adds to what it allocates).
+const countInChild = (build, cap) => {
+  const src = `(${measureInChild})(${JSON.stringify(HOOK_PATH)}, (${build})(), ${cap});`;
+  const r = runNode(['-e', src], { env: { ...process.env, NODE_V8_COVERAGE: '' } });
+  assert.equal(r.exitCode, 0, `child exit ${r.exitCode}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+};
+// grammarScan in a child process whose stack is pinned at `stackKb` KB (V8's --stack-size),
+// for a row whose verdict depends on where the stack runs out.
+function grammarScanChild(hookPath, cmd) {
+  const hook = require(hookPath);
+  const run = (scan) => {
+    try {
+      return scan(cmd);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      return { code: 'command-too-complex', text: '' };
+    }
+  };
+  run(hook.scanBashCommand);
+  run(hook.scanDebuggerSpawn);
+  const before = hook.spanReaderSteps();
+  const verdict = run(hook.scanBashByGrammar);
+  process.stdout.write(JSON.stringify({ verdict, steps: hook.spanReaderSteps() - before }));
+}
+const grammarScanOnStack = (build, stackKb) => {
+  const src = `(${grammarScanChild})(${JSON.stringify(HOOK_PATH)}, (${build})());`;
+  const r = runNode([`--stack-size=${stackKb}`, '-e', src], { env: { ...process.env, NODE_V8_COVERAGE: '' } });
+  assert.equal(r.exitCode, 0, `child exit ${r.exitCode}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+};
 
 // #5784: the hook reads its crash policy from its environment, so an ambient
 // GSD_SECRET_READ_GUARD_ON_CRASH in the shell running this file would flip
@@ -744,6 +894,1028 @@ describe('regressions: #4651 — trailing-dot normalization must not touch prose
   });
   test('allows a commit message with .env at the end of prose', () => {
     assertAllowed(runHook(bash('git commit -m "update .env"')), 'commit message 2');
+  });
+});
+
+describe('regressions: #5267 — a `case` pattern paren does not close a substitution', () => {
+  // bash ends `$( … )` at the paren that closes it, and the `)` that ends a
+  // `case` pattern is not that paren. The guard used to count every unquoted
+  // paren, so the first pattern closed the span and the arm after it was
+  // never scanned. Each command below holds `cat .env` where bash 5.2 reads
+  // a command (a `case` arm counts whether or not its pattern can match: the
+  // guard does not evaluate the subject), or is unterminated and fails
+  // closed. The commands come from the issue, its triage acceptance criteria
+  // and the `case` grammar in the bash manual, not from the guard's own
+  // tables.
+  const blocks = [
+    // The issue's forms: quoted, unquoted, multi-line, extended-glob pattern
+    // and `;&` fall-through.
+    'echo "$(case x in x) cat .env;; esac)"',
+    'echo $(case x in x) cat .env;; esac)',
+    'echo "$(case x in\n  x) cat .env ;;\nesac)"',
+    'echo "$(case x in @(x|y)) cat .env;; esac)"',
+    'echo "$(case x in y) :;& x) cat .env;; esac)"',
+    // Unterminated input fails closed: the span runs to the end and is scanned.
+    'echo "$(case x in x) cat .env',
+    'echo "$(case x in x) cat .env;; esac"',
+    // Every other route into the span finder: a process substitution, an
+    // unquoted heredoc body, a substitution nested in a case arm, and one
+    // inside an arithmetic expansion.
+    'echo <(case x in x) cat .env;; esac)',
+    'cat <<EOF\n$(case x in x) cat .env;; esac)\nEOF',
+    'echo "$(case x in x) echo "$(case y in y) cat .env;; esac)";; esac)"',
+    'echo "$(( $(case x in x) cat .env;; esac) + 1 ))"',
+    // Pattern lists: alternatives, the optional paren, a quoted or escaped
+    // paren, a later arm, a last arm without `;;`, a comment between arms.
+    'echo "$(case x in a|b) cat .env;; esac)"',
+    'echo "$(case x in (a|b) cat .env;; esac)"',
+    'echo "$(case x in ")") cat .env;; esac)"',
+    'echo "$(case x in \\)) cat .env;; esac)"',
+    'echo "$(case x in a) :;; *) cat .env;; esac)"',
+    'echo "$(case x in a) :;;& x) cat .env;; esac)"',
+    'echo "$(case x in x) cat .env; esac)"',
+    'echo "$(case x in # first )\n x) cat .env;; esac)"',
+    // A process substitution is a part of the word it touches, in a pattern
+    // or a subject as anywhere else.
+    'echo "$(case x in <(echo x)) cat .env;; esac)"',
+    'echo "$(case x in a|>(echo x)) cat .env;; esac)"',
+    'echo "$(case <(echo x) in x) cat .env;; esac)"',
+    'echo "$(case x<(echo x) in x) cat .env;; esac)"',
+    'echo "$(case "x">(echo x) in x) cat .env;; esac)"',
+    // The word after `case`: an expansion, a substitution, a reserved word.
+    'echo "$(case $(echo x) in x) cat .env;; esac)"',
+    'echo "$(case ${x%% *} in x) cat .env;; esac)"',
+    'echo "$(case case in case) cat .env;; esac)"',
+    'echo "$(case x\nin x) cat .env;; esac)"',
+    // Everywhere bash reads `case` as the reserved word.
+    'echo "$(true; case x in x) cat .env;; esac)"',
+    'echo "$(true && case x in x) cat .env;; esac)"',
+    'echo "$(true | case x in x) cat .env;; esac)"',
+    'echo "$(true\ncase x in x) cat .env;; esac)"',
+    'echo "$(if case x in x) true;; esac; then cat .env; fi)"',
+    'echo "$(if (true) then case x in x) cat .env;; esac; fi)"',
+    'echo "$( ! (case x in x) cat .env;; esac) )"',
+    'echo "$(f() case x in x) cat .env;; esac; f)"',
+    'echo "$(! case x in x) cat .env;; esac)"',
+    'echo "$(time -p case x in x) cat .env;; esac)"',
+    'echo "$( (case x in x) cat .env;; esac) )"',
+    'echo "$({ case x in x) cat .env;; esac; })"',
+    'echo "$(for i in a; do case $i in a) cat .env;; esac; done)"',
+    'echo "$(f() { case x in x) cat .env;; esac; }; f)"',
+    'echo "$(function f { case x in x) cat .env;; esac; }; f)"',
+    'echo "$(a=(1 2); case x in x) cat .env;; esac)"',
+    // A line continuation is nothing to bash: it makes no word of its own, and
+    // the word around it stays whole.
+    'echo "$(\\\ncase x in x) cat .env;; esac)"',
+    'echo "$(true; \\\ncase x in x) cat .env;; esac)"',
+    'echo "$(true && \\\ncase x in x) cat .env;; esac)"',
+    'echo "$(if true; then \\\ncase x in x) cat .env;; esac; fi)"',
+    'echo "$(for i in a; do \\\ncase x in x) cat .env;; esac; done)"',
+    'echo "$({ \\\ncase x in x) cat .env;; esac; })"',
+    'echo "$(case x in x) \\\ncase y in y) cat .env;; esac;; esac)"',
+    'echo "$(ca\\\nse x in x) cat .env;; esac)"',
+    'echo "$(case x \\\nin x) cat .env;; esac)"',
+    'echo "$(case x i\\\nn x) cat .env;; esac)"',
+    // Nor in an array literal, where the `#` after one still starts a comment.
+    'echo "$(a=(x \\\n# )\n); cat .env)"',
+    'echo "$(a=(\\\n# )\n); cat .env)"',
+    // A process substitution is a word inside `[[ ]]` too.
+    'echo "$([[ -n <(case x in x) :;; esac) ]]; cat .env)"',
+    'echo "$([[ -n >(case x in x) :;; esac) ]]; cat .env)"',
+  ];
+  for (const cmd of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The converse error: a `case` that is not the reserved word must not open
+  // a pattern list, or its "pattern" swallows the paren that really closes the
+  // span and the read after it is hidden inside a string. Each command puts
+  // the words `case … in` where bash reads them as plain text, then reads
+  // `.env` after the substitution.
+  const afterSpan = [
+    ['an argument', 'x=$(echo case); cat .env'],
+    ['an argument list', 'echo "$(echo case x in y)"; cat .env'],
+    ['a loop variable', 'echo "$(for case in a b; do echo $case; done)"; cat .env'],
+    ['after an assignment', 'echo "$(x=1 case x in y)"; cat .env'],
+    ['after a redirection', 'echo "$(>f case x in y)"; cat .env'],
+    ['an array literal', 'echo "$(a=(case x in y); echo z)"; cat .env'],
+    ['a multi-line array literal', 'echo "$(a=(\n  case x in\n); echo z)"; cat .env'],
+    ['inside [[ ]]', 'echo "$([[ -n x && case != in ]])"; cat .env'],
+    ['inside (( ))', 'echo "$( (( case x in y )) )"; cat .env'],
+    ['after an extended-glob word', 'echo "$(ls !(a|b) case x in y)"; cat .env'],
+    ['inside an extended-glob group', 'echo "$(ls @(case x in y) z)"; cat .env'],
+    ['after a process substitution', 'echo "$(cat <(echo a) case x in y)"; cat .env'],
+    ['after a subshell closes, where no command can start', 'echo "$( (echo hi) case x in y )"; cat .env'],
+    ['after an extended-glob command name', 'echo "$( !(a|b) case x in y )"; cat .env'],
+    ['after an extended-glob group holding a `#`', 'echo "$(ls !(a # b)\n)"; cat .env'],
+    ['`time` after a pipe is a command', 'echo "$(true | time -- case x in y)"; cat .env'],
+    ['`}` with no open group is a command', 'echo "$(} case x in y)"; cat .env'],
+    ['a comment', 'echo "$(echo hi # (case insensitive in bash)\n)"; cat .env'],
+    ['a ${ } default', 'echo "$(echo ${m:-none; case closed in court})"; cat .env'],
+    ['a heredoc body', 'echo "$(cat <<EOF\ncase x in y)\nEOF\n)"; cat .env'],
+    ['a quoted string', 'echo "$(echo "; case x in y")"; cat .env'],
+    // A carriage return is a word character to bash, not a blank.
+    ['part of a word that starts with a carriage return', 'echo "$(\rcase x in y)"; cat .env'],
+    ['an argument after a carriage return', 'echo "$(\r case x in y)"; cat .env'],
+  ];
+  for (const [what, cmd] of afterSpan) {
+    test(`\`case\` as ${what} opens no pattern list: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    // The same span followed by a string. With the pattern list wrongly open
+    // the span runs on through the closing quote, and the text of the string
+    // is then read as commands. That needs the span inside double quotes: an
+    // unquoted span that closes late hides nothing, so it has no twin.
+    if (!cmd.startsWith('echo "$(')) continue;
+    const quiet = cmd.replace(/; cat \.env$/, '; echo "; cat .env; "');
+    test(`\`case\` as ${what} opens no pattern list: allows ${JSON.stringify(quiet)}`, () => {
+      assert.notEqual(quiet, cmd, 'the table entry must end in the read this twin replaces');
+      assertAllowed(runHook(bash(quiet)), quiet);
+    });
+  }
+
+  // `!(` where a command can start is `!` and a subshell with extglob off,
+  // bash's default outside an interactive shell, so a `case` inside it ends
+  // its patterns where bash ends them. The counter reads the same text as a
+  // glob group, as bash does with extglob on, and the span is scanned both ways.
+  test('`!(` at a command start reads as `!` and a subshell: blocks a read in a later `case` arm', () => {
+    const cmd = 'echo "$( !(case x in y) a;; x) cat .env;; esac) )"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+  // The cost of that reading, pinned. With extglob off bash rejects this line,
+  // and with it on the line only echoes, so this deny is a false positive on a
+  // command that reads nothing in either mode.
+  test('`!(` at a command start holding a `#` reads the `#` as a comment: blocks the string after it', () => {
+    const cmd = 'echo "$( !(a # b)\n)"; echo "; cat .env; "';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // Which bash runs the command decides where a span closes, and the guard
+  // cannot know which will. bash 3.2 — the /bin/bash macOS ships — counts
+  // parens: it ends each span below at the `case` pattern, fails the
+  // substitution and runs the `cat`. bash 5 rejects the same lines whole. A
+  // read that either would perform is blocked, so nothing the guard blocked
+  // before #5267 is allowed after it.
+  const eitherBash = [
+    'echo "$(case x in y)"; cat .env',
+    'x=$(case x in y); cat .env',
+    'echo "$(then case x in y)"; cat .env',
+    'echo "$(if true; then :; fi case x in y)"; cat .env',
+    'echo "$( ((1)) case x in y)"; cat .env',
+    'echo "$(echo x; coproc time case x in y)"; cat .env',
+  ];
+  for (const cmd of eitherBash) {
+    test(`blocks under the paren-counting reading ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // A `$'…'` span in a case arm: its `\'` and a later quoted `)` close nothing under bash's
+  // and zsh's readings, so the read after it runs (bash 5.2 and zsh 5.9 run each). A
+  // `$'…'` after an escaped `\$` starts a run of its own.
+  for (const cmd of [
+    "echo \"$(case $m in *) printf $'it\\'s %s\\n' 'a)'; cat .env;; esac)\"",
+    "echo \"$(case x in x) echo $'a\\'b'c')'; cat .env;; esac)\"",
+    "echo \"$(case x in x) echo \\$$'a\\'b'c')'; cat .env;; esac)\"",
+    "echo \"$(case x in x) echo a\\$$'a\\'b'c')'; cat .env;; esac)\"",
+  ]) {
+    test(`blocks a read after a $'…' span in a case arm: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // Two reads that need both #5285's `$'…'` reading and this scan, so `next` before the
+  // merge, this PR before it and #5285 alone each allowed them; bash 5.2 reads the file.
+  for (const cmd of [
+    "echo \"$(case x in y) echo $'\\'';; x) cat .env;; esac)\"",
+    "echo \"$(case x in x) cat $'.e\\x6ev';; esac)\"",
+  ]) {
+    test(`blocks a read in a case arm that needs #5285's reading too: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // An unquoted heredoc tag whose `$( )` or `${ }` holds `$'\''`: the scan reads the tag
+  // under the shell reading too, so the `\'` opens no quote and the tag ends where bash
+  // ends it. Read plainly, the quote took the body, and the read in it or after it was
+  // missed; `next` and this PR before it allowed each. bash 5.2 reads the file in every
+  // row, and zsh 5.9 in the first two.
+  for (const cmd of [
+    "cat <<E$(echo $'\\'')\necho \"$(case x in x) cat .env;; esac)\"\n",
+    "cat <<E$(echo $'\\'')\nx\nE$(echo $'\\'')\necho \"$(case x in x) cat .env;; esac)\"",
+    "cat <<E${x:-$'\\''}\necho \"$(case x in x) cat .env;; esac)\"\n",
+  ]) {
+    test(`blocks a read past a heredoc tag holding $'\\'': ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The review's row. Unquoted, the scans that count parens end the substitution at
+  // `x)`, so `echo` and `$'\x2e'env` are read as more words of the `cat`: it was
+  // blocked before this PR too, and stays blocked.
+  // A heredoc tag's `$'` after an even run of `$`: bash pairs the run, so `$$'\''` is the
+  // PID and a plain quote, and the tag runs on to the next line's `'`. Read as a `$'…'`,
+  // the tag ended on the first line, and the `echo` line was taken for the body. bash
+  // 5.2 and dash read the file in each row; `next` and this PR before it allowed each.
+  for (const cmd of [
+    "cat <<E$$'\\''\n'; echo \"$(case x in x) cat .env;; esac)\"\nb\n",
+    "cat <<E$$$$'\\''\n'; echo \"$(case x in x) cat .env;; esac)\"\nb\n",
+    "cat <<E$\\\n$'\\''\n'; echo \"$(case x in x) cat .env;; esac)\"\nb\n",
+  ]) {
+    test(`blocks a read past a heredoc tag whose $' follows an even run of $: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // A heredoc a `case` arm opens is still waiting when the substitution closes, and
+  // bash reads its body from the next line: the `"` or `'` line is that body and
+  // opens no string, and bash 5.2 reads the file after the `A` line. The same
+  // command reading README.md is allowed.
+  for (const body of ['"', "'"]) {
+    const cmd = `echo "$(case x in x) cat <<A;; esac)"\n${body}\nA\ncat .env`;
+    test(`blocks a read after the body of a heredoc a case arm leaves waiting: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      const twin = cmd.replace(/cat \.env$/, 'cat README.md');
+      assertAllowed(runHook(bash(twin)), twin);
+    });
+  }
+
+  // The same heredoc, unquoted, with a line after it that opens a heredoc of its own:
+  // bash 5.2 reads the file in the last line. The README.md twin is allowed.
+  test('blocks a read after a waiting heredoc whose next line opens another heredoc', () => {
+    const cmd = 'echo $(case x in x) cat <<A;; esac)\nA$(:<<B)\nB\ncat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    const twin = cmd.replace(/cat \.env$/, 'cat README.md');
+    assertAllowed(runHook(bash(twin)), twin);
+  });
+
+  // A heredoc opened in a `$( )` inside a delimiter word: bash 5.2 runs no `cat` in
+  // this command, and it is allowed, as on `next`.
+  test('allows a command whose delimiter word holds a heredoc, with no read bash runs', () => {
+    const cmd = "cat <<A$(:<<B)\nA$(:<<B)\necho '\nB\ncat .env\n'";
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  // A `$( )` inside "…" in a heredoc tag is read under the shell reading too: its
+  // `$'\''` closes nothing, so the "…" ends where bash ends it. bash 5.2 and zsh 5.9
+  // read the file; `next` allowed it, as did this PR before its tag readers took the
+  // shell reading.
+  test('blocks a read past a heredoc tag whose "…" holds a $( ) with $\'\\\'\'', () => {
+    const cmd = "cat <<$'\\''\"$(echo $'\\'')\"; echo \"$(case x in x) cat .env;; esac)\"\nx\n$'\\''\"$(echo $'\\'')\"\n";
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // dash has no `$'…'`, so it reads the quote after a tag's `$` plainly, also where a
+  // line continuation splits the `$` from it, and the tag runs on to the next line's
+  // `'`. dash reads the file; bash and zsh do not; `next` allowed it.
+  test("blocks a read dash makes past a heredoc tag whose $ and ' a continuation splits", () => {
+    const cmd = "cat <<E$\\\n'\\''\n'; echo \"$(case x in x) cat .env;; esac)\"\nb\n";
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test("blocks the review's case-arm row holding $'\\x2e'", () => {
+    const cmd = "cat $(case x in x) echo $'\\x2e'env;; esac)";
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('the debugger check reads `((` the same however much read-ahead the secret-read scan used', () => {
+    // One hook run makes two grammar scans: for a secret read, then for a
+    // gsd-debugger spawn. Each reads `((` by reading ahead, within a cap on
+    // the total that scanByGrammar refills per scan. A cap shared by the two
+    // would let the first `((` here, read ahead over 150,000 characters in each
+    // of the secret-read scan's passes, leave the spawn scan none for the second:
+    // it would read that `((` as two subshells, open a pattern list at
+    // `case x in y`, and take the string after the span for commands. The same
+    // span alone is allowed. Within one scan the passes share the cap: the spawn
+    // scan makes one per shell reading since #5441, so at twice this length its
+    // later passes read the second `((` as two subshells and it denies the
+    // command, but the hook's own budget denies that one as `command-too-complex`.
+    const span = 'echo "$( (( case x in y )) )"; echo "; claude --agent gsd-debugger -p y; "';
+    const longArith = `echo "$( (( ${'1+'.repeat(75000)}1 )) )"; `;
+    assertAllowed(runHook(bash(span)), 'the span alone');
+    assertAllowed(runHook(bash(longArith + span)), 'the span after a long arithmetic read-ahead');
+    assert.equal(checkBashCommand(span), null, 'the span alone, in process');
+    assert.equal(checkBashCommand(longArith + span), null, 'the span after a long arithmetic read-ahead, in process');
+  });
+
+  test('a carriage return inside a pattern word does not end the case: blocks the later arm', () => {
+    // `esac\rfoo` is one pattern word, so the case is still open at `x)`.
+    const cmd = 'echo "$(case x in esac\rfoo) :;; x) cat .env;; esac)"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // Reading reserved words made two more parens visible as not the closing
+  // one: a `)` in a comment and a `)` in a `${ }`.
+  const sameScan = [
+    'echo "$(echo hi # )\ncat .env)"',
+    'echo "$(echo ${x:-)}; cat .env)"',
+  ];
+  for (const cmd of sameScan) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // A heredoc body is data wherever bash reads it from, so a `)"` inside one
+  // must neither close the span nor end the string around it. Bash reads the
+  // body at the span's next newline; when the heredoc was opened in a nested
+  // `$( )` that already closed, at the next newline of the input; and a
+  // nested span never takes the body of a heredoc its parent opened.
+  // Only these two can fail on their own. A body's `)"` anywhere else closes
+  // the span under #5513's bash 3.2 reading and leaves the rest as commands, so
+  // the hook denies such a row with or without #5267.
+  const heredocBodies = [
+    ['past a nested span that crosses the newline', 'echo "$(cat <<EOF $(echo a\necho b)\nbody )"\nEOF\n)"; cat .env'],
+    ['past a process substitution that crosses the newline', 'echo "$(cat <<EOF <(echo a\necho b)\nbody )"\nEOF\n)"; cat .env'],
+  ];
+  for (const [where, cmd] of heredocBodies) {
+    test(`a heredoc body ${where} is skipped: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // These end in a read only the grammar-following reading can see: the case arm
+  // is inside the span only when the body's `)` did not close it. The body
+  // holds no `"`, so under bash 3.2's reading the arm stays inside the string.
+  // bash 5.2 runs the read in the first two. It fails the last two before it
+  // reaches the arm, so those pin only where the readers end the body.
+  const heredocThenArm = [
+    ['in the span that opened it', 'echo "$(cat <<EOF\nbody )\nEOF\ncase x in x) cat .env;; esac)"'],
+    ['after a nested span that opened it', 'echo "$(echo $(cat <<EOF) x\nbody )\nEOF\ncase x in x) cat .env;; esac)"'],
+    ['inside an array literal', 'echo "$(cat <<EOF; a=(\nbody )\nEOF\nx); case x in x) cat .env;; esac)"'],
+    ['inside `!(`, read as a subshell', 'echo "$( !(cat <<EOF\nbody )\nEOF\n); case x in x) cat .env;; esac)"'],
+  ];
+  for (const [where, cmd] of heredocThenArm) {
+    test(`a heredoc body ${where} is skipped, and the case arm after it is read: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // bash reads a heredoc's body after the next newline it takes as a token, and
+  // that holds wherever the reader is: in a pattern list, before `in`, inside
+  // `[[ ]]`. Read as patterns, the body's `)` would move the frame on to an arm
+  // and the real pattern's `)` would close the span. bash runs the read in each.
+  const bodyAtNewline = [
+    ['after a `;;`', 'echo "$(case x in y) cat <<E ;;\nbody )\nE\nx) cat .env;; esac)"'],
+    ['after the `case x in` on its line', 'echo "$(cat <<E; case x in\nbody )\nE\nx) cat .env;; esac)"'],
+    ['after a `;;`, in a script', 'out="$(case dump in\n  help) cat <<USAGE ;;\noptions:\n  a) show all\nUSAGE\n  dump) cat .env ;;\nesac)"; echo "$out"'],
+    ['before `in`', 'echo "$(cat <<E; case x\nbody )\nE\nin x) cat .env;; esac)"'],
+    ['inside `[[ ]]`', 'echo "$(cat <<E; [[ -n x &&\nbody )\nE\n-n y ]]\ncase x in x) cat .env;; esac)"'],
+    ['after a `;;`, two of them', 'echo "$(case x in y) cat <<E <<F ;;\nbody )\nE\nmore )\nF\nx) cat .env;; esac)"'],
+    ['after a `;;`, with tabs stripped', 'echo "$(case x in y) cat <<-E ;;\n\tbody )\n\tE\nx) cat .env;; esac)"'],
+    ['after a `;;` and a comment', 'echo "$(case x in y) cat <<E ;; # c\nbody )\nE\nx) cat .env;; esac)"'],
+  ];
+  for (const [where, cmd] of bodyAtNewline) {
+    test(`a heredoc body ${where} is not read as patterns: blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // Bash finds the delimiter word with nesting, then removes quotes across all of it,
+  // and only if the word held a quote of its own. Each pair was confirmed against bash
+  // 5.2: a line that is not the delimiter does not end the body, and this one does.
+  const delimiters = [
+    ['E"F"', 'EF'], ["E'F'", 'EF'], ['"E"F', 'EF'], ["'E'\"F\"", 'EF'],
+    ['E\\F', 'EF'], ['E" "F', 'E F'], ['E\\\nF', 'EF'], ['\\\nE', 'E'], ['\\\n E', 'E'], [' \\\n E', 'E'],
+    ['\\\\E', '\\E'], ["\\'E", "'E"], ['\\"E', '"E'], ['\\ E', ' E'],
+    ['"a\\\\b"', 'a\\b'], ['"\\$E"', '$E'], ['E"\\$F"', 'E$F'], ['"E\\\nF"', 'EF'],
+    ['"E\\"F"', 'E"F'], ["$'E'", 'E'], ['$"E"', 'E'], ["E$'F'", 'EF'], ["$'E\\'F'", "E'F"],
+    ['${a:-"}"}F', '${a:-"}"}F'], ["${a:-'}'}F", "${a:-'}'}F"], ['${"}"}', '${"}"}'],
+    ['\'E\'${x:-"a b"}', 'E${x:-a b}'], ['\'E\'$(echo "x")', 'E$(echo x)'],
+    ['"a$(echo "b c")d"', 'a$(echo b c)d'], ['"a`echo "b c"`d"', 'a`echo b c`d'],
+    ['"${x:-"b c"}"', '${x:-b c}'], ['E<(x)F', 'E<(x)F'], ['>(x)', '>(x)'],
+    ['${a:-${b} c}', '${a:-${b} c}'],
+  ];
+  // Since #6132 the first scan reads the default of a `${…}` in these tags and denies the
+  // command there, naming the tag, so main() stops before the grammar scan. Their rows
+  // assert that deny and read the grammar scan's own verdict (grammarScan).
+  const tagDeniedFirst = new Set(['${a:-"}"}F', "${a:-'}'}F", '${a:-${b} c}']);
+  const assertDelimiterRow = (word, cmd) => {
+    if (!tagDeniedFirst.has(word)) {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      return;
+    }
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'secret-read', tool: 'Bash' });
+    assert.deepEqual(grammarScan(cmd).verdict, { code: 'secret-read', text: '.env' });
+  };
+  for (const [word, end] of delimiters) {
+    // The lone `"` in the body is the point. A counting scan ends the span at the
+    // pattern, so that quote takes the end of the string, and the read after the span
+    // looks quoted to it. Only a span that ends at the case's own `)` sees the read,
+    // and only a tag that ends at its own line gets there: one that never matches
+    // takes the rest of the input for the body. A word with a `"` of its own flips
+    // that parity, so `\"E`, `"E\"F"`, `${a:-"}"}F` and `${"}"}` are denied either way.
+    test(`delimiter ${JSON.stringify(word)} ends at its own line: blocks a read after the span`, () => {
+      const cmd = `x="$(case x in y) cat <<${word} ;;\n"\n${end}\nx) echo ok;; esac)"; cat .env`;
+      assertDelimiterRow(word, cmd);
+    });
+    // A regression row: that `"` leaves this read bare to the counting scan too.
+    test(`delimiter ${JSON.stringify(word)}: blocks a read in the arm after it`, () => {
+      const cmd = `echo "$(case x in y) cat <<${word} ;;\n"\n${end}\nx) cat .env;; esac)"`;
+      assertDelimiterRow(word, cmd);
+    });
+  }
+
+  // A line that only looks like the delimiter must not end the body. If it did, the
+  // `)` after it would close the span and the arm would land in the outer string.
+  const notTheDelimiter = [
+    ['\\\\E', 'E', '\\E'],
+    ['E"\\$F"', 'E\\$F', 'E$F'],
+    ['"a\\\\b"', 'a\\\\b', 'a\\b'],
+    ["\\'E", 'E', "'E"],
+    ['\'E\'${x:-"a b"}', 'E${x:-"a b"}', 'E${x:-a b}'],
+    ['"E\\F"', 'EF', 'E\\F'],
+    ['"E\'F"', 'EF', "E'F"],
+  ];
+  for (const [word, lookalike, end] of notTheDelimiter) {
+    test(`delimiter ${JSON.stringify(word)} is not ended by the line ${JSON.stringify(lookalike)}: blocks the read`, () => {
+      const cmd = `echo "$(cat <<${word}\n${lookalike}\n)\n${end}\ncase x in x) cat .env;; esac)"`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('a delimiter quoted in part keeps its body literal: allows a substitution in the body', () => {
+    const cmd = 'echo "$(cat <<"E"F\n$(cat .env)\nEF\n)"';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test('a delimiter with a backslash keeps its body literal: allows a substitution in the body', () => {
+    const cmd = 'echo "$(case x in y) echo \'"\'; cat <<\\E ;;\n$(cat .env)\'\nE\nx) echo ok;; esac)"';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test("`$'…'` in a delimiter counts as quoting: allows a substitution in the body", () => {
+    const cmd = 'echo "$(cat <<$\'E\'\n$(cat .env)\nE\n)"';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test('a continuation in a delimiter is not quoting: blocks a substitution in the body', () => {
+    const cmd = 'echo "$(case x in x) echo \'"\'; cat <<E\\\nF ;;\n$(cat .env)\'\nEF\n;; esac)"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a substitution in a delimiter is part of the word: blocks the read in the arm after it', () => {
+    const cmd = 'echo "$(case x in y) cat <<E$(x)F ;;\nbody )\nE$(x)F\nx) cat .env;; esac)"';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('backticks in a delimiter are part of the word: allows a quoted read after the span', () => {
+    const cmd = 'echo "$(case x in y) cat <<E`x;`F ;;\nbody )\nE`x;`F\nx) echo ok;; esac)"; echo "; cat .env; "';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  test('a `<<-` delimiter with quotes ends at its tab-indented line: blocks a read after the span', () => {
+    const cmd = 'x=$(case x in y) cat <<-E"F" ;;\nb\n\tEF\nx) echo ok;; esac); cat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a `<<-` split by a continuation still strips tabs: blocks a read after the span', () => {
+    const cmd = 'x=$(case x in y) cat <<\\\n-E ;;\nb\n\tE\nx) echo ok;; esac); cat .env';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('the word of a here-string is not a heredoc tag: allows a quoted read after the span', () => {
+    const cmd = 'echo "$(case x in y) cat <<<EOF ;;\nx) echo ok;; esac)"; echo "; cat .env; "';
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  for (const word of ['E"F"', "E'F'", 'E\\F']) {
+    test(`the counting scans read ${word} as they did before #5267`, () => {
+      // bash runs nothing secret here. The counting scan keeps the quoting in the tag and
+      // denies it, as `next` does: the delimiter reader belongs to the grammar scan.
+      const cmd = `echo "$(cat <<${word}\nbody )\nEF\necho ok)"; echo "; cat .env; "`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('a read in front of a nest of 5000 unquoted `$(`: blocks', () => {
+    // The counting scan walks this nest in a loop and finds the read, so the
+    // grammar reading never runs. The next test is the one that reaches it.
+    const cmd = `cat .env; echo ${'$('.repeat(5000)}`;
+    assertBlocked(runHook(bash(cmd)), '5000 nested $(', { tool: 'Bash', path: '.env' });
+  });
+
+  test('a read only the grammar sees, in front of a nest too deep for it: denies as nesting-too-deep, and the grammar scan as command-too-complex', () => {
+    // The first scan denies the nest (#6136) before the grammar scan runs. The grammar scan
+    // that would find the read cannot finish the nest either, so it denies the command whole
+    // rather than read the nest by count.
+    const cmd = `echo "$(case x in x) cat .env;; esac)"; echo ${'$('.repeat(5000)}`;
+    assertBlocked(runHook(bash(cmd)), 'a case, then 5000 nested $(', { code: 'nesting-too-deep', tool: 'Bash' });
+    assert.deepEqual(grammarScan(cmd).verdict, { code: 'command-too-complex', text: '' });
+  });
+
+  // The grammar reading is an extra scan: giving up on a nest must cost nothing
+  // the counting scans deny. Paren counting takes the comment's `)` for the close
+  // here and the `'` for the start of a string, so it never enters the nest and
+  // denies at any depth. The grammar reading enters it and overflows the stack.
+  const unentered = (first, nest) => `${first}\necho $(echo # )'\n) ${nest}`;
+  const onlyThe5513Pass = 'echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"';
+  for (const n of [900, 1100, 5000, 9000, 20000, 340000]) {
+    const nest = '"$('.repeat(n);
+    test(`a nest ${n} deep that counting never enters costs no read: blocks`, () => {
+      assertBlocked(runHook(bash(unentered('cat .env', nest))), `${n} deep`, { tool: 'Bash', path: '.env' });
+    });
+    test(`a nest ${n} deep that counting never enters costs no spawn: blocks`, () => {
+      const cmd = unentered('claude --agent gsd-debugger -p y', nest);
+      assertBlocked(runHook(bash(cmd)), `${n} deep`, { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+    test(`a nest ${n} deep that counting never enters costs no #5513 reading: blocks`, () => {
+      assertBlocked(runHook(bash(unentered(`${onlyThe5513Pass};`, nest))), `${n} deep`, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // Paren counting itself recurses through a heredoc tag and through `"$(`, and
+  // what it reaches is what the hook reaches on `next`: a read in front is named up
+  // to where the stack runs out, about 2,150 tags or 1,200 `"$(` on Linux (measured
+  // the same on `next` and here, with and without the JIT), and past that the command
+  // is denied as `command-too-complex`, as #5285 made it.
+  const tagNests = [
+    ['on the next line', (n) => `cat .env\necho $(${'cat <<E$('.repeat(n)}`],
+    ['on the same line', (n) => `cat .env; echo $(${'cat <<E$('.repeat(n)}`],
+    ['closed', (n) => `cat .env; echo $(${'cat <<E$('.repeat(n)}${')'.repeat(n)})`],
+    ['inside a ${ }', (n) => `cat .env; echo $(echo \${${'$(cat <<E$('.repeat(n)}x`],
+  ];
+  for (const [where, shape] of tagNests) {
+    for (const n of [1000, 1500]) {
+      test(`a read in front of ${n} nested heredoc tags ${where}: blocks`, () => {
+        assertBlocked(runHook(bash(shape(n))), `${n} tags`, { tool: 'Bash', path: '.env' });
+      });
+    }
+    test(`a read in front of 12000 nested heredoc tags ${where} runs out of stack: denies as command-too-complex (#5285)`, () => {
+      assertBlocked(runHook(bash(shape(12000))), '12000 tags', { code: 'command-too-complex', tool: 'Bash' });
+    });
+  }
+  // The counting scan's limit depends on the platform's stack, and macOS's is the
+  // smaller. This row stays well inside both.
+  test('a read in front of 800 nested "$(: blocks', () => {
+    assertBlocked(runHook(bash(`cat .env; echo "$(${'"$('.repeat(800)}`)), '800 "$(', { tool: 'Bash', path: '.env' });
+  });
+  test('a read in front of 12000 nested "$( runs out of stack: denies as command-too-complex (#5285)', () => {
+    assertBlocked(runHook(bash(`cat .env; echo "$(${'"$('.repeat(12000)}`)), '12000 "$(', { code: 'command-too-complex', tool: 'Bash' });
+  });
+
+  // Past 1,000 nested spans (MAX_READER_DEPTH, the limit the changeset states)
+  // the readers stop, and the grammar scan, which cannot
+  // finish, denies the command as command-too-complex; a stack overflow does the
+  // same at a depth that depends on the runtime. Each row nests a `case` N spans
+  // deep, with a read after the innermost spans close. bash 5 closes the
+  // outermost span after the read, and only the grammar reading sees it there;
+  // paren counting closes every span one paren early, starting at the pattern's
+  // `)`, so the read is text inside the string. The pre-fix hook allows the row
+  // at every depth. Since #6136 the hook's first scan denies each of these nests
+  // as nesting-too-deep before the grammar scan runs, so each row reads the
+  // grammar scan's own verdict as well (grammarScan). The depths are written
+  // out, so a change to the limit fails these rows.
+  const nestedCase = (n) => `echo "$(${'$('.repeat(n - 1)}case x in y) :;; esac${')'.repeat(n - 1)}; cat .env)"`;
+  for (const n of [999, 1000]) {
+    test(`a case ${n} spans deep: the hook denies it as nesting-too-deep; the grammar scan reads it and finds the read after it`, () => {
+      assertBlocked(runHook(bash(nestedCase(n))), `${n} deep`, { code: 'nesting-too-deep', tool: 'Bash' });
+      assert.deepEqual(grammarScan(nestedCase(n)).verdict, { code: 'secret-read', text: '.env' });
+    });
+  }
+  test('a case 1001 spans deep: the hook denies it as nesting-too-deep; the grammar scan stops as command-too-complex', () => {
+    assertBlocked(runHook(bash(nestedCase(1001))), '1001 deep', { code: 'nesting-too-deep', tool: 'Bash' });
+    assert.deepEqual(grammarScan(nestedCase(1001)).verdict, { code: 'command-too-complex', text: '' });
+  });
+
+  // The size cap on the same scan: a case-arm read padded with a plain word is
+  // found at MAX_COMMAND_LENGTH - 1 and MAX_COMMAND_LENGTH characters, and one
+  // character more is refused unread.
+  const atLength = (n) => {
+    const cmd = 'echo "$(case x in x) cat .env;; esac)" ';
+    return cmd + 'x'.repeat(n - cmd.length);
+  };
+  for (const n of [MAX_COMMAND_LENGTH - 1, MAX_COMMAND_LENGTH]) {
+    test(`a read in a case arm in a command of ${n} characters: blocks as secret-read`, () => {
+      const cmd = atLength(n);
+      assert.equal(cmd.length, n);
+      assertBlocked(runHook(bash(cmd)), `${n} characters`, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test(`a read in a case arm in a command of ${MAX_COMMAND_LENGTH + 1} characters: blocks as command-too-large`, () => {
+    const cmd = atLength(MAX_COMMAND_LENGTH + 1);
+    assert.equal(cmd.length, MAX_COMMAND_LENGTH + 1);
+    assertBlocked(runHook(bash(cmd)), `${MAX_COMMAND_LENGTH + 1} characters`, { code: 'command-too-large', tool: 'Bash' });
+  });
+
+  // A command that made a scan give up leaves nothing for the next one. The grammar
+  // scan gives up on `deep` (paren counting never enters it), and since #5285 a scan
+  // that gives up on its budget, its depth limit or the stack is `command-too-complex`.
+  test('a scan that gave up leaves the readings as they were', () => {
+    const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
+    const deep = `echo $(echo # )'\n) ${'"$('.repeat(9000)}`;
+    const byCount = 'echo "$(case x in y)"; cat .env';
+    const byGrammar = 'echo "$(case x in x) cat .env;; esac)"';
+    const byBodiesPass = 'echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"';
+    assert.deepEqual(checkBashCommand(deep), TOO_COMPLEX);
+    assert.deepEqual(checkBashCommand(byCount), { code: 'secret-read', text: '.env' });
+    assert.deepEqual(checkBashCommand(deep), TOO_COMPLEX);
+    assert.deepEqual(checkBashCommand(byGrammar), { code: 'secret-read', text: '.env' });
+    assert.deepEqual(checkBashCommand(deep), TOO_COMPLEX);
+    assert.deepEqual(checkBashCommand(byBodiesPass), { code: 'secret-read', text: '.env' });
+  });
+
+  // scanBashReadings runs scanBashByGrammar third, on what scanBashCommand's scan and
+  // scanDebuggerSpawn left of the command's budget (#5285's one budget per command), and
+  // only for a command one of them met a span in.
+  test('the grammar scan spends what the scans before it left of the budget', () => {
+    const { scanBashCommand, scanDebuggerSpawn, scanBashByGrammar, workSpent, MAX_SCAN_CHARACTERS } = hookApi;
+    const BIG = 64 * MAX_SCAN_CHARACTERS;
+    const cmd = 'echo "$(case x in y) z)"';
+    assert.equal(scanBashCommand(cmd, BIG, BIG), null);
+    assert.equal(scanDebuggerSpawn(cmd), null);
+    const used = workSpent().scan;
+    const reader = workSpent().reader;
+    const steps = spanReaderSteps();
+    assert.equal(scanBashByGrammar(cmd), null, 'with budget to spare');
+    assert.ok(workSpent().scan > used, 'the grammar scan charged the same budget');
+    assert.ok(spanReaderSteps() > steps, 'the span readers ran');
+    assert.ok(workSpent().reader - reader >= spanReaderSteps() - steps, 'and charged their steps to the readers\' budget');
+    assert.equal(scanBashCommand(cmd, used, BIG), null);
+    assert.equal(scanDebuggerSpawn(cmd), null);
+    assert.deepEqual(scanBashByGrammar(cmd), { code: 'command-too-complex', text: '' }, 'with none left');
+  });
+
+  test('a grammar debugger-spawn scan that runs out of budget is command-too-complex', () => {
+    // The debugger check by grammar is the last pass, so one separator short of the
+    // command's whole need runs out there.
+    const { scanBashCommand, scanDebuggerSpawn, scanBashByGrammar, workSpent, MAX_SCAN_CHARACTERS } = hookApi;
+    const BIG = 64 * MAX_SCAN_CHARACTERS;
+    const cmd = 'echo "$(case x in x) claude --agent gsd-debugger -p y;; esac)"';
+    const verdict = (separators) => scanBashCommand(cmd, BIG, separators) || scanDebuggerSpawn(cmd) || scanBashByGrammar(cmd);
+    assert.equal(verdict(BIG).code, 'debugger-cli-spawn');
+    const need = workSpent().separators;
+    assert.equal(verdict(need).code, 'debugger-cli-spawn', 'on the whole need');
+    assert.deepEqual(verdict(need - 1), { code: 'command-too-complex', text: '' }, 'one short of it');
+  });
+
+  test('a read after heredocs whose quoted tags each level reads again is still found: blocks', () => {
+    // The readings read each tag again at each level of `$( )` around it. A quote-removal
+    // budget of one command length ran out on these four, kept the tags' quotes, and so
+    // ran the last body to the end of the input, past the read, which zsh runs.
+    const tag = 'T'.repeat(40);
+    const heredocs = [0, 1, 2, 3].map((k) => `v${k}=$(echo $(cat <<'${tag}'\nb${k}\n${tag}\n))\n`).join('');
+    const cmd = `${heredocs}echo "$(case x in x) echo $$'a\\'b'c')'; cat .env;; esac)"`;
+    assertBlocked(runHook(bash(cmd)), 'four heredocs, then a read', { tool: 'Bash', path: '.env' });
+  });
+
+  for (const [what, gap, tag] of [
+    ['its word', '', 'a'.repeat(100000)],
+    ['the blanks in front of it', ' '.repeat(100000), 'E'],
+  ]) {
+    test(`a heredoc delimiter the grammar scan reads is charged to the budget: ${what}`, () => {
+      const cmd = `echo "$(x)"; cat <<${gap}${tag}\nbody\n${tag}\n`;
+      const before = spanReaderSteps();
+      assert.equal(checkBashCommand(cmd), null);
+      assert.ok(spanReaderSteps() - before >= 100000, `${spanReaderSteps() - before} steps charged`);
+    });
+  }
+
+  test('either SyntaxError V8 gives for a regular expression compiled with no stack left is running out', () => {
+    // Nearest the stack edge V8 says `Maximum call stack size exceeded`, not `Stack
+    // overflow`. Missed, it reached main()'s crash path, which allows.
+    const { stackRanOut } = hookApi;
+    for (const tail of ['Stack overflow', 'Maximum call stack size exceeded']) {
+      assert.equal(stackRanOut(new SyntaxError(`Invalid regular expression: /^x$/: ${tail}`)), true, tail);
+    }
+    assert.equal(stackRanOut(new SyntaxError('Invalid regular expression: /(/: Unterminated group')), false);
+  });
+
+  test('a command with no span gets no grammar scan, whatever the one before it had', () => {
+    const { scanBashCommand, scanBashByGrammar, workSpent, MAX_SCAN_CHARACTERS } = hookApi;
+    const BIG = 64 * MAX_SCAN_CHARACTERS;
+    assert.equal(scanBashCommand('echo "$(case x in y) z)"', BIG, BIG), null);
+    assert.equal(scanBashCommand('echo ok', BIG, BIG), null);
+    const used = workSpent().scan;
+    assert.equal(scanBashByGrammar('echo ok'), null);
+    assert.equal(workSpent().scan, used);
+  });
+
+  test('property: a nest paren counting never enters cannot cost its verdict', () => {
+    const OPEN = fc.constantFrom('"$(', '$(', '<(', '>(', '${', '$((', 'cat <<E$(', 'a=(', '`');
+    const nest = fc.array(fc.tuple(OPEN, fc.integer({ min: 1, max: 9000 })), { minLength: 1, maxLength: 4 });
+    fc.assert(fc.property(nest, (parts) => {
+      const text = parts.map(([open, n]) => open.repeat(n)).join('');
+      const cmd = `cat .env\necho $(echo # )'\n) ${text}`;
+      assert.deepEqual(checkBashCommand(cmd), { code: 'secret-read', text: '.env' });
+    }), { seed: 5267, numRuns: 40 });
+  });
+
+  // Four shapes the readers once took quadratic time on. A hook that outlives
+  // its timeout is skipped by the runtime, which allows the command. None of
+  // them holds a read the counting scans can find: those run first and would
+  // deny it before a reader took a step.
+  //
+  // Two were quadratic in the readers' own loops, so those loops count their
+  // iterations (spanReaderSteps) and the tests below run in process and bound the
+  // count: a few passes over the text, plus the `((` read-ahead cap for each
+  // scan, which is MAX_COMMAND_LENGTH and is refilled per scan. Either old
+  // fault exceeds the bound several times over at these sizes (measured
+  // below); the fixed reader stays well under it.
+  const linearSteps = (cmd) => 16 * cmd.length + 4 * MAX_COMMAND_LENGTH;
+  const scanCounted = (cmd) => {
+    const before = spanReaderSteps();
+    const verdict = checkBashCommand(cmd);
+    return { verdict, steps: spanReaderSteps() - before };
+  };
+
+  test('nested arithmetic probes take reader steps linear in the command', () => {
+    // Every `((` reads ahead to its matching paren. Started inside one
+    // another, each would read the rest of the nest again: 38.7 million steps
+    // for these 8 around a 40,000-character word, eight times the bound,
+    // against 2.7 million with no read-ahead inside another. The nest is eight
+    // `$(` deep, so the hook's first scan denies it as nesting-too-deep (#6136);
+    // the bound is on the grammar scan, run on what the first two scans leave.
+    // That scan stops a body nested deeper than three too, so the bound covers the
+    // `((` read-ahead over the command's text, not a rescan of the inner bodies.
+    const cmd = `echo "$( ${'(( $( '.repeat(8)}echo ${'x'.repeat(40000)}${' ) ) ) '.repeat(8)})"`;
+    assert.deepEqual(checkBashCommand(cmd), { code: 'nesting-too-deep', text: '' });
+    const { steps } = grammarScan(cmd);
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  test('a run of `$` split by line continuations is read once, not from each `$`', () => {
+    // Each `$` there follows a newline, not a `$`. Read again from each one, 8,000 of
+    // them cost 384 million steps, and a 192 KB command 20 seconds as a process.
+    const cmd = `echo $'x' $( ${'$\\\n'.repeat(8000)}x )`;
+    const { verdict, steps } = scanCounted(cmd);
+    assert.equal(verdict, null);
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  for (const [shape, cmd, hookCodes] of [
+    ['unterminated', `echo "$(${'cat <<"E$('.repeat(2000)}x`, ['nesting-too-deep', 'command-too-complex']],
+    ['closed', `echo "$(${'cat <<"E$('.repeat(2000)}x${')"'.repeat(2000)})"`, ['nesting-too-deep', 'command-too-complex']],
+  ]) {
+    test(`a nest of quoted delimiters, ${shape}, is bounded by the command's budget: denies as command-too-complex`, () => {
+      // Each delimiter holds the rest of the nest, so removing quotes from each one reads
+      // it again. That work is quadratic and charged, so the scan spends the command's
+      // budget, or under a smaller stack overflows first, and denies the command rather
+      // than outlive the hook's timeout. Which of the two comes first depends on the stack.
+      // Since #6136 the hook's first scan denies either nest as nesting-too-deep, or as
+      // command-too-complex where the stack runs out first (which comes first moves with the
+      // stack's headroom per frame), so the verdict and the steps pinned here are the grammar
+      // scan's.
+      const hook = scanOrOverflow(cmd).verdict;
+      assert.ok(hook !== null && hookCodes.includes(hook.code), `hook verdict ${JSON.stringify(hook)}`);
+      const { verdict, steps } = grammarScan(cmd);
+      assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
+      const bound = hookApi.MAX_SCAN_CHARACTERS + MAX_COMMAND_LENGTH;
+      assert.ok(steps <= bound, `${steps} reader steps, against a budget of ${hookApi.MAX_SCAN_CHARACTERS}`);
+    });
+  }
+
+  // A grammar scan that meets a nest past the depth limit, or runs out of stack, cannot
+  // finish, and the command is denied as command-too-complex (#5285), in steps linear
+  // in the command: the readers stop there rather than read the nest by count. In
+  // process the overflow can also escape the scans, which main() denies the same way,
+  // so these read it as main() does.
+  const scanOrOverflow = (cmd) => {
+    const before = spanReaderSteps();
+    let verdict;
+    try {
+      verdict = checkBashCommand(cmd);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      verdict = { code: 'command-too-complex', text: '' };
+    }
+    return { verdict, steps: spanReaderSteps() - before };
+  };
+  test('10,000 levels, each after a `)` in a comment: the hook denies it; the grammar scan ends as command-too-complex, in steps linear in the command', () => {
+    const cmd = `echo "$(${'# c )\n$( '.repeat(10000)}`;
+    assert.deepEqual(scanOrOverflow(cmd).verdict, { code: 'command-too-complex', text: '' });
+    const { verdict, steps } = grammarScan(cmd);
+    assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  // A nest through heredoc tags gets a fresh depth per tag, so the stack, not the
+  // depth limit, stops the grammar scan, and with stack enough it reads the nest to
+  // the end: it holds no read, so the grammar scan allows it there. Where the stack
+  // runs out depends on the runtime, so each outcome has its own row: 20 tags are read
+  // to the end on a default stack (measured down to 100 KB), and 1,100 tags overflow a
+  // stack pinned at 200 KB in a child process (grammarScanOnStack). The hook denies
+  // both: since #6136 its first scan stops the nest as nesting-too-deep, or as
+  // command-too-complex where the stack runs out first.
+  const tagNestsAround = (n) => `echo $(${'cat <<E$('.repeat(n)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(n)}`;
+  test('two nests of 20 heredoc tags around a long delimiter: the hook denies it as nesting-too-deep; the grammar scan reads the read-free nest to its end and allows it, in steps linear in the command', () => {
+    const cmd = tagNestsAround(20);
+    assert.deepEqual(scanOrOverflow(cmd).verdict, { code: 'nesting-too-deep', text: '' });
+    const { verdict, steps } = grammarScan(cmd);
+    assert.equal(verdict, null);
+    // It read the whole command: a grammar scan that stopped early, or never ran, takes fewer steps.
+    assert.ok(steps >= cmd.length, `${steps} reader steps for ${cmd.length} characters`);
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+  test('two nests of 1,100 heredoc tags around a long delimiter: the hook denies it; on a 200 KB stack the grammar scan ends as command-too-complex, in steps linear in the command', () => {
+    const cmd = tagNestsAround(1100);
+    const hook = scanOrOverflow(cmd).verdict;
+    assert.ok(hook !== null && ['nesting-too-deep', 'command-too-complex'].includes(hook.code), `hook verdict ${JSON.stringify(hook)}`);
+    const { verdict, steps } = grammarScanOnStack(`() => (${tagNestsAround})(1100)`, 200);
+    assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  // A read next to such a nest is denied too. Since #6136 the hook's first scan stops the
+  // nest as nesting-too-deep before the grammar scan runs. The grammar scan that would find
+  // the read cannot finish either, and ends as command-too-complex.
+  const front = 'echo "$(case x in x) cat .env;; esac)"; ';
+  const deep = `${'$('.repeat(1001)}x${')'.repeat(1001)}`;
+  for (const [where, cmd] of [
+    ['in front of two nests past the depth limit in a delimiter', `${front}cat <<E${deep}F${deep}\nE\n`],
+    ['after a nest past the depth limit', `echo ${deep}; ${front}`],
+  ]) {
+    test(`a read ${where}: denies as nesting-too-deep; the grammar scan, as command-too-complex`, () => {
+      assertBlocked(runHook(bash(cmd)), where, { code: 'nesting-too-deep', tool: 'Bash' });
+      assert.deepEqual(grammarScan(cmd).verdict, { code: 'command-too-complex', text: '' });
+    });
+  }
+  // Behind 1,200 heredoc tags the stack, not the depth limit, decides where both scans stop:
+  // with more stack the grammar scan finishes and finds the read. The hook process's stack is
+  // not the test's to set, so its row takes either deny code; the grammar scan runs on a stack
+  // pinned at 200 KB in a child process, where it cannot finish and must deny.
+  const frontOfTags = () => `echo "$(case x in x) cat .env;; esac)"; echo $(${'cat <<E$('.repeat(1200)}`;
+  test('a read in front of a nest of 1,200 heredoc tags: denies as nesting-too-deep, or as command-too-complex where the stack runs out; on a 200 KB stack the grammar scan ends as command-too-complex', () => {
+    const r = runHook(bash(frontOfTags()));
+    const code = r.status === 2 ? JSON.parse(r.stdout).code : undefined;
+    assert.ok(['nesting-too-deep', 'command-too-complex'].includes(code), `hook code ${code}`);
+    assertBlocked(r, '1,200 heredoc tags', { code, tool: 'Bash' });
+    assert.deepEqual(grammarScanOnStack(frontOfTags, 200).verdict, { code: 'command-too-complex', text: '' });
+  });
+
+  test('a read paren counting finds is denied before any grammar reading runs', () => {
+    // The span here runs to the end of the command under the grammar reading,
+    // so a reader that ran first would walk all of it.
+    const cmd = `echo "$(case x in y)"; cat .env; echo ${'x'.repeat(200000)}`;
+    const { verdict, steps } = scanCounted(cmd);
+    assert.deepEqual(verdict, { code: 'secret-read', text: '.env' });
+    assert.ok(steps < 1000, `${steps} reader steps`);
+  });
+
+  // The other two were quadratic outside any loop: a copy of the waiting
+  // heredocs for each `((` read-ahead, and a flattening of the word being
+  // built at each `@(`. The reader steps see neither, so each row also scans its
+  // command in a child process (countInChild) and bounds what that leaves:
+  // - A copy is made by an array builtin, so the first row bounds the array
+  //   elements the builtins return or walk at 256 a character. The fixed hook
+  //   uses about 36; the copy put back through slice, concat, spread, Array.from,
+  //   flat, toSpliced or structuredClone reaches the bound.
+  // - The flattening happens inside V8 when a character is read from a string
+  //   built by `+=`, with no builtin call to count, but each one copies the whole
+  //   word. The second row bounds the bytes allocated at 4,096 a character: about
+  //   1,300 with the fix on Node 22 and 24 alike, and about 43,800 with the
+  //   flattening put back. Neither bound is a time. Both rows also hold the
+  //   verdict at the size cap, in process: a throw on either path, which the
+  //   hook would turn into an allow, still fails them.
+  const waitingCommand = () => {
+    // 38,000 heredocs waiting for a body, then 72,000 probes, just under the
+    // command-size cap.
+    const waiting = ' $(cat <<X)'.repeat(38000);
+    const probes = '((1)); '.repeat(72000);
+    return `echo "$(echo${waiting}; ${probes}case x in x) cat .env;; esac)"\n${'X\n'.repeat(38000)}`;
+  };
+  // Each `@(` asks what the word ends in, which must not be read from the word
+  // as it is being built.
+  const globCommand = () => `echo "$(echo ${'a@(x)'.repeat(209000)}; case x in x) cat .env;; esac)"`;
+
+  test('arithmetic probes behind waiting heredocs: blocks the read in the case after them, copying array elements linear in the command', () => {
+    const cmd = waitingCommand();
+    assert.ok(cmd.length <= MAX_COMMAND_LENGTH, `${cmd.length} characters`);
+    // #5285's budget denies it whole, as on `next`; the readers are reached on a larger one.
+    assert.deepEqual(checkBashCommand(cmd), { code: 'command-too-complex', text: '' });
+    const cap = 256 * cmd.length;
+    const counted = countInChild(waitingCommand, cap);
+    assert.ok(!counted.capped && counted.elements <= cap, `${counted.elements} array elements for ${cmd.length} characters`);
+    assert.deepEqual(counted.verdict, { code: 'secret-read', text: '.env' });
+  });
+
+  test('a long word of extended-glob groups: blocks the read in the case after it, allocating bytes linear in the command', () => {
+    const cmd = globCommand();
+    assert.ok(cmd.length <= MAX_COMMAND_LENGTH, `${cmd.length} characters`);
+    assert.deepEqual(checkBashCommand(cmd), { code: 'command-too-complex', text: '' });
+    const counted = countInChild(globCommand, 256 * cmd.length);
+    assert.ok(counted.allocated <= 4096 * cmd.length, `${counted.allocated} bytes allocated for ${cmd.length} characters`);
+    assert.deepEqual(counted.verdict, { code: 'secret-read', text: '.env' });
+  });
+
+  const allows = [
+    // The triage control, and the inline-value idiom this must keep working.
+    'x=$(echo case); echo hi',
+    'os="$(case "$OSTYPE" in linux*) echo linux;; freebsd*) echo bsd;; *) echo other;; esac)"; echo "$os"',
+    'echo "$(case x in x) echo ok;; esac)"; echo done',
+    // The arm is scanned, not refused: a template name and an existence check pass.
+    'echo "$(case x in x) cat .env.example;; esac)"',
+    'echo "$(case x in x) test -f .env && echo yes;; esac)"',
+    // Each "not the reserved word" shape above, with nothing secret after it.
+    'echo "$(for case in a b; do echo $case; done)"; echo hi',
+    'echo "$(a=(case x in y); echo z)"; echo hi',
+    'echo "$(echo hi # (case insensitive in bash)\n)"; echo hi',
+    // A continuation leaves a `case` a keyword, and an argument an argument.
+    'echo "$(\\\ncase x in x) echo ok;; esac)"; echo done',
+    'echo "$(echo \\\ncase x in y)"; echo "; cat .env; "',
+    // A heredoc in a pattern list leaves the span where bash ends it.
+    'echo "$(case x in y) cat <<E ;;\nbody (flags)\nE\nx) echo ok;; esac)"; echo done',
+    'echo "$(case x in y) cat <<E ;;\nbody )\nE\nx) echo ok;; esac)"; echo "; cat .env; "',
+    // Outside a `<(`, a `<` in `[[ ]]` compares, and a `(` groups.
+    'echo "$([[ a < b ]])"; echo "; cat .env; "',
+    'echo "$([[ ( a < b ) ]])"; echo "; cat .env; "',
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // ── Properties over generated `case` commands ─────────────────────────────
+  // Built from the manual's syntax — `case WORD in [ [(] PATTERN [| PATTERN]…)
+  // LIST ;; ]… esac` — with every vocabulary declared here. Each run spawns the
+  // hook, which keeps numRuns small; fast-check prints the seed and the
+  // counterexample on failure.
+  const PROPERTY_RUNS = { seed: 5267, numRuns: 40 };
+  const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production');
+  const SUBJECT = fc.constantFrom('x', '$1', '"$OSTYPE"', '${v}', '$(uname -s)', 'case', 'in', 'esac');
+  const PATTERN = fc.constantFrom('a', '*', '*.txt', '[ab]', 'linux*', '"a b"', "')'", '\\)', '$v', 'case', 'in');
+  const BENIGN = fc.constantFrom('echo ok', ':', 'true', 'echo case', 'echo esac', 'printf %s x', 'echo "a)"');
+  const arm = fc.record({
+    paren: fc.boolean(),
+    patterns: fc.array(PATTERN, { minLength: 1, maxLength: 3 }),
+    bar: fc.constantFrom('|', ' | '),
+    terminator: fc.constantFrom(';;', ';&', ';;&'),
+  });
+  const caseShape = fc.record({
+    subject: SUBJECT,
+    arms: fc.array(arm, { minLength: 1, maxLength: 3 }),
+    gap: fc.constantFrom(' ', '\n', '\n  '),
+    lastTerminator: fc.constantFrom(';;', ';', '\n'),
+  });
+  // `bodies[k]` is the command list of arm k.
+  const render = ({ subject, arms, gap, lastTerminator }, bodies) => {
+    const parts = arms.map((a, k) => {
+      const end = k === arms.length - 1 ? lastTerminator : a.terminator;
+      return `${a.paren ? '(' : ''}${a.patterns.join(a.bar)}) ${bodies[k]}${end === '\n' ? '' : ' '}${end}`;
+    });
+    return `case ${subject} in${gap}${parts.join(gap)}${gap}esac`;
+  };
+  const WRAP = fc.constantFrom(
+    (c) => `echo "$(${c})"`,
+    (c) => `echo $(${c})`,
+    (c) => `v=$(${c})`,
+    (c) => `echo <(${c})`,
+    (c) => `cat <<EOF\n$(${c})\nEOF`,
+  );
+
+  test('property: a secret read in any arm of a case inside a substitution is blocked', () => {
+    const withRead = caseShape.chain((shape) => fc.tuple(
+      fc.constant(shape), fc.nat({ max: shape.arms.length - 1 }),
+      fc.array(BENIGN, { minLength: shape.arms.length, maxLength: shape.arms.length }), SECRET, WRAP,
+    ));
+    fc.assert(fc.property(withRead, ([shape, at, benign, secret, wrap]) => {
+      const bodies = benign.map((b, k) => (k === at ? `cat ${secret}` : b));
+      const cmd = wrap(render(shape, bodies));
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: the word before a `case` decides whether the span ends at its pattern', () => {
+    // A read after the span is blocked by either reading of `case`, so that
+    // half cannot fail on its own; the quoted twin is the half that can. Where
+    // `case` is the reserved word, `y)` is a pattern and the substitution runs
+    // on to the end, so bash reads `cat` as a command and the twin is blocked.
+    // Where it is an ordinary word, `y)` closes the substitution and `cat` is
+    // quoted, so the twin is allowed. The two lists are bash's: each word was
+    // run in front of a `case` that echoes from its arm.
+    const STARTS = fc.array(fc.constantFrom('true;', 'echo a &&', 'false ||', 'x | y;', 'z\n'), { maxLength: 3 });
+    const RESERVED_AFTER = ['', '!', '{', 'time', 'if', 'while', 'until'];
+    const ORDINARY_AFTER = ['echo', 'x', 'x=1', '>f', 'printf'];
+    const BEFORE = fc.constantFrom(...RESERVED_AFTER, ...ORDINARY_AFTER);
+    fc.assert(fc.property(STARTS, BEFORE, SUBJECT, SECRET, (starts, before, subject, secret) => {
+      const span = `echo "$(${[...starts, before, 'case', subject, 'in', 'y'].filter(Boolean).join(' ')})"`;
+      const cmd = `${span}; cat ${secret}`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+      const twin = `${span}; echo "; cat ${secret}; "`;
+      if (RESERVED_AFTER.includes(before)) assertBlocked(runHook(bash(twin)), twin, { tool: 'Bash', path: secret });
+      else assertAllowed(runHook(bash(twin)), twin);
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: the span ends where the case ends — a read after it is blocked, and nothing else is', () => {
+    // One arm holds a lone `"`. Paren counting ends the span at the first
+    // pattern's `)` and reads the rest of the case inside the outer quotes,
+    // where that `"` ends them, so to it the read after the span is quoted: on
+    // most of these shapes only a span that ends at the case's own `)` blocks it.
+    const LONE_QUOTE = fc.constantFrom(`echo '"'`, `printf %s '"'`);
+    const benignOnly = caseShape.chain((shape) => fc.tuple(
+      fc.constant(shape), fc.array(BENIGN, { minLength: shape.arms.length, maxLength: shape.arms.length }),
+      fc.nat({ max: shape.arms.length - 1 }), LONE_QUOTE, SECRET,
+    ));
+    fc.assert(fc.property(benignOnly, ([shape, benign, at, quote, secret]) => {
+      const bodies = benign.map((b, k) => (k === at ? quote : b));
+      const span = `echo "$(${render(shape, bodies)})"`;
+      assertAllowed(runHook(bash(`${span}; echo done`)), `${span}; echo done`);
+      assertBlocked(runHook(bash(`${span}; cat ${secret}`)), `${span}; cat ${secret}`, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
   });
 });
 
@@ -1978,6 +3150,30 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
         }
       },
     ), { numRuns: 20 });
+  });
+
+  // This check finds spans with the same span finder as the secret-read scan
+  // (#5267), so it reads each span both ways too: as paren counting does and
+  // as bash 5 closes it. The third row is behind `timeout … bash -c`, which
+  // only this check looks inside.
+  const DEBUGGER_SPAN_BLOCKS = [
+    ['in a `case` arm inside "$( )"', 'echo "$(case x in x) claude --agent gsd-debugger -p y;; esac)"'],
+    ['after a `)` in a comment inside "$( )"', 'echo "$(echo hi # )\nclaude --agent gsd-debugger -p y)"'],
+    ['in a `case` arm, behind timeout and bash -c',
+      "timeout 5 bash -c 'echo \"$(case x in x) claude --agent gsd-debugger -p y;; esac)\"'"],
+    // bash 3.2 ends the span at the pattern and runs the spawn; bash 5 rejects the line.
+    ['after a span paren counting closes at a `case` pattern', 'echo "$(case x in y)"; claude --agent gsd-debugger -p z'],
+  ];
+
+  for (const [label, command] of DEBUGGER_SPAN_BLOCKS) {
+    test(`blocks under either reading of a span: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+  }
+
+  test('allows: the agent name as an echo argument in a `case` arm', () => {
+    const command = 'echo "$(case x in x) echo gsd-debugger;; esac)"';
+    assertAllowed(runHook(bash(command)), command);
   });
 
   test('the Kimi Shell vocabulary is covered too', () => {
@@ -3840,37 +5036,45 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.equal(scanBashCommand(cmd, BIG, separators + 1), null, 'limit + 1');
     });
 
-    test('in process: a case-block script a shell reads from a heredoc is denied between 30,000 and 40,000 characters', () => {
-      // One of the reaches the hook comment and the user guide give. Every pass
-      // re-tokenizes the script, so with a reading trigger (the `$((` beside a
-      // quote) each character is charged several separators, and the separator
-      // budget stops it before the character budget would. Pinned either side.
+    test('in process: a case-block script a shell reads from a heredoc is first denied at 26,539 characters', () => {
+      // One of the shapes behind the security-hooks reference's examples. Every pass re-tokenizes the
+      // script, so with a reading trigger (the `$((` beside a quote) each
+      // character is charged several separators, and the separator budget stops
+      // it before the character budget would. The `$((` also starts the grammar
+      // scan (#5267), so the verdict is main()'s (checkBashCommand): first denied
+      // at 26,539 characters, against 35,457 without that scan. The script grows a
+      // block at a time, so the rows are the block before that size, at it, and after.
       const block = (i) => `case "$x" in\n  a${i}) y=1 ;;\n  b${i}) y=2 ;;\n  *) y=0 ;;\nesac\n[ "$y" -gt 0 ] && echo "$((y * ${i}))"\n`;
-      const script = (chars) => {
+      const script = (blocks) => {
         let body = '';
-        for (let i = 0; body.length < chars; i++) body += block(i);
+        for (let i = 0; i < blocks; i++) body += block(i);
         return `bash <<'EOF'\n${body}EOF\n`;
       };
-      const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
-      assert.ok(allowed(script(30000)), '30,000 characters');
-      assert.ok(!allowed(script(40000)), '40,000 characters');
+      assert.deepEqual([273, 274, 275].map((n) => script(n).length), [26441, 26539, 26637]);
+      assert.equal(checkBashCommand(script(273)), null, 'limit - 1');
+      assert.deepEqual(checkBashCommand(script(274)), TOO_COMPLEX, 'limit');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
+      assert.deepEqual(checkBashCommand(script(275)), TOO_COMPLEX, 'limit + 1');
     });
 
-    test('in process: the same kind of script inside `$( )` is denied between 3,000 and 5,000 characters', () => {
-      // The lowest reach the hook comment and the user guide give. A body nested
-      // one level deeper is read again at each outer pass, so a strict-mode
-      // script of `(( n += K ))` lines given to `bash <<'EOF'` inside `$( )` is
-      // charged about 130 separators a character. `next` scans it to the end.
-      const script = (chars) => {
+    test('in process: a strict-mode script inside `$( )` is first denied at 3,031 characters', () => {
+      // One of the shapes behind the security-hooks reference's examples. A body nested one level deeper is
+      // read again at each outer pass, so a strict-mode script of `(( n += K ))`
+      // lines given to `bash <<'EOF'` inside `$( )` is charged about 130
+      // separators a character, and the `$( )` adds the grammar scan (#5267):
+      // main()'s verdict (checkBashCommand) first denies it at 3,031 characters,
+      // against 4,051 without that scan. The script grows a line at a time, so the
+      // rows are the line before that size, at it, and after.
+      const script = (lines) => {
         let body = "set -euo pipefail\nIFS=$'\\n\\t'\n";
-        for (let k = 0; body.length < chars; k++) body += `(( n += ${k} ))\n`;
+        for (let k = 0; k < lines; k++) body += `(( n += ${k} ))\n`;
         return `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"`;
       };
-      const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
-      assert.ok(allowed(script(3000)), '3,000 characters');
-      assert.ok(!allowed(script(5000)), '5,000 characters');
+      assert.deepEqual([204, 205, 206].map((n) => script(n).length), [3016, 3031, 3046]);
+      assert.equal(checkBashCommand(script(204)), null, 'limit - 1');
+      assert.deepEqual(checkBashCommand(script(205)), TOO_COMPLEX, 'limit');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
+      assert.deepEqual(checkBashCommand(script(206)), TOO_COMPLEX, 'limit + 1');
     });
 
     test('in process: the debugger-spawn check spends what the secret scan left', () => {
@@ -3901,13 +5105,16 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
-    test('in process: a commit message holding a reading trigger is scanned to about 70,000 characters', () => {
-      // The user guide's figure: two levels, eight scans each, and #5513's
-      // heredoc passes put the boundary near 69,900 characters. Pinned at
-      // 10% either side, so the guide's "about" stays true.
+    test('in process: a commit message holding a reading trigger is first denied at 52,445 characters', () => {
+      // The security-hooks reference's "about 52,000": two levels, eight scans each, #5513's heredoc
+      // passes, and the grammar scan the `$( )` starts (#5267) put main()'s
+      // boundary (checkBashCommand) at 52,445 characters, a message of 52,394, against
+      // 69,921 without that scan.
       const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
-      assert.equal(scanBashCommand(message(63000)), null);
-      assert.deepEqual(scanBashCommand(message(77000)), TOO_COMPLEX);
+      assert.equal(message(52394).length, 52445);
+      assert.equal(checkBashCommand(message(52393)), null, 'limit - 1');
+      assert.deepEqual(checkBashCommand(message(52394)), TOO_COMPLEX, 'limit');
+      assert.deepEqual(checkBashCommand(message(52395)), TOO_COMPLEX, 'limit + 1');
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
@@ -3921,7 +5128,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     // Each is allowed on `next` too. A change that closes one updates the
     // header's list with it. Plain strings, not R``: `${` would interpolate.
     const shapes = [
-      "echo $(#)'\n); cat $'.env' #'",
       'echo "$\\\n(cat .env)"', 'cat <<E\n$\\\n(cat .env)\nE',
       ": <<${x#'}'}\n${x#'}'}\ncat .env\n",
       "echo $(( ' $(cat .env >&2) ' ))",
@@ -3931,12 +5137,19 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo $[ \\] ' $(cat .env >&2) ' ]",
       "(( \\( ' $(cat .env >&2) ' ))",
       "(( \\) ' $(cat .env >&2) ' ))",
+      'echo "$((echo a) # )\ncat .env)"',
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
     }
+    // Listed here until #5267's scan by bash 5's grammar, which reads the `#` as a
+    // comment, so the `)` on the next line closes the span and the read runs after it.
+    test('denied since #5267: a `#` comment in a `$( )` that does not open `$((`', () => {
+      const cmd = "echo $(#)'\n); cat $'.env' #'";
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
     // Listed here until #5513 (bash 3.2's reading of a `$( )` span) closed it on `next`.
     test('denied since #5513: a `<<` with no tag before the `)` of a `$( )`', () => {
       const cmd = '$(E<<\n)\ncat .env';
@@ -4987,6 +6200,36 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     // the plain reading takes `'; mv a b` as an open quote and sees only `cat`.
     assertBlocked(run(bash(`cat ${pq} $'\\''; mv a b`)), "a $'…' span hiding mv", { tool: 'Bash', path: p });
     assertAllowed(run(bash(`cat ${pq} $'x'`)), "a $'…' word on a read-only line");
+  });
+
+  // #5267: the grammar scan does not grant the exemption. It reads a heredoc
+  // tag as one word, so by its own reading each of these tags leaves no
+  // substitution body on the line, and after each of them only that scan sees
+  // the listed path as an operand.
+  const SPAN_TAGS = ['$(case x in x) ;; esac)', '$(# )\n)', '$(case x in x) mv a b;; esac)'];
+  test('Bash exemption is not granted by the grammar scan (#5267)', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    const pq = absq('.env.production');
+    assertAllowed(run(bash(`cat <<EOF ${pq}`)), 'control: a plain tag with no body, as before');
+    for (const tag of SPAN_TAGS) {
+      assertBlocked(run(bash(`cat <<${tag} ${pq}`)), `after the tag ${JSON.stringify(tag)}`, { tool: 'Bash', path: p });
+      assertBlocked(run(bash(`cat ${pq} <<${tag} ${pq}`)), `on both sides of the tag ${JSON.stringify(tag)}`, { tool: 'Bash', path: p });
+    }
+  });
+
+  test('property: a listed path on a line with one of these tags is blocked wherever it sits (#5267)', () => {
+    listed('.env.production');
+    const pq = absq('.env.production');
+    const place = fc.constantFrom('after', 'before', 'both');
+    fc.assert(fc.property(
+      fc.constantFrom('cat', 'head', 'tail', 'wc', 'sort'), fc.constantFrom(...SPAN_TAGS), place,
+      (reader, tag, where) => {
+        const lead = where === 'after' ? '' : `${pq} `;
+        const trail = where === 'before' ? 'notes.txt' : pq;
+        return run(bash(`${reader} ${lead}<<${tag} ${trail}`)).status === 2;
+      },
+    ), PROPERTY_RUNS);
   });
 
   // #5514: the line is judged read-only under each env -S reading, not only the
