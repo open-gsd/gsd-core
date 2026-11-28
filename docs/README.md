@@ -183,6 +183,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
 - [Nyquist validation explained](explanation/nyquist-validation.md) — how test coverage is mapped to requirements before code is written, and how `/gsd-validate-phase` fills the gaps afterwards
 - [Quick-task archival explained](explanation/archive-quick-tasks.md) — why archiving `.planning/quick/` is opt-in, bucketed into one milestone and indexed from disk
+- [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md) — why `planning inspect` and the `.planning/state.json` contract each declare their own schema
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
 - [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation

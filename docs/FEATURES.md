@@ -4118,7 +4118,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 - REQ-INSP-06: `accepted_phases` and `completed_plans` are independent fractions. `percent` is `null` whenever the scope is not `complete`, per the same rule the roadmap and progress surfaces follow.
 - REQ-INSP-07: Payloads over ~50 KB use the existing `@file:` spill channel, resolved transparently before stdout.
 
-**Why it does not simply serialize the internal snapshot.** `PlanningSnapshot` (the diagnostic-rule subject introduced by ADR-3180 §8.1) is deliberately additive and still growing — four fields at Phase 10, twenty-plus by Phase 12. Handing that shape to external consumers would freeze an internal contract by accident. `planning inspect` declares its own flat schema and maps into it, so a field added to `PlanningSnapshot` never changes what this command emits.
+The reason `planning inspect` maps into its own flat schema rather than serializing the internal snapshot is in [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md).
 
 **Composed, never re-derived.** Milestone identity and phase enumeration arrive via `buildPlanningSnapshot`; completion from `isPhaseComplete` (disk-strict); live-plan counting from `scanPhasePlans`; the percentage arithmetic from `clampPercent`; STATE fields from `stateFieldValue`; plan bodies from the Plan Document Module; requirement IDs from `parseRequirements`; UAT items from `parseUatItems`. Markdown structure is read through the Markdown Sectionizer and Markdown Table Model seams, so the Traceability table is resolved by column name against its registered schema rather than by a position-anchored regex.
 
@@ -4189,7 +4189,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 **Composed, never re-derived.** Milestone identity comes from `getMilestoneInfo`; phase rows from `locateRoadmapProgress` (Roadmap Progress Module), the same `## Progress` locator the progress counters use, so `state.json` can never disagree with the rest of GSD about which phases are complete; the recommended action from `classifyProject`. This module introduces no second answer to any question GSD already answers.
 
-**Why it does not reuse `planning inspect`'s schema.** The two surfaces answer different questions and have opposite shapes. `planning inspect` is a rich, diagnostic-carrying **pull** query a consumer runs; this is a small **push** artifact a consumer watches. Publishing `planning inspect`'s payload at every `phase add` would mean opening every plan, summary and requirements document on a hot path, and freezing a much larger surface as a contract.
+The reason the contract does not reuse `planning inspect`'s schema is in [Why the planning read surfaces have separate schemas](explanation/planning-surface-schemas.md#why-the-state-contract-does-not-reuse-planning-inspects-schema).
 
 **It costs up to three bounded git calls per boundary.** Deriving `next` from the smart-entry classifier means inheriting its git signals — `git status --porcelain`, and `git log @{u}..HEAD`. Each is timeout-bounded and swallows every error, so nothing can hang or fail because of it, but a command like `phase add` did not previously touch git at all. "Invisible to the parent command" is exact about exit code and output; it is not a claim about latency.
 
