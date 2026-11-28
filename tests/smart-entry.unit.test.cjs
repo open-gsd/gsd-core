@@ -1598,3 +1598,143 @@ describe('smart-entry: continued milestone numbering (#5228)', () => {
     assert.equal(classifyProject(dir).summary, 'Phase 2 of 5 — needs a plan');
   });
 });
+
+// ─── #6176: the terminal `Awaiting next milestone` status classifies `complete` ─
+//
+// `milestone complete` writes `Status: Awaiting next milestone` (ADR-2207's
+// terminal state). isComplete matched only `milestone complete` / `all phases
+// complete` / `complete(d)`, so the project fell through to `unknown` and the
+// suggested next action became "Show progress / Unsure of state" right after
+// a successful close. The value now lives in the shared status vocabulary
+// (state-document's STATUS_EXACT_TOKENS) and smart-entry consumes it, so a new
+// lifecycle value cannot fall through again.
+
+describe('#6176 — Awaiting next milestone classifies as complete', () => {
+  afterEach(removeAll);
+
+  const { normalizeStateStatus, STATUS_EXACT_TOKENS } = require('../gsd-core/bin/lib/state-document.cjs');
+  const { runGsdTools, createTempProject } = require('./helpers.cjs');
+
+  function progressRoadmap(total, completed) {
+    const rows = [];
+    for (let i = 1; i <= total; i++) {
+      const done = i <= completed;
+      rows.push(`| ${String(i).padStart(2, '0')} | ${done ? '1/1' : '0/1'} | ${done ? 'Complete' : 'In Progress'} | ${done ? '2026-01-01' : ''} |`);
+    }
+    return [
+      '# Roadmap', '', '## Milestone v1.3', '', '## Progress', '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|---------------|--------|-----------|',
+      ...rows,
+    ].join('\n') + '\n';
+  }
+
+  test('unit: status "awaiting next milestone" with every roadmap phase complete → complete', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'Awaiting next milestone', current_phase: 2, total_phases: 2 }),
+      roadmap: progressRoadmap(2, 2),
+    }));
+    const result = classifyProject(dir);
+    assert.equal(result.situation, 'complete');
+    assert.equal(result.recommended, 'new-milestone');
+    assert.equal(result.actions.find((a) => a.recommended).command, '/gsd-new-milestone');
+  });
+
+  test('the archived status with roadmap completed < total is NOT complete', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'Awaiting next milestone', current_phase: 2, total_phases: 3 }),
+      roadmap: progressRoadmap(3, 2),
+    }));
+    assert.notEqual(classifyProject(dir).situation, 'complete');
+  });
+
+  test('the archived status without a roadmap Progress table still needs the legacy phase position to be complete', () => {
+    const behind = track(makeProject({ state: state({ status: 'Awaiting next milestone', current_phase: 2, total_phases: 5 }), roadmap: true }));
+    assert.notEqual(classifyProject(behind).situation, 'complete');
+    const done = track(makeProject({ state: state({ status: 'Awaiting next milestone', current_phase: 5, total_phases: 5 }), roadmap: true }));
+    assert.equal(classifyProject(done).situation, 'complete');
+  });
+
+  // PARITY (ADR-2207 "The Status lifecycle"): every status the shared
+  // vocabulary maps to `completed` must classify complete, except bare `done`
+  // (per-phase noise, see isComplete). The rows are derived from
+  // STATUS_EXACT_TOKENS, so a terminal value added there adds a row here.
+  const VOCABULARY_COMPLETED = Object.entries(STATUS_EXACT_TOKENS)
+    .filter(([key, token]) => token === 'completed' && key !== 'done')
+    .map(([key]) => key);
+  test('parity: the vocabulary still carries the ADR-2207 terminal statuses', () => {
+    for (const status of ['all phases complete', 'milestone complete', 'awaiting next milestone']) {
+      assert.ok(VOCABULARY_COMPLETED.includes(status), status);
+    }
+  });
+  for (const status of VOCABULARY_COMPLETED) {
+    test(`parity: vocabulary status "${status}" normalizes to completed and classifies complete`, () => {
+      assert.equal(normalizeStateStatus(status, null), 'completed');
+      const dir = track(makeProject({
+        state: state({ status, current_phase: 2, total_phases: 2 }),
+        roadmap: progressRoadmap(2, 2),
+      }));
+      assert.equal(classifyProject(dir).situation, 'complete');
+    });
+  }
+
+  test('bare done is not milestone completion in any case or spacing', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'Awaiting next milestone', current_phase: 2, total_phases: 2 }),
+      roadmap: progressRoadmap(2, 2),
+    }));
+    const base = detectSignals(dir);
+    assert.equal(classify(base), 'complete', 'the fixture is otherwise complete');
+    for (const status of ['done', 'Done', 'DONE', ' done ']) {
+      assert.notEqual(classify({ ...base, status }), 'complete', JSON.stringify(status));
+    }
+  });
+
+  test('existing forms are unchanged: legacy `complete` / `completed` / `milestone complete` still classify complete', () => {
+    for (const status of ['complete', 'completed', 'Milestone complete', 'v1.0 milestone complete', 'All phases complete']) {
+      const dir = track(makeProject({
+        state: state({ status, current_phase: 2, total_phases: 2 }),
+        roadmap: progressRoadmap(2, 2),
+      }));
+      assert.equal(classifyProject(dir).situation, 'complete', status);
+    }
+  });
+
+  test('end to end: milestone complete on an all-complete project → classify complete, state.json next.command is /gsd-new-milestone', (t) => {
+    const tmpDir = createTempProject('gsd-6176-');
+    t.after(() => cleanup(tmpDir));
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), [
+      '# Roadmap v1.3 Example', '',
+      '- [x] **Phase 1: Alpha**', '- [x] **Phase 2: Beta**', '',
+      '### Phase 1: Alpha', '**Goal:** a', '',
+      '### Phase 2: Beta', '**Goal:** b', '',
+      '## Progress', '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|---------------|--------|-----------|',
+      '| 1. Alpha | 1/1 | Complete | 2026-01-01 |',
+      '| 2. Beta | 1/1 | Complete | 2026-01-02 |', '',
+    ].join('\n'));
+    // A STATE.md whose only status lives in `## Current Position` (no `**Status:**` body field),
+    // so the value milestone complete writes there is the one smart-entry reads back.
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '# Project State\n\n## Current Position\n\nPhase: 2 of 2 (Beta)\nPlan: 1 of 1\nStatus: All phases complete\nLast activity: 2026-01-02 — done\n');
+    for (const [n, name] of [['01', 'alpha'], ['02', 'beta']]) {
+      const dir = path.join(planning, 'phases', `${n}-${name}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${n}-01-PLAN.md`), '# Plan\n');
+      fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), `---\none-liner: Shipped ${name}\n---\n# Summary\n`);
+      fs.writeFileSync(path.join(dir, `${n}-VERIFICATION.md`), '---\nstatus: passed\n---\n# Verification\n');
+    }
+    const r = runGsdTools(['milestone', 'complete', 'v1.3', '--name', 'Example', '--confirm'], tmpDir);
+    assert.ok(r.success, r.error);
+    const stateMd = fs.readFileSync(path.join(planning, 'STATE.md'), 'utf-8');
+    assert.match(stateMd, /Awaiting next milestone/i, 'milestone complete writes the terminal status');
+    // The frontmatter `status` is the normalized projection (buildStateFrontmatter), so it now
+    // persists `completed` where it carried the verbatim archived string before #6176.
+    assert.match(stateMd, /^status: completed$/m, 'the persisted frontmatter status is the normalized token');
+    const result = classifyProject(tmpDir);
+    assert.equal(result.situation, 'complete', JSON.stringify(result.signals));
+    const stateJson = JSON.parse(fs.readFileSync(path.join(planning, 'state.json'), 'utf-8'));
+    assert.equal(stateJson.next.command, '/gsd-new-milestone');
+  });
+});

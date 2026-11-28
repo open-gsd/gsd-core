@@ -1112,6 +1112,11 @@ export const STATUS_EXACT_TOKENS: Readonly<Record<string, string>> = Object.free
   // legacy STATE.md still normalizes, exactly the way KNOWN_TEMPLATE_DEFAULTS
   // keeps the other legacy Status strings.
   'milestone complete': 'completed',
+  // #6176: the terminal ARCHIVED state (ADR-2207 lifecycle). `milestoneCompleteCore`
+  // writes it to `## Current Position`'s `Status:` after `<version> milestone
+  // complete`; without an entry it passed through verbatim, so smart-entry
+  // read it as `unknown` and the statusline showed its first word.
+  'awaiting next milestone': 'completed',
   unknown: 'unknown',
 } as const);
 
