@@ -209,8 +209,8 @@ export function resolveLanding(
 interface WorktreeFacts {
   /** Top level of the worktree, or null when the directory is not in one. */
   root: string | null;
-  /** The git calls the seam stopped (a timeout or a signal), so a failed check names the cause. */
-  stopped: string[];
+  /** The worktree reads the seam stopped (a timeout or a signal), so a failed check names the cause. */
+  stops: { toplevel: string | null; layout: string | null };
   /** The git layout could be read: `.git` entry and git dir vs common dir. */
   layoutKnown: boolean;
   /** `.git` is a file, or the git dir is not the common dir: a linked worktree, a submodule, a separate git dir. */
@@ -218,15 +218,11 @@ interface WorktreeFacts {
 }
 
 function readWorktree(deps: ExecutorGuardDeps | undefined, from: string): WorktreeFacts {
-  const stopped: string[] = [];
-  const read = (args: string[]): GitResult => {
-    const r = git(deps, from, args);
-    const why = gitStopped(r, args);
-    if (why !== null) stopped.push(why);
-    return r;
-  };
-  const top = read(['rev-parse', '--show-toplevel']);
-  if (top.exitCode !== 0 || top.stdout === '') return { root: null, stopped, layoutKnown: false, isolatedLayout: false };
+  const stops: WorktreeFacts['stops'] = { toplevel: null, layout: null };
+  const topArgs = ['rev-parse', '--show-toplevel'];
+  const top = git(deps, from, topArgs);
+  stops.toplevel = gitStopped(top, topArgs);
+  if (top.exitCode !== 0 || top.stdout === '') return { root: null, stops, layoutKnown: false, isolatedLayout: false };
   // Native form: git prints `C:/…` on Windows.
   const root = path.resolve(top.stdout);
   let dotGitFile = false;
@@ -234,14 +230,27 @@ function readWorktree(deps: ExecutorGuardDeps | undefined, from: string): Worktr
     // Followed, as the shell's `[ -f .git ]` follows a link.
     dotGitFile = fs.statSync(path.join(root, '.git')).isFile();
   } catch { /* no .git file at the top level */ }
-  const dirs = read(['rev-parse', '--absolute-git-dir', '--git-common-dir']);
+  const dirsArgs = ['rev-parse', '--absolute-git-dir', '--git-common-dir'];
+  const dirs = git(deps, from, dirsArgs);
+  stops.layout = gitStopped(dirs, dirsArgs);
   const lines = dirs.stdout.split(/\r?\n/).filter((l) => l !== '');
-  if (dirs.exitCode !== 0 || lines.length !== 2) return { root, stopped, layoutKnown: false, isolatedLayout: dotGitFile };
+  if (dirs.exitCode !== 0 || lines.length !== 2) return { root, stops, layoutKnown: false, isolatedLayout: dotGitFile };
   const gitDir = realpathOr(deps, path.resolve(from, lines[0]));
   const commonDir = realpathOr(deps, path.resolve(from, lines[1]));
-  if (gitDir === null || commonDir === null) return { root, stopped, layoutKnown: false, isolatedLayout: dotGitFile };
-  return { root, stopped, layoutKnown: true, isolatedLayout: dotGitFile || gitDir !== commonDir };
+  if (gitDir === null || commonDir === null) return { root, stops, layoutKnown: false, isolatedLayout: dotGitFile };
+  return { root, stops, layoutKnown: true, isolatedLayout: dotGitFile || gitDir !== commonDir };
 }
+
+/** The git reads whose answers each check uses: the toplevel read, the layout read, the branch and HEAD reads. */
+type StopRead = 'toplevel' | 'layout' | 'symbolic' | 'head';
+const CHECK_READS: Record<GuardCheck['name'], StopRead[]> = {
+  'head-attached': ['toplevel', 'symbolic', 'head'],
+  'not-protected': ['toplevel', 'symbolic'],
+  'agent-namespace': ['toplevel', 'symbolic', 'layout'],
+  base: ['toplevel', 'head'],
+  toplevel: ['toplevel'],
+  path: ['toplevel'],
+};
 
 /**
  * Run every requested check and return them all; the caller decides the exit. Checks never
@@ -257,18 +266,18 @@ export function evaluateGuard(
   // Every git call runs where the command ran, so git reads the repository it discovered there.
   const cwd = opts.invokedFrom;
 
-  const stopped = [...facts.stopped];
-  const read = (args: string[]): GitResult => {
+  const stops: Record<StopRead, string | null> = { ...facts.stops, symbolic: null, head: null };
+  const read = (key: 'symbolic' | 'head', args: string[]): GitResult => {
     const r = git(deps, cwd, args);
-    const why = gitStopped(r, args);
-    if (why !== null) stopped.push(why);
+    stops[key] = gitStopped(r, args);
     return r;
   };
-  const symbolic = facts.root === null ? null : read(['symbolic-ref', '--quiet', 'HEAD']);
+  const symbolic = facts.root === null ? null : read('symbolic', ['symbolic-ref', '--quiet', 'HEAD']);
   const attached = symbolic !== null && symbolic.exitCode === 0 && symbolic.stdout.startsWith('refs/heads/');
   const branch = attached && symbolic ? symbolic.stdout.slice('refs/heads/'.length) : '';
-  const headResult = facts.root === null ? null : read(['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const headResult = facts.root === null ? null : read('head', ['rev-parse', '--verify', '--quiet', 'HEAD']);
   const head = headResult && headResult.exitCode === 0 ? headResult.stdout : '';
+  const headStops = [stops.symbolic, stops.head].filter((w): w is string => w !== null);
 
   const expectedBase = opts.expectedBase ?? null;
   // The branch checks run on the spawn-time and pre-commit calls, never on `--path` alone.
@@ -278,11 +287,13 @@ export function evaluateGuard(
     checks.push({
       name: 'head-attached',
       ok: attached && head !== '',
-      detail: facts.root === null && facts.stopped.length > 0
-        ? `the worktree of ${opts.invokedFrom} could not be read: ${facts.stopped.join('; ')}`
+      detail: facts.root === null && stops.toplevel !== null
+        ? `the worktree of ${opts.invokedFrom} could not be read: ${stops.toplevel}`
         : facts.root === null
           ? `${opts.invokedFrom} is not inside a git worktree`
-          : attached && head !== '' ? `HEAD is on '${branch}'` : 'HEAD is detached or unreadable',
+          : attached && head !== ''
+            ? `HEAD is on '${branch}'`
+            : headStops.length > 0 ? `HEAD could not be read: ${headStops.join('; ')}` : 'HEAD is detached or unreadable',
     });
   }
 
@@ -381,10 +392,11 @@ export function evaluateGuard(
     checks.push({ name: 'path', ok, detail });
   }
 
-  // A check that failed while git was stopped may have failed for that reason alone: say so.
-  if (stopped.length > 0) {
-    const note = `; ${stopped.join('; ')}`;
-    for (const c of checks) if (!c.ok && !c.detail.includes(stopped[0])) c.detail += note;
+  // A failed check names a stopped git call only when the check read that call's answer.
+  for (const c of checks) {
+    if (c.ok) continue;
+    const whys = CHECK_READS[c.name].map((k) => stops[k]).filter((w): w is string => w !== null && !c.detail.includes(w));
+    if (whys.length > 0) c.detail += `; ${whys.join('; ')}`;
   }
   return { ok: checks.every((c) => c.ok), branch, head, worktree_root: facts.root ?? '', checks };
 }
@@ -397,8 +409,8 @@ export function cmdExecutorGuard(
   deps?: ExecutorGuardDeps,
 ): GuardResult {
   const writeDiagnostic = deps?.writeDiagnostic ?? ((s: string) => process.stderr.write(s));
-  // A flag that changes nothing on a path-only call is refused, so a command that means to run the
-  // branch checks cannot lose them without an error.
+  // `--sequential` changes nothing on a path-only call, so it is refused: a command that joins step 0
+  // and step 0b cannot lose the branch checks without an error.
   if (isPathOnly(opts) && opts.sequential) {
     error(
       'executor.guard: --sequential has no effect on --path alone, which runs only the path check; ' +
@@ -451,7 +463,7 @@ function fail(message: string): never {
   throw new ExitError(1, `Error: executor.ledger: ${message}`);
 }
 
-/** Run a git read for the ledger; a call the seam stopped fails with that cause, not `message`'s. */
+/** Run a git read for the ledger; on a failed read, fail with `message`, and name the stopped call when the seam stopped it. */
 function gitOrFail(
   deps: ExecutorGuardDeps | undefined,
   cwd: string,
@@ -472,8 +484,8 @@ export function ledgerFileName(phase: string, plan: string): string {
 
 function worktreeRootOrFail(deps: ExecutorGuardDeps | undefined, from: string): string {
   const facts = readWorktree(deps, from);
-  if (facts.root === null && facts.stopped.length > 0) {
-    return fail(`the worktree of ${from} could not be read: ${facts.stopped.join('; ')}`);
+  if (facts.root === null && facts.stops.toplevel !== null) {
+    return fail(`the worktree of ${from} could not be read: ${facts.stops.toplevel}`);
   }
   if (facts.root === null) return fail(`${from} is not inside a git worktree`);
   const real = realpathOr(deps, facts.root);
@@ -594,7 +606,9 @@ export function cmdExecutorLedgerRecord(
 
   const head = gitOrFail(deps, invokedFrom, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
     (r) => r.exitCode === 0 && SHA_RE.test(r.stdout), 'HEAD does not resolve to a commit; nothing to record');
-  const symbolic = git(deps, invokedFrom, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  // A detached HEAD records an empty branch; a branch read the seam stopped fails the record.
+  const symbolic = gitOrFail(deps, invokedFrom, ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+    (r) => !r.timedOut && !r.signal, 'cannot read the branch');
   const record: LedgerRecord = {
     schema: 1,
     phase,

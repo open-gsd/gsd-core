@@ -949,7 +949,43 @@ describe('#6216: seams and properties', () => {
     const failedChecks = result.checks.filter((c) => !c.ok);
     assert.deepEqual(failedChecks.map((c) => c.name), ['head-attached', 'not-protected']);
     for (const c of failedChecks) assert.match(c.detail, /'git symbolic-ref --quiet HEAD' timed out/, c.name);
+    assert.doesNotMatch(failedChecks[0].detail, /detached/);
     assert.ok(result.checks.filter((c) => c.ok).every((c) => !/timed out/.test(c.detail)));
+  });
+
+  test('a stopped git read is named only on the failed checks that read it', () => {
+    // The layout read stops: agent-namespace (which needs the layout) names it; the toplevel and
+    // path checks, which fail on their own, do not.
+    const layout = evaluateGuard(
+      { projectRoot: '/w' },
+      { invokedFrom: '/w', toplevel: '/other-6216', path: '/elsewhere-6216/x' },
+      { execGit: stoppingGit('/w', ['rev-parse --absolute-git-dir']), protectedStatus: unprotectedStatus, realpath: (p) => p },
+    );
+    const byName = Object.fromEntries(layout.checks.map((c) => [c.name, c]));
+    assert.deepEqual(layout.checks.filter((c) => !c.ok).map((c) => c.name), ['agent-namespace', 'toplevel', 'path']);
+    assert.match(byName['agent-namespace'].detail, /'git rev-parse --absolute-git-dir --git-common-dir' timed out/);
+    for (const name of ['toplevel', 'path']) assert.doesNotMatch(byName[name].detail, /timed out/, name);
+
+    // The HEAD read stops: head-attached and base (which compares HEAD) name it; the path check does not.
+    const stubbed = stoppingGit('/w', []);
+    const headStopped = evaluateGuard(
+      { projectRoot: '/w' },
+      { invokedFrom: '/w', expectedBase: 'b'.repeat(40), path: '/elsewhere-6216/x' },
+      {
+        execGit: (args, opts) => (args[0] === 'symbolic-ref'
+          ? { exitCode: 0, stdout: 'refs/heads/agent-6216\n' }
+          : args[1] === '--verify'
+            ? { exitCode: 1, stdout: '', timedOut: true, signal: 'SIGTERM' }
+            : stubbed(args, opts)),
+        protectedStatus: unprotectedStatus,
+        realpath: (p) => p,
+      },
+    );
+    const h = Object.fromEntries(headStopped.checks.map((c) => [c.name, c]));
+    assert.deepEqual(headStopped.checks.filter((c) => !c.ok).map((c) => c.name), ['head-attached', 'base', 'path']);
+    assert.match(h['head-attached'].detail, /^HEAD could not be read: 'git rev-parse --verify --quiet HEAD' timed out$/);
+    assert.match(h.base.detail, /'git rev-parse --verify --quiet HEAD' timed out/);
+    assert.doesNotMatch(h.path.detail, /timed out/);
   });
 
   test('a git call stopped by a signal is named by that signal', () => {
@@ -985,9 +1021,42 @@ describe('#6216: seams and properties', () => {
     assert.match(noHead.message, /HEAD does not resolve to a commit; nothing to record: 'git rev-parse --verify --quiet HEAD\^\{commit\}' timed out/);
     assert.ok(!fs.existsSync(path.join(root, '.gsd', 'executor-ledger', '02+04.json')));
 
-    const noCount = call(cmdExecutorLedgerRead, ['merge-base --is-ancestor']);
-    assert.equal(noCount && noCount.code, 1);
-    assert.match(noCount.message, /no ledger record/, 'nothing was recorded, so read stops before git');
+    const noBranch = call(cmdExecutorLedgerRecord, ['symbolic-ref --quiet']);
+    assert.equal(noBranch && noBranch.code, 1);
+    assert.match(noBranch.message, /cannot read the branch: 'git symbolic-ref --quiet --short HEAD' timed out/);
+    assert.ok(!fs.existsSync(path.join(root, '.gsd', 'executor-ledger', '02+04.json')));
+  });
+
+  test('ledger read names each of its git reads the seam stopped, with exit 1', (t) => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-read-')));
+    t.after(() => cleanup(root));
+    const base = 'd'.repeat(40);
+    const answer = stubGit(root);
+    const git6216 = (stopped) => (args, opts) => {
+      if (args.join(' ') === stopped) return { exitCode: 1, stdout: '', timedOut: true, signal: 'SIGTERM' };
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '3\n' };
+      return answer(args, opts);
+    };
+    const deps = (stopped) => ({ execGit: git6216(stopped), realpath: (p) => p });
+    cmdExecutorLedgerRecord({ projectRoot: root }, root, '02', '04', false, deps(''));
+    const read = cmdExecutorLedgerRead({ projectRoot: root }, root, '02', '04', false, deps(''));
+    assert.equal(read.commits, 3);
+    const cases = [
+      [`rev-parse --verify --quiet ${base}^{commit}`, /recorded base d{40} is not a commit in this repository: 'git rev-parse --verify --quiet d{40}\^\{commit\}' timed out/],
+      ['rev-parse --verify --quiet HEAD^{commit}', /HEAD does not resolve: 'git rev-parse --verify --quiet HEAD\^\{commit\}' timed out/],
+      [`merge-base --is-ancestor ${base} ${base}`, /is not an ancestor of HEAD d{40}; the count cannot be measured from it: 'git merge-base --is-ancestor/],
+      [`rev-list --count ${base}..${base}`, /git rev-list --count failed: 'git rev-list --count d{40}\.\.d{40}' timed out/],
+    ];
+    for (const [stopped, want] of cases) {
+      let caught = null;
+      try {
+        cmdExecutorLedgerRead({ projectRoot: root }, root, '02', '04', false, deps(stopped));
+      } catch (err) {
+        caught = err;
+      }
+      assert.equal(caught && caught.code, 1, stopped);
+      assert.match(caught.message, want, stopped);
+    }
   });
 
   const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
