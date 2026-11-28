@@ -4,17 +4,7 @@ title: Graphify CLI Preferred for Planner and Researcher Graph Queries
 group: v1.7.0 Features
 ---
 
-**Purpose:** `gsd-planner` gets **one** knowledge-graph query per phase and
-`gsd-phase-researcher` gets two or three. That single shot decides which modules
-the plan treats as related, and therefore how tasks are ordered into waves. It
-was spent on the built-in reader, which seeds by case-insensitive **substring**
-match over a node's label and description and then expands a hardcoded two hops
-— so the phase "User Authentication" seeds on `author`, `authoring`, and
-`unauthorized` with exactly the same weight as `authenticate`, and when the
-inflated result exceeds `--budget` the trimmer drops edges by confidence tier.
-The `graphify` CLI, already a hard dependency of `/gsd-graphify build`, ranks
-seeds (IDF weighting, trigram fuzzy matching) and applies context filters before
-traversal.
+**Purpose:** `gsd-planner` gets one knowledge-graph query per phase and `gsd-phase-researcher` two or three, and that single shot decides how tasks are ordered into waves. It was spent on the built-in reader's substring seeding; the `graphify` CLI ranks seeds and filters context before traversal. The argument is in [Why planners and researchers query graphify first](../explanation/graphify-query-path.md).
 
 **Both prompts now prefer the CLI and fall back to the built-in reader.** The
 branch is `command -v graphify`, the same degradation shape the repo already
@@ -25,11 +15,7 @@ covers edge cases — a CI checkout with a committed graph, a binary since remov
 — not the common path. No new tool grant either: both agents already have
 `Bash`.
 
-**The planner additionally runs `graphify affected`.** The reference states its
-own goal as "which subsystems may be affected by changes in this phase", which is
-literally reverse traversal by relation. The built-in reader only approximates it
-with undirected two-hop expansion, and has no equivalent verb, so `affected` is
-skipped on the fallback path.
+**The planner additionally runs `graphify affected`** (reverse traversal by relation); it is skipped on the fallback path, which has no equivalent verb.
 
 **`gsd-tools graphify status` now returns `graph_path`.** The CLI takes the graph
 location as `--graph`, and the prompts must not re-derive
