@@ -107,6 +107,8 @@ interface VerificationGapItem {
   status: string;
   scan_error?: boolean;
   archived_milestone?: string;
+  /** #6172: archived report whose status is outside the closed verifier set. */
+  out_of_set?: true;
 }
 
 interface ContextQuestionItem {
@@ -1100,6 +1102,19 @@ function scanUatGaps(planDir: string, cwd: string): ScanOutcome<UatGapItem> {
   return { items: results, acknowledged };
 }
 
+/**
+ * The value `audit_acknowledged.status` snapshots for a `verification_gaps`
+ * item — shared by `scanVerificationGaps` (out-of-set archived reports) and
+ * `cmdAuditAcknowledge` so the writer and the scanner cannot disagree (#6172).
+ * A string is kept as is; a list or map (the only non-strings the frontmatter
+ * parser yields, including the `{}` of a bare `status:`) is JSON text; an
+ * absent or empty status is `unknown`. Lowercased, padding preserved.
+ */
+function deriveVerificationStatusSnapshotValue(rawStatus: unknown): string {
+  if (!rawStatus) return 'unknown';
+  return (typeof rawStatus === 'string' ? rawStatus : JSON.stringify(rawStatus)).toLowerCase();
+}
+
 // ─── scanVerificationGaps ─────────────────────────────────────────────────────
 
 /**
@@ -1154,9 +1169,28 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
       const fm = extractFrontmatter(content, safeFilePath);
       // #5118: the owner's report reader judges `status` — exact match, no
       // case folding; an out-of-set value throws VerificationStatusError.
-      const status = reportStatusOf(fm, safeFilePath);
+      //
+      // #6172: that refusal (ADR-5057) belongs to the ACTIVE phases root,
+      // where the author can fix the report. An archived milestone's report
+      // is history: one stale status there must not abort the whole audit
+      // (and with it /gsd-complete-milestone's pre-close gate), so for an
+      // archived target the out-of-set value becomes ONE open item carrying
+      // the raw status, and the scan moves on. The closed-set reader itself
+      // is unchanged.
+      let status: string | null;
+      let outOfSet = false;
+      try {
+        status = reportStatusOf(fm, safeFilePath);
+      } catch (err) {
+        if (!(err instanceof VerificationStatusError) || target.milestone === undefined) throw err;
+        outOfSet = true;
+        // Same derivation `cmdAuditAcknowledge` snapshots, so an acknowledged
+        // item matches on the next scan.
+        status = deriveVerificationStatusSnapshotValue(fm['status']);
+      }
 
-      if (status !== VERIFICATION_STATUS.GAPS_FOUND && status !== VERIFICATION_STATUS.HUMAN_NEEDED) continue;
+      if (status === null) continue;
+      if (!outOfSet && status !== VERIFICATION_STATUS.GAPS_FOUND && status !== VERIFICATION_STATUS.HUMAN_NEEDED) continue;
 
       if (isAuditItemAcknowledged(fm, { snapshotKey: 'status', currentValue: status })) {
         acknowledged++;
@@ -1166,8 +1200,11 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
       const item: VerificationGapItem = {
         phase: sanitizeLabel(phaseNum),
         file: sanitizeLabel(file),
-        status: sanitizeForDisplay(status),
+        // An out-of-set status is raw, author-controlled content that lands in
+        // a one-line report: escape every C0, DEL and C1 character visibly first.
+        status: sanitizeForDisplay(outOfSet ? sanitizeLabel(status) : status),
       };
+      if (outOfSet) item.out_of_set = true;
       if (target.milestone !== undefined) item.archived_milestone = sanitizeLabel(target.milestone);
       results.push(item);
     }
@@ -1521,7 +1558,8 @@ function formatAuditReport(auditResult: AuditResult): string {
     lines.push(`🔴 Verification Gaps (${counts.verification_gaps} unresolved${ackSuffix(acknowledged.verification_gaps)})`);
     for (const item of items.verification_gaps.filter(i => !i.scan_error)) {
       const archived = item.archived_milestone ? ` (archived ${item.archived_milestone})` : '';
-      lines.push(`   • Phase ${item.phase}${archived}: ${item.file} [${item.status}]`);
+      const outOfSet = item.out_of_set ? ' — status is outside gaps_found/human_needed/passed' : '';
+      lines.push(`   • Phase ${item.phase}${archived}: ${item.file} [${item.status}]${outOfSet}`);
     }
   }
 
@@ -1784,7 +1822,7 @@ function cmdAuditAcknowledge(cwd: string, args: string[], raw: boolean): void {
       currentValue = deriveUatGapSnapshotValue(((fm.status as string) || 'unknown').toLowerCase(), normalizedContent);
     } else if (category === 'verification_gaps') {
       snapshotKey = 'status';
-      currentValue = ((fm.status as string) || 'unknown').toLowerCase();
+      currentValue = deriveVerificationStatusSnapshotValue(fm.status);
     } else {
       // context_questions — WARNING 2: snapshot a content digest of the
       // question set, not just its count (see `deriveOpenQuestionsDigest`'s
