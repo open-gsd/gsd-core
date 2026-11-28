@@ -884,9 +884,7 @@ table, the measurement scale, and the fallback rules.
 
 ### Package Legitimacy Gate (v1.42.1)
 
-The researcher → planner → executor pipeline includes a supply-chain gate against slopsquatting (AI-hallucinated package names pre-registered with malicious post-install scripts).
-
-**Threat model:** GSD automates the full path from "researcher names a package" to "executor runs `npm install`". A hallucinated name that passes `npm view` (proving only registration, not legitimacy) would previously flow through undetected. ~20% of AI-generated package references are hallucinated; ~43% of those names recur consistently across prompts, making pre-registration economically viable for attackers.
+The researcher → planner → executor pipeline includes a supply-chain gate against slopsquatting (AI-hallucinated package names pre-registered with malicious post-install scripts). The threat model, why web-search packages are always `[ASSUMED]` (which extends the `[ASSUMED]` / `[VERIFIED]` / `[CITED]` provenance system), the registry coverage and the degraded-registry behavior are explained in [Layer 1 of the security model](explanation/security-model.md#layer-1--supply-chain-protection-the-package-legitimacy-gate).
 
 **Gate layers:**
 
@@ -895,12 +893,6 @@ The researcher → planner → executor pipeline includes a supply-chain gate ag
 | Research | `gsd-phase-researcher` | Runs `gsd-tools query package-legitimacy check --ecosystem <npm\|pypi\|crates> <pkgs>`; writes `## Package Legitimacy Audit` table to RESEARCH.md; strips `[SLOP]` packages before RESEARCH.md is written |
 | Planning | `gsd-planner` | Reads Audit table; inserts `checkpoint:human-verify` before any `[ASSUMED]` or `[SUS]` install task; adds `T-{phase}-SC` STRIDE supply-chain row to `<threat_model>` |
 | Execution | `gsd-executor` | RULE 3 excludes package installation from auto-fix scope; failed installs surface as checkpoints, never silent substitutions |
-
-**Claim provenance integration:** Package names discovered via WebSearch are tagged `[ASSUMED]` (not `[VERIFIED]`) regardless of the registry-API verdict. This extends the existing `[ASSUMED]` / `[VERIFIED]` / `[CITED]` provenance system by enforcing the provenance tag as a hard gate at the install boundary — `[ASSUMED]` always generates a `checkpoint:human-verify` in PLAN.md.
-
-**Ecosystem coverage:** The gate resolves signals directly from each ecosystem's registry API rather than a single generic check — `registry.npmjs.org` + `api.npmjs.org/downloads` (Node), `pypi.org/pypi/<pkg>/json` (Python), the crates.io API (Rust). This catches cross-ecosystem hallucination (~9% rate documented in 2025 USENIX research).
-
-**Graceful degradation:** Each registry adapter degrades to null signals (never throws) on a failed lookup; missing signals push a package to `[SUS]`, which is gated behind the same `checkpoint:human-verify` checkpoint as `[ASSUMED]`. Research and planning proceed; the system never hard-fails on a network or tool outage. `slopcheck` is an optional escalate-only adapter — it can only raise a verdict, never lower it, and is not the install-or-degrade gate. No shipped configuration wires it.
 
 ---
 
