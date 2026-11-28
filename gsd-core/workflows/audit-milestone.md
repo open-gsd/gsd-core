@@ -44,29 +44,52 @@ gsd_run query phases.list
 ```
 
 - Parse version from arguments or detect current from ROADMAP.md
-- Identify all phase directories in scope
+- Identify the milestone's phases in ROADMAP.md (their numbers) and their directories
 - Extract milestone definition of done from ROADMAP.md
 - Extract requirements mapped to this milestone from REQUIREMENTS.md
 
 ## 2. Read All Phase Verifications
 
-For each phase directory, read the VERIFICATION.md:
+For each phase of the milestone in ROADMAP.md (`PHASE` is its number, whether or not it has a directory), ask the owner for the phase's verification status:
 
 ```bash
-# For each phase, use find-phase to resolve the directory (handles archived phases)
-PHASE_INFO=$(gsd_run query find-phase 01 --raw)
-# Extract directory from JSON, then read VERIFICATION.md from that directory
-# Repeat for each phase number from ROADMAP.md
+# Once per audit: the scope's planning root.
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root) || { echo "planning.inspect failed — see the error above." >&2; exit 1; }
+: "${PLANNING_ROOT:?}"
+# Per phase. find-phase resolves the directory, archived phases included; it prints nothing when the phase has none.
+PHASE_DIR=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick directory) || { echo "find-phase failed for phase ${PHASE} — see the error above." >&2; exit 1; }
+# #6812: the status is the owner's, never the report's own. A phase with no directory is asked about under phases/,
+# where find-phase found none, so the owner answers phase_dir_not_found; an empty argument is a usage error.
+VERIFY_DIR="${PHASE_DIR:-${PLANNING_ROOT}/phases/${PHASE}}"
+# A refusal (a report status outside passed | gaps_found | human_needed) stops the audit; it is never "no status".
+# planning.inspect reads every active phase's report through the same owner, so it can refuse such a report first.
+VERIFICATION_STATUS=$(gsd_run query verification.status "${VERIFY_DIR}" --pick status) || { echo "verification.status refused phase ${PHASE}'s report — see the error above. Fix it before auditing." >&2; exit 1; }
 ```
 
-From each VERIFICATION.md, extract:
-- **Status:** passed | gaps_found
+`VERIFICATION_STATUS` is one of `passed`, `gaps_found`, `human_needed`, `stale`, `missing`, `unparseable`, `phase_dir_not_found`. Record it per phase; step 5d keys on it. Do not read or reinterpret the report's own status.
+
+- `human_needed`: human verification is pending.
+- `stale`: the report predates a change to its covered files; the phase must be re-verified (#4682).
+- `missing`: no report, or a report without a status. Flag it as "unverified phase"; this is a blocker.
+- `unparseable`: the report's frontmatter is not YAML. This is a blocker.
+- `phase_dir_not_found`: the phase has no directory. This is a blocker.
+
+For `gaps_found`, `human_needed`, `stale`, `missing` and `unparseable`, read the owner's next step:
+
+```bash
+NEXT_ACTION=$(gsd_run query verification.status "${VERIFY_DIR}" --pick next_action) || { echo "verification.status failed for phase ${PHASE} — see the error above." >&2; exit 1; }
+NEXT_COMMAND=$(gsd_run query verification.status "${VERIFY_DIR}" --pick next_command) || { echo "verification.status failed for phase ${PHASE} — see the error above." >&2; exit 1; }
+```
+
+List `NEXT_ACTION` with the phase's gaps and, when `NEXT_COMMAND` is non-empty, `NEXT_COMMAND` as the command to run next.
+
+For `phase_dir_not_found`, list the phase as never planned or executed. Do not read the owner's next step: it is written for a caller that passed a wrong path.
+
+From each phase's VERIFICATION.md, when it has one, extract:
 - **Critical gaps:** (if any — these are blockers)
 - **Non-critical gaps:** tech debt, deferred items, warnings
 - **Anti-patterns found:** TODOs, stubs, placeholders
 - **Requirements coverage:** which requirements satisfied/blocked
-
-If a phase is missing VERIFICATION.md, flag it as "unverified phase" — this is a blocker.
 
 ## 3. Spawn Integration Checker
 
@@ -144,16 +167,22 @@ done
 
 ### 5d. Status Determination Matrix
 
-For each REQ-ID, determine status using all three sources:
+For each REQ-ID, determine status from the three sources. The first two columns come from VERIFICATION.md: the phase's `VERIFICATION_STATUS` from step 2, and the requirement's Status in the report's table (5b), where `other` is any other Status or no row. Rows are read top to bottom; the first match wins.
 
-| VERIFICATION.md Status | SUMMARY Frontmatter | REQUIREMENTS.md | → Final Status |
-|------------------------|---------------------|-----------------|----------------|
-| passed                 | listed              | `[x]`           | **satisfied**  |
-| passed                 | listed              | `[ ]`           | **satisfied** (update checkbox) |
-| passed                 | missing             | any             | **partial** (verify manually) |
-| gaps_found             | any                 | any             | **unsatisfied** |
-| missing                | listed              | any             | **partial** (verification gap) |
-| missing                | missing             | any             | **unsatisfied** |
+| Owner Status        | Report Row      | SUMMARY Frontmatter | REQUIREMENTS.md | → Final Status |
+|---------------------|-----------------|---------------------|-----------------|----------------|
+| passed              | `? NEEDS HUMAN` | any                 | any             | **partial** (human verification pending) |
+| passed              | `✗ BLOCKED`     | any                 | any             | **unsatisfied** |
+| passed              | other           | listed              | `[x]`           | **satisfied**  |
+| passed              | other           | listed              | `[ ]`           | **satisfied** (update checkbox) |
+| passed              | other           | missing             | any             | **partial** (verify manually) |
+| gaps_found          | any             | any                 | any             | **unsatisfied** |
+| human_needed        | any             | any                 | any             | **partial** (human verification pending) |
+| stale               | any             | any                 | any             | **partial** (re-verify via execute-phase, #4682) |
+| missing             | any             | listed              | any             | **partial** (verification gap) |
+| missing             | any             | missing             | any             | **unsatisfied** |
+| unparseable         | any             | any                 | any             | **unsatisfied** |
+| phase_dir_not_found | any             | any                 | any             | **unsatisfied** |
 
 ### 5e. FAIL Gate and Orphan Detection
 
@@ -213,7 +242,7 @@ gaps:  # Critical blockers
       phase: "{assigned phase}"
       claimed_by_plans: ["{plan files that reference this requirement}"]
       completed_by_plans: ["{plan files whose SUMMARY marks it complete}"]
-      verification_status: "passed | gaps_found | missing | orphaned"
+      verification_status: "passed | gaps_found | human_needed | stale | missing | unparseable | phase_dir_not_found | orphaned"
       evidence: "{specific evidence or lack thereof}"
   integration: [...]
   flows: [...]
@@ -380,7 +409,7 @@ or `5.2` if `5.1` exists), never `<after-phase>`.
 
 <success_criteria>
 - [ ] Milestone scope identified
-- [ ] All phase VERIFICATION.md files read
+- [ ] Each phase's status read from `verification.status` (a refusal stops the audit)
 - [ ] SUMMARY.md `requirements-completed` frontmatter extracted for each phase
 - [ ] REQUIREMENTS.md traceability table parsed for all milestone REQ-IDs
 - [ ] 3-source cross-reference completed (VERIFICATION + SUMMARY + traceability)

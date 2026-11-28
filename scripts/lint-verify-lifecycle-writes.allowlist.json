@@ -21,7 +21,7 @@
     "file": "gsd-core/workflows/audit-milestone.md",
     "rule": "L1",
     "command": "VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)",
-    "reason": "#5105 design census §1b: audit-milestone.md:162 is read-only discovery (§5.5) — it never dispatches a step or writes an artifact, so gating is not applicable."
+    "reason": "#5105 design census §1b: audit-milestone.md's verify:post render-hooks read is read-only discovery (§5.5) — it never dispatches a step or writes an artifact, so gating is not applicable."
   },
   {
     "file": "gsd-core/workflows/verify-work.md",
