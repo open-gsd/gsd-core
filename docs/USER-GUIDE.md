@@ -19,6 +19,9 @@ A narrative companion guide to GSD Core — orient yourself here, then follow th
 - [Backlog & Threads](#backlog--threads)
 - [Workstreams & Workspaces](#workstreams--workspaces)
 - [Security](#security)
+- [Code Review Workflow](#code-review-workflow)
+- [Coverage-Aware UAT Routing](#coverage-aware-uat-routing)
+- [Command And Configuration Reference](#command-and-configuration-reference)
 - [Usage Examples](#usage-examples)
 - [Troubleshooting](#troubleshooting)
 - [Recovery Quick Reference](#recovery-quick-reference)
@@ -42,35 +45,7 @@ The installer writes this form into the command directory of each runtime you ta
 
 ## Namespace routing primer (`gsd-ns-*`, v1.40+)
 
-### Architecture
-
-GSD ships six **namespace router bundles** (`gsd-ns-workflow`, `gsd-ns-project`, `gsd-ns-review`, `gsd-ns-context`, `gsd-ns-ideate`, `gsd-ns-manage`). On runtimes with non-recursive skill loaders, the installer emits these 6 routers as the **only top-level skill entries**; the ~61 concrete skills are nested under each router at `<router>/skills/<name>/SKILL.md`. This reduces the eager skill-listing overhead to ≈6 entries instead of ≈67.
-
-Each router's body contains a routing table. When the model receives a request, it reads the router, identifies the relevant sub-skill by name, then opens `skills/<name>/SKILL.md` via a file-path `Read`. The concrete skill is fully available — it is not invocable by bare name through the Skill tool's top-level listing, but is reachable through the router.
-
-The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Cline, Qwen, Hermes, Augment, Trae**. Claude's loader is also non-recursive, but #924 reverted it flat because the Skill tool hard-errors on unknown names rather than re-routing via the router. Antigravity's loader is also non-recursive, but #1614 moved it flat because `agy` scans only `skills/<name>/SKILL.md` — nested sub-skills were unreachable. Other recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
-
-| Namespace | Router bundle | Routes to |
-|-----------|--------------|-----------|
-| Phase pipeline | `gsd-ns-workflow` | discuss / plan / execute / verify / phase / progress |
-| Project lifecycle | `gsd-ns-project` | milestones, audits, summary |
-| Quality gates | `gsd-ns-review` | code review, debug, audit, security, eval, ui |
-| Codebase intelligence | `gsd-ns-context` | map, graphify, docs, learnings |
-| Exploration & capture | `gsd-ns-ideate` | explore, sketch, spike, spec, capture |
-| Management | `gsd-ns-manage` | config, workspace, workstreams, thread, update, ship, inbox |
-
-### Slash commands are unaffected
-
-On runtimes that install a commands surface (`commands/gsd`), slash commands such as `/gsd-plan-phase` continue to work directly — the nesting applies only to the Skill tool's top-level listing, not to the commands directory.
-
-### Migration note (breaking change on nesting runtimes)
-
-On the seven nesting runtimes listed above, upgrading to v1.40 changes skill invocation behaviour:
-
-- **Before:** each of the ~67 concrete `gsd-<name>` skills appeared at the top level and was invocable by bare name through the Skill tool.
-- **After:** only the 6 `gsd-ns-*` router bundles appear at the top level. Concrete skills are reachable via the router's routing table and a `Read skills/<name>/SKILL.md` call. Direct bare-name invocation of concrete skills through the Skill tool's listing no longer works.
-- **Slash commands unchanged:** `/gsd-plan-phase`, `/gsd-discuss-phase`, etc. still work directly where a commands surface is installed.
-- **Upgrade prune:** the installer's existing prune step removes the legacy top-level `gsd-<concrete>/` skill directories on upgrade — no manual cleanup is needed.
+GSD ships six namespace router bundles (`gsd-ns-workflow`, `gsd-ns-project`, `gsd-ns-review`, `gsd-ns-context`, `gsd-ns-ideate`, `gsd-ns-manage`). On the five runtimes with confirmed non-recursive skill loaders (Cline, Qwen, Hermes, Augment, Trae) they are the only top-level skills, and concrete skills are reached through a router. Slash commands such as `/gsd-plan-phase` are unaffected. The routing table, the per-runtime layout and the v1.40 migration note are in [Architecture](ARCHITECTURE.md#two-stage-hierarchical-routing-v140-2792).
 
 ---
 
@@ -135,7 +110,7 @@ For the full command reference with all flags, see [`docs/COMMANDS.md`](COMMANDS
 
 `/gsd-new-project` does not register a milestone. On a fresh project there is no `MILESTONES.md`, no `milestone:` value in `STATE.md`, and no version token in `ROADMAP.md` — by design ([ADR-3180](adr/3180-planning-semantic-model-single-owner.md) §7.2 rule 5): a ROADMAP with no version token has no milestone identity, and the runtime must not invent one.
 
-The first milestone is therefore **implicit**: it is "everything between `/gsd-new-project` and the first `/gsd-complete-milestone <version>`". Its identity is recorded only at close time — the version from the command argument, the name from the separate `--name` value the close workflow passes alongside it (defaulting to the version when no name is given). There is no start-registration step to look for, and none is needed; `/gsd-new-milestone` (the cycle opener) is intended for the second milestone onward, where it reads the previous version from `MILESTONES.md` and records the new identity at cycle start.
+The first milestone is therefore **implicit**: everything between `/gsd-new-project` and the first `/gsd-complete-milestone <version>`, with its identity recorded only at close time. There is no start-registration step; `/gsd-new-milestone` is for the second milestone onward.
 
 Until the first close, while `ROADMAP.md` carries no version token, the milestone-aware commands report no current milestone: `gsd_run query init.manager` emits `milestone_version: null` and `milestone_name: null`, and `gsd_run query init.new-milestone` emits `current_milestone: null` — the documented state, not data loss.
 
@@ -271,7 +246,7 @@ Decisions captured in CONTEXT.md as numbered bullets (`- **D-01:** …`) are che
 
 ### Isolated-run Recovery (fail-safe)
 
-When a worktree-isolated run is rejected — the user declines to merge it, or the run over-reached the requested scope, or the orchestrator surfaces recovery guidance for a blocked plan — GSD halts safely and offers two options: (a) re-attempt in a fresh, narrowly-scoped worktree, or (b) inspect or discard the rejected worktree without merging. GSD never defaults recovery to editing the primary checkout (`main`). Any path that edits the primary checkout requires explicit, clearly-labeled confirmation from the user first. This behavior is unconditional and applies to both `/gsd-execute-phase` (worktree executor waves) and `/gsd-quick` (quick-mode isolated runs).
+A rejected worktree-isolated run halts safely and never defaults recovery to editing the primary checkout; see [Multi-agent orchestration](explanation/multi-agent-orchestration.md#isolated-run-recovery-fail-safe).
 
 ---
 
@@ -539,13 +514,7 @@ What each check covers and each resolver value means: [`plan_review.source_groun
 
 ### Speed vs Quality Presets
 
-| Scenario    | Mode          | Granularity | Profile    | Research | Plan Check | Verifier |
-| ----------- | ------------- | ----------- | ---------- | -------- | ---------- | -------- |
-| Prototyping | `yolo`        | `coarse`    | `budget`   | off      | off        | off      |
-| Normal dev  | `interactive` | `standard`  | `balanced` | on       | on         | on       |
-| Production  | `interactive` | `fine`      | `quality`  | on       | on         | on       |
-
-**Skipping discuss-phase in autonomous mode:** When running in `yolo` mode, set `workflow.skip_discuss: true` via `/gsd-settings`.
+The preset combinations are in [Common Setting Combinations](CONFIGURATION.md#common-setting-combinations). In `yolo` mode, set `workflow.skip_discuss: true` via `/gsd-settings` to skip discuss-phase.
 
 ### Mid-Milestone Scope Changes
 
@@ -652,28 +621,11 @@ Set `commit_docs: false` during `/gsd-new-project` or via `/gsd-settings`. Add `
 
 ### GSD Update Overwrote My Local Changes
 
-Which recovery you need depends on whether you *modified a GSD file* or *added your own*:
-
-- **You edited a file GSD ships** (an agent prompt, a workflow). Since v1.17 the installer backs it up to `gsd-local-patches/`. Run `/gsd-update --reapply` to merge your changes back.
-- **You added your own file inside a GSD-managed directory** (a custom skill under `skills/`, an extra file in `commands/gsd/`). The installer saves it to `gsd-user-files-backup/`, and the update offers to restore it once the new version is installed. If you declined, or the backup is left over from an older update, restore it any time:
-
-  ```bash
-  node <config-dir>/gsd-core/bin/gsd-tools.cjs restore-custom-files --config-dir <config-dir> --apply
-  ```
-
-  Run it without `--apply` first to see what would be restored. The backup is never deleted, and the restore skips any file that would overwrite something the new release ships.
+A file GSD ships is backed up to `gsd-local-patches/` (restore with `/gsd-update --reapply`); a file you added inside a GSD-managed directory is saved to `gsd-user-files-backup/` and restored with `restore-custom-files`. See [Update GSD](how-to/update-gsd.md).
 
 ### Install or Refresh a Release Candidate
 
-To install or refresh GSD from the `@next` RC dist-tag (the pre-release channel established by ADR #660), run:
-
-```bash
-/gsd-update --next
-# or equivalently:
-/gsd-update --rc
-```
-
-The same scope/runtime detection, changelog preview, custom-file backup, and cache clearing apply. Omitting `--next`/`--rc` keeps targeting `@latest` (stable channel, no change). Only the `@latest` and `@next` channels are supported — no arbitrary dist-tag can be passed.
+`/gsd-update --next` (or `--rc`) targets the `@next` dist-tag; see [Update GSD](how-to/update-gsd.md).
 
 ### Cannot Update via npm
 
@@ -685,85 +637,15 @@ When a workflow fails in a non-obvious way, run `/gsd-forensics` to generate a d
 
 ### Pre-populated Permissions (Claude Code)
 
-Since v1.3.1, the installer pre-populates `~/.claude/settings.json` (or
-`settings.local.json` for local installs) with the core permissions GSD needs:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Read(.planning/*)",
-      "Edit(.planning/*)",
-      "Read(STATE.md)",
-      "Edit(STATE.md)"
-    ]
-  }
-}
-```
-
-These entries eliminate first-run approval prompts for GSD's own tool calls. The
-merge is non-destructive — your existing permissions are preserved and GSD entries
-are only appended. Uninstalling GSD removes exactly these entries and preserves
-any others.
-
-**The unscoped `npx gsd-core` rule is retired (#5054).** Earlier versions also
-wrote `Bash(npx gsd-core *)`. GSD is published as `@opengsd/gsd-core`, and the
-unscoped `gsd-core` name on npm belongs to a different owner, so that rule let
-Claude Code run whatever is published under that name without asking. The next
-install or upgrade removes that exact entry; rules you wrote yourself, including
-scoped `@opengsd/gsd-core` ones, are kept.
-Install and upgrade with `npx @opengsd/gsd-core@latest`.
-
-**Secret-file protection moved from deny rules to a hook (#4221).** Earlier
-versions also wrote three `permissions.deny` rules — `Read(.env)`,
-`Read(.env.*)` and `Read(.secrets)`. Claude Code 2.1.259 hardened the
-Bash-side enforcement of `Read()` deny rules so that *any* such rule makes every
-`cd DIR && grep …` / `cd DIR && cat …` compound prompt for approval, even in
-`auto` mode — and GSD's subagents emit hundreds of those per session. The same
-protection now ships as the always-on `gsd-secret-read-guard.js` PreToolUse hook
-(Read, Grep and Bash; see Runtime Hooks above for what it covers and its
-documented gaps). A hook denial is not a permission rule, so it never arms that
-check, and it applies in `auto` and `bypassPermissions` modes alike. On install
-and uninstall the three retired strings are removed from `permissions.deny`
-(and an emptied `deny` array is dropped). Note the removal is byte-exact: a
-rule you wrote by hand that is identical to one of the three is indistinguishable
-from the installer's and is removed as well — re-add it if you want both layers.
+The installer pre-populates `settings.json` with GSD's `.planning/` and `STATE.md` read/edit permissions, merged non-destructively. The unscoped `npx gsd-core` rule is retired (#5054) and secret-file protection moved from deny rules to a hook (#4221). The details are in [Installer permissions](explanation/installer-permissions.md).
 
 ### Executor Subagent Gets "Permission denied" on Bash Commands
 
-Add the required patterns to `~/.claude/settings.json`. Core patterns needed for all stacks:
-
-```json
-"Bash(git add:*)",
-"Bash(git commit:*)",
-"Bash(git merge:*)",
-"Bash(git worktree:*)",
-"Bash(git rebase:*)",
-"Bash(git reset:*)",
-"Bash(git checkout:*)",
-"Bash(git switch:*)",
-"Bash(git restore:*)",
-"Bash(git stash:*)",
-"Bash(git rm:*)",
-"Bash(git mv:*)",
-"Bash(git fetch:*)",
-"Bash(git cherry-pick:*)",
-"Bash(git apply:*)",
-"Bash(gh:*)"
-```
-
-**Per-project permissions:** add the same `permissions.allow` block to `.claude/settings.local.json` in your project root instead of `~/.claude/settings.json`.
+Add the required `Bash(...)` patterns to `permissions.allow`; see [Recover and troubleshoot](how-to/recover-and-troubleshoot.md#if-an-executor-gets-permission-denied-on-bash-commands).
 
 ### Parallel Execution Causes Build Lock Errors
 
-GSD handles this automatically since v1.26. If you're on an older version, add to your project's `CLAUDE.md`:
-
-```markdown
-## Git Commit Rules for Agents
-All subagent/executor commits MUST use `--no-verify`.
-```
-
-To disable parallel execution entirely: `/gsd-settings` → set `parallelization.enabled` to `false`.
+See [Recover and troubleshoot](how-to/recover-and-troubleshoot.md#if-parallel-execution-causes-build-lock-errors-or-pre-commit-hook-failures).
 
 ---
 

@@ -123,6 +123,24 @@ User-facing entry points. Each file contains YAML frontmatter (name, description
 
 To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. On runtimes with non-recursive skill loaders (cline, qwen, hermes, augment, trae) the installer now realizes this fully: it emits only the 6 namespace router bundles as top-level skills and nests the 66 concrete skills under `<router>/skills/<name>/SKILL.md`, so the eager listing is ≈6 entries instead of 72. The model selects a namespace router, which instructs it to read the nested concrete skill file via a routing table embedded in the router body. On these runtimes concrete skills are **not** directly invocable by bare name via the Skill tool; they are reachable through the router. Slash commands (`/gsd-*`, via the separate commands surface) are unaffected where the runtime has one. On runtimes with recursive or unconfirmed skill loaders (claude global, cursor, codex, copilot, windsurf, codebuddy, opencode, kilo, antigravity) the layout remains flat — all skills emitted at the top level as before. Antigravity moved from nested to flat in #1614: `agy` scans only `skills/<name>/SKILL.md`, so nested sub-skills were unreachable. Claude was reverted to flat in #924: the Skill tool hard-errors on unknown names rather than re-routing via the router, so nested concrete skills were uninvokable.
 
+The router bundles and what each routes to:
+
+| Namespace | Router bundle | Routes to |
+|-----------|--------------|-----------|
+| Phase pipeline | `gsd-ns-workflow` | discuss / plan / execute / verify / phase / progress |
+| Project lifecycle | `gsd-ns-project` | milestones, audits, summary |
+| Quality gates | `gsd-ns-review` | code review, debug, audit, security, eval, ui |
+| Codebase intelligence | `gsd-ns-context` | map, graphify, docs, learnings |
+| Exploration & capture | `gsd-ns-ideate` | explore, sketch, spike, spec, capture |
+| Management | `gsd-ns-manage` | config, workspace, workstreams, thread, update, ship, inbox |
+
+**Migration note (breaking change on the five nesting runtimes).** Upgrading to v1.40 changes skill invocation behaviour on Cline, Qwen, Hermes, Augment and Trae:
+
+- **Before:** each of the ~67 concrete `gsd-<name>` skills appeared at the top level and was invocable by bare name through the Skill tool.
+- **After:** only the 6 `gsd-ns-*` router bundles appear at the top level. Concrete skills are reachable via the router's routing table and a `Read skills/<name>/SKILL.md` call. Direct bare-name invocation of concrete skills through the Skill tool's listing no longer works.
+- **Slash commands unchanged:** `/gsd-plan-phase`, `/gsd-discuss-phase`, etc. still work directly where a commands surface is installed.
+- **Upgrade prune:** the installer's existing prune step removes the legacy top-level `gsd-<concrete>/` skill directories on upgrade — no manual cleanup is needed.
+
 The router descriptions use pipe-separated keyword tags (≤ 60 chars) per the Tool Attention research showing keyword-dense tags outperform prose for routing at ~40 % the token cost.
 
 #### MCP token-budget interaction
