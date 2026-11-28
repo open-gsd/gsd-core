@@ -1537,6 +1537,10 @@ function beginPhaseCore(
   // intent-first current_phase_name override on a resume — the core just
   // preserved the mid-flight name, and an override would drift frontmatter
   // away from the preserved body value.
+  // Deliberate (#6168): the rebuilt document is returned even when `updated` is empty, so a re-run
+  // on non-canonical frontmatter still re-serializes and resyncs it. `updated` is not a full edit
+  // log (completePhaseCore's inline `percent:` rewrite is not listed), so returning the input on an
+  // empty list could drop an edit. Only refusals must be no-ops.
   return { content: reassemble(body), updated, data: { resumed: isAlreadyExecuting } };
 }
 
@@ -2114,7 +2118,11 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   } = parsePlanFields(content);
 
   if (parsedCurrent === null || parsedTotal === null) {
-    return { content: reassemble(body), updated: [], data: { error: true } };
+    // #6168: a refusal returns the INPUT document, not `reassemble(body)`.
+    // The rebuild re-serializes the frontmatter (re-quoting scalars), so the
+    // no-op guard (`modified === content`) did not fire and the sync step then
+    // added its fields and wrote the refusal to disk.
+    return { content, updated: [], data: { error: true } };
   }
   const currentPlan = parsedCurrent;
   const totalPlans = parsedTotal;
@@ -2152,7 +2160,7 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // would be this transition inventing an answer to a question nobody asked it.
   if (legacyOwnCurrent !== null && planOwnCurrent !== null && legacyOwnCurrent !== planOwnCurrent) {
     return {
-      content: reassemble(body),
+      content, // #6168: input document, so the refusal is a no-op write
       updated: [],
       data: {
         error: true,
@@ -2605,6 +2613,10 @@ function completePhaseCore(
     }
   }
 
+  // Deliberate (#6168): the rebuilt document is returned even when `updated` is empty, so a re-run
+  // on non-canonical frontmatter still re-serializes and resyncs it. `updated` is not a full edit
+  // log (completePhaseCore's inline `percent:` rewrite is not listed), so returning the input on an
+  // empty list could drop an edit. Only refusals must be no-ops.
   return { content: reassemble(body), updated };
 }
 
@@ -2734,6 +2746,10 @@ function plannedPhaseCore(
     }
   }
 
+  // Deliberate (#6168): the rebuilt document is returned even when `updated` is empty, so a re-run
+  // on non-canonical frontmatter still re-serializes and resyncs it. `updated` is not a full edit
+  // log (completePhaseCore's inline `percent:` rewrite is not listed), so returning the input on an
+  // empty list could drop an edit. Only refusals must be no-ops.
   return { content: reassemble(body), updated };
 }
 
