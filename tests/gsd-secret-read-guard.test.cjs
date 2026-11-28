@@ -5146,7 +5146,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     }
     // Listed here until #5267's scan by bash 5's grammar, which reads the `#` as a
     // comment, so the `)` on the next line closes the span and the read runs after it.
-    test('denied since #5267: a `#` comment in a `$( )`', () => {
+    test('denied since #5267: a `#` comment in a `$( )` that does not open `$((`', () => {
       const cmd = "echo $(#)'\n); cat $'.env' #'";
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
