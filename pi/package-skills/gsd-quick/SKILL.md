@@ -77,7 +77,7 @@ For each directory found:
   ```bash
   PLANNING_ROOT=$(gsd-tools query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
   : "${PLANNING_ROOT:?}"
-  gsd-tools query frontmatter.get "${PLANNING_ROOT}/quick/{dir}/SUMMARY.md" status
+  gsd-tools query frontmatter.get "${PLANNING_ROOT}/quick/{dir}/SUMMARY.md" --field status
   ```
 - Determine directory creation date: `stat -f "%SB" -t "%Y-%m-%d"` (macOS) or `stat -c "%w"` (Linux); fall back to the date prefix in the directory name (format: `YYYYMMDD-` prefix)
 - Derive display status:

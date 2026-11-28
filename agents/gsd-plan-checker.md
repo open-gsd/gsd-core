@@ -432,26 +432,9 @@ issue:
 3. Compare: does the task deliver what D-XX actually says, or a reduced version?
 4. If reduced: BLOCKER — the planner must either deliver fully or propose phase split
 
-**Red flags (from real incident):**
-- CONTEXT.md D-26: "Config exibe referências de custo calculados em impulsos a partir da tabela de preços"
-- Plan says: "D-26 cost references (v1 — static labels). NOT wired to billingPrecosOriginaisModel — dynamic pricing display is a future enhancement"
-- This is a BLOCKER: the planner invented "v1/v2" versioning that doesn't exist in the user's decision
-
 **Severity:** ALWAYS BLOCKER. Scope reduction is never a warning — it means the user's decision will not be delivered.
 
-**Example:**
-```yaml
-issue:
-  dimension: scope_reduction
-  severity: blocker
-  required_property: "Locked decisions are delivered at full recorded scope"
-  description: "Plan reduces D-26 from 'calculated costs in impulses' to 'static hardcoded labels'"
-  plan: "03"
-  task: 1
-  decision: "D-26: Config exibe referências de custo calculados em impulsos"
-  plan_action: "static labels v1 — NOT wired to billing"
-  fix_hint: "Either implement D-26 fully (fetch from billingPrecosOriginaisModel) or return PHASE SPLIT RECOMMENDED"
-```
+**Real incident and example issue:** see `plan-checker-examples.md` § Scope Reduction (Dimension 7b).
 
 **Fix path:** When scope reduction is detected, the checker returns ISSUES FOUND with recommendation:
 ```
@@ -741,17 +724,21 @@ Orchestrator provides CONTEXT.md content in the verification prompt. If provided
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 
 gsd_run query phase.list-plans "$phase_number"
-# Research / brief artifacts (deterministic listing)
-gsd_run query phase.list-artifacts "$phase_number" --type research
 gsd_run query roadmap.get-phase "$phase_number"
-gsd_run query phase.list-artifacts "$phase_number" --type summary
+# Research and summary artifacts
+if [ -n "${phase_dir:-${PHASE_DIR:-}}" ]; then
+  for artifact in "${phase_dir:-$PHASE_DIR}"/{,*-}RESEARCH.md "${phase_dir:-$PHASE_DIR}"/{,*-}SUMMARY.md; do
+    [ -f "$artifact" ] || continue
+    printf '%s\n' "$artifact"
+  done
 
-# Smart-zone estimate check (#2631) — advisory, never fails the check.
-for plan in "${phase_dir:-$PHASE_DIR}"/*-PLAN.md; do
-  [ -f "$plan" ] || continue   # unmatched glob leaves the literal pattern — skip it
-  EST=$(sed -n '/^estimate:/,/^[a-z_]*:/p' "$plan" | grep -o 'tokens: *[0-9]*' | head -1 | grep -o '[0-9]*')
-  [ -n "$EST" ] && gsd_run query estimate-check --tokens "$EST" --calibrated 2>/dev/null || true
-done
+  # Smart-zone estimate check (#2631) — advisory, never fails the check.
+  for plan in "${phase_dir:-$PHASE_DIR}"/*-PLAN.md; do
+    [ -f "$plan" ] || continue   # unmatched glob leaves the literal pattern — skip it
+    EST=$(sed -n '/^estimate:/,/^[a-z_]*:/p' "$plan" | grep -o 'tokens: *[0-9]*' | head -1 | grep -o '[0-9]*')
+    [ -n "$EST" ] && gsd_run query estimate-check --tokens "$EST" --calibrated 2>/dev/null || true
+  done
+fi
 ```
 
 **Extract:** Phase goal, requirements (decompose goal), locked decisions, deferred ideas.
@@ -767,7 +754,7 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 for plan in "$PHASE_DIR"/*-PLAN.md; do
   echo "=== $plan ==="
   PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
-  echo "$PLAN_STRUCTURE"
+  printf '%s\n' "$PLAN_STRUCTURE"
   echo "structure_exit=$STRUCTURE_EXIT"
 done
 ```
@@ -787,10 +774,16 @@ Map errors/warnings to verification dimensions:
 Extract must_haves from each plan using `gsd-tools query`:
 
 ```bash
-MUST_HAVES=$(gsd_run query frontmatter.get "$PLAN_PATH" must_haves)
+MUST_HAVES=$(gsd_run query frontmatter.get "$PLAN_PATH" --field must_haves)
 ```
 
-Returns JSON: `{ truths: [...], artifacts: [...], key_links: [...] }`
+Returns JSON: `{ "must_haves": { "truths": [...], "artifacts": [...], "key_links": [...] } }`
+
+Exit `0` can still return an error payload:
+
+- `{ "error": "Field not found", "field": "must_haves" }` — report a `must_haves_derivation` issue.
+- `{ "error": "File not found", "path": "..." }` — missing or empty file; report the plan as unreadable.
+- `{ "error": "Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block", "path": "..." }` — report the malformed frontmatter.
 
 **Expected structure:**
 
@@ -838,6 +831,7 @@ PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PLAN_PATH") && STRUCTURE_
 Exit `0` / `1` are the verdict (`valid` true / false, read the JSON); any other status means the structure was not evaluated (Step 2).
 
 The `tasks` array in the result shows each task's completeness:
+- `name` — task name
 - `hasFiles` — files element present
 - `hasAction` — action element present
 - `hasVerify` — verify element present
@@ -845,11 +839,7 @@ The `tasks` array in the result shows each task's completeness:
 
 **Check:** valid task type (auto, checkpoint:*, tdd), auto tasks have files/action/verify/done, action is specific, verify is runnable, done is measurable.
 
-**For manual validation of specificity** (`verify.plan-structure` checks structure, not content quality), use structured extraction instead of grepping raw XML:
-```bash
-gsd_run query plan.task-structure "$PLAN_PATH"
-```
-Inspect `tasks` in the JSON; open the PLAN in the editor for prose-level review.
+Judge specificity from each task's action, verify and done text.
 
 ## Step 6: Verify Dependency Graph
 
@@ -877,11 +867,22 @@ Missing: No mention of fetch/API call → Issue: Key link not planned
 ## Step 8: Assess Scope
 
 ```bash
-gsd_run query plan.task-structure "$PHASE_DIR/$PHASE-01-PLAN.md"
-gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" files_modified
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+if [ -n "${phase_dir:-${PHASE_DIR:-}}" ]; then
+  for plan in "${phase_dir:-$PHASE_DIR}"/*-PLAN.md; do
+    echo "=== $plan ==="
+    PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
+    printf '%s\n' "$PLAN_STRUCTURE"
+    echo "structure_exit=$STRUCTURE_EXIT"
+    FILES_MODIFIED=$(gsd_run query frontmatter.get "$plan" --field files_modified)
+    printf '%s\n' "$FILES_MODIFIED"
+  done
+else
+  echo "scope_not_evaluated: phase_dir unset"
+fi
 ```
 
-Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
+Read `structure_exit` as in Step 5 and take each plan's `task_count` from its structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
 
 ## Step 9: Verify must_haves Derivation
 
