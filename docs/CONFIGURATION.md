@@ -883,6 +883,10 @@ The `plan_review.*` namespace controls the plan drift guard, which verifies that
 | `plan_review.source_grounding` | boolean | `true` | Enable the plan drift guard. When `true` (the default), plan review resolves every symbol reference cited in a PLAN.md against the live source tree. Plans that cite a non-existent function, class, decorator, or CLI flag produce a `needs-acknowledgement` notice before the plan is approved. The same key also gates the cross-artifact fact-drift pass, which reports when ROADMAP.md, PLAN.md, STATE.md and CONTEXT.md state the same fact in contradictory ways (advisory only — it never blocks convergence). Disable with `false` to skip both passes entirely. Toggle during setup (`/gsd-new-project`) or at any time via `/gsd-settings`. |
 | `plan_review.source_grounding_authority` | enum | `grep` | Selects the resolver adapter used to verify symbol existence. Allowed values: `grep` (default — ripgrep/grep search of source files, works in any project without additional tooling), `intel` (query the `.planning/intel/api-map.json` index built by `/gsd-map-codebase`; requires `intel.enabled: true`), `treesitter` (reserved for future tree-sitter adapter), `lsp` (reserved for future LSP adapter), `scip` (reserved for future SCIP/LSIF adapter). Use `intel` when you have run `/gsd-map-codebase` and want the faster, pre-indexed lookup. All other values beyond `grep` and `intel` are reserved and have no effect in the current release. |
 
+#### Fact-drift axis
+
+`plan_review.source_grounding` also gates a second, cross-artifact axis: a fact-drift pass that compares the *same* fact as stated in `ROADMAP.md`, `PLAN.md`, `STATE.md` and `CONTEXT.md` and reports contradictions (a phase status, a success criterion, a requirement ID, a glossary term) with both locations and the authoritative side named. Where the source-grounding axis grounds a plan against code, this one grounds the planning artifacts against each other. It keys on contradicting knowledge rather than similar-looking text, and is advisory only — it never sets `hardBlock` and never contributes to the convergence counts.
+
 <a id="mempalace-settings"></a>
 ### MemPalace Settings
 
@@ -1862,26 +1866,7 @@ The intent is the same as the Claude profile tiers -- use a stronger model for p
 
 #### OpenCode 1.x and 2.x
 
-One `opencode` runtime serves OpenCode 1.x and 2.x (design: [ADR-5331](adr/5331-opencode-v2-support-and-v1-sunset.md)).
-
-| Setting | Where | Effect |
-|---------|-------|--------|
-| `GSD_OPENCODE_GENERATION` | environment | `1`, `2`, `v1`, `v2` (any case). Forces the generation GSD assumes when it builds an `opencode run` command line; otherwise GSD runs `opencode --version`. An unreadable version leaves the 1.x behavior. |
-| `GSD_HOOK_RUNTIME` | environment | Executable the OpenCode plugin starts GSD's hook scripts with. Default: `node` from `PATH`. The OpenCode binary itself cannot run them. |
-| `review.models.opencode` | `.planning/config.json` | Reviewer model, `provider/model`. On 2.x a configured reasoning effort is appended as `#<level>` (`provider/model#high`); a model that already has a `#variant` is used as written. |
-| `review.effort.opencode` | `.planning/config.json` | Reasoning effort for the OpenCode reviewer. On 1.x it is passed as `--variant <level>`; on 2.x it needs a configured model to ride on, and is dropped with a warning otherwise. |
-
-OpenCode 1.x is deprecated for GSD: bug fixes only until **2026-12-31**. The installer prints the notice when it finds a 1.x binary (never for 2.x, and never for Kilo). The opt-in community hooks (`hooks.community`) and the graphify auto-update hook (`graphify.auto_update`) run through the OpenCode plugin when enabled in `.planning/config.json`; they need `bash` on `PATH` and are skipped silently without it. `GSD_HOOK_SHELL` overrides the shell they start with.
-
-Installed agents carry a `permission:` block that denies the tools their Claude `tools:` allowlist leaves out (and any
-`disallowedTools:`); allowed tools keep your own configured default, and MCP tool entries are not restricted. An agent
-with neither key inherits everything. `effort sync` keeps the effort in `variant:` on 1.x and in the `#variant` suffix of
-`model:` when an agent already uses the 2.x form.
-
-GSD edits `opencode.json`/`opencode.jsonc` (and Kilo's `kilo.json(c)`) as text when the file has comments or trailing
-commas, so annotations survive install, update and uninstall. It writes the `mcp.gsd` companion entry with
-`--no-prompts`; remove or edit the entry and GSD treats it as yours.
-
+One `opencode` runtime serves OpenCode 1.x and 2.x ([ADR-5331](adr/5331-opencode-v2-support-and-v1-sunset.md)). `GSD_OPENCODE_GENERATION` forces the assumed generation and `GSD_HOOK_RUNTIME` names the executable that starts hook scripts; `review.models.opencode` and `review.effort.opencode` configure the reviewer. OpenCode 1.x is deprecated: bug fixes only until **2026-12-31**. The settings, spawn-argument differences and installed-agent `permission:` behavior are in [How GSD runs on OpenCode](explanation/how-gsd-runs-on-opencode.md).
 
 ### The `tier` Field
 

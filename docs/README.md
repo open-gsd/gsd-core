@@ -100,6 +100,8 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Interpret `state validate` results](how-to/interpret-state-validate-results.md) — read the `scope` reason codes and tell "nothing to report" apart from "could not look"
 - [Park an idea for later](how-to/park-an-idea-for-later.md) — choose between the backlog, a seed and a thread, then park, review, promote or close the idea
 - [Fix a workflow or agent size failure](how-to/fix-a-workflow-or-agent-size-failure.md) — resolve a red size-budget check by justifying the growth with an acknowledgment trailer or shrinking the file
+- [Fix a regression-test-name or duplicate-fold lint failure](how-to/fix-a-regression-test-lint-failure.md) — fold a one-off regression file into its module's test file, prune the allowlist, or delete a duplicate fold block
+- [Respond to a new QA smell](how-to/respond-to-a-new-qa-smell.md) — decide whether a smell is a real defect or a false positive, then fix the oracle or acknowledge it with an issue
 - [Add a positive control for a new gate](how-to/add-a-gate-positive-control.md) — resolve a `no-control` report from `lint:ci` by adding a `gateControl` call with a red and a green scenario
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
@@ -153,6 +155,14 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Custom phase IDs](reference/custom-phase-ids.md) — which custom phase IDs are accepted or refused, the `.phase-id` marker and how readers resolve a directory to its owner
 - [Planning artifacts](reference/planning-artifacts.md) — all `.planning/` files and their roles
 - [Security hooks](reference/security-hooks.md) — the exact rules, limits, bypasses and known gaps of the prompt, workflow, write and secret-read guards
+- [Config section null semantics](reference/config-null-semantics.md) — how an explicit non-object section such as `"workflow": null` blocks defaults in the config merge
+- [Agent tool grants](reference/agent-tool-grants.md) — `agent_tools` selectors, validation, precedence and per-runtime output
+- [Bracket phase IDs](reference/bracket-phase-ids.md) — what `phase_id_convention: "bracket"` changes across read, display, migration and write paths
+- [Compact content mode](reference/compact-content-mode.md) — the spine-and-detail, variant-swap and agent-payload mechanisms behind `workflow.compact_content`
+- [Project-root resolution](reference/project-root-resolution.md) — the ordered rules that walk a child repo up to the workspace that owns `.planning/`
+- [Decision-coverage plan gate](reference/check-decision-coverage-plan.md) — invoking `check decision-coverage-plan` directly, with its fail-closed reasons
+- [Check gate modules](reference/check-gate-modules.md) — support modules, ESLint boundaries and behavior differences for the `check <gate>` router
+- [Evaluation scope resolver](reference/evaluation-scope.md) — the fields, design rules and flags of `check evaluation-scope`
 - [Runtime install contracts](reference/runtime-install-contracts.md) — the installed file layout, the per-runtime install contract matrix, and the upstream docs each row was checked against
 - [Review and verification capabilities](reference/review-verification-capabilities.md) — code review, security, and Nyquist capability ownership and hook contracts
 - [Templates](reference/templates.md) — every file under `gsd-core/templates/`, the artifact it produces, and what references it
@@ -198,6 +208,16 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Agent skills dual injection](explanation/agent-skills-dual-injection.md) — why configured skills reach agents through two seams and how the dedup guard keeps one copy
 - [Decision coverage gates explained](explanation/decision-coverage-gates.md) — how the plan-phase and verify-phase decision gates work, and when a decision is exempt
 - [About the code-review pipeline design](explanation/review-pipeline-design.md) — why depth escalation, prefix matching, ledger replacement and the sibling record are shaped as they are
+- [Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md) — the ADR-3473 and ADR-3889 hardening: dropped data, unreadable directories, the raw terminator and short-form dependencies
+- [Runtime identity design](explanation/runtime-identity-design.md) — why the launcher's PATH branch and anchored probe defend against a foreign `gsd-tools`
+- [Spec-phase probe design](explanation/spec-phase-probe-design.md) — why the edge and prohibition probes classify, tier and abstain the way they do
+- [Deep verify capability](explanation/deep-verify-capability.md) — why interaction-level behaviors are enumerated during UAT and how the capability is shaped
+- [Why planners query graphify first](explanation/graphify-query-path.md) — why the single graph query per phase goes to the CLI, with the built-in reader as fallback
+- [Codebase drift gate design](explanation/codebase-drift-gate-design.md) — why the rule is inverted, the baseline stamp is a shell step and an absent baseline is skipped
+- [Why PR-branch filtering has a strict mode](explanation/pr-branch-filtering-design.md) — why keeping planning out of git costs worktrees and strict mode does not
+- [Why the test suites are guarded the way they are](explanation/testing-suites-design.md) — the reasoning behind the regression-fold, size, QA, live-config, mergeability and timeout guards
+- [Installer permissions](explanation/installer-permissions.md) — what the installer pre-populates in `settings.json` and why two earlier rules were retired
+- [How GSD runs on OpenCode](explanation/how-gsd-runs-on-opencode.md) — how one `opencode` runtime serves OpenCode 1.x and 2.x
 - [About autonomous decision classification](explanation/autonomous-decision-classification.md) — why /gsd-autonomous decides some discuss questions and asks about others
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
