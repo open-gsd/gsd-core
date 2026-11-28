@@ -26,6 +26,8 @@ const { INSTALL_TIMEOUT_MS } = require('./timeouts.cjs');
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const PROC_VERSION = '/proc/version';
 const PROBE_JSON_MARKER = 'PROBE_JSON ';
+// What the installer's load-time WSL check prints before it exits 1 (`bin/install.js`).
+const WSL_WARNING_PATTERN = /Detected WSL with Windows-native Node\.js/;
 
 // Child source. Hides /proc/version from existsSync, so the installer's WSL check skips the read.
 const HIDE_PROC_VERSION = `
@@ -66,7 +68,9 @@ const FAKE_WSL_HOST_PREAMBLE = `
 function runWin32InstallerChild(t, source, { preamble = '', env = {}, isolateWsl = true, tmpPrefix = 'gsd-win32-install-' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix));
   t.after(() => cleanup(home));
-  const result = runNode(['-e', preamble + (isolateWsl ? HIDE_PROC_VERSION : '') + source], {
+  // Joined with newlines so no part depends on another starting or ending with one.
+  const childSource = [preamble, isolateWsl ? HIDE_PROC_VERSION : '', source].join('\n');
+  const result = runNode(['-e', childSource], {
     cwd: REPO_ROOT,
     env: installSpawnEnv(isolatedEnv({
       home,
@@ -90,6 +94,7 @@ function readProbeJson(result) {
 
 module.exports = {
   FAKE_WSL_HOST_PREAMBLE,
+  WSL_WARNING_PATTERN,
   runWin32InstallerChild,
   readProbeJson,
 };

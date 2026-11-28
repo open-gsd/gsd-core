@@ -14,7 +14,7 @@ const fc = require('fast-check');
 const os = require('node:os');
 const path = require('node:path');
 
-const { FAKE_WSL_HOST_PREAMBLE, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
+const { FAKE_WSL_HOST_PREAMBLE, WSL_WARNING_PATTERN, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const shellCmdProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -490,7 +490,7 @@ describe('#5850 the installer writes the shell key', () => {
   test('#5888 on a faked WSL host the probe takes the installer WSL exit without the isolation', (t) => {
     const result = runProbe(t, { ...fakeWslHost, isolateWsl: false });
     assert.equal(result.exitCode, 1, `expected exit 1; got outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
-    assert.match(result.stderr, /Detected WSL with Windows-native Node\.js/);
+    assert.match(result.stderr, WSL_WARNING_PATTERN);
   });
 
   test('#5888 on a faked WSL host the isolated probe still writes PowerShell hooks', (t) => {

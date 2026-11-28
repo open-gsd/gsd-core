@@ -14,7 +14,7 @@ require('node:test').afterEach(() => {
 });
 
 const helpers = require('./helpers.cjs');
-const { FAKE_WSL_HOST_PREAMBLE, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
+const { FAKE_WSL_HOST_PREAMBLE, WSL_WARNING_PATTERN, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const { install, installAllRuntimes, finishInstall, selectConfiguredEntrypointsForValidation } = require('../bin/install.js');
@@ -875,7 +875,8 @@ process.stdout.write('PROBE_JSON ' + JSON.stringify({
 `;
 
 // `env` stands in for host variables (the #5888 case passes a WSL host's WSL_DISTRO_NAME);
-// the probe's own blanks below, and runWin32InstallerChild's WSL isolation, win over it.
+// the probe's own blanks below, and runWin32InstallerChild's WSL isolation, win over it. So the
+// #5888 case's WSL_DISTRO_NAME is discarded before the child runs, which is what that case checks.
 function gsd5100RunWin32InstallProbe(t, runtime, { preamble = '', env = {} } = {}) {
   const result = runWin32InstallerChild(t, GSD_5100_WIN32_INSTALL_PROBE, {
     preamble,
@@ -977,6 +978,6 @@ for (const [label, opts] of [
   test(`#5888 a faked-win32 installer on a WSL host still exits with the WSL warning (${label})`, (t) => {
     const result = runWin32InstallerChild(t, GSD_5888_BARE_WIN32_REQUIRE, { ...opts, isolateWsl: false, tmpPrefix: 'gsd-5888-wsl-' });
     assert.equal(result.exitCode, 1, `expected exit 1; got outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
-    assert.match(result.stderr, /Detected WSL with Windows-native Node\.js/);
+    assert.match(result.stderr, WSL_WARNING_PATTERN);
   });
 }
