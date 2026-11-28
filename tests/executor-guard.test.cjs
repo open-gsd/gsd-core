@@ -661,12 +661,25 @@ describe('#6216: layouts, path resolution and ledger confinement', () => {
     assert.deepEqual(failed(res), ['path']);
   });
 
-  test('--path on Linux reads letter case as part of a name', { skip: process.platform !== 'linux' }, (t) => {
+  test('--path on Linux and macOS refuses the worktree root spelled in another letter case', { skip: process.platform === 'win32' }, (t) => {
     const { tmp, wt } = mkFixture(t);
     const otherCase = path.join(path.dirname(wt), path.basename(wt).toUpperCase(), 'new.txt');
     const res = run(['executor.guard', '--path', otherCase], wt, tmp);
     assert.equal(res.exitCode, GUARD_EXIT_CODE);
     assert.deepEqual(failed(res), ['path']);
+  });
+
+  test('--path on Linux and macOS: a directory below the root in another letter case is inside; the filesystem root and the parent stay outside', { skip: process.platform === 'win32' }, (t) => {
+    const { tmp, wt } = mkFixture(t);
+    fs.mkdirSync(path.join(wt, 'src'));
+    const below = run(['executor.guard', '--path', path.join(wt, 'SRC', 'new.txt')], wt, tmp);
+    assert.equal(below.exitCode, 0, below.error);
+
+    for (const outside of ['/', '/new.txt', path.dirname(wt), path.join(path.dirname(wt), 'new.txt'), '..']) {
+      const res = run(['executor.guard', '--path', outside], wt, tmp);
+      assert.equal(res.exitCode, GUARD_EXIT_CODE, outside);
+      assert.deepEqual(failed(res), ['path'], outside);
+    }
   });
 
   test('record refuses a linked .gsd/executor-ledger and writes nothing through it', (t) => {
