@@ -713,14 +713,20 @@ function phaseArtifactPaths(phaseDir: string, projectRoot: string): PhaseArtifac
   // so a workstream/project ROADMAP under an out-of-repo store is still
   // recognized as a shared planning document even when `phaseDir` itself was
   // addressed by its real (non-`.planning`-spelled) path.
-  let mappedPhaseDir: string | null = null;
+  return { ok: true, paths, scope: scan.scope, mappedPhaseDir: mappedPhaseDirOf(phaseDir, roots) };
+}
+
+/**
+ * The phase directory's own root-relative, posix spelling (realpath, then
+ * `mapRealPathToRootRelative`), or `null` when it cannot be resolved or placed.
+ */
+function mappedPhaseDirOf(phaseDir: string, roots: ContainmentRoots): string | null {
+  if (roots.realRoot === null) return null;
   try {
-    const realPhaseDir = fs.realpathSync(phaseDir);
-    mappedPhaseDir = mapRealPathToRootRelative(realPhaseDir, roots.realRoot, roots.planningScopes);
+    return mapRealPathToRootRelative(fs.realpathSync(phaseDir), roots.realRoot, roots.planningScopes);
   } catch {
-    mappedPhaseDir = null;
+    return null;
   }
-  return { ok: true, paths, scope: scan.scope, mappedPhaseDir };
 }
 
 // ─── #4155: covered-input fingerprint ──────────────────────────────────────────
@@ -753,6 +759,13 @@ function phaseArtifactPaths(phaseDir: string, projectRoot: string): PhaseArtifac
  *                revised R7).
  *   v4 (#5351) — v3 with each CRLF byte pair hashed as LF. Every other
  *                byte, including a lone CR and non-UTF-8 input, is preserved.
+ *   v5 (#6811) — v4 with one more shared planning root: a phase archived in
+ *                a scope's `milestones/<v>-phases/` directory keeps that
+ *                scope as its own planning root (`phasePlanningRoot`), so a
+ *                workstream's `ROADMAP.md` stays shared after
+ *                `milestone complete --ws`. v2-v4 keep the `phases/`-only rule,
+ *                so a v2-v4 report fingerprinted inside such an archive still
+ *                reproduces its digest.
  *
  * A stored digest names its own version (`v<N>:sha256:…`), and
  * `readVerificationStatus` recomputes under the STORED version rather than
@@ -761,9 +774,36 @@ function phaseArtifactPaths(phaseDir: string, projectRoot: string): PhaseArtifac
  * semantics (shared documents included for v1; no report filter or artifact
  * union for v1/v2) until it is re-fingerprinted; only a version outside
  * `KNOWN_FINGERPRINT_VERSIONS` is unrecomputable and fails closed.
+ *
+ * Moving a phase directory changes no version's input: the checker reads the
+ * moved files at their new spelling and hashes them under the spelling the
+ * report declared (`PhaseRelocation`, #6811).
  */
-const FINGERPRINT_VERSION = 4;
-const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
+const FINGERPRINT_VERSION = 5;
+const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4, 5]);
+
+/**
+ * #4623/#6811: the planning root a phase directory sits in, by position, as a
+ * root-relative posix path: the parent of its `phases/` directory, or, when
+ * `archives` is set, the scope that owns the `milestones/<v>-phases/` archive
+ * it sits in (`milestone complete` and `phases clear` move a phase from
+ * `<scope>/phases/` to `<scope>/milestones/<v>-phases/`). `null` for any other
+ * shape, and for a root outside `.planning/`: without that check
+ * `<root>/src/phases/01-fake` would nominate `src` as a planning root and
+ * silently drop real implementation evidence from the digest.
+ */
+function phasePlanningRoot(phaseRel: string, archives: boolean): string | null {
+  const parent = path.posix.dirname(phaseRel);
+  const parentName = path.posix.basename(parent);
+  let root: string | null = null;
+  if (parentName === 'phases') {
+    root = path.posix.dirname(parent);
+  } else if (archives && parentName.endsWith('-phases') && path.posix.basename(path.posix.dirname(parent)) === 'milestones') {
+    root = path.posix.dirname(path.posix.dirname(parent));
+  }
+  if (root === null || !(root === '.planning' || root.startsWith('.planning/'))) return null;
+  return root.split('/').includes('..') ? null : root;
+}
 
 /**
  * #4623: the planning roots whose DIRECT children are repo-wide planning
@@ -776,32 +816,20 @@ const KNOWN_FINGERPRINT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3, 4]);
  * workstream-scoped `ROADMAP.md` is recognised without this function
  * knowing what a workstream is, and so `.planning/research/notes.md` is
  * NOT mistaken for one — lexically the two are indistinguishable from
- * `.planning/<project>/ROADMAP.md`. A phase directory that does not sit
- * under the project root (unit fixtures at a bare tmpdir) contributes no
- * extra root.
+ * `.planning/<project>/ROADMAP.md`. A phase directory outside the project
+ * root (unit fixtures at a bare tmpdir) contributes no extra root; from v5
+ * (#6811) one in `<scope>/milestones/<v>-phases/` adds `<scope>`.
  */
-function sharedPlanningRoots(projectRoot: string, phaseDir?: string | null): string[] {
+function sharedPlanningRoots(
+  projectRoot: string,
+  phaseDir?: string | null,
+  version: number = FINGERPRINT_VERSION,
+): string[] {
   const roots = ['.planning'];
   if (phaseDir) {
-    const phasesDir = path.dirname(path.resolve(phaseDir));
-    const planningDir = path.dirname(phasesDir);
-    const rel = normalizeRel(path.relative(path.resolve(projectRoot), planningDir));
-    // Two structural checks, both load-bearing: the phase dir's PARENT must be
-    // the `phases/` directory `planningDir` lays every scope out with, and the
-    // derived root must sit inside `.planning/`. Without them any accepted
-    // directory — `<root>/src/phases/01-fake` — would nominate `src` as a
-    // planning root and silently drop real implementation evidence from the
-    // digest (found by the cross-AI review of this change). A shape that fails
-    // either check contributes no extra root; `.planning` itself is already
-    // present.
-    if (
-      path.basename(phasesDir) === 'phases' &&
-      rel.startsWith('.planning/') &&
-      !rel.includes('/../') &&
-      !roots.includes(rel)
-    ) {
-      roots.push(rel);
-    }
+    const rel = normalizeRel(path.relative(path.resolve(projectRoot), path.resolve(phaseDir)));
+    const root = phasePlanningRoot(rel, version >= 5);
+    if (root !== null && !roots.includes(root)) roots.push(root);
   }
   return roots;
 }
@@ -844,21 +872,117 @@ function sharedRootsFor(
   projectRoot: string,
   phaseDir: string | null | undefined,
   mappedPhaseDir: string | null,
+  version: number = FINGERPRINT_VERSION,
 ): string[] {
-  const roots = sharedPlanningRoots(projectRoot, phaseDir);
+  const roots = sharedPlanningRoots(projectRoot, phaseDir, version);
   if (mappedPhaseDir) {
-    const phasesDir = path.posix.dirname(mappedPhaseDir);
-    const planningDir = path.posix.dirname(phasesDir);
-    if (
-      path.posix.basename(phasesDir) === 'phases' &&
-      (planningDir === '.planning' || planningDir.startsWith('.planning/')) &&
-      !planningDir.includes('/../') &&
-      !roots.includes(planningDir)
-    ) {
-      roots.push(planningDir);
-    }
+    const root = phasePlanningRoot(mappedPhaseDir, version >= 5);
+    if (root !== null && !roots.includes(root)) roots.push(root);
   }
   return roots;
+}
+
+/**
+ * #6811: `rel` minus the directory `prefix` it sits under (`/`-bounded, so
+ * `01-foo` never claims `01-foo2/`), or `null` when it does not sit under it.
+ */
+function restUnder(rel: string, prefix: string): string | null {
+  return rel.startsWith(`${prefix}/`) ? rel.slice(prefix.length) : null; // allow-handrolled-containment: lexical rewrite of one root-relative spelling into another; every rewritten path is realpath-confined by deriveCoveredDigest before it is read
+}
+
+/** #6811: a root-relative path is absent (ENOENT/ENOTDIR). Any other error is not proof of absence. */
+function isAbsentRel(projectRoot: string, rel: string): boolean {
+  try {
+    fs.lstatSync(path.join(projectRoot, rel));
+    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  }
+}
+
+/**
+ * #6811: where a moved phase directory lived when its report was fingerprinted.
+ * Every mover renames the directory and rewrites nothing inside it, so the
+ * report's `covered_files` keep the old spelling: `milestone complete` and
+ * `phases clear` move `<scope>/phases/<dir>` to `<scope>/milestones/<v>-phases/<dir>`
+ * (`<dir>.N` on a collision); `workstream complete` moves `<root>/workstreams/<ws>`
+ * to `<root>/milestones/ws-<ws>-<date>[-N]`, its ROADMAP and REQUIREMENTS with
+ * it. The checker reads each file at its new spelling and still hashes it under
+ * the declared one, so a pure move reproduces a stored digest of any version byte
+ * for byte, and one changed byte still moves it. Two maps, longer prefix first:
+ *   - `from` -> `to`, the phase directory. Tried only after the declared
+ *     spelling misses, so a report that matches where it says is read there.
+ *   - `scopeFrom` -> `scopeTo`, the planning root, when the move changed it.
+ *     Applied per file, to a declared path that exists at the new spelling.
+ */
+interface PhaseRelocation {
+  from: string;
+  to: string;
+  scopeFrom: string | null;
+  scopeTo: string | null;
+}
+
+/** #6811: the spelling `rel` lives at now under `relocation`. */
+function relocatedRel(projectRoot: string, rel: string, relocation: PhaseRelocation): string {
+  const phaseRest = restUnder(rel, relocation.from);
+  if (phaseRest !== null) return relocation.to + phaseRest;
+  if (relocation.scopeFrom !== null && relocation.scopeTo !== null) {
+    const scopeRest = restUnder(rel, relocation.scopeFrom);
+    if (scopeRest !== null && !isAbsentRel(projectRoot, relocation.scopeTo + scopeRest)) {
+      return relocation.scopeTo + scopeRest;
+    }
+  }
+  return rel;
+}
+
+/**
+ * #6811: every spelling the phase directory could have had before one of the
+ * movers put it where it is, as relocations, in a fixed order. An old spelling
+ * that exists again (a phase or workstream of the same name created since) is
+ * still a candidate. Derived from the current spelling alone, never from
+ * `covered_files`, so a report that declared none of the phase's own files
+ * still finds where its artifacts were hashed. The caller accepts a candidate
+ * only when it reproduces the stored digest.
+ */
+function phaseRelocationCandidates(projectRoot: string, phaseDir: string): PhaseRelocation[] {
+  const current = mappedPhaseDirOf(phaseDir, resolveContainmentRoots(projectRoot));
+  if (current === null) return [];
+  const currentRoot = phasePlanningRoot(current, true);
+  if (currentRoot === null) return [];
+  const name = path.posix.basename(current);
+  const names = [name];
+  // `phases clear` suffixes `.N` only inside an archive; a decimal phase such
+  // as `02.1` in `phases/` is never stripped.
+  const collision = path.posix.basename(path.posix.dirname(current)).endsWith('-phases')
+    ? /^(.+)\.\d+$/.exec(name)
+    : null;
+  if (collision) names.push(collision[1]);
+  const scopeRoots = [currentRoot];
+  const archiveParent = path.posix.dirname(currentRoot);
+  const archivedWorkstream = /^ws-(.+)-\d{4}-\d{2}-\d{2}(?:-\d+)?$/.exec(path.posix.basename(currentRoot));
+  if (archivedWorkstream && path.posix.basename(archiveParent) === 'milestones') {
+    scopeRoots.push(`${path.posix.dirname(archiveParent)}/workstreams/${archivedWorkstream[1]}`);
+  }
+  const within = current.slice(currentRoot.length);
+  const spellings = new Set<string>();
+  for (const scopeRoot of scopeRoots) {
+    for (const n of names) spellings.add(`${scopeRoot}/phases/${n}`);
+    spellings.add(scopeRoot + within);
+  }
+  const candidates: PhaseRelocation[] = [];
+  for (const from of spellings) {
+    if (from === current || from.split('/').some((s) => s === '' || s === '.' || s === '..')) continue;
+    const fromRoot = phasePlanningRoot(from, true);
+    const scopeMoved = fromRoot !== null && fromRoot !== currentRoot;
+    candidates.push({
+      from,
+      to: current,
+      scopeFrom: scopeMoved ? fromRoot : null,
+      scopeTo: scopeMoved ? currentRoot : null,
+    });
+  }
+  return candidates;
 }
 
 /**
@@ -933,14 +1057,19 @@ function deriveCoveredDigest(
   projectRoot: string,
   coveredFiles: readonly string[],
   version: number = FINGERPRINT_VERSION,
-  opts: { phaseDir?: string | null } = {},
+  opts: { phaseDir?: string | null; relocation?: PhaseRelocation | null } = {},
 ): CoveredDigestDerivation {
   // #4623: `version` selects the input shape to hash under — the CURRENT
   // one for a fresh fingerprint (the CLI verb), or the STORED one when
   // `readVerificationStatus` recomputes against a report's own digest.
   // `opts.phaseDir` lets v2+ recognise the phase's own planning root
   // (`sharedPlanningRoots`); without it only `.planning/` itself is shared.
+  // #6811: `opts.relocation` (check side only) recomputes a moved phase's
+  // digest as it was emitted: every path keeps its pre-move spelling in the
+  // hash, its bytes are read where it lives now, and the shared roots are the
+  // ones its old directory had.
   if (!KNOWN_FINGERPRINT_VERSIONS.has(version)) return { ok: true, digest: null, files: [], mappedPhaseDir: null };
+  const relocation = opts.relocation ?? null;
 
   // #5095 (R1, ADR-5057 Phase 2): for v3+ with a known phaseDir, the hashed
   // set is the declared list UNIONED with the phase's own live artifacts —
@@ -961,11 +1090,24 @@ function deriveCoveredDigest(
     const artifacts = phaseArtifactPaths(opts.phaseDir, projectRoot);
     if (!artifacts.ok) return { ok: false, reason: artifacts.reason };
     artifactMappedPhaseDir = artifacts.mappedPhaseDir;
-    declared = canonicalizeCoveredFiles([...declared, ...artifacts.paths], { version });
+    // #6811: a moved phase's live artifacts enter the union under the
+    // spelling the emitter saw.
+    const artifactPaths = relocation === null
+      ? artifacts.paths
+      : artifacts.paths.map((p) => {
+        const rest = restUnder(p, relocation.to);
+        return rest === null ? p : relocation.from + rest;
+      });
+    declared = canonicalizeCoveredFiles([...declared, ...artifactPaths], { version });
   }
   if (declared.length === 0) return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
 
-  const sharedRoots = version >= 2 ? sharedRootsFor(projectRoot, opts.phaseDir, artifactMappedPhaseDir) : [];
+  let sharedRoots: string[] = [];
+  if (version >= 2) {
+    sharedRoots = relocation === null
+      ? sharedRootsFor(projectRoot, opts.phaseDir, artifactMappedPhaseDir, version)
+      : sharedRootsFor(projectRoot, path.join(projectRoot, relocation.from), relocation.from, version);
+  }
   let hashed = 0;
 
   // Canonicalize the roots ONCE — every candidate's realpath is checked
@@ -987,21 +1129,24 @@ function deriveCoveredDigest(
     // (`a/../../b` → `../b`), so this start-of-string check is already the
     // full lexical confinement test — no separate post-`path.resolve`
     // re-check can observe a different answer.
-    if (rel === '' || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+    // #6811: `readRel` is where a relocated path's bytes live now; it gets
+    // every check below. `rel` stays the spelling that is hashed.
+    const readRel = relocation === null ? rel : relocatedRel(projectRoot, rel, relocation);
+    if ([rel, readRel].some((r) => r === '' || r === '..' || r.startsWith('../') || path.isAbsolute(r))) {
       return { ok: true, digest: null, files: declared, mappedPhaseDir: artifactMappedPhaseDir };
     }
     // #5095 (R7): a `.planning`-spelled path may resolve inside the checkout
     // root OR the LONGEST-prefix anchored planning scope that claims it
     // (`bestPlanningScopeForRel`) — every other path is confined to the
     // checkout root alone, exactly as before.
-    const firstSegment = rel.split('/')[0];
+    const firstSegment = readRel.split('/')[0];
     const admissibleRoots =
       firstSegment === '.planning'
-        ? [roots.realRoot, bestPlanningScopeForRel(rel, roots.planningScopes)?.real ?? null].filter(
+        ? [roots.realRoot, bestPlanningScopeForRel(readRel, roots.planningScopes)?.real ?? null].filter(
             (r): r is string => r !== null,
           )
         : [roots.realRoot];
-    const resolved = path.resolve(projectRoot, rel);
+    const resolved = path.resolve(projectRoot, readRel);
     let bytes: Buffer;
     try {
       // A regular file INSIDE a known root can still be a symlink whose
@@ -1077,10 +1222,34 @@ function computeCoveredDigest(
   projectRoot: string,
   coveredFiles: readonly string[],
   version: number = FINGERPRINT_VERSION,
-  opts: { phaseDir?: string | null } = {},
+  opts: { phaseDir?: string | null; relocation?: PhaseRelocation | null } = {},
 ): string | null {
   const result = deriveCoveredDigest(projectRoot, coveredFiles, version, opts);
   return result.ok ? result.digest : null;
+}
+
+/**
+ * #6811: the stored digest checked where the phase lives now, then, when that
+ * misses, under each relocation a mover could have made (in order). A
+ * relocation counts only when it reproduces the stored digest exactly. Also
+ * returns the candidates, so the stale diagnostic can name files where they
+ * live now.
+ */
+function storedDigestMatches(
+  projectRoot: string,
+  phaseDir: string,
+  coveredFiles: readonly string[],
+  version: number,
+  storedDigest: string,
+): { matches: boolean; relocations: PhaseRelocation[] } {
+  if (computeCoveredDigest(projectRoot, coveredFiles, version, { phaseDir }) === storedDigest) {
+    return { matches: true, relocations: [] };
+  }
+  const relocations = phaseRelocationCandidates(projectRoot, phaseDir);
+  const matches = relocations.some(
+    (relocation) => computeCoveredDigest(projectRoot, coveredFiles, version, { phaseDir, relocation }) === storedDigest,
+  );
+  return { matches, relocations };
 }
 
 /**
@@ -1223,7 +1392,8 @@ function defaultPhaseCleanCommitTimesMs(
  * staleness (the digest does), and an unreadable clock yields fewer names,
  * never a wrong status. Timed through the same injectable resolver the
  * legacy mtime check uses, rooted at the project so the covered paths
- * (project-root-relative) resolve.
+ * (project-root-relative) resolve. #6811: a moved phase's files are timed and
+ * named where they live now, so a file that was only renamed is never named.
  */
 function coveredFilesMovedSinceReport(
   projectRoot: string,
@@ -1233,10 +1403,31 @@ function coveredFilesMovedSinceReport(
   version: number,
   fsImpl: FsLike,
   resolver: PhaseCleanCommitTimesFn,
+  relocations: readonly PhaseRelocation[] = [],
 ): string[] {
-  const sharedRoots = version >= 2 ? sharedRootsFor(projectRoot, phaseDir, null) : [];
-  const files = canonicalizeCoveredFiles(coveredFiles, { version })
-    .filter((f) => !isVerificationReportPath(f) && !isSharedPlanningDoc(f, sharedRoots));
+  const declared = canonicalizeCoveredFiles(coveredFiles, { version });
+  // #6811: the candidate relocation that claims the most declared paths.
+  const claims = (r: PhaseRelocation): number =>
+    declared.filter((f) => restUnder(f, r.from) !== null || (r.scopeFrom !== null && restUnder(f, r.scopeFrom) !== null)).length;
+  let relocation: PhaseRelocation | null = null;
+  let bestClaims = 0;
+  for (const candidate of relocations) {
+    const n = claims(candidate);
+    if (n > bestClaims) {
+      relocation = candidate;
+      bestClaims = n;
+    }
+  }
+  let sharedRoots: string[] = [];
+  if (version >= 2) {
+    sharedRoots = relocation === null
+      ? sharedRootsFor(projectRoot, phaseDir, mappedPhaseDirOf(phaseDir, resolveContainmentRoots(projectRoot)), version)
+      : sharedRootsFor(projectRoot, path.join(projectRoot, relocation.from), relocation.from, version);
+  }
+  const kept = declared.filter((f) => !isVerificationReportPath(f) && !isSharedPlanningDoc(f, sharedRoots));
+  const files = relocation === null
+    ? kept
+    : Array.from(new Set(kept.map((f) => relocatedRel(projectRoot, f, relocation)))).sort();
   if (files.length === 0) return [];
   const reportRel = toPosix(path.relative(projectRoot, reportPath));
   let commitTimes: Map<string, number>;
@@ -2056,11 +2247,9 @@ function readVerificationStatus(
     // unknown version parses to `null`, which `computeCoveredDigest`
     // refuses (returns `null`), so the compare below fails closed.
     const projectRoot = resolveProjectRoot(phaseDir);
-    const storedVersion =
-      hasWellFormedFingerprint && typeof coveredDigestVal === 'string'
-        ? parseFingerprintVersion(coveredDigestVal)
-        : null;
-    if (!hasWellFormedFingerprint || storedVersion === null) {
+    const storedDigest = hasWellFormedFingerprint && typeof coveredDigestVal === 'string' ? coveredDigestVal : null;
+    const storedVersion = storedDigest === null ? null : parseFingerprintVersion(storedDigest);
+    if (!hasWellFormedFingerprint || storedDigest === null || storedVersion === null) {
       isStale = true;
     } else if (storedVersion >= 3) {
       // #5095 (R1): the v3+ digest is computed over the declared set UNIONED
@@ -2068,24 +2257,28 @@ function readVerificationStatus(
       // fingerprinting already moves the digest itself, so the separate
       // live-directory re-scan (`uncoveredCurrentArtifacts`) is redundant
       // for v3+ and is not run.
-      isStale =
-        computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
+      // #6811: a phase directory moved since the report was written is
+      // recomputed as it was emitted (`storedDigestMatches`).
+      const check = storedDigestMatches(projectRoot, phaseDir, coveredFilesVal, storedVersion, storedDigest);
+      isStale = !check.matches;
       if (isStale) {
         const moved = coveredFilesMovedSinceReport(
           projectRoot, phaseDir, located.filePath, coveredFilesVal, storedVersion, fsImpl, phaseCleanCommitTimesMs,
+          check.relocations,
         );
         if (moved.length > 0) staleDetail = { uncovered: [], moved, digestMoved: true };
       }
     } else {
-      // v1/v2: unchanged — the digest alone cannot see a plan/summary that
-      // was never declared, so the live-directory re-scan still runs.
-      const digestMoved =
-        computeCoveredDigest(projectRoot, coveredFilesVal, storedVersion, { phaseDir }) !== coveredDigestVal;
+      // v1/v2: the digest alone cannot see a plan/summary that was never
+      // declared, so the live-directory re-scan still runs.
+      const check = storedDigestMatches(projectRoot, phaseDir, coveredFilesVal, storedVersion, storedDigest);
+      const digestMoved = !check.matches;
       const uncovered = uncoveredCurrentArtifacts(phaseDir, coveredFilesVal);
       isStale = digestMoved || uncovered === null || uncovered.length > 0;
       const moved = digestMoved
         ? coveredFilesMovedSinceReport(
           projectRoot, phaseDir, located.filePath, coveredFilesVal, storedVersion, fsImpl, phaseCleanCommitTimesMs,
+          check.relocations,
         )
         : [];
       if ((uncovered !== null && uncovered.length > 0) || moved.length > 0) {
