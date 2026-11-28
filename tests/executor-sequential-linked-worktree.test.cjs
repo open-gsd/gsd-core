@@ -91,25 +91,39 @@ describe('#4799 the orchestrator tells each sequential executor, in its own prom
       assert.ok(start !== -1 && end > start, `section ${from} … ${to} not found`);
       return doc.slice(start, end);
     };
+    // The same toplevel exception, word for word, in executor step 0 and worktree-path-safety.md step 0a.
+    const toplevelRetry = /When its only `FATAL:`\s+line is `toplevel`(?: \(step 0a\))?, `cd` back to the kept worktree root and run\s+it again\. On any other\s+non-zero exit, HALT/;
+    // The step 0b fallback's root test, in both texts.
+    const rootTest = /an absolute (?:one|path) is used only when it\s+begins with the\s+worktree root followed by a path separator and has no `\.` or `\.\.`\s+segment[;,] (?:and )?otherwise HALT/i;
+
     const executor = read('agents/gsd-executor.md');
     const step0b = between(executor, '**0b. absolute-path safety', '**0. Pre-commit HEAD safety assertion');
-    assert.match(step0b, /On any non-zero exit, do\s+not write to that path/);
-    assert.match(step0b, /If `gsd_run` cannot run, use a relative path; an absolute one is used only when it begins with the\s+worktree root kept for step 0a followed by `\/` and has no `\.` or `\.\.` segment, and otherwise HALT/);
+    assert.match(step0b, /```\s+On any non-zero exit, do not write to that path\./);
+    assert.match(step0b, /If `gsd_run` cannot run, use a relative path; /);
+    assert.match(step0b.replace(/\s+/g, ' '), new RegExp(rootTest.source.replace(/\\s\+/g, ' '), 'i'));
+    assert.match(step0b, /root is the literal kept from the plan's first `git rev-parse --show-toplevel` run, here or in step\s+0's fallback, whichever came first; run it now if neither has run/);
     const step0 = between(executor, '**0. Pre-commit HEAD safety assertion', '**1. Check modified files:**');
-    assert.match(step0, /On any non-zero exit,\s+HALT/);
-    assert.match(step0, /keep what\s+`git rev-parse --show-toplevel` prints as the worktree root, a literal/);
-    assert.match(step0, /on every later run it must print that literal/);
+    assert.match(step0, toplevelRetry);
+    assert.match(step0, /The plan's first `git rev-parse --show-toplevel`\s+output, here or in step 0b's fallback, is kept as the worktree root, a literal/);
+    assert.match(step0, /every later run must print that literal/);
 
     const fragment = read('gsd-core/references/worktree-branch-check.md');
     assert.match(fragment, /On any non-zero exit, HALT immediately/);
 
     const safety = read('gsd-core/references/worktree-path-safety.md');
     const safety0a = between(safety, '## cwd-drift check — step 0a', '## Absolute-path guard — step 0b');
-    assert.match(safety0a, /when `gsd_run` cannot\s+run, keep what `git rev-parse --show-toplevel` printed on the first run/);
-    assert.match(safety0a, /On any non-zero exit, do not commit/);
+    assert.match(safety0a, /when `gsd_run` cannot\s+run, the plan's first `git rev-parse --show-toplevel` output, here or in step 0b, is kept\s+as the root/);
+    assert.match(safety0a, toplevelRetry);
+    assert.match(safety0a, /HALT and do not commit/);
     const safety0b = between(safety, '## Absolute-path guard — step 0b', '## `<automated>` command guard — step 0c');
     assert.match(safety0b, /On any non-zero exit, do not\s+write to that path/);
-    assert.match(safety0b, /If `gsd_run` cannot run, use a relative path\. An absolute path is used only when it\s+begins with the worktree root kept for step 0a/);
+    assert.match(safety0b, /If `gsd_run` cannot run, use a relative path\./);
+    assert.match(safety0b.replace(/\s+/g, ' '), new RegExp(rootTest.source.replace(/\\s\+/g, ' '), 'i'));
+    assert.match(safety0b, /That root is the plan's first `git rev-parse --show-toplevel`\s+output, here or in step 0a, kept as a literal; run it now if it has not run/);
+
+    const adr = read('docs/adr/6216-executor-guard-verbs.md');
+    assert.match(adr, /so the step texts halt on any non-zero exit, except that a pre-commit call whose only failed check is `toplevel` is re-run from the kept worktree root/);
+    assert.match(adr, /The root it compares against is the plan's first `git rev-parse --show-toplevel` output, from step 0 or step 0b, whichever runs first, kept as a literal\. For step 0b it uses a relative path, and an absolute one only when it begins with that root followed by a path separator and has no `\.` or `\.\.` segment; otherwise it halts\./);
   });
 
   test('the sequential blocks name the --sequential flag of the Step 0 guard command (#6216)', () => {
