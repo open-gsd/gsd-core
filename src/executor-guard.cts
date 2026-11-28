@@ -32,14 +32,23 @@ export const AGENT_BRANCH_RE = /^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-
 /** The spawn-time block's protected names (#2924), checked without the base-branch resolver. */
 export const SPAWN_PROTECTED_RE = /^(main|master|develop|trunk|release\/.*)$/;
 
-/** Phase and plan ids: a letter or digit, then letters, digits, `.`, `_`, `-`. */
-const LEDGER_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** The longest phase or plan id: two ids, `+` and `.json` stay well inside a 255-byte file name. */
+export const LEDGER_TOKEN_MAX = 64;
+
+/** Phase and plan ids: a letter or digit, then letters, digits, `.`, `_`, `-`; at most LEDGER_TOKEN_MAX. */
+export const LEDGER_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** Whether `value` is a phase or plan id the ledger accepts. */
+export function isLedgerToken(value: unknown): value is string {
+  return typeof value === 'string' && LEDGER_TOKEN_RE.test(value);
+}
 
 const SHA_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
 
 export const LEDGER_DIR = 'executor-ledger';
 
-const RECORD_MAX_BYTES = 4096;
+/** A ledger record larger than this is refused unread. */
+export const RECORD_MAX_BYTES = 4096;
 
 type GitResult = { exitCode: number; stdout: string; stderr?: string; timedOut?: boolean; signal?: string | null };
 type ExecGitFn = (args: string[], opts?: { cwd?: string }) => GitResult;
@@ -429,9 +438,9 @@ export interface LedgerRecord {
 }
 
 function requireToken(name: string, value: string | null | undefined): string {
-  if (value === undefined || value === null || !LEDGER_TOKEN_RE.test(value)) {
+  if (!isLedgerToken(value)) {
     error(
-      `executor.ledger: --${name} must be a plain id (a letter or digit, then letters, digits, '.', '_', '-'); got '${value ?? ''}'`,
+      `executor.ledger: --${name} must be a plain id (a letter or digit, then letters, digits, '.', '_', '-'; at most ${LEDGER_TOKEN_MAX} characters); got '${value ?? ''}'`,
       ERROR_REASON.USAGE,
     );
   }

@@ -25,7 +25,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const guardModule = require('../gsd-core/bin/lib/executor-guard.cjs');
 const {
   evaluateGuard, cmdExecutorGuard, cmdExecutorLedgerRecord, cmdExecutorLedgerRead, resolveLanding, ledgerFileName,
-  GUARD_EXIT_CODE,
+  isLedgerToken, GUARD_EXIT_CODE, LEDGER_TOKEN_MAX, RECORD_MAX_BYTES,
 } = guardModule;
 
 const GIT_CFG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6216-gitcfg-'));
@@ -284,6 +284,56 @@ describe('executor.ledger (#6216): the plan base, recorded once in the worktree'
     const unknown = run(['executor.ledger', 'write', '--phase', '02', '--plan', '01'], wt, tmp);
     assert.notEqual(unknown.exitCode, 0);
     assert.match(unknown.error, /Available: record, read/);
+  });
+
+  test('ids of 63 and 64 characters are recorded and read back; 65 is refused before anything is written', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    assert.equal(LEDGER_TOKEN_MAX, 64);
+    for (const n of [LEDGER_TOKEN_MAX - 1, LEDGER_TOKEN_MAX]) {
+      const id = `p${'1'.repeat(n - 1)}`;
+      const rec = run(['executor.ledger', 'record', '--phase', id, '--plan', id], wt, tmp);
+      assert.equal(rec.exitCode, 0, `${n}: ${rec.error}`);
+      assert.equal(path.basename(json(rec).path), `${id}+${id}.json`);
+      const read = run(['executor.ledger', 'read', '--phase', id, '--plan', id, '--pick', 'commits'], wt, tmp);
+      assert.equal(read.exitCode, 0, `${n}: ${read.error}`);
+      assert.equal(read.output.trim(), '0');
+    }
+    const long = `p${'1'.repeat(LEDGER_TOKEN_MAX)}`;
+    const before = fs.readdirSync(path.join(wt, '.gsd', 'executor-ledger')).sort();
+    for (const flags of [['--phase', long, '--plan', '01'], ['--phase', '01', '--plan', long]]) {
+      const res = run(['executor.ledger', 'record', ...flags], wt, tmp);
+      assert.notEqual(res.exitCode, 0, flags.join(' '));
+      assert.match(res.error, /at most 64 characters/);
+    }
+    assert.deepEqual(fs.readdirSync(path.join(wt, '.gsd', 'executor-ledger')).sort(), before);
+  });
+
+  test('read takes a record of 4095 and 4096 bytes and refuses 4097 bytes and a much larger file', (t) => {
+    const { tmp, wt } = mkFixture(t);
+    const rec = run(['executor.ledger', 'record', '--phase', '02', '--plan', '04'], wt, tmp);
+    assert.equal(rec.exitCode, 0, rec.error);
+    const file = json(rec).path;
+    const body = fs.readFileSync(file, 'utf8').trimEnd();
+    assert.equal(RECORD_MAX_BYTES, 4096);
+    // Trailing whitespace keeps the JSON valid, so only the size decides.
+    const padTo = (n) => fs.writeFileSync(file, body + ' '.repeat(n - Buffer.byteLength(body)));
+    for (const n of [RECORD_MAX_BYTES - 1, RECORD_MAX_BYTES]) {
+      padTo(n);
+      assert.equal(fs.statSync(file).size, n);
+      const read = run(['executor.ledger', 'read', '--phase', '02', '--plan', '04', '--pick', 'commits'], wt, tmp);
+      assert.equal(read.exitCode, 0, `${n}: ${read.error}`);
+      assert.equal(read.output.trim(), '0');
+    }
+    for (const n of [RECORD_MAX_BYTES + 1, 1024 * 1024]) {
+      padTo(n);
+      const read = run(['executor.ledger', 'read', '--phase', '02', '--plan', '04'], wt, tmp);
+      assert.equal(read.exitCode, 1, String(n));
+      assert.match(read.error, /is not a ledger record/);
+      // record keeps no oversize record either: it refuses rather than overwrite it.
+      const again = run(['executor.ledger', 'record', '--phase', '02', '--plan', '04'], wt, tmp);
+      assert.equal(again.exitCode, 1, String(n));
+      assert.equal(fs.statSync(file).size, n);
+    }
   });
 });
 
@@ -939,6 +989,29 @@ describe('#6216: seams and properties', () => {
     .tuple(id, id, id, fc.constantFrom('.', '_', '-'))
     .map(([x, y, z, joiner]) => [[`${x}${joiner}${y}`, z], [x, `${y}${joiner}${z}`]]);
   const twoPairs = fc.oneof(fc.tuple(pair, pair), recut, pair.map((p) => [p, p]));
+
+  // The id alphabet, written out here independently of the module's regular expression.
+  const isPlainId = (v) => typeof v === 'string' && v.length >= 1 && v.length <= 64 &&
+    ALNUM.includes(v[0]) && [...v].every((ch) => ch.length === 1 && (ALNUM.includes(ch) || '._-'.includes(ch)));
+
+  test('property: the ledger accepts a string as an id exactly when it is a plain id of at most 64 characters', () => {
+    const near = fc.string({
+      unit: fc.constantFrom(...'aZ09._-+/\\ :\n\u00e9\u0130\u212a'),
+      minLength: 0,
+      maxLength: 70,
+    });
+    const runs = fc.oneof(near, fc.string({ unit: 'grapheme', maxLength: 8 }), fc.string({ unit: fc.constantFrom('a', '1', '.'), minLength: 60, maxLength: 70 }));
+    fc.assert(
+      fc.property(runs, (value) => {
+        assert.equal(isLedgerToken(value), isPlainId(value), JSON.stringify(value));
+      }),
+      { examples: [['a+b'], ['a'.repeat(64)], ['a'.repeat(65)], [''], ['.a'], ['a/b'], ['a\nb']] },
+    );
+  });
+
+  test('every id the properties below generate is one the ledger accepts', () => {
+    fc.assert(fc.property(pair, ([phase, plan]) => isLedgerToken(phase) && isLedgerToken(plan)));
+  });
 
   test('property: two phase/plan pairs share a ledger file name exactly when they are the same pair', () => {
     fc.assert(
