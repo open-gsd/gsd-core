@@ -448,7 +448,7 @@ Also audit which MCP servers are enabled. Every enabled MCP server injects its t
 | Update broke local changes | `/gsd-update --reapply` |
 | Want session summary | `/gsd-pause-work --report` |
 | Parallel execution build errors | Update GSD or set `parallelization.enabled: false` |
-| Worktree base mismatch / exit 42 | Auto-degraded to sequential (no action needed); run `worktree set-baseref` to restore parallelism |
+| Worktree base mismatch / exit 42 | Auto-degraded to sequential (no action needed); run `worktree set-baseref` to restore parallelism in a later run |
 
 ---
 

@@ -18,8 +18,8 @@ there rather than consulted — a worktree at HEAD does not record which creator
 plain harness created before the hook reads the same as one the hook created (#4881), and only
 `--observed-fork-base` restores a trusted verdict. A supplied `--observed-fork-base` is never trusted
 either: HEAD is compared against the observation, in both modes. Without the setting the fork
-base is `origin/HEAD` and parallel execution returns once HEAD is merged/pushed so it matches
-(#3659). The `worktree-branch-check` exit-42 guard inside each executor remains in place as the
-backstop on a host that does not honor the setting; step 0.5 of
+base is `origin/HEAD` and parallel execution can return in a later run once HEAD is merged/pushed
+so it matches (#3659). The `worktree-branch-check` exit-42 guard inside each executor remains in
+place as the backstop on a host that does not honor the setting; step 0.5 of
 `gsd-core/references/execute-phase-wave-guard.md` carries the measurement detail.
 </step>

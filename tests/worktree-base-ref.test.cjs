@@ -400,7 +400,7 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.ok(result.message !== null, 'divergence under head must carry the explanatory message');
     // Pinned VERBATIM — the source declares these messages downstream dependencies, and a
     // substring check lets the untested portions drift (P4.6 review, round 3).
-    const expectedMsg = `⚠ Worktree base mismatch: worktree.baseRef:"head" is set, but a worktree created for this dispatch was observed to fork from ${OBSERVED.slice(0, 8)} while HEAD is ${HEAD_SHA.slice(0, 8)} — the worktree was not forked from HEAD despite the setting. Running this phase sequentially on the main working tree. Parallel worktrees return once a fresh dispatch is observed to fork from HEAD, or once HEAD is merged/pushed so the default fork base matches it. See #3659, #4588.`;
+    const expectedMsg = `⚠ Worktree base mismatch: worktree.baseRef:"head" is set, but a worktree created for this dispatch was observed to fork from ${OBSERVED.slice(0, 8)} while HEAD is ${HEAD_SHA.slice(0, 8)} — the worktree was not forked from HEAD despite the setting. Running this phase sequentially on the main working tree. Parallel worktrees can return in a later run once a fresh dispatch is observed to fork from HEAD, or once HEAD is merged/pushed so the default fork base matches it. See #3659, #4588.`;
     assert.strictEqual(result.message, expectedMsg);
     assert.ok(result.message.includes('observed'), 'message must say the fork base was observed, not inferred');
     assert.ok(!result.message.includes('runtime harness'),
@@ -427,7 +427,7 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.forkRef, 'observed');
     assert.strictEqual(result.forkSha, OBSERVED);
     // Pinned verbatim (P4.6 review, round 4) — the observed branch of buildMsgDiverged.
-    const expectedMsg = `⚠ Worktree base mismatch: HEAD (${HEAD_SHA.slice(0, 8)}) differs from the observed fork base (${OBSERVED.slice(0, 8)}). Running this phase sequentially on the main working tree. Parallel worktrees return once a fresh dispatch is observed to fork from HEAD, or once HEAD is merged/pushed so the default fork base matches it, or set worktree.baseRef:"head" to fork worktrees from HEAD instead (honored by GSD-created worktrees and by the Claude Code harness; #683, #4588).`;
+    const expectedMsg = `⚠ Worktree base mismatch: HEAD (${HEAD_SHA.slice(0, 8)}) differs from the observed fork base (${OBSERVED.slice(0, 8)}). Running this phase sequentially on the main working tree. Parallel worktrees can return in a later run once a fresh dispatch is observed to fork from HEAD, or once HEAD is merged/pushed so the default fork base matches it, or set worktree.baseRef:"head" to fork worktrees from HEAD instead (honored by GSD-created worktrees and by the Claude Code harness; #683, #4588).`;
     assert.strictEqual(result.message, expectedMsg);
     assert.ok(result.message.includes('the observed fork base'),
       'message must phrase the fork side as an observation, not as a ref name');
@@ -741,7 +741,7 @@ describe('evaluateWorktreeBaseDegrade', () => {
     // not read the setting; it does now (#4588), so the advice is back — with
     // the setting absent the harness really does fork from origin/HEAD, and
     // `head` is the fix for that.
-    const expectedMsg = `⚠ Worktree base mismatch: HEAD (${HEAD_SHA.slice(0, 8)}) differs from origin/HEAD (${FORK_SHA.slice(0, 8)}). Running this phase sequentially on the main working tree. Parallel worktrees return once HEAD is merged/pushed so origin/HEAD matches it, or set worktree.baseRef:"head" to fork worktrees from HEAD instead (honored by GSD-created worktrees and by the Claude Code harness; #683, #4588).`;
+    const expectedMsg = `⚠ Worktree base mismatch: HEAD (${HEAD_SHA.slice(0, 8)}) differs from origin/HEAD (${FORK_SHA.slice(0, 8)}). Running this phase sequentially on the main working tree. Parallel worktrees can return in a later run once HEAD is merged/pushed so origin/HEAD matches it, or set worktree.baseRef:"head" to fork worktrees from HEAD instead (honored by GSD-created worktrees and by the Claude Code harness; #683, #4588).`;
     assert.strictEqual(result.message, expectedMsg);
   });
 
@@ -778,7 +778,7 @@ describe('evaluateWorktreeBaseDegrade', () => {
     assert.strictEqual(result.reason, 'fork-ref-unknown');
     assert.strictEqual(result.forkRef, null);
     assert.strictEqual(result.forkSha, null);
-    const expectedMsg = `⚠ Cannot determine the worktree fork base (origin/HEAD unresolved). Running this phase sequentially on the main working tree to avoid a base mismatch. Parallel worktrees return once origin/HEAD resolves and matches HEAD. See #683, #3659.`;
+    const expectedMsg = `⚠ Cannot determine the worktree fork base (origin/HEAD unresolved). Running this phase sequentially on the main working tree to avoid a base mismatch. Parallel worktrees can return in a later run once origin/HEAD resolves and matches HEAD. See #683, #3659.`;
     assert.strictEqual(result.message, expectedMsg);
   });
 
