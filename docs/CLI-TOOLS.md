@@ -29,10 +29,12 @@ node gsd-tools.cjs <command> [args] [--raw] [--cwd <path>]
 | ------------------- | ---------------------------------------------------------------------------- |
 | `--raw`             | Machine-readable output (JSON or plain text, no formatting)                  |
 | `--cwd <path>`      | Override working directory (for sandboxed subagents)                         |
+| `--project-dir <path>` | Project root to run against; it must contain `.planning/`, and no parent directory is searched |
 | `--ws <name>`       | Workstream context for `.planning/workstreams/<name>` paths |
 | `--pick <field>`    | Extract one field from a command's JSON output — see [`--pick <field>` contract](#--pick-field-contract) below |
+| `--default <value>` | Value `config-get` prints when the key is absent — see `config-get` below |
 
-These global flags are read once, before the command runs, and are never passed on to the command. The full global set is recorded under `global` in [`CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json). Besides the flags above, it includes `--project-dir`, `--default`, `--json-errors` and `--exit-contract=<v>`.
+These global flags are read once, before the command runs, and are never passed on to the command. `--cwd`, `--project-dir` and `--ws` also accept `--flag=<value>`. The full global set is recorded under `global` in [`CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json). Besides the flags above, it includes `--json-errors` and `--exit-contract=<v>`.
 
 ---
 
@@ -756,7 +758,13 @@ decimal number (`5`, `-1`, `.5`, `5.0`, `1e3`, with no surrounding spaces and no
 becomes a number, text starting with `[` or `{` is parsed as JSON (and stays a string if it is
 not valid JSON), and anything else is a string, including ` 5`, `0x10` and a number too large to
 represent (`1e400`). So `--default '[]'` prints `[]`,
-the same as a key set to an empty array.
+the same as a key set to an empty array. `--default` needs a value: a missing value, or one that
+starts with `--` (another flag), is a usage error, as it is for `--cwd`, `--project-dir`, `--ws`
+and `--pick`. The value is the word right after the flag as you typed it, so a global flag there,
+such as `--raw` or `--help`, is a missing value too. Pass `--default ""` for an empty default. Some PowerShell versions (Windows PowerShell 5.1,
+PowerShell 7.0 to 7.2, and later versions in `Legacy` argument mode) drop an empty argument when
+they run a program, so `--default ""` arrives as a bare `--default` there; write `--default '""'`
+instead.
 
 `--raw` prints the value as plain text for shell use. It is a display format, not JSON: an array
 prints its items joined by commas and an object prints `[object Object]`, so read structured

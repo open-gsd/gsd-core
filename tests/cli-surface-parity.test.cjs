@@ -252,7 +252,7 @@ describe('GLOBAL_FLAGS', () => {
   });
 
   test('declares the =-form-only flags', () => {
-    for (const f of ['exit-contract', 'cwd', 'project-dir']) {
+    for (const f of ['exit-contract', 'cwd', 'project-dir', 'ws']) {
       assert.ok(GLOBAL_FLAGS.eqFlags.includes(f), `eqFlags missing ${f}`);
     }
   });
