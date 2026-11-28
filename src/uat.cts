@@ -50,7 +50,7 @@ import { sanitizeForDisplay, PathAcceptance } from './security.cjs';
 import { requirePlanningArtifactPath, type ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
 import configLoader = require('./config-loader.cjs');
-const { loadConfig } = configLoader;
+const { loadConfig, isGitIgnored } = configLoader;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -821,13 +821,23 @@ function cmdUatCompleteSession(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const commandsMod = require('./commands.cjs') as {
     cmdCommit(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void;
-    commitRefusal(ctx: ProjectContext, planningCwd: string, files: string[] | undefined, filesRemoved: string[] | undefined): { reason: string } | null;
+    commitRefusal(ctx: ProjectContext, planningCwd: string, files: string[] | undefined, filesRemoved: string[] | undefined): { reason: string; message: string } | null;
+    resolveCommitDocsPolicy(config: Record<string, unknown>, phaseId: string | null, isGitIgnoredFn: () => boolean): { resolved: boolean };
+    detectPhaseNumberFromFiles(files: string[] | undefined): string | null;
   };
   // The UAT file is already written, so a commit the context refuses (not a git repository, or a file
   // outside the worktree) is reported in the envelope, never raised: this command's exit code answers
-  // "did the session complete", and `committed:false` + `reason` answers the commit.
-  const refusal = commandsMod.commitRefusal(ctx, ctx.projectRoot, [relPath], undefined);
+  // "did the session complete", and `committed:false` + `reason` answers the commit. cmdCommit's own order
+  // is kept: a commit_docs skip wins over a refusal, so the refusal is checked only when the policy would
+  // commit; otherwise cmdCommit below reports the skip itself.
+  const wouldCommit = commandsMod.resolveCommitDocsPolicy(
+    loadConfig(ctx.projectRoot),
+    commandsMod.detectPhaseNumberFromFiles([relPath]),
+    () => isGitIgnored(ctx.projectRoot, '.planning'),
+  ).resolved;
+  const refusal = wouldCommit ? commandsMod.commitRefusal(ctx, ctx.projectRoot, [relPath], undefined) : null;
   if (refusal) {
+    process.stderr.write(`${refusal.message}\n`);
     output({ changed: true, status: result.status, committed: false, reason: refusal.reason }, raw);
     return;
   }

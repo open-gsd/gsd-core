@@ -611,6 +611,10 @@ describe('project-context CLI: workspace and verb', () => {
       const res = run(['query', 'uat.complete-session', rel], sub, tmp);
 
       assert.equal(commitCount(main), before, `the main checkout must not receive the commit: ${JSON.stringify(res)}`);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      const o = outcome(res);
+      assert.equal(o.committed, false);
+      assert.equal(o.reason, 'outside_worktree');
     });
 
     test('uatCompleteSessionOutsideAGitRepositoryReportsTheRefusalAndExitsZero', (t) => {
@@ -632,6 +636,26 @@ describe('project-context CLI: workspace and verb', () => {
       assert.equal(o.changed, true);
       assert.equal(o.committed, false);
       assert.equal(o.reason, 'not_git_repo');
+    });
+
+    test('uatCompleteSessionWithCommitDocsOffOutsideAGitRepositoryReportsTheSkipNotTheRefusal', (t) => {
+      const dir = mkTmp(t);
+      const rel = path.join('.planning', 'phases', '01-foo', '01-UAT.md');
+      write(path.join(dir, '.planning', 'config.json'), JSON.stringify({ commit_docs: false }));
+      write(path.join(dir, rel), [
+        '---', 'status: testing', 'phase: 01-foo', 'started: 2026-01-01T00:00:00Z', 'updated: 2026-01-01T00:00:00Z', '---', '',
+        '## Current Test', '', '### 2. Submit Button', 'expected: Submitting shows loading state', '',
+        '## Tests', '', '### 1. Login Form', 'expected: Form displays', 'result: pass', '',
+        '### 2. Submit Button', 'expected: Submitting shows loading state', 'result: pass', '',
+      ].join('\n'));
+
+      const res = run(['query', 'uat.complete-session', rel], dir, dir);
+
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      const o = outcome(res);
+      assert.equal(o.committed, false);
+      assert.notEqual(o.reason, 'not_git_repo', 'the commit_docs skip wins over the refusal, as in cmdCommit');
+      assert.equal(typeof o.reason, 'string');
     });
 
     test('commitToSubrepoFromAWorkspaceSubdirectoryCommitsInTheNamedSubRepo', (t) => {
