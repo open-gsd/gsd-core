@@ -124,33 +124,24 @@ If your prompt contains a `<worktree_branch_check>` embed instruction rather tha
 
 ---
 
-## cwd-drift sentinel — step 0a (#3097)
+## cwd-drift check — step 0a (#3097, #6216)
 
-A prior Bash call may have `cd`'d out of the worktree into the main repo. When
-that happens `[ -f .git ]` is false (main repo's `.git` is a directory), silently
-skipping all worktree guards. The sentinel captures the spawn-time toplevel and
-detects drift before every commit.
+A prior Bash call may have `cd`'d out of the worktree into the main repo. Keep the
+`worktree_root` that the executor's first `executor.guard` run printed as a literal
+path, and pass it on every later step 0 run, before every commit (when `gsd_run` cannot
+run, the plan's first `git rev-parse --show-toplevel` output, here or in step 0b, is kept
+as the root, and each later output is compared with it):
 
 ```bash
-if [ -f .git ]; then  # we are in a worktree
-  WT_GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
-  case "$WT_GIT_DIR" in
-    *.git/worktrees/*)
-      SENTINEL="$WT_GIT_DIR/gsd-spawn-toplevel"
-      [ ! -f "$SENTINEL" ] && git rev-parse --show-toplevel > "$SENTINEL" 2>/dev/null
-      EXPECTED_TL=$(cat "$SENTINEL" 2>/dev/null)
-      ACTUAL_TL=$(git rev-parse --show-toplevel 2>/dev/null)
-      if [ -n "$EXPECTED_TL" ] && [ "$ACTUAL_TL" != "$EXPECTED_TL" ]; then
-        echo "FATAL: cwd drifted from spawn-time worktree root (#3097)" >&2
-        echo "  Spawn-time: $EXPECTED_TL" >&2
-        echo "  Current:    $ACTUAL_TL" >&2
-        echo "RECOVERY: cd \"$EXPECTED_TL\" before staging, then re-run this commit." >&2
-        exit 1
-      fi
-      ;;
-  esac
-fi
+gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
 ```
+
+When its only `FATAL:` line is `toplevel`, `cd` back to the kept worktree root and run
+it again. On any other non-zero exit, HALT and do not commit.
+
+This is step 0's pre-commit command, so its branch checks run too: add `--sequential`
+only when the executor's prompt has a `<sequential_execution>` block (#4799). Without it
+the guard requires the agent branch namespace in a linked worktree.
 
 ---
 
@@ -164,13 +155,21 @@ is silently lost.
 Before any Edit or Write using an absolute path:
 
 ```bash
-WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-# Fail fast if ABS_PATH resolves outside the worktree
-if [[ "$ABS_PATH" != "$WT_ROOT"* ]]; then
-  echo "WARNING: $ABS_PATH is outside the worktree ($WT_ROOT)" >&2
-  echo "Use a relative path or recompute the absolute path from WT_ROOT." >&2
-fi
+gsd_run query executor.guard --path "<absolute path>"
 ```
+
+It exits 42 when the path lands outside the worktree root, or cannot be resolved,
+judging a file not yet created by where it would land. On any non-zero exit, do not
+write to that path.
+
+Given alone, `--path` runs only this check: the branch checks of step 0 are not run,
+so the command is the same in a sequential dispatch. `--sequential` beside it is
+refused, since it would change nothing.
+
+If `gsd_run` cannot run, use a relative path. An absolute path is used only when it
+begins with the worktree root followed by a path separator and has no `.` or `..`
+segment; otherwise HALT. That root is the plan's first `git rev-parse --show-toplevel`
+output, here or in step 0a, kept as a literal; run it now if it has not run.
 
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the
@@ -190,7 +189,7 @@ rewrite the prefix silently (#3050) — a rewritten command hides the defective 
 next executor meets it again.
 
 ```bash
-# WT_ROOT as in step 0b. MAIN_ROOT is the checkout this worktree was created from — the one an
+# WT_ROOT is this worktree's root. MAIN_ROOT is the checkout this worktree was created from — the one an
 # orchestrator-cwd path points at.
 WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 MAIN_ROOT=$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd -P)

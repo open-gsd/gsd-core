@@ -40,15 +40,6 @@ const { runHook } = require('./helpers/process-seam.cjs');
 const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
- * The #3819 executor pre-commit protected-branch guard test harness below
- * invokes a bash script with fake `git`/`gsd_run` shell functions defined
- * INLINE — no real subprocess fan-out happens, so this is lighter than
- * `HOOK_FANOUT_TIMEOUT_MS` (60000ms, sized for a hook that fans out to
- * nested shell spawns). Pre-existing value, unchanged by this migration.
- */
-const EXECUTOR_GUARD_TIMEOUT_MS = 10000;
-
-/**
  * These four constants are NOT bounds on this suite's own subprocess calls —
  * they are the EXACT timeout values production code (gitBaseBranch's
  * trySymbolicRef / tryRemoteShow / tryLocalBranch / gitWorktreeInfoInternal,
@@ -1194,256 +1185,56 @@ describe('#3819: allow_default_branch_commits escape hatch', () => {
 // ─── #3819: gsd-executor.md pre-commit protected-branch guard ────────────────
 
 /**
- * Extract the FIRST ```bash fenced block that follows the "Pre-commit
- * protected-branch safety assertion" heading in agents/gsd-executor.md.
- * Keyed off the heading text (not a `<step name>` tag — this step has no
- * such wrapper) so a future rewording of the heading fails the test loudly
- * instead of silently extracting nothing.
+ * #6216: Step 0 was a bash block this suite extracted and ran against mocked `git` / `gsd_run`.
+ * It is now one `gsd_run query executor.guard` command, so its behaviours (protected branch halts
+ * in and out of a worktree, the protected check precedes the allow-list, detached HEAD halts, an
+ * unprotected branch passes, a resolver that reports or cannot verify protection halts) are tested
+ * against the real verb in tests/executor-guard.test.cjs § "#4799 / #3819 / #2924 behaviours" and
+ * § "an unverifiable base branch counts as protected (#3057)". What stays here is the step's text:
+ * the command it runs, and the named fallback that replaced the old mocked five-name list for when
+ * `gsd_run` cannot run.
  */
-function extractExecutorPreCommitBash() {
-  const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
-  const content = readFileNormalized(executorPath);
-  const lines = content.split('\n');
-  const headingIndex = lines.findIndex(
-    (line) => line.includes('Pre-commit HEAD safety assertion'),
-  );
-  if (headingIndex === -1) {
+function executorStep0() {
+  const content = readFileNormalized(path.join(__dirname, '..', 'agents', 'gsd-executor.md'));
+  const start = content.indexOf('Pre-commit HEAD safety assertion');
+  if (start === -1) {
     throw new Error(
       'agents/gsd-executor.md: could not find the "Pre-commit HEAD safety ' +
       'assertion" heading — has it been reworded?',
     );
   }
-  let inBash = false;
-  const buffer = [];
-  for (let i = headingIndex + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!inBash && /^\s*```bash\s*$/.test(line)) {
-      inBash = true;
-      continue;
-    }
-    if (inBash && /^\s*```\s*$/.test(line)) {
-      return buffer.join('\n');
-    }
-    if (inBash) buffer.push(line);
-  }
-  throw new Error(
-    'agents/gsd-executor.md: no ```bash block found after the pre-commit protected-branch ' +
-    'heading — has the step been restructured?',
-  );
-}
-
-/**
- * Write a standalone script that mocks `git` and `gsd_run`, then runs the
- * extracted pre-commit guard bash verbatim. Deliberately does NOT `set -e`:
- * the guard's fatal paths call `exit 1` explicitly, and this script must run
- * to completion on the non-fatal path to print the GUARD_PASSED sentinel.
- *
- * `isWorktree` controls whether `scriptDir` gets a `.git` FILE (worktree) or
- * a `.git` DIRECTORY (ordinary checkout) — the guard's own `[ -f .git ]`
- * branch reads this from the script's cwd, so the test runs the script with
- * `cwd: scriptDir`.
- */
-function writeExecutorGuardScript(prefix, bash, { branch, headRef, isWorktree, queryResult, queryExit = 0 }) {
-  const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const gitPath = path.join(scriptDir, '.git');
-  if (isWorktree) {
-    fs.writeFileSync(gitPath, 'gitdir: /nonexistent\n');
-  } else {
-    fs.mkdirSync(gitPath);
-  }
-  const scriptPath = path.join(scriptDir, 'guard.sh');
-  fs.writeFileSync(scriptPath, [
-    '#!/usr/bin/env bash',
-    'git() {',
-    '  if [ "$1" = symbolic-ref ]; then',
-    headRef === 'DETACHED'
-      ? '    return 1'
-      : `    printf "%s\\n" "${headRef}"\n    return 0`,
-    '  elif [ "$1" = rev-parse ] && [ "$2" = --abbrev-ref ]; then',
-    `    printf "%s\\n" "${branch}"`,
-    '    return 0',
-    '  else',
-    '    printf "unexpected git invocation: %s\\n" "$*" >&2',
-    '    return 97',
-    '  fi',
-    '}',
-    'gsd_run() {',
-    `  if [ "$#" -ne 4 ] || [ "$1" != query ] || [ "$2" != git.base-branch ] || ` +
-      `[ "$3" != --is-protected ] || [ "$4" != "${branch}" ]; then`,
-    '    printf "unexpected gsd_run invocation: %s\\n" "$*" >&2',
-    '    return 0',
-    '  fi',
-    queryExit
-      ? `  return ${queryExit}`
-      : `  printf "%s\\n" "${queryResult}"`,
-    '}',
-    bash,
-    'printf "GUARD_PASSED\\n"',
-  ].join('\n'), { mode: 0o755 });
-  return { scriptDir, scriptPath };
+  const end = content.indexOf('**1. Check modified files:**', start);
+  if (end === -1) throw new Error('agents/gsd-executor.md: step 1 not found after step 0');
+  return content.slice(start, end);
 }
 
 describe('#3819: gsd-executor.md pre-commit protected-branch guard', () => {
-  const bash = extractExecutorPreCommitBash();
+  const step0 = executorStep0();
 
-  test('#3819 non-worktree, branch is protected (query says true) → HALT with exit 1, no GUARD_PASSED', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-nonwt-protected-', bash, {
-      branch: 'main',
-      headRef: 'main',
-      isWorktree: false,
-      queryResult: 'true',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 1, result.stderr);
-    assert.match(result.stderr, /protected\/default branch/);
-    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
+  test('#3819 step 0 runs the guard as one `gsd_run query executor.guard` command', () => {
+    const fence = step0.indexOf('```bash\n');
+    assert.notStrictEqual(fence, -1, 'step 0 must carry a bash block');
+    const body = step0.slice(fence + '```bash\n'.length, step0.indexOf('\n```', fence + 1));
+    assert.match(body, /^gsd_run query executor\.guard( |$)/, 'the block must be the executor.guard command');
+    assert.ok(!body.includes('\n'), 'the block must be ONE command, not a script');
   });
 
-  test('#3819 non-worktree, branch is not protected (query says false) → continues, GUARD_PASSED', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-nonwt-clean-', bash, {
-      branch: 'feature-x',
-      headRef: 'feature-x',
-      isWorktree: false,
-      queryResult: 'false',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout, /GUARD_PASSED/);
+  test('#3819 step 0 halts on a protected/default branch, or one it cannot verify, and never self-recovers', () => {
+    assert.match(step0, /HEAD on the resolved protected\/default branch \(or on one it cannot verify\)/);
+    assert.match(step0, /exit 42/);
+    assert.match(step0, /never self-recover via `git update-ref refs\/heads\/<protected>`/);
+    assert.match(step0, /`git\.allow_default_branch_commits: true`/);
   });
 
-  test('#3819 worktree, branch is protected → HALT with exit 1 (protected check fires before the allow-list check)', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-wt-protected-', bash, {
-      branch: 'main',
-      headRef: 'main',
-      isWorktree: true,
-      queryResult: 'true',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 1, result.stderr);
-    assert.match(result.stderr, /protected\/default branch/);
-  });
-
-  test('#3819 worktree, branch not protected but outside the agent-*/worktree-agent-*/worktree-wf_* namespace → HALT', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-wt-outside-namespace-', bash, {
-      branch: 'some-random-branch',
-      headRef: 'some-random-branch',
-      isWorktree: true,
-      queryResult: 'false',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 1, result.stderr);
-    assert.match(result.stderr, /not in the agent-\* \/ worktree-agent-\* \/ worktree-wf_\* namespace/);
-  });
-
-  test('#3819 worktree, branch not protected AND in the agent-* namespace → continues, GUARD_PASSED', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-wt-clean-', bash, {
-      branch: 'agent-42',
-      headRef: 'agent-42',
-      isWorktree: true,
-      queryResult: 'false',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout, /GUARD_PASSED/);
-  });
-
-  test('#3819 detached HEAD (non-worktree) → HALT with exit 1 before any protected-branch query', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-detached-', bash, {
-      branch: 'HEAD',
-      headRef: 'DETACHED',
-      isWorktree: false,
-      queryResult: 'false',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 1, result.stderr);
-    assert.match(result.stderr, /detached/);
-  });
-
-  test('#3819 HOSTILE: gsd_run RUNS but reports the branch as protected (resolver-internal fail-closed) → HALT', (t) => {
-    // This is the scenario that must stay fail-closed unconditionally:
-    // gsd_run itself succeeds (exit 0) — e.g. because cmdGitBaseBranch's own
-    // pre-existing #3057 B4 logic already answered "true" when it could not
-    // VERIFY the real default branch — and the bash guard must never
-    // second-guess that answer. It is deliberately indistinguishable, at
-    // this bash layer, from an ordinary "yes this branch is protected"
-    // answer (see the "non-worktree, branch is protected" test above) —
-    // that IS the fail-closed contract: the guard trusts what gsd_run says
-    // when gsd_run actually says something.
-    //
-    // This is a DIFFERENT failure mode from "gsd_run could not be invoked at
-    // all" (nonzero exit / no output), which is covered by the two
-    // "gsd_run itself is unavailable" tests below and — per the #3819
-    // approval's item 2 ("keep the existing names as a fallback where the
-    // default cannot be resolved") — deliberately does NOT fail closed for
-    // every branch; it falls back to the pre-#3819 five-name list instead.
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-resolver-unverified-', bash, {
-      branch: 'feature-x',
-      headRef: 'feature-x',
-      isWorktree: false,
-      queryResult: 'true',
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 1, result.stderr);
-    assert.match(result.stderr, /protected\/default branch/);
-    assert.doesNotMatch(result.stdout, /GUARD_PASSED/);
-  });
-
-  test('#3819 gsd_run itself is unavailable (query cannot run) + branch matches the old five-name list → still HALTs via the fallback', (t) => {
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-unavailable-listed-', bash, {
-      branch: 'develop',
-      headRef: 'develop',
-      isWorktree: false,
-      queryResult: 'false',
-      queryExit: 1,
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 1, result.stderr);
-    assert.match(result.stderr, /protected\/default branch/);
-  });
-
-  test('#3819 gsd_run itself is unavailable (query cannot run) + branch does NOT match the old five-name list → falls back to allowing it', (t) => {
-    // Deliberate #3819-approved tradeoff: when gsd-tools itself cannot even be
-    // invoked, an unlisted branch is allowed through rather than blocking every
-    // branch outright — unlike the "HOSTILE: the protected-branch query itself
-    // fails" test above (gsd-tools runs fine but the resolver's own internal
-    // verification fails), which stays fail-closed.
-    const { scriptDir, scriptPath } = writeExecutorGuardScript('gsd-3819-guard-unavailable-unlisted-', bash, {
-      branch: 'my-feature-branch',
-      headRef: 'my-feature-branch',
-      isWorktree: false,
-      queryResult: 'false',
-      queryExit: 1,
-    });
-    t.after(() => cleanup(scriptDir));
-
-    const result = runHook(scriptPath, [], { interpreter: 'bash', cwd: scriptDir, timeoutMs: EXECUTOR_GUARD_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout, /GUARD_PASSED/);
+  test('#3819 the named fallback for an unavailable gsd_run (was: the mocked five-name list) refuses main, master, develop, trunk and release/*', () => {
+    const at = step0.indexOf('If `gsd_run` cannot run');
+    assert.notStrictEqual(at, -1, 'step 0 must name a fallback for when gsd_run cannot run');
+    const fallback = step0.slice(at);
+    assert.match(
+      fallback,
+      /`git symbolic-ref --quiet --short HEAD` must print a branch that is not `main`,\s+`master`, `develop`, `trunk` or `release\/\*`/,
+    );
+    assert.match(fallback, /HALT on any mismatch/);
   });
 
   // allow-test-rule: source-text-is-the-product

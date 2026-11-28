@@ -1,7 +1,8 @@
 'use strict';
 
 // Commit claims are measured, never narrated (#3968), and the commit-claim window is bounded to the plan's own
-// history (#4670): the executor persists a HEAD ledger, takes the SUMMARY commit count from `git rev-list --count`,
+// history (#4670): the executor persists a HEAD ledger through `executor.ledger record` (#6216), takes the SUMMARY
+// commit count from `executor.ledger read` (`git rev-list --count` over the recorded base),
 // records plan_head_before and plan_head_after, and halts the SUMMARY write on a measured zero with code changes;
 // verify-work reconciles each SUMMARY against git with exact equality over BASE..AFTER and flags a mismatch as a
 // BLOCKER (legacy SUMMARYs without the anchor fall back to a WARNING); pause-work fills HANDOFF
@@ -20,13 +21,13 @@ module.exports = {
   issue: '#3968',
   check(ctx) {
     ctx.doc('agents/gsd-executor.md')
-      .has('gsd-plan-head-before', 'the ledger must persist on disk (each Bash call is a fresh shell: a variable measures zero)')
+      .has('gsd_run query executor.ledger record --phase {phase} --plan {plan}', 'the ledger must persist on disk through executor.ledger record (each Bash call is a fresh shell: a variable measures zero; #6216)')
       .has('git rev-list --count', 'the SUMMARY commit count must come from git rev-list --count, not narration')
-      .has('plan_head_before: ${PLAN_HEAD_BEFORE}', 'the base is recorded in the frontmatter so the verifier reconciles with the same instrument')
+      .has('`plan_head_before:`', 'the base is recorded in the frontmatter so the verifier reconciles with the same instrument')
       .has(/HALT — do not write the\s{1,20}SUMMARY/i, 'a measured zero with uncommitted code changes must halt the SUMMARY write')
       .has(/commits: 7 .{0,500}MEASURED/, 'the actuals block sources its count from the measurement')
-      .has('plan_head_after: ${PLAN_HEAD_AFTER}', 'the SUMMARY frontmatter must carry plan_head_after, captured at the measurement moment')
-      .has('PLAN_HEAD_AFTER=$(git rev-parse HEAD)', 'PLAN_HEAD_AFTER must be captured from HEAD at the same measurement moment as the count');
+      .has('`plan_head_after:`', 'the SUMMARY frontmatter must carry plan_head_after, captured at the measurement moment')
+      .has('gsd_run query executor.ledger read --phase {phase} --plan {plan}', 'plan_head_after must come from the same executor.ledger read as the count (#6216)');
 
     ctx.doc('gsd-core/workflows/verify-work.md')
       .has(RECONCILIATION, 'verify-work must run a commit-claim reconciliation over each SUMMARY')

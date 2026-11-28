@@ -425,6 +425,7 @@
       "estimate-cli.cjs",
       "eval-command-router.cjs",
       "eval.cjs",
+      "executor-guard.cjs",
       "executor-type.cjs",
       "exit-code-registry.cjs",
       "external-descriptor-trust.cjs",

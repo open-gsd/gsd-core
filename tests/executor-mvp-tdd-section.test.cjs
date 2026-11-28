@@ -156,14 +156,17 @@ describe('bug #3097: cwd-drift sentinel in gsd-executor.md', () => {
     );
   });
 
-  test('sentinel uses git rev-parse --git-dir to detect worktree', () => {
+  test('cwd-drift step passes the first guard run\'s worktree_root back as --toplevel (replaces the git-dir sentinel, #6216)', () => {
     const protocolIdx = executorSrc.indexOf('<task_commit_protocol>');
     const protocolEnd = executorSrc.indexOf('</task_commit_protocol>');
     const protocol = executorSrc.slice(protocolIdx, protocolEnd);
-    assert.ok(
-      protocol.includes('rev-parse --git-dir') || protocol.includes('worktrees/'),
-      'cwd-drift detection does not use git rev-parse --git-dir or .git/worktrees/ pattern',
-    );
+    const step0a = protocol.slice(protocol.indexOf('0a. cwd-drift assertion'), protocol.indexOf('0b. absolute-path safety'));
+    assert.ok(step0a.includes('`worktree_root`') && step0a.includes('`--toplevel`'),
+      'step 0a must keep the first run\'s worktree_root and pass it back as --toplevel');
+    assert.ok(/refuses a cwd whose worktree\s+root is anywhere else/.test(step0a),
+      'step 0a must say the guard refuses a drifted cwd');
+    assert.ok(protocol.includes('gsd_run query executor.guard --toplevel "<worktree_root from its first run>"'),
+      'step 0 must run the guard with --toplevel set to the first run\'s worktree_root');
   });
 
   test('cwd-drift check precedes HEAD assertion', () => {
@@ -184,10 +187,12 @@ describe('bug #3099: absolute-path safety guidance in gsd-executor.md', () => {
     const protocolEnd = executorSrc.indexOf('</task_commit_protocol>');
     const protocol = executorSrc.slice(protocolIdx, protocolEnd);
     assert.ok(
-      (protocol.includes('absolute') || protocol.includes('absolute-path')) &&
-      (protocol.includes('worktree') || protocol.includes('WT_ROOT')),
+      protocol.includes('absolute') && protocol.includes('worktree'),
       'task_commit_protocol missing absolute-path safety guidance — #3099 fix not applied',
     );
+    // #6216: the containment check is the verb's --path (behaviour: tests/executor-guard.test.cjs).
+    assert.ok(protocol.includes('gsd_run query executor.guard --path "<absolute path>"'),
+      'step 0b must check an absolute path with `gsd_run query executor.guard --path`');
   });
 
   test('#4767 — the absolute-path guard also precedes <automated> verify execution', () => {
@@ -250,10 +255,15 @@ describe('bug #3099: absolute-path safety guidance in gsd-executor.md', () => {
     const safetySrc = fs.readFileSync(
       path.join(ROOT, 'gsd-core', 'references', 'worktree-path-safety.md'), 'utf8',
     );
-    assert.ok(safetySrc.includes('gsd-spawn-toplevel') || safetySrc.includes('cwd-drift'),
-      'worktree-path-safety.md missing cwd-drift sentinel content');
-    assert.ok(safetySrc.includes('WT_ROOT') || safetySrc.includes('absolute'),
-      'worktree-path-safety.md missing absolute-path guard content');
+    // #6216: both guards are now `executor.guard` runs (the sentinel file and WT_ROOT are gone).
+    assert.ok(safetySrc.includes('## cwd-drift check — step 0a'),
+      'worktree-path-safety.md missing the cwd-drift step 0a section');
+    assert.ok(safetySrc.includes('gsd_run query executor.guard --toplevel "<worktree_root from its first run>"'),
+      'worktree-path-safety.md step 0a must run executor.guard --toplevel');
+    assert.ok(safetySrc.includes('## Absolute-path guard — step 0b'),
+      'worktree-path-safety.md missing the absolute-path step 0b section');
+    assert.ok(safetySrc.includes('gsd_run query executor.guard --path "<absolute path>"'),
+      'worktree-path-safety.md step 0b must run executor.guard --path');
   });
 });
   });

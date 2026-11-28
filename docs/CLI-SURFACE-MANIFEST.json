@@ -310,6 +310,39 @@
       ]
     },
     {
+      "verb": "executor.guard",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "expected-base": "value",
+        "expected-base-alternate": "value-or-bare",
+        "path": "value",
+        "sequential": "boolean",
+        "toplevel": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "nonEmpty": [
+        "expected-base",
+        "path",
+        "toplevel"
+      ]
+    },
+    {
+      "verb": "executor.ledger",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "phase": "value",
+        "plan": "value"
+      },
+      "required": [
+        "phase",
+        "plan"
+      ],
+      "workstreamScoped": false
+    },
+    {
       "verb": "frontmatter.get",
       "aliases": [],
       "positionals": 3,

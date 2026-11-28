@@ -11,7 +11,7 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | Surface | Items | Documented | Fully documented | Missing items | Missing options |
 |---------|------:|-----------:|-----------------:|--------------:|----------------:|
 | [Slash commands](#slash-commands) | 72 | 72 | 72 | 0 | 0 |
-| [`gsd-tools` verbs](#gsd-tools-verbs) | 98 | 98 | 98 | 0 | 0 |
+| [`gsd-tools` verbs](#gsd-tools-verbs) | 100 | 100 | 100 | 0 | 0 |
 | [Config keys](#config-keys) | 129 | 129 | 129 | 0 | 0 |
 | [Agents](#agents) | 36 | 36 | 36 | 0 | 0 |
 | [Hooks](#hooks) | 30 | 30 | 30 | 0 | 0 |
@@ -130,6 +130,8 @@ In the tables, **Documented in** is the first documenting section, **Type** is t
 | `drift-guard.phase-status` | [CLI-TOOLS.md#drift-guard-phase-status---phase-n](../CLI-TOOLS.md#drift-guard-phase-status---phase-n) | Reference | 1/1 | — |
 | `drift-guard.severity` | [CLI-TOOLS.md#drift-guard-severity---status-status---authority-authority](../CLI-TOOLS.md#drift-guard-severity---status-status---authority-authority) | Reference | 2/2 | — |
 | `effort.sync` | [COMMANDS.md#effort-sync](../COMMANDS.md#effort-sync) | Reference | 4/4 | — |
+| `executor.guard` | [CLI-TOOLS.md#executor-guards-and-plan-ledger](../CLI-TOOLS.md#executor-guards-and-plan-ledger) | Reference | 5/5 | — |
+| `executor.ledger` | [CLI-TOOLS.md#executor-guards-and-plan-ledger](../CLI-TOOLS.md#executor-guards-and-plan-ledger) | Reference | 2/2 | — |
 | `frontmatter.get` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 1/1 | — |
 | `frontmatter.merge` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 1/1 | — |
 | `frontmatter.set` | [CLI-TOOLS.md#frontmatter-commands](../CLI-TOOLS.md#frontmatter-commands) | Reference | 2/2 | — |

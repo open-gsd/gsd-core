@@ -445,6 +445,7 @@ const routeTaskCommand = lazyFn('./lib/task-command-router.cjs', 'routeTaskComma
 const parseNamedArgsOrExit = lazyFn('./lib/command-arg-projection.cjs', 'parseNamedArgsOrExit');
 const isFlagToken = lazyFn('./lib/command-arg-projection.cjs', 'isFlagToken');
 const cmdGitBaseBranch = lazyFn('./lib/git-base-branch.cjs', 'cmdGitBaseBranch');
+const executorGuard = lazyModule('./lib/executor-guard.cjs');
 const getEffectiveAuthority = lazyFn('./lib/plan-drift-guard.cjs', 'getEffectiveAuthority');
 const classifyDriftSeverity = lazyFn('./lib/plan-drift-guard.cjs', 'classifyDriftSeverity');
 const comparePhaseStatus = lazyFn('./lib/plan-drift-guard.cjs', 'comparePhaseStatus');
@@ -837,6 +838,46 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       return;
     }
     cmdGitBaseBranch(cwd, args.slice(2));
+  }
+
+  // #6216 (ADR-6216): the executor's worktree guards and plan commit ledger as single commands.
+  // They read the worktree the command ran in (invokingCwd, #4906/#4465), never the remapped
+  // project root, which is the main checkout when a linked worktree does not carry `.planning/`.
+  function routeExecutor({ args, cwd, raw, error, ctx, invokingCwd }) {
+    const sub = args[1];
+    const guardCtx = { projectRoot: ctx.projectRoot };
+    const invokedFrom = invokingCwd || cwd;
+    if (sub === 'guard') {
+      const parsed = parseNamedArgsOrExit(args, specFor('executor.guard'), error);
+      executorGuard.cmdExecutorGuard(guardCtx, {
+        expectedBase: parsed['expected-base'],
+        expectedBaseAlternate: parsed['expected-base-alternate'],
+        toplevel: parsed.toplevel,
+        path: parsed.path,
+        sequential: parsed.sequential === true,
+        invokedFrom,
+      }, raw);
+      return;
+    }
+    if (sub === 'ledger') {
+      // Flags first, so a usage error names the flag; then the action.
+      const parsed = parseNamedArgsOrExit(args, specFor('executor.ledger'), error);
+      const action = args[2];
+      if (action !== 'record' && action !== 'read') {
+        error(
+          `Unknown executor.ledger action: ${action || '(none)'}. Available: record, read`,
+          ERROR_REASON.USAGE,
+        );
+        return;
+      }
+      if (action === 'record') executorGuard.cmdExecutorLedgerRecord(guardCtx, invokedFrom, parsed.phase, parsed.plan, raw);
+      else executorGuard.cmdExecutorLedgerRead(guardCtx, invokedFrom, parsed.phase, parsed.plan, raw);
+      return;
+    }
+    error(
+      `Unknown executor subcommand: ${sub || '(none)'}. Available: guard, ledger`,
+      ERROR_REASON.SDK_UNKNOWN_COMMAND,
+    );
   }
 
   function routeConfigEnsureSection({ args, cwd, raw }) {
@@ -5365,6 +5406,7 @@ const HOST_COMMAND_ROUTERS = {
   'resolve-granularity': routeResolveGranularity,
   'resolve-execution': routeResolveExecution,
   git: routeGit,
+  executor: routeExecutor,
   'config-ensure-section': routeConfigEnsureSection,
   'config-set': routeConfigSet,
   'config-set-model-profile': routeConfigSetModelProfile,
@@ -5810,7 +5852,7 @@ const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <fiel
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
   'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
-  'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, planning, profile-questionnaire, ' +
+  'capability, classify-confidence, executor, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, planning, profile-questionnaire, ' +
   'profile-sample, progress, project-instruction-file, prompt-budget, quick-batch, quick-tasks-append, quick-tasks-migrate, requirements, research-plan, research-store, resolve-granularity, resolve-model, restore-custom-files, roadmap, runtime-identity, scaffold, smart-entry, state, ' +
   'config-set-model-profile, dispatch-capacity, dispatch-isolation, dispatch-should-flatten, inspect-dispatch-isolation, record-dispatch-isolation, estimate-calibrate, estimate-calibration, estimate-check, resolve-agent, resolve-dispatch-type, ' +
   'resolve-execution, review-lane, select-revert-commits, skill-manifest, skills-root, stamp-codebase-map, state-snapshot, stats, summary-extract, teams-status, todo, uat, update-context, verification, websearch, windows, ' +
@@ -5857,6 +5899,9 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // #6043: project-context prints the resolved ProjectContext itself, so it
   // needs no remapped cwd; the dispatcher hands every router `ctx`.
   'project-context',
+  // #6216: the executor verbs must run in a worktree with no resolvable project root of its own;
+  // they read the worktree from invokingCwd, not from the remapped cwd.
+  'executor',
   // context-predicates is a pure repo-root CONTEXT.md read (like
   // prompt-budget); it never touches .planning/, so it needs no project
   // root resolution and must work from any cwd (including one with no

@@ -308,6 +308,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
 | [ADR-5182](5182-stall-watch-return-receipt.md) | A plan-phase return receipt holds the agent's complete return | Proposed | — |
 | [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) | OpenCode 2.x support as a version-gated target of the `opencode` runtime, and sunset of OpenCode 1.x support | Proposed | — |
+| [ADR-6216](6216-executor-guard-verbs.md) | Executor worktree guards and the plan commit ledger as single commands | Proposed | — |
 | [ADR-6315](6315-ci-redesign.md) | CI redesign — a fast static tier, a sharded critical path, one full matrix per merge, and feedback loops that keep it fast | Proposed | — |
 
 ### Superseded, Retired, and Legacy

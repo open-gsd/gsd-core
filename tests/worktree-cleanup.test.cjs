@@ -116,6 +116,21 @@ function findCommandIndex(statements, predicate) {
   return -1;
 }
 
+/**
+ * Find the `gsd_run query executor.guard …` statement among a block's fenced shell commands
+ * (#6216: the guard is one plain command, not a script). Returns its tokens, or null.
+ */
+function findGuardCommand(markdown) {
+  const statements = extractFencedCodeBlocks(markdown).flatMap(({ body }) => shellStatements(body));
+  return statements.find((cmd) => cmd[0] === 'gsd_run' && cmd[1] === 'query' && cmd[2] === 'executor.guard') || null;
+}
+
+/** The value token following `flag` in a tokenized command, or undefined. */
+function flagValue(cmd, flag) {
+  const i = cmd.indexOf(flag);
+  return i === -1 ? undefined : cmd[i + 1];
+}
+
 // ─── #2924: HEAD attachment + destructive recovery ──────────────────────────
 
 describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
@@ -135,65 +150,44 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       assert.ok(block, 'worktree-branch-check.md must contain a <worktree_branch_check> block');
     });
 
-    test('block invokes `git symbolic-ref` to inspect HEAD attachment', () => {
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
-      const idx = findCommandIndex(allStatements, (cmd) =>
-        cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
-      );
-      assert.notStrictEqual(
-        idx, -1,
-        'worktree_branch_check must run `git symbolic-ref ... HEAD` to verify HEAD attachment before any reset'
-      );
+    test('block runs `gsd_run query executor.guard` with both expected-base placeholders (#2924, #6216)', () => {
+      // #6216: the HEAD-attachment / protected / allow-list / base checks are the verb's; the
+      // behaviours are tested against the real verb in tests/executor-guard.test.cjs.
+      const cmd = findGuardCommand(block);
+      assert.ok(cmd, 'worktree_branch_check must run `gsd_run query executor.guard` as a fenced command');
+      assert.strictEqual(flagValue(cmd, '--expected-base'), '"{EXPECTED_BASE}"',
+        'the guard must be passed --expected-base "{EXPECTED_BASE}"');
+      assert.strictEqual(flagValue(cmd, '--expected-base-alternate'), '"{EXPECTED_BASE_ALTERNATE}"',
+        'the guard must be passed --expected-base-alternate "{EXPECTED_BASE_ALTERNATE}"');
+      assert.ok(!cmd.includes('--sequential'), 'the spawn-time guard must never pass --sequential');
     });
 
-    test('block is verify-only: HEAD assertion present, no git reset, fails closed (#48)', () => {
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
-      const symbolicRefIdx = findCommandIndex(allStatements, (cmd) => cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD'));
+    test('block is verify-only: guard command present, no git reset, fails closed (#48)', () => {
+      const allStatements = extractFencedCodeBlocks(block).flatMap(({ body }) => shellStatements(body));
       const resetIdx = findCommandIndex(allStatements, (cmd) => cmd[0] === 'git' && cmd[1] === 'reset');
-      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref HEAD-attachment check must exist');
+      assert.ok(findGuardCommand(block), 'executor.guard check must exist');
       assert.strictEqual(resetIdx, -1, 'fragment must be verify-only — no git reset self-recovery (#48)');
+      assert.ok(!/git\s+reset/.test(block), 'fragment prose must not instruct a git reset either (#48)');
+      assert.ok(/VERIFY-ONLY/.test(block), 'fragment must declare itself VERIFY-ONLY (#48)');
       assert.ok(/exit 42/.test(block), 'fragment must fail closed with exit 42 (#48)');
     });
 
     test('block names protected branches that must NOT be the agent branch', () => {
-      // The protected-branch list must be enforced by name. Parse it out of the
-      // shell scripts and verify required names are present.
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const scripts = codeBlocks.map(({ body }) => body).join('\n');
-      // Look for an assignment whose value is a regex/list naming protected refs.
-      // Acceptable forms: PROTECTED_BRANCHES_RE='...' or grep -Eq '^(main|...)$'
-      // Parse the alternation list out of the grep -E pattern so we assert
-      // structurally on the protected-branch enumeration rather than via
-      // raw substring matching (release/* contains regex-special chars and
-      // can't be safely tested with `\b...\b`).
-      const altMatch = scripts.match(/grep\s+-Eq?\s+'\^\(([^)]+)\)\$'/);
-      assert.ok(
-        altMatch,
-        'worktree_branch_check must contain a `grep -Eq` protected-branch alternation pattern'
-      );
-      const branches = altMatch[1].split('|').map((b) => b.trim());
-      const required = ['main', 'master', 'develop', 'trunk', 'release/.*'];
-      for (const name of required) {
-        assert.ok(
-          branches.includes(name),
-          `worktree_branch_check protected-branch alternation must include '${name}' (found: ${branches.join(', ')})`
-        );
+      // #6216: the refusal list is stated in the block's prose (the verb enforces it; see
+      // tests/executor-guard.test.cjs "#2924 spawn-time guard refuses …").
+      for (const name of ['main', 'master', 'develop', 'trunk', 'release/*']) {
+        assert.ok(block.includes(`\`${name}\``),
+          `worktree_branch_check must name \`${name}\` among the refused branches`);
       }
     });
 
     test('block enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const scripts = codeBlocks.map(({ body }) => body).join('\n');
-      // Allow-list must reference the canonical Claude Code worktree-agent-<id>
-      // namespace via a regex assertion (grep -Eq '^worktree-agent-...').
-      // #3021: allow-list now includes worktree-wf_* alongside agent-*/worktree-agent-*
-      const allowListRe = /grep\s+-Eq?\s+'\^\(\(worktree-\)\?agent-\|worktree-wf_/;
-      assert.ok(
-        allowListRe.test(scripts),
-        'worktree_branch_check must enforce a positive allow-list matching ^((worktree-)?agent-|worktree-wf_) (#2924/#3021 hardening)'
-      );
+      // #3021: allow-list includes worktree-wf_* alongside agent-*/worktree-agent-*.
+      assert.ok(findGuardCommand(block), 'the allow-list is enforced by the executor.guard command');
+      assert.match(block, /branch outside the `agent-\*` \/ `worktree-agent-\*` \/ `worktree-wf_\*` namespace/,
+        'worktree_branch_check must say the guard refuses a branch outside agent-* / worktree-agent-* / worktree-wf_*');
+      assert.match(block, /must print an `agent-\*`, `worktree-agent-\*` or\s+`worktree-wf_\*` branch/,
+        'the single-command fallback must hold the same namespace');
     });
 
     test('block forbids `git update-ref` self-recovery in its guidance text', () => {
@@ -288,31 +282,23 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       assert.ok(block, 'worktree-branch-check.md must contain a <worktree_branch_check> block');
     });
 
-    test('block references `git symbolic-ref` for HEAD attachment assertion', () => {
-      // Search the block from the canonical fragment as a token stream of statements.
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
-      const idx = findCommandIndex(allStatements, (cmd) =>
-        cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
-      );
-      assert.notStrictEqual(
-        idx, -1,
-        'quick.md worktree_branch_check must run `git symbolic-ref ... HEAD`'
-      );
+    test('block runs `gsd_run query executor.guard` for the HEAD attachment assertion (#2924, #6216)', () => {
+      const cmd = findGuardCommand(block);
+      assert.ok(cmd, 'quick.md worktree_branch_check must run `gsd_run query executor.guard`');
+      assert.strictEqual(flagValue(cmd, '--expected-base'), '"{EXPECTED_BASE}"');
+      assert.strictEqual(flagValue(cmd, '--expected-base-alternate'), '"{EXPECTED_BASE_ALTERNATE}"');
+      assert.match(block, /It refuses a detached HEAD/, 'the block must say a detached HEAD is refused');
     });
 
-    test('block is verify-only: HEAD assertion present, no git reset, fails closed (#48)', () => {
-      // Verify-only contract: symbolic-ref exists, no git reset at all, fails closed with exit 42.
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const allStatements = codeBlocks.flatMap(({ body }) => shellStatements(body));
-      const symbolicRefIdx = findCommandIndex(allStatements, (cmd) =>
-        cmd[0] === 'git' && cmd[1] === 'symbolic-ref' && cmd.includes('HEAD')
-      );
+    test('block is verify-only: guard command present, no git reset, fails closed (#48)', () => {
+      // Verify-only contract: the guard exists, no git reset at all, fails closed with exit 42.
+      const allStatements = extractFencedCodeBlocks(block).flatMap(({ body }) => shellStatements(body));
       const resetIdx = findCommandIndex(allStatements, (cmd) =>
         cmd[0] === 'git' && cmd[1] === 'reset'
       );
-      assert.notStrictEqual(symbolicRefIdx, -1, 'symbolic-ref HEAD-attachment check must exist');
+      assert.ok(findGuardCommand(block), 'executor.guard check must exist');
       assert.strictEqual(resetIdx, -1, 'fragment must be verify-only — no git reset self-recovery (#48)');
+      assert.ok(!/git\s+reset/.test(block), 'fragment prose must not instruct a git reset either (#48)');
       assert.ok(/exit 42/.test(block), 'fragment must fail closed with exit 42 (#48)');
     });
 
@@ -324,11 +310,9 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     });
 
     test('block enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
-      const allowListRe = /grep\s+-Eq?\s+'\^\(\(worktree-\)\?agent-\|worktree-wf_/;
-      assert.ok(
-        allowListRe.test(block),
-        'quick.md worktree_branch_check must enforce a positive allow-list matching ^((worktree-)?agent-|worktree-wf_) (#2924/#3021 hardening)'
-      );
+      assert.ok(findGuardCommand(block), 'the allow-list is enforced by the executor.guard command');
+      assert.match(block, /branch outside the `agent-\*` \/ `worktree-agent-\*` \/ `worktree-wf_\*` namespace/,
+        'quick.md worktree_branch_check must say the guard refuses a branch outside agent-* / worktree-agent-* / worktree-wf_* (#2924/#3021 hardening)');
     });
   });
 
@@ -412,13 +396,14 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     });
 
     test('step 0 enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
-      const codeBlocks = extractFencedCodeBlocks(block);
-      const scripts = codeBlocks.map(({ body }) => body).join('\n');
-      const allowListRe = /grep\s+-Eq?\s+'\^\(\(worktree-\)\?agent-\|worktree-wf_/;
-      assert.ok(
-        allowListRe.test(scripts),
-        'task_commit_protocol step 0 must enforce a positive allow-list matching ^((worktree-)?agent-|worktree-wf_) in addition to the protected-ref deny-list (#2924/#3021 hardening)'
-      );
+      const step0 = block.slice(block.indexOf('Pre-commit HEAD safety assertion'), block.indexOf('**1. Check modified files:**'));
+      const cmd = findGuardCommand(step0);
+      assert.ok(cmd, 'task_commit_protocol step 0 must run `gsd_run query executor.guard`');
+      assert.ok(!cmd.includes('--sequential'), 'step 0\'s command must not hard-code --sequential (it is added only from <sequential_execution>, #4799)');
+      assert.match(step0, /in an agent-isolated worktree, a branch outside `agent-\*` \/ `worktree-agent-\*` \/\s+`worktree-wf_\*` each exit 42/,
+        'step 0 must say the guard refuses, in an agent-isolated worktree, a branch outside the agent namespaces, in addition to the protected-ref refusal (#2924/#3021 hardening)');
+      assert.match(step0, /`agent-\*` \/ `worktree-agent-\*` \/ `worktree-wf_\*` namespace\. HALT on any mismatch/,
+        'step 0\'s named fallback must hold the same namespace');
     });
   });
 

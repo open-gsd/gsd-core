@@ -20,6 +20,11 @@ preferred over `cd <dir> && npm run <script>` — it does not depend on the exec
 `prior_verify_commands` is empty and you cannot ground a path, say so in the plan instead of
 guessing one.
 
+Write each `<automated>` step as **one command** (#6216). Never a `for`/`while` loop, a heredoc, or
+two git commands chained with `;`, `&&` or a pipe: a worktree-isolated executor may be refused the
+compound form and then has to improvise the check. One `git diff --quiet -- <paths…>`, which exits
+non-zero when any of the paths changed, replaces a loop of `git diff --quiet -- <path>`.
+
 **Run a count/match gate before it ships (#4927).** A gate you author — or one a `RESEARCH.md`
 hands you — that counts or matches text (`grep -c`, `grep -q`, `rg`, `test -n "$(grep …)"`) is a
 claim about the tree, and two defects are invisible to reading and take one command to expose. You

@@ -473,7 +473,7 @@ fi
 ` : ''}\`\`\`
 ` : `
 <sequential_execution>
-You are running as a SEQUENTIAL executor agent on the main working tree (set SEQUENTIAL=true in your Step 0 commit guard; a linked worktree on the configured branch is allowed, #4799).
+You are running as a SEQUENTIAL executor agent on the main working tree (add --sequential to your Step 0 commit guard; a linked worktree on the configured branch is allowed, #4799).
 </sequential_execution>
 `}
 

@@ -6299,11 +6299,18 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     );
 
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
-    const branchCheck = fragmentSource.indexOf('HEAD_REF=$(git symbolic-ref --quiet HEAD || echo');
-    const namespaceCheck = fragmentSource.indexOf('(worktree-)?agent-');
-
-    assert.ok(branchCheck > 0, 'canonical fragment must assert HEAD before any work');
-    assert.ok(namespaceCheck > branchCheck, 'canonical fragment must require disposable agent/worktree-agent branch');
+    // #6216: the HEAD assertion is the block's first command, `executor.guard` with the expected base;
+    // the verb holds the agent namespace (tests/executor-guard.test.cjs "#2924 …").
+    const block = fragmentSource.slice(fragmentSource.indexOf('<worktree_branch_check>'));
+    assert.match(block, /FIRST ACTION: HEAD assertion MUST run before anything else/,
+      'canonical fragment must assert HEAD before any work');
+    const blockLines = block.split(/\r?\n/);
+    const fenceAt = blockLines.findIndex((l) => l.trim() === '```bash');
+    const firstCommand = fenceAt >= 0 ? blockLines[fenceAt + 1] : '';
+    assert.ok(firstCommand.startsWith('gsd_run query executor.guard --expected-base "{EXPECTED_BASE}"'),
+      'canonical fragment must run executor.guard with the expected base as its first command');
+    assert.ok(block.includes('`agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace'),
+      'canonical fragment must require disposable agent/worktree-agent branch');
     // #48: verify-only — the destructive self-recovery is gone; the fragment fails closed instead.
     assert.ok(!fragmentSource.includes('git reset --hard {EXPECTED_BASE}'), 'canonical fragment must not self-recover via reset --hard — orchestrator owns recovery (#48)');
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');

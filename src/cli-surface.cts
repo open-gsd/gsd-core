@@ -179,6 +179,22 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     booleanFlags: JSON_FLAG,
   },
   'dispatch-capacity': { positionals: 1, booleanFlags: JSON_FLAG },
+
+  // ─── executor (#6216, ADR-6216) ─────────────────────────────────────────────
+  // An empty `--expected-base-alternate` is the worktree_branch_check contract's "no alternate".
+  'executor.guard': {
+    positionals: 2,
+    valueFlags: ['expected-base', 'expected-base-alternate', 'path', 'toplevel'],
+    nonEmptyFlags: ['expected-base', 'path', 'toplevel'],
+    bareEmptyFlags: ['expected-base-alternate'],
+    booleanFlags: ['sequential'],
+  },
+  // The action (`record` | `read`) is the third verb token.
+  'executor.ledger': {
+    positionals: 3,
+    valueFlags: ['phase', 'plan'],
+    requiredFlags: ['phase', 'plan'],
+  },
   // --force-isolation, --phase and --plan are read by the router only to refuse them with the
   // "recording-only" message, so they are declared to reach it; bareEmptyFlags makes a bare flag read as '' (present).
   'inspect-dispatch-isolation': {

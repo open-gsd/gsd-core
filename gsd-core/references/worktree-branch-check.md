@@ -19,26 +19,18 @@ FIRST ACTION: HEAD assertion MUST run before anything else, and this block is
 VERIFY-ONLY. Worktrees spawned by Claude Code's `isolation="worktree"` use the
 `agent-<id>` namespace (previously `worktree-agent-<id>`; both are accepted). The orchestrator owns this worktree's lifecycle;
 a sub-agent MUST NOT hold state-correction primitives (hard-reset, update-ref,
-force-move, index-discard) on a worktree it did not create (#48, #2924). If ANY
-assertion below fails, HALT immediately — print the FATAL line, `exit 42`, and let
-the orchestrator (the lifecycle owner) decide recovery. Do NOT self-recover, do NOT
-commit.
+force-move, index-discard) on a worktree it did not create (#48, #2924). Run the
+guard below as ONE plain command (#6216). It refuses a detached HEAD, a HEAD on
+`main`, `master`, `develop`, `trunk` or `release/*`, a
+branch outside the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace, and a
+HEAD that is neither expected base, and it exits 42 on any of them; a refused
+argument exits non-zero too. On any non-zero exit, HALT immediately — surface its
+FATAL or Error lines and let the orchestrator (the lifecycle owner) decide recovery. Do NOT self-recover via `git update-ref`, do NOT commit.
 ```bash
-HEAD_REF=$(git symbolic-ref --quiet HEAD || echo "DETACHED")
-ACTUAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$HEAD_REF" = "DETACHED" ] || echo "$ACTUAL_BRANCH" | grep -Eq '^(main|master|develop|trunk|release/.*)$'; then
-  echo "FATAL: worktree HEAD on '$ACTUAL_BRANCH' (expected agent-* or worktree-agent-*); refusing to commit or self-recover via 'git update-ref' (#2924)." >&2
-  exit 42
-fi
-if ! echo "$ACTUAL_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$'; then
-  echo "FATAL: worktree HEAD '$ACTUAL_BRANCH' is not in the agent-* / worktree-agent-* / worktree-wf_* namespace; refusing to commit (#2924)." >&2
-  exit 42
-fi
-ACTUAL_BASE=$(git rev-parse HEAD)
-EXPECTED_BASE_ALTERNATE="{EXPECTED_BASE_ALTERNATE}"
-if [ "$ACTUAL_BASE" != "{EXPECTED_BASE}" ] && { [ -z "$EXPECTED_BASE_ALTERNATE" ] || [ "$ACTUAL_BASE" != "$EXPECTED_BASE_ALTERNATE" ]; }; then
-  echo "FATAL: worktree base mismatch — HEAD is $ACTUAL_BASE, expected {EXPECTED_BASE}${EXPECTED_BASE_ALTERNATE:+ or $EXPECTED_BASE_ALTERNATE}. Orchestrator owns recovery; sub-agent refuses to rewrite the worktree (#48)." >&2
-  exit 42
-fi
+gsd_run query executor.guard --expected-base "{EXPECTED_BASE}" --expected-base-alternate "{EXPECTED_BASE_ALTERNATE}"
 ```
+If `gsd_run` cannot run, check with single commands, each in its own Bash call:
+`git symbolic-ref --quiet --short HEAD` must print an `agent-*`, `worktree-agent-*` or
+`worktree-wf_*` branch, and `git rev-parse HEAD` must print `{EXPECTED_BASE}` (or a
+non-empty `{EXPECTED_BASE_ALTERNATE}`). On any mismatch, HALT as above with exit 42.
 </worktree_branch_check>

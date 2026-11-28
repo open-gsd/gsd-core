@@ -289,6 +289,8 @@ const DOCS_GUARD_TESTS = {
     'docs/reference/host-integration-capability-matrix.md',
   ],
   'tests/execute-phase-wave.test.cjs': ['docs/COMMANDS.md'],
+  // #6216: asserts ADR-6216's halt rule and gsd_run-unavailable fallback beside the step texts.
+  'tests/executor-sequential-linked-worktree.test.cjs': ['docs/adr/6216-executor-guard-verbs.md'],
   // #3913 (ADR-3889 terminal phase): reads the generated docs/reference/exit-codes.md
   // (content invariants, F1/F3) and docs/README.md (F4, the index link).
   'tests/exit-code-registry.test.cjs': ['docs/reference/exit-codes.md', 'docs/README.md'],

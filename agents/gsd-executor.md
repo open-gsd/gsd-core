@@ -439,85 +439,51 @@ The verb owns the canonical predicate (tdd="true" frontmatter AND `<behavior>` b
 <task_commit_protocol>
 After each task completes (verification passed, done criteria met), commit immediately.
 
-**0a. cwd-drift assertion (worktree mode only, MANDATORY before staging — #3097):**
-A prior Bash call may have `cd`'d out of the worktree into the main repo. When that happens
-`[ -f .git ]` is false (main repo's `.git` is a directory), silently skipping all worktree guards.
-Capture the spawn-time toplevel via a sentinel on first commit, then verify on every subsequent commit:
-```bash
-WT_GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
-case "$WT_GIT_DIR" in
-  *.git/worktrees/*)
-      SENTINEL="$WT_GIT_DIR/gsd-spawn-toplevel"
-      [ ! -f "$SENTINEL" ] && git rev-parse --show-toplevel > "$SENTINEL" 2>/dev/null
-      EXPECTED_TL=$(cat "$SENTINEL" 2>/dev/null)
-      ACTUAL_TL=$(git rev-parse --show-toplevel 2>/dev/null)
-      if [ -n "$EXPECTED_TL" ] && [ "$ACTUAL_TL" != "$EXPECTED_TL" ]; then
-        echo "FATAL: cwd drifted from spawn-time worktree root (#3097)" >&2
-        echo "  Spawn-time: $EXPECTED_TL" >&2
-        echo "  Current:    $ACTUAL_TL" >&2
-        echo "RECOVERY: cd \"$EXPECTED_TL\" before staging, then re-run this commit." >&2
-        exit 1
-      fi
-    ;;
-esac
-```
+**0a. cwd-drift assertion (worktree mode only, MANDATORY before staging — #3097, #6216):**
+A prior Bash call may have `cd`'d out of the worktree into the main repo. Keep the
+`worktree_root` that step 0's guard printed on its first run in this plan as a literal path,
+and pass it back as `--toplevel` on every later step 0 run: the guard refuses a cwd whose worktree
+root is anywhere else.
 
 **0b. absolute-path safety (worktree mode only, MANDATORY before Edit/Write — #3099):**
-Before any Edit or Write call that uses an absolute path, verify the path resolves inside the
-current worktree. Absolute paths constructed from prior `pwd` output (orchestrator's cwd) will
-resolve to the **main repo**, not the worktree — silently writing files to the wrong location.
+Before any Edit or Write call that uses an absolute path, verify it lands inside the current
+worktree (a file not yet created is judged by where it would land):
 ```bash
-# Obtain the canonical worktree root
-WT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-[ -z "$WT_ROOT" ] && { echo "FATAL: could not determine worktree root" >&2; exit 1; }
-# Verify absolute path containment with boundary safety (not glob prefix which allows siblings)
-if [[ "$ABS_PATH" != "$WT_ROOT" && "$ABS_PATH" != "$WT_ROOT/"* ]]; then
-  echo "FATAL: $ABS_PATH is outside the worktree ($WT_ROOT) — use a relative path or recompute from WT_ROOT" >&2
-  exit 1
-fi
+gsd_run query executor.guard --path "<absolute path>"
 ```
-Prefer **relative paths** for Edit/Write in a worktree; an unavoidable absolute comes from
-`git rev-parse --show-toplevel` inside it, never an orchestrator `pwd`. Same check before each
-`<automated>`: `worktree-path-safety.md` step 0c (#4767).
+On any non-zero exit, do not write to that path. Prefer **relative paths** for Edit/Write in a
+worktree; an unavoidable absolute comes from `git rev-parse --show-toplevel` inside it, never an
+orchestrator `pwd`. Same check before each `<automated>`: `worktree-path-safety.md` step 0c (#4767).
+If `gsd_run` cannot run, use a relative path; an absolute one is used only when it begins with the
+worktree root followed by a path separator and has no `.` or `..` segment, and otherwise HALT. That
+root is the literal kept from the plan's first `git rev-parse --show-toplevel` run, here or in step
+0's fallback, whichever came first; run it now if neither has run.
 
-**0. Pre-commit HEAD safety assertion (MANDATORY — #2924, #3819):**
-Assert HEAD is not the protected/default branch before committing (#3819). If drifted onto it, HALT — never self-recover via `git update-ref refs/heads/<protected>`:
+**0. Pre-commit HEAD safety assertion (MANDATORY — #2924, #3819, #4799, #6216):**
+Run the guard as ONE plain command before every commit. It is verify-only and fails closed:
+a detached HEAD, HEAD on the resolved protected/default branch (or on one it cannot verify),
+or, in an agent-isolated worktree, a branch outside `agent-*` / `worktree-agent-*` /
+`worktree-wf_*` each exit 42, and a refused argument exits non-zero too. When its only `FATAL:`
+line is `toplevel` (step 0a), `cd` back to the kept worktree root and run it again. On any other
+non-zero exit, HALT: surface its `FATAL:` or `Error:` lines, do not commit, and
+never self-recover via `git update-ref refs/heads/<protected>`.
 ```bash
-HEAD_REF=$(git symbolic-ref --quiet HEAD || echo "DETACHED")
-ACTUAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-if [ "$HEAD_REF" = "DETACHED" ]; then
-  echo "FATAL: refusing to commit — HEAD is detached." >&2
-  exit 1
-fi
-# #3819: real default branch; override git.allow_default_branch_commits; else five-name fallback.
-IS_PROTECTED=$(gsd_run query git.base-branch --is-protected "$ACTUAL_BRANCH" 2>/dev/null) || IS_PROTECTED="__GSD_RUN_UNAVAILABLE__"
-if [ "$IS_PROTECTED" = "__GSD_RUN_UNAVAILABLE__" ] || [ -z "$IS_PROTECTED" ]; then
-  if echo "$ACTUAL_BRANCH" | grep -Eq '^(main|master|develop|trunk|release/.*)$'; then
-    IS_PROTECTED="true"
-  else
-    IS_PROTECTED="false"
-  fi
-fi
-if [ "$IS_PROTECTED" != "false" ]; then
-  echo "FATAL: refusing to commit — HEAD is on '$ACTUAL_BRANCH' (protected/default branch)." >&2
-  echo "Re-home onto a phase/agent branch (#2924, #3819); override: git.allow_default_branch_commits:true in the project config.json." >&2
-  exit 1
-fi
-# #4799: set SEQUENTIAL=true ONLY if your prompt has a `<sequential_execution>` block (the
-# orchestrator dispatched you onto its own working tree, which may be a linked phase worktree on
-# the configured branch). Otherwise leave it false: the allow-list below applies (fails closed).
-SEQUENTIAL=false
-if [ -f .git ] && [ "$SEQUENTIAL" != "true" ]; then  # agent-isolated worktree
-  # Positive allow-list: HEAD must be on a per-agent branch (`agent-<id>` or
-  # legacy `worktree-agent-<id>`). This catches feature/* and any other
-  # arbitrary branch that the deny-list would silently allow (#2924, #1995).
-  if ! echo "$ACTUAL_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$'; then
-    echo "FATAL: refusing to commit — worktree HEAD '$ACTUAL_BRANCH' is not in the agent-* / worktree-agent-* / worktree-wf_* namespace." >&2
-    echo "Agent commits must live on per-agent branches; surface as blocker (#2924)." >&2
-    exit 1
-  fi
-fi
+gsd_run query executor.guard --toplevel "<worktree_root from its first run>"
 ```
+Omit `--toplevel` on the first run in a plan. Add `--sequential` ONLY if your prompt has a
+`<sequential_execution>` block (#4799: the orchestrator dispatched you onto its own working
+tree); otherwise leave it off, so the allow-list applies and the guard fails closed. Override
+for the default branch: `git.allow_default_branch_commits: true` in the project config.json.
+
+**If `gsd_run` cannot run (named fallback, ADR-6216):** check the root and the branch with
+single commands, each in its own Bash call. The plan's first `git rev-parse --show-toplevel`
+output, here or in step 0b's fallback, is kept as the worktree root, a literal (as `worktree_root`
+is kept above); every later run must print that literal. `git symbolic-ref --quiet --short HEAD` must print a branch that is not `main`,
+`master`, `develop`, `trunk` or `release/*` and, in a worktree whose `.git` is a file and without
+`<sequential_execution>`, is in the `agent-*` / `worktree-agent-*` / `worktree-wf_*` namespace. HALT on any mismatch.
+
+**Run each git command you compose in its own Bash call.** Never chain git with `;`, `&&`, a pipe,
+a loop or a heredoc: a worktree-isolated runtime may refuse the compound form (#6216).
 
 **1. Check modified files:** `git status --short`
 
@@ -546,17 +512,17 @@ git add src/types/user.ts
 ```bash
 gsd_run query commit-to-subrepo "{type}({phase}-{plan}): {concise task description}" --files file1 file2 ...
 ```
-**0c. Plan commit ledger (#3968, single-repo — before the first commit):**
-Each Bash call is a FRESH shell, so the ledger persists on disk like the #3097 sentinel above
-(a variable would be unset at SUMMARY time and `rev-list ..HEAD` would measure zero).
-Per-plan filename, so sequential plans cannot contaminate each other:
+**0c. Plan commit ledger (#3968, #6216, single-repo — before the first commit):**
+Record the plan's base as one plain command. A later run keeps the first record, so running
+it before every commit is safe:
 ```bash
-_GSD_LEDGER="$(git rev-parse --git-dir)/gsd-plan-head-before-{phase}-{plan}"
-[ -f "$_GSD_LEDGER" ] || git rev-parse HEAD > "$_GSD_LEDGER"
+gsd_run query executor.ledger record --phase {phase} --plan {plan}
 ```
-The SUMMARY's `commits:` is MEASURED from this ledger, the base recorded as
-`plan_head_before:` for `/gsd:verify-work`'s same-instrument check. Multi-repo keeps commit-to-subrepo
-JSON hashes instead.
+The record lives in the worktree's own `.gsd/executor-ledger/` (ADR-6216), so it outlasts the
+fresh shell of each Bash call. The SUMMARY's `commits:` is MEASURED from it, the base recorded
+as `plan_head_before:` for `/gsd:verify-work`'s same-instrument check. If `record` fails, take
+the base from the `head` step 0's guard printed on its first run in this plan, before the first
+commit (or, if the guard could not run, a `git rev-parse HEAD` run then), and keep it as a literal. Multi-repo keeps commit-to-subrepo JSON hashes instead.
 
 Returns JSON with per-repo commit hashes: `{ committed: true, repos: { "backend": { hash: "abc", files: [...] }, ... } }`. Record all hashes for SUMMARY.
 
@@ -570,19 +536,16 @@ git commit -m "{type}({phase}-{plan}): {concise task description}
 ```
 
 **5. Record hash:**
-- **Single-repo:** `TASK_COMMIT=$(git rev-parse --short HEAD)` — track for SUMMARY.
+- **Single-repo:** run `git rev-parse --short HEAD` and keep the hash it prints for SUMMARY.
 - **Multi-repo (sub_repos):** Extract hashes from `commit-to-subrepo` JSON output (`repos.{name}.hash`). Record all hashes for SUMMARY (e.g., `backend@abc1234, frontend@def5678`).
 
-**6. Post-commit deletion check:** After recording the hash, verify the commit did not accidentally delete tracked files:
+**6. Post-commit deletion check:** After recording the hash, verify the commit did not accidentally delete tracked files. Every path this prints is a file the commit deleted, a WARNING to act on:
 ```bash
-DELETIONS=$(git show --first-parent --diff-filter=D --name-only --pretty=format: HEAD 2>/dev/null || true)
-if [ -n "$DELETIONS" ]; then
-  echo "WARNING: Commit includes file deletions: $DELETIONS"
-fi
+git show --first-parent --diff-filter=D --name-only --pretty=format: HEAD
 ```
 Intentional deletions (e.g., removing a deprecated file as part of the task) are expected — document them in the Summary. Unexpected deletions are a Rule 1 bug: revert and fix before proceeding.
 
-**7. Check for untracked files:** After running scripts or tools, check `git status --short | grep '^??'`. For any new untracked files: commit if intentional, add to `.gitignore` if generated/runtime output. Never leave generated files untracked.
+**7. Check for untracked files:** After running scripts or tools, run `git status --short` and read its `??` lines. For any new untracked files: commit if intentional, add to `.gitignore` if generated/runtime output. Never leave generated files untracked.
 </task_commit_protocol>
 
 <destructive_git_prohibition>
@@ -669,20 +632,19 @@ This file is the canonical output of this step. The orchestrator reads `{phase_d
 actuals:
   tokens: 74000    # chars/4 over the files you actually changed
   tasks: 5         # tasks completed
-  commits: 7       # MEASURED: git rev-list --count ${PLAN_HEAD_BEFORE}..HEAD (#3968)
+  commits: 7       # MEASURED: executor.ledger read (#3968)
 ```
 These pair with the plan's `estimate` to calibrate future estimates (ADR-2629). Do not round to look closer to the estimate — a flattering number corrupts every later projection.
 
-**`commits:` is measured, never narrated (#3968).** At SUMMARY write, read the persisted
-ledger (protocol 0c — a fresh shell per Bash call; the base comes from disk):
+**`commits:` is measured, never narrated (#3968).** At SUMMARY write, read the ledger back
+(protocol 0c):
 ```bash
-PLAN_HEAD_BEFORE=$(cat "$(git rev-parse --git-dir)/gsd-plan-head-before-{phase}-{plan}")
-COMMITS_ACTUAL=$(git rev-list --count ${PLAN_HEAD_BEFORE}..HEAD)
-PLAN_HEAD_AFTER=$(git rev-parse HEAD)
+gsd_run query executor.ledger read --phase {phase} --plan {plan}
 ```
-Write ALL THREE into the frontmatter — `commits: ${COMMITS_ACTUAL}`,
-`plan_head_before: ${PLAN_HEAD_BEFORE}`, `plan_head_after: ${PLAN_HEAD_AFTER}` — including
-when the count is `0`.
+It prints `plan_head_before`, `plan_head_after` and `commits` (`git rev-list --count` from the
+recorded base). Write ALL THREE into the frontmatter — `commits:`, `plan_head_before:`,
+`plan_head_after:` — including when the count is `0`. If `read` fails, or 0c used the fallback,
+run `git rev-list --count <base>..HEAD` on that base and `git rev-parse HEAD`, one command each.
 A `0` with code changes means the changes sit UNCOMMITTED: **HALT — do not write the
 SUMMARY with a narrated count**; surface `git status --short` in your return. A `0` with no
 code changes (docs-only) is legitimate. `/gsd:verify-work` flags mismatches as BLOCKER.
@@ -755,9 +717,9 @@ After writing SUMMARY.md, verify claims before proceeding.
 [ -f "path/to/file" ] && echo "FOUND: path/to/file" || echo "MISSING: path/to/file"
 ```
 
-**2. Check commits exist:**
+**2. Check commits exist:** one command per hash; exit 0 means FOUND, anything else MISSING:
 ```bash
-git merge-base --is-ancestor "{hash}" HEAD 2>/dev/null && echo "FOUND: {hash}" || echo "MISSING: {hash}"
+git merge-base --is-ancestor {hash} HEAD
 ```
 
 **3. Append result to SUMMARY.md:** `## Self-Check: PASSED` or `## Self-Check: FAILED` with missing items listed.
