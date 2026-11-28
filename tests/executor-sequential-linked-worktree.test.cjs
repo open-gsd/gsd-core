@@ -84,6 +84,34 @@ describe('#4799 the orchestrator tells each sequential executor, in its own prom
     assert.match(read('gsd-core/references/worktree-path-safety.md'), /pass it on every later step 0 run, before every commit/);
   });
 
+  test('the step texts halt on any non-zero exit, and steps 0a and 0b name a fallback for when gsd_run cannot run (#6216)', () => {
+    const between = (doc, from, to) => {
+      const start = doc.indexOf(from);
+      const end = doc.indexOf(to, start);
+      assert.ok(start !== -1 && end > start, `section ${from} … ${to} not found`);
+      return doc.slice(start, end);
+    };
+    const executor = read('agents/gsd-executor.md');
+    const step0b = between(executor, '**0b. absolute-path safety', '**0. Pre-commit HEAD safety assertion');
+    assert.match(step0b, /On any non-zero exit, do\s+not write to that path/);
+    assert.match(step0b, /If `gsd_run` cannot run, use a relative path; an absolute one is used only when it begins with the\s+worktree root kept for step 0a followed by `\/` and has no `\.` or `\.\.` segment, and otherwise HALT/);
+    const step0 = between(executor, '**0. Pre-commit HEAD safety assertion', '**1. Check modified files:**');
+    assert.match(step0, /On any non-zero exit,\s+HALT/);
+    assert.match(step0, /keep what\s+`git rev-parse --show-toplevel` prints as the worktree root, a literal/);
+    assert.match(step0, /on every later run it must print that literal/);
+
+    const fragment = read('gsd-core/references/worktree-branch-check.md');
+    assert.match(fragment, /On any non-zero exit, HALT immediately/);
+
+    const safety = read('gsd-core/references/worktree-path-safety.md');
+    const safety0a = between(safety, '## cwd-drift check — step 0a', '## Absolute-path guard — step 0b');
+    assert.match(safety0a, /when `gsd_run` cannot\s+run, keep what `git rev-parse --show-toplevel` printed on the first run/);
+    assert.match(safety0a, /On any non-zero exit, do not commit/);
+    const safety0b = between(safety, '## Absolute-path guard — step 0b', '## `<automated>` command guard — step 0c');
+    assert.match(safety0b, /On any non-zero exit, do not\s+write to that path/);
+    assert.match(safety0b, /If `gsd_run` cannot run, use a relative path\. An absolute path is used only when it\s+begins with the worktree root kept for step 0a/);
+  });
+
   test('the sequential blocks name the --sequential flag of the Step 0 guard command (#6216)', () => {
     for (const rel of ['gsd-core/workflows/execute-phase.md', 'gsd-core/workflows/quick.md', 'gsd-core/workflows/execute-plan.md']) {
       assert.match(read(rel), /SEQUENTIAL executor agent on the main working tree \(add --sequential to your Step 0 commit guard/, rel);
