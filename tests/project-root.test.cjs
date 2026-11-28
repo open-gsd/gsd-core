@@ -22,7 +22,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { findProjectRoot } = require('../gsd-core/bin/lib/project-root.cjs');
+// #6820 (ADR-4908): the walk-up is `resolveProjectContext(...).projectRoot`; these cases pin its nearest-.planning rule.
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+const findProjectRoot = (startDir) => resolveProjectContext(startDir).projectRoot;
 const { cleanup } = require('./helpers.cjs');
 
 // ─── helpers ────────────────────────────────────────────────────────────────

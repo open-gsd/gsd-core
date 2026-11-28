@@ -36,7 +36,8 @@ const { output: coreOutput, error: coreError } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
 const { resolvePhaseArtifactFile } = verificationMod;
-import { requireSafePath, PathAcceptance } from './security.cjs';
+import { PathAcceptance } from './security.cjs';
+import { requirePlanningArtifactPath, resolveProjectContext } from './project-context.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
@@ -721,7 +722,7 @@ function cmdLoopRenderHooks(
     // own path argument.
     let safePhaseDir: string;
     try {
-      safePhaseDir = requireSafePath(afterFingerprintDir, cwd, '--after-fingerprint directory', PathAcceptance.AbsoluteInsideRoot);
+      safePhaseDir = requirePlanningArtifactPath(resolveProjectContext(cwd), afterFingerprintDir, '--after-fingerprint directory', PathAcceptance.AbsoluteInsideRoot).resolved;
     } catch (err: unknown) {
       const msg = (err instanceof Error) ? err.message : String(err);
       coreError(`--after-fingerprint directory is unsafe: ${msg}`);

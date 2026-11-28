@@ -22,7 +22,11 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempProject, cleanup } = require('./helpers.cjs');
 
 const phaseStatusMod = require('../gsd-core/bin/lib/phase-status.cjs');
-const { isPhaseComplete } = require('../gsd-core/bin/lib/verification.cjs');
+const { isPhaseComplete: isPhaseCompleteWithCtx } = require('../gsd-core/bin/lib/verification.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+// #6820 (ADR-4908 §6): isPhaseComplete requires a ProjectContext.
+const isPhaseComplete = (phaseDir, deps = {}) =>
+  isPhaseCompleteWithCtx(phaseDir, { ctx: resolveProjectContext(phaseDir), ...deps });
 const stateContractMod = require('../gsd-core/bin/lib/state-contract.cjs');
 
 const {

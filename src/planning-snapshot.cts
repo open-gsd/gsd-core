@@ -22,6 +22,7 @@
 import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, extractCurrentMilestone } = roadmapParserMod;
@@ -333,7 +334,7 @@ function buildPhaseSnapshot(phasesDir: string, dir: string, convention: string |
   // #612: the snapshot's single federated convention resolution rides into
   // completion, so a bracket phase dir resolves and scopes its verification
   // report exactly like its legacy twin.
-  const completionResult = isPhaseComplete(fullPhaseDir, { convention });
+  const completionResult = isPhaseComplete(fullPhaseDir, { ctx: resolveProjectContext(fullPhaseDir), convention });
   const scanResult = scanPhasePlans(fullPhaseDir);
   const statusError = completionResult.value.statusError;
   return {
