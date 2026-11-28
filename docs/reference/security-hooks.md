@@ -11,6 +11,43 @@ The runtime hooks GSD installs to guard planning artifacts and secret files, wit
 
 Git configuration supplied through `-c key=value` is also checked for the two command-valued forms in #5045: a shell alias (`alias.*` whose value starts with `!`) and `diff.external`. Their literal command strings are scanned by the same bounded shell analysis, so `git -c alias.x='!cat .env' x` and `git -c diff.external='cat .env' diff` are blocked. Benign scripts, secret-free templates, ordinary config values, and `core.pager` remain subject to the existing checks. Scanning is conservative: every matching value supplied before the Git subcommand is inspected, even if a later setting replaces it or that subcommand does not invoke it. Behind a Git option the guard does not recognize, the subcommand can no longer be located, so every later `-c` value on the command is inspected. This does not resolve config files, values obtained through `--config-env` / `GIT_CONFIG_*`, other command-valued keys (diff drivers, filters, credential helpers, SSH or GPG commands), or scripts hidden behind the existing indirection and nesting limits; those remain documented gaps.
 
+## Hook specifications
+
+**Prompt Guard** (`gsd-prompt-guard.js`):
+
+- Triggers on Write/Edit to `.planning/` files
+- Scans content for prompt injection patterns (role override, instruction bypass, system tag injection)
+- Advisory-only — logs detection, does not block
+- Patterns are inlined (subset of `security.cjs`) for hook independence
+- **Output contract:** `hookSpecificOutput` carries both `additionalContext` and `findings` — an array of `{ ruleId, match }` records (`INJECTION-PATTERN` or `INVISIBLE-UNICODE`), module-local to this hook (not shared with `gsd-read-injection-scanner.js`'s own `RULE_IDS`). The advisory is rendered from `findings` via a single mapper, so the two cannot disagree. Consumers should read `findings` rather than parsing the advisory text.
+
+**Read Injection Scanner** (`gsd-read-injection-scanner.js`):
+
+- Triggers on `Read` / `WebFetch` / `WebSearch` PostToolUse events
+- Advisory by default; blocks only `HIGH` severity, and only when `security.injection_blocking` is `true`
+- Severity is `LOW` for 1-2 matched patterns, `HIGH` for 3 or more
+- Skips content shorter than 20 characters, and skips excluded paths (`.planning/`, `REVIEW.md`, `CHECKPOINT*`, security/injection docs, and GSD's own staged hook bundle)
+- Rule ids: the `MD-LINK-*` markdown-link rules mirrored from `security.cjs`'s `MARKDOWN_LINK_PATTERNS`, plus `INJECTION-PATTERN`, `INVISIBLE-UNICODE`, and `UNICODE-TAG-BLOCK`
+- Patterns are shared with `gsd-prompt-guard.js` via `hooks/lib/injection-patterns.js` (#3504); the markdown-link list is inlined for hook independence
+- **Output contract:** `hookSpecificOutput` carries `additionalContext` (the human-readable advisory sentence), `findings` — an array of `{ ruleId, match }` records naming each rule that fired — plus `severity` (`LOW` for 1-2 matches, `HIGH` for 3+) and `source` (the scanned file path, URL, or `search: <query>` string). `findings` and `severity` are the structured surface; the advisory is rendered from them, so the three cannot disagree. `match` is `null` for rules with no captured text (`INVISIBLE-UNICODE`, `UNICODE-TAG-BLOCK`). Consumers should read `findings`/`severity`/`source` rather than parsing the advisory text.
+
+**Workflow Guard** (`gsd-workflow-guard.js`):
+
+- Triggers on Write/Edit to non-`.planning/` files
+- Detects edits outside GSD workflow context (no active `/gsd-` command or Task subagent)
+- Advises using `/gsd-quick` or `/gsd-fast` for state-tracked changes
+- Opt-in via `hooks.workflow_guard: true` (default: false)
+- **Output contract:** the advisory leg's `hookSpecificOutput` carries `code: 'WORKFLOW_ADVISORY'` alongside `additionalContext`. This is distinct from the hook's separate force-add block leg (`code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'`, `decision: 'block'`) — the two are disambiguated by `code`, never by presence.
+
+## Hook safety properties
+
+- Advisory hooks wrap in try/catch and exit silently on error; enforcement hooks take the crash policy they declare (see the crash policy in [Architecture](../ARCHITECTURE.md#hooks-hooks))
+- A stdin timeout guard prevents hanging on pipe issues: 3 s in the guards and the statusline, 5 s in the read injection scanner, 8 s in the config reload hook, 10 s in the context monitor
+- Stale metrics (>60s old) are ignored
+- Missing bridge files handled gracefully (fresh sessions)
+- Subagent inputs (`agent_id` a non-empty string) exit silently before any bridge or sentinel access: they share the parent's `session_id`, so any reading would be the parent's (#6360)
+- Context monitor is advisory — never issues imperative commands that override user preferences
+
 ## CI scanner
 
  `prompt-injection-scan.security.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.

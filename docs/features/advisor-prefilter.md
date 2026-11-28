@@ -20,4 +20,4 @@ group: v1.23.0 Features
 
 **Cost and limits:** Each consult sends the full session transcript to the advisor model, billed at the advisor's rate, so the key is off by default. The advisor is a single session-wide model (per-agent control is tracked upstream in anthropics/claude-code#73072) and may share a family with the executor, so the answer is an early warning rather than decorrelated review. The Claude Code advisor is an experimental host feature; GSD takes no dependency on its interface beyond the tool being present.
 
-See [ADR-4795](adr/4795-advisor-prefilter-in-review-pipeline.md), [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) and the [advisor caveats](../gsd-core/references/model-profiles.md).
+See [ADR-4795](adr/4795-advisor-prefilter-in-review-pipeline.md), [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) and the [advisor caveats](../../gsd-core/references/model-profiles.md).

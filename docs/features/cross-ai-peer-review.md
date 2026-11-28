@@ -30,7 +30,3 @@ Each reviewer is a **declared lane**: its binary, prompt and output channels, ti
 The reason a lane refuses an over-window prompt instead of trimming it (#4559) is in [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md#why-a-lane-refuses-instead-of-trimming-4559).
 
 The reason each review records the model that produced it (#2295) is in [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md#why-the-review-records-which-model-produced-it-2295).
-
-The fix records the model *and its provenance*. Provenance is what makes the value trustworthy: `pinned` (from `review.models.<slug>`) is certain, while `banner` and `transcript` are recovered from third-party CLI output this project does not own — a startup banner or an undocumented session log.
-
-That third-party dependence is a real trade-off, held honestly rather than papered over: the `banner` and `transcript` arms read formats GSD does not control, so they are best-effort by design and degrade to `unknown` rather than guessing or failing the run. A recorded `unknown` is a real answer — a wrong model name attributed to a review would be worse than none.

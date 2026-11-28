@@ -123,6 +123,24 @@ User-facing entry points. Each file contains YAML frontmatter (name, description
 
 To keep the eager skill-listing token cost low, v1.40 introduces six namespace **meta-skills** (`gsd-workflow`, `gsd-project`, `gsd-quality`, `gsd-context`, `gsd-manage`, `gsd-ideate` — sourced from `commands/gsd/ns-*.md`, but the invocable `name:` is the bare form shown here) layered above the concrete sub-skills. On runtimes with non-recursive skill loaders (cline, qwen, hermes, augment, trae) the installer now realizes this fully: it emits only the 6 namespace router bundles as top-level skills and nests the 66 concrete skills under `<router>/skills/<name>/SKILL.md`, so the eager listing is ≈6 entries instead of 72. The model selects a namespace router, which instructs it to read the nested concrete skill file via a routing table embedded in the router body. On these runtimes concrete skills are **not** directly invocable by bare name via the Skill tool; they are reachable through the router. Slash commands (`/gsd-*`, via the separate commands surface) are unaffected where the runtime has one. On runtimes with recursive or unconfirmed skill loaders (claude global, cursor, codex, copilot, windsurf, codebuddy, opencode, kilo, antigravity) the layout remains flat — all skills emitted at the top level as before. Antigravity moved from nested to flat in #1614: `agy` scans only `skills/<name>/SKILL.md`, so nested sub-skills were unreachable. Claude was reverted to flat in #924: the Skill tool hard-errors on unknown names rather than re-routing via the router, so nested concrete skills were uninvokable.
 
+The router bundles and what each routes to:
+
+| Namespace | Router bundle | Routes to |
+|-----------|--------------|-----------|
+| Phase pipeline | `gsd-ns-workflow` | discuss / plan / execute / verify / phase / progress |
+| Project lifecycle | `gsd-ns-project` | milestones, audits, summary |
+| Quality gates | `gsd-ns-review` | code review, debug, audit, security, eval, ui |
+| Codebase intelligence | `gsd-ns-context` | map, graphify, docs, learnings |
+| Exploration & capture | `gsd-ns-ideate` | explore, sketch, spike, spec, capture |
+| Management | `gsd-ns-manage` | config, workspace, workstreams, thread, update, ship, inbox |
+
+**Migration note (breaking change on the five nesting runtimes).** Upgrading to v1.40 changes skill invocation behaviour on Cline, Qwen, Hermes, Augment and Trae:
+
+- **Before:** each of the ~67 concrete `gsd-<name>` skills appeared at the top level and was invocable by bare name through the Skill tool.
+- **After:** only the 6 `gsd-ns-*` router bundles appear at the top level. Concrete skills are reachable via the router's routing table and a `Read skills/<name>/SKILL.md` call. Direct bare-name invocation of concrete skills through the Skill tool's listing no longer works.
+- **Slash commands unchanged:** `/gsd-plan-phase`, `/gsd-discuss-phase`, etc. still work directly where a commands surface is installed.
+- **Upgrade prune:** the installer's existing prune step removes the legacy top-level `gsd-<concrete>/` skill directories on upgrade — no manual cleanup is needed.
+
 The router descriptions use pipe-separated keyword tags (≤ 60 chars) per the Tool Attention research showing keyword-dense tags outperform prose for routing at ~40 % the token cost.
 
 #### MCP token-budget interaction
@@ -215,92 +233,17 @@ Specialized agent definitions with frontmatter specifying:
 
 ### References (`gsd-core/references/*.md`)
 
-Shared knowledge documents that workflows and agents `@-reference` (see [`docs/INVENTORY.md`](INVENTORY.md#references) for the authoritative full roster):
+Shared knowledge documents that workflows and agents `@-reference`. The authoritative roster, with one line per reference, is in [`docs/INVENTORY.md`](INVENTORY.md#references).
 
-**Core references:**
-
-- `checkpoints.md` — Checkpoint type definitions and interaction patterns
-- `gates.md` — 4 canonical gate types (Confirm, Quality, Safety, Transition) wired into plan-checker and verifier
-- `model-profiles.md` — Per-agent model tier assignments
-- `model-profile-resolution.md` — Model resolution algorithm documentation
-- `verification-patterns.md` — How to verify different artifact types
-- `verification-overrides.md` — Per-artifact verification override rules
-- `planning-config.md` — Full config schema and behavior
-- `git-integration.md` — Git commit, branching, and history patterns
-- `git-planning-commit.md` — Planning directory commit conventions
-- `questioning.md` — Dream extraction philosophy for project initialization
-- `tdd.md` — Test-driven development integration patterns
-- `ui-brand.md` — Visual output formatting patterns
-- `common-bug-patterns.md` — Common bug patterns for code review and verification
-
-**Workflow references:**
-
-- `agent-contracts.md` — Formal interface between orchestrators and agents
-- `context-budget.md` — Context window budget allocation rules
-- `continuation-format.md` — Session continuation/resume format
-- `domain-probes.md` — Domain-specific probing questions for discuss-phase
-- `gate-prompts.md` — Gate/checkpoint prompt templates
-- `revision-loop.md` — Plan revision iteration patterns
-- `universal-anti-patterns.md` — Common anti-patterns to detect and avoid
-- `artifact-types.md` — Planning artifact type definitions
-- `phase-argument-parsing.md` — Phase argument parsing conventions
-- `decimal-phase-calculation.md` — Decimal sub-phase numbering rules
-- `workstream-flag.md` — Workstream active pointer conventions
-- `user-profiling.md` — User behavioral profiling methodology
-- `thinking-partner.md` — Conditional thinking partner activation at decision points
-
-**Thinking model references:**
-
-References for integrating thinking-class models (o3, o4-mini, Gemini 2.5 Pro) into GSD workflows:
-
-- `thinking-models-debug.md` — Thinking model patterns for debugging workflows
-- `thinking-models-execution.md` — Thinking model patterns for execution agents
-- `thinking-models-planning.md` — Thinking model patterns for planning agents
-- `thinking-models-research.md` — Thinking model patterns for research agents
-- `thinking-models-verification.md` — Thinking model patterns for verification agents
-
-**Modular planner decomposition:**
-
-The planner agent (`agents/gsd-planner.md`) was decomposed from a single monolithic file into a core agent plus reference modules to stay under the 50K character limit imposed by some runtimes:
-
-- `planner-gap-closure.md` — Gap closure mode behavior (reads VERIFICATION.md, targeted replanning)
-- `planner-reviews.md` — Cross-AI review integration (reads REVIEWS.md from `/gsd-review`)
-- `planner-revision.md` — Plan revision patterns for iterative refinement
+The planner agent (`agents/gsd-planner.md`) was decomposed from a single monolithic file into a core agent plus reference modules (`planner-gap-closure.md`, `planner-reviews.md`, `planner-revision.md`) to stay under the 50K character limit imposed by some runtimes.
 
 ### Templates (`gsd-core/templates/`)
 
-Markdown templates for all planning artifacts. Used by `gsd-tools.cjs template fill` / `phase.scaffold` (and top-level `scaffold`) to create pre-structured files:
-- `project.md`, `requirements.md`, `roadmap.md`, `state.md` — Core project files
-- `phase-prompt.md` — Phase execution prompt template
-- `summary.md` (+ `summary-minimal.md`, `summary-standard.md`, `summary-complex.md`) — Granularity-aware summary templates
-- `DEBUG.md` — Debug session tracking template
-- `UI-SPEC.md`, `UAT.md`, `VALIDATION.md` — Specialized verification templates
-- `discussion-log.md` — Discussion audit trail template
-- `codebase/` — Brownfield mapping templates (architecture, stack)
-- `research-project/` — Research output templates (SUMMARY, STACK, FEATURES, ARCHITECTURE, PITFALLS)
+Markdown templates for all planning artifacts, used by `gsd-tools.cjs template fill` / `phase.scaffold` (and top-level `scaffold`) to create pre-structured files. The catalog is in [Templates](reference/templates.md).
 
 ### Hooks (`hooks/`)
 
-Runtime hooks that integrate with the host AI agent:
-
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `gsd-statusline.js` | `statusLine` | Displays model (long-context suffixes like `(1M context)` collapse to a compact `(1M)` badge), task, directory, and context usage bar |
-| `gsd-context-monitor.js` | `PostToolUse` / `AfterTool` | Injects agent-facing context warnings at 35%/25% remaining by default (configurable — see [CONFIGURATION.md](CONFIGURATION.md)) |
-| `gsd-check-update.js` | `SessionStart` | Foreground trigger for the background update check |
-| `gsd-ensure-canonical-path.js` | `SessionStart` | For Claude Code plugin installs, symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve; runs first in `SessionStart`, no-op in classic installs, self-heals after `claude plugin update` (#997) |
-| `gsd-path-export.js` | `SessionStart` | Appends the installed `gsd-core/bin` directory to `$CLAUDE_ENV_FILE` (provided to SessionStart hooks only) so a later Bash call resolves `gsd_run` from PATH; no-op when the variable is unset |
-| `gsd-check-update-worker.js` | (helper) | Background worker spawned by `gsd-check-update.js`; no direct event registration |
-| `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt injection patterns (advisory) |
-| `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read, WebFetch and WebSearch output for injected instructions in untrusted content (advisory) |
-| `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in via `hooks.workflow_guard`) |
-| `gsd-secret-read-guard.js` | `PreToolUse` | Hard-blocks Read / Grep / Bash reads of `.env`, `.env.<suffix>` (templates such as `.env.example` exempt) and `.secrets`; replaces the installer-written `Read(.env*)` permission deny rules, which made every `cd DIR && grep …` compound prompt for approval on Claude Code ≥ 2.1.259 (#4221) |
-| `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on files not yet read in the session |
-| `gsd-session-state.sh` | `SessionStart` | Session state tracking for shell-based runtimes; opt-in, a no-op unless `hooks.community` is `true` |
-| `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional commit enforcement; blocks a non-conforming `git commit` (exit 2); opt-in, a no-op unless `hooks.community` is `true` |
-| `gsd-phase-boundary.sh` | `PostToolUse` | Phase boundary detection for workflow transitions; opt-in, a no-op unless `hooks.community` is `true` |
-
-See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
+Runtime hooks that integrate with the host AI agent. The authoritative hook roster, with each hook's event and purpose, is in [`docs/INVENTORY.md`](INVENTORY.md#hooks), and the security hooks are specified in [Security hooks](reference/security-hooks.md). The statusline collapses long-context model suffixes such as `(1M context)` into a compact `(1M)` badge.
 
 **Crash policy (ADR-3889 Phase 7, #3911).** Every enforcement hook terminates
 through `hooks/lib/hook-exit.js`'s `allow(payload)` (exit 0), `deny(payload,
@@ -324,64 +267,13 @@ CJS command family routers dispatch through `CommandRoutingHub`. The hub owns th
 
 Every `gsd-tools check <gate>` verb is a module that returns a value; the router only turns that value into output. Each gate module (`gate-decision-coverage-plan`, `gate-decision-coverage-verify`, `gate-ui-plan`, `gate-ui-safety`, `gate-tdd-review-checkpoint`, `gate-tdd-red-evidence`, `gate-verify-command-paths`, `gate-verify-failure-directions`, `gate-gap-analysis-plan-post`, `gate-predicate`, `gate-api-coverage-verify-pre`, and, since #5219 (ADR-5057 §4), `gate-schema-drift`, `gate-codebase-drift`, `gate-context-drift` and `gate-prohibition-enforcement`) returns a `GateResult` from `gate-verdict`: a `GateVerdict` (`outcome`, `block`, a frozen ordered `payload`) or a `GateUsageFailure`. `GATE_FAILURE_CODE` is the closed set of failure codes.
 
-`src/check-command-router.cts` (261 lines) parses argv, calls the gate, and formats the result through one output site, `emitGateResult`. A gate's stdout and exit code are byte-identical to the pre-refactor router; 149 golden files pin them (`tests/check-router-cutover-equivalence.test.cjs`).
-
-Support modules shared by the gates: `gate-config` (workflow switches, read quietly), `gate-args` (argument parsing), `gate-phase-context` (containment, phase-directory resolution, the tolerant file read and the degraded verify-probe verdict), `decision-coverage-support` (decision extraction and matching), and `check-auto-mode` (the `check auto-mode` state reader). XML decision-tag extraction lives in the markdown sectionizer seam (`src/markdown-sectionizer.cts`), and `type: tdd` detection in the Frontmatter Module (`frontmatterKeyHasValue`).
-
-Two ESLint boundaries in `eslint.config.mjs` keep the split honest: a gate module imports no io module (`./io.cjs` or any `**/io.cjs` / `**/io` path) and performs no direct `console`, `process.stdout` or `process.stderr` write, and the router cannot import `fs`, `child_process` or `fs/promises` (bare or `node:`), or the shell exec and version-control helpers. Gate config is read through the same dot-path resolver `config-get` uses (`resolveConfigKey`, with `quiet: true`), so a gate sees the configuration `config-get` reports, including `GSD_WORKSTREAM` routing; only nested `workflow.*` keys are honored, and a malformed `config.json` is an absent key with nothing written to stderr. `verify context-drift` and `verify codebase-drift` read their `workflow.*` keys through the same reader.
-
-Behavior differences from the pre-refactor router:
-
-- A top-level `context_coverage_gate` no longer disables the decision-coverage gates, and top-level `auto_advance` / `_auto_chain_active` no longer feed `check auto-mode`; only nested `workflow.*` keys count (#4978).
-- Gate config honors `GSD_WORKSTREAM`; the old router read `<project>/.planning/config.json` only.
-- `decision-coverage-verify` reads a SUMMARY's `files_modified` from its frontmatter (inline `[a, b]` and block lists); a `files_modified:` block in the body is ignored.
-- `tdd-red-evidence` requires the record path to stay inside the project directory and fails as `path escapes its allowed directory: <arg>` otherwise; it used to read any readable path. A record inside the project is reported exactly as before. A relative record path resolves against the process working directory, which every workflow sets to the project directory; invoked from elsewhere, a project-relative path is that same usage failure rather than an `unreadable_record` verdict.
-- `tdd-review-checkpoint` asks the evaluation-scope resolver (below) for the plan's commits, so a name such as `x.*` matches nothing instead of satisfying RED or GREEN with an unrelated commit, and a commit on another branch no longer counts. `type: tdd` detection is unchanged (`frontmatterKeyHasValue` is the old `^type:\s*tdd\s*$` test over the frontmatter block).
-- Stderr from the version-control calls in `ui-safety-gate`, `tdd-review-checkpoint` and `decision-coverage-verify` is captured instead of leaking to the process stderr (`fatal: not a git repository` on a non-git project).
-- `api-coverage-verify-pre` resolves a phase's relative directory against the project directory, not the process working directory.
+The gate roster, support modules, ESLint boundaries and the behavior differences from the pre-refactor router are in [Check gate modules](reference/check-gate-modules.md); the design is [ADR-5057](adr/5057-one-owner-per-workflow-verdict.md), and the roster is in [`docs/INVENTORY.md`](INVENTORY.md).
 
 ### Evaluation Scope Resolver (`src/gate-evaluation-scope.cts`, #5164, epic #5056, ADR-5057 §4)
 
 "Which commits and which files does this gate or workflow step evaluate?" has one owner. Before it existed, `code-review`, `quick`, `execute-plan`, `execute-phase`, the `gsd-code-reviewer` agents, `ui-safety-gate`, `tdd-review-checkpoint`, `decision-coverage-verify` and `verify schema-drift` each derived their own answer (`HEAD~1..HEAD`, `DIFF_BASE..HEAD`, `git log --all`), and the answers disagreed with each other and with the work they meant to scope.
 
-`resolveEvaluationScope(projectDir, unit, options)` takes a unit — a phase, a plan (`<phase>-<plan>`) or a quick task id — and returns:
-
-| Field | Meaning |
-|-------|---------|
-| `status` | `resolved` (exactly the unit's own commits), `degraded` (the preferred evidence was absent or empty, so `files` come from wider evidence; `reason` says why) or `unresolvable` (git or the phase could not be read, including a git timeout; `files` is empty and means "could not look"). A plan or quick unit that matches nothing is `resolved` with `reason: no-matching-commits` (or `empty-after-exclusions` when its commits touched only excluded paths, or `merge-only` when every match is a merge, which carries only its own resolutions): git was read and the answer is "none", and the verb reports it as `advisory`, not `pass` |
-| `source` | `task-commits`, `plan-subjects`, `quick-subjects`, `phase-range` or `none` |
-| `commits` | the unit's commits (`sha`, `subject`, optionally `body` and `files`) |
-| `changedFiles` / `files` / `missingOnDisk` | every path the commits touched; the subset that exists on disk (the reviewable set); the subset that no longer exists, **by name** |
-| `outsideUnion` | files changed in the phase window by commits that are *not* the unit's, by name. What a listed catch-up merge (base branch merged into the phase branch) brought in from the base is base work the union deliberately omits, so it is not named here either, under an exact rule: a file is omitted only when it is in the merge's diff against its first parent, no listed commit sits on the merge's second-parent side, no listed non-merge commit is an ancestor of the second parent after the phase start (a branch forked from the phase), every merge-base of the two parents (`git merge-base --all`) is `rangeBase` or an ancestor of it (the fork-point rule: a side forked from phase work is phase work), and no commit of the phase window (`<rangeBase>..<newest listed commit>` minus what the second parent reaches, listed or not, made before or after the merge, the merge itself excluded) touched the file; any other merge commit in that window counts through its own changes against each of its parents (`git log -m`), so a phase-side merge's conflict resolution or edit is phase work, and a clean one over-includes (a file stays named, never hidden). Anything doubtful is named: an advisory false positive is accepted, hidden phase work is not. No merge-base, an empty-tree `rangeBase` (the phase directory arrived with the root commit) or any git call for that merge that fails or times out subtracts nothing for that merge only, and the scope stays `resolved`. Accepted cost: a second catch-up merge forks at the first catch-up's base commit, which is after `rangeBase`, so the base files it brings in are named as an advisory false positive. A SUMMARY whose every listed commit is a merge is `merge-only-task-commits`; a task commit that touched only excluded paths is not a merge, so it keeps the ordinary reasons. A phase branch merged into its base keeps its listed task commits on the merged side, so the base work in the window is still named |
-| `unreachable` | listed task commits that are not reachable from the evaluated ref (another branch, dropped by a rebase), by name |
-| `unparsedSummaries` | phase units: the live SUMMARY files that have a `## Task Commits` section from which no commit id could be read, or in which a task row yielded no id, by name. Their work is not in the scope, so it is reported instead of left to read as complete. A task row may carry a qualifier before its colon (`**Task 1 (tracer):**`, `**Task 1 RED:**`), and the backticked ids on the first list level nested under a task row (a TDD task's RED and GREEN sub-bullets; wrapped description lines allowed, a blank line ends the row) belong to that row |
-| `rangeBase` | the phase-start anchor (the parent of the commit that first added the phase directory, or `--since`), for consumers that need an anchor sha |
-
-The design rules:
-
-- **The scope is a union, not a range.** A range keeps every interleaved non-phase commit in its window. Measured on a 9,676-commit repository, the range held 23, 194 and 602 files for three phases where the union of the phases' own commits held 9, 42 and 69. A phase's commits are the `## Task Commits` rows of its SUMMARY files (section-scoped, row-scoped, backtick-anchored: a sha quoted in prose is not a task commit); a merge commit contributes only what the merge itself changed (its conflict resolutions and edits, from `git show --remerge-diff`, git 2.36 or newer), so a clean merge contributes nothing in either direction: a catch-up merge of the base branch into the phase branch adds none of the base's files, and a phase branch merged into its base adds none either, its files coming from its own task commits. On a git without `--remerge-diff`, and for an octopus merge, a merge contributes no files rather than the base branch's work. A SUMMARY whose listed commits are merges alone (for example only the phase-into-base merge sha) has no task commits of its own to read, so it degrades to the phase range with `reason: merge-only-task-commits`, never `resolved` with just the merge's edits.
-- **Only commits reachable from the evaluated ref count.** The former `git log --all` let a commit on any branch satisfy a check.
-- **An empty union never becomes an empty scope.** A phase with no SUMMARY, no task rows, no reachable task commits, or only planning paths degrades to the phase-directory range and reports `degraded` with the reason. A phase directory git has never seen, or an unreadable repository, is `unresolvable`.
-- **Plan commits are matched on the subject.** `<type>(<phase>-<plan>):` is anchored, tolerant of zero padding (`03-01`, `3-1`) and of decimal, N-segment and letter-suffixed phase numbers, and escapes every metacharacter, so `03-01` never matches `03-010`. An id carrying the project's CONFIGURED `project_code` (`PRJ-01-01` with `project_code: "PRJ"`, #5271) matches either spelling of the same plan — `feat(PRJ-01-01):` and `feat(01-01):` — because the two init verbs hand out different phase tokens for one plan. The code is stripped only when it is the configured one, matched case-sensitively; the configured value only has to pass a safety check (a letter first, then letters, digits, `_`, `.` or `-`, at most 32 characters), so `gsd` and `AUTH-X` work. An id that merely looks coded (`AUTH-01-02`), and an unusable `project_code` value, keeps the literal behaviour. Every spelling is built by `qualifiedPlanSubjectPattern`, the builder the workstream-qualified id proposed in #5177 is meant to share.
-- **Every git call is bounded** by the `execGit` seam; a timeout or a missing git is `unresolvable`, never a throw and never an empty scope.
-- **A `planning.sub_repos` workspace is read repo by repo** ([#5867](https://github.com/open-gsd/gsd-core/issues/5867)). The workspace root need not be a git repo: the resolver runs the same lookup in each configured sub-repo (and in the root, when the root is itself a repo) and merges the result. Commits are ordered newest first by committer time with `maxCommits` applied to the merged list; `changedFiles`, `files`, `missingOnDisk`, `outsideUnion` and each `commits[].files` are workspace-relative (`<sub-repo>/<path>`); a phase task-commit id is resolved in whichever sub-repo holds it, and one no sub-repo holds is named in `unreachable`. `--ref`, `--pathspec`, `--milestone-bound` (each repo bounded at its own latest tag; a repo with none is unbounded) and `--committed-since` apply inside every repo, and a sub-repo that has no such commit (an empty repo, or a `--ref` only another repo has) contributes nothing; a `--since` commit filters the repo that holds it by ancestry and every other repo by that commit's committer time (a `--since` no repo holds is `unresolvable`: `since-not-found`). Names are normalized (`./app/` is `app`), at most 64 are read, a phase's task-commit ids times repos are capped at 1024 lookups (`sub-repo-too-many-lookups`), sub-repo git runs with `core.fsmonitor=false`, and a folder that is part of the workspace root's own repo is covered by the root. A configured sub-repo that is missing (also when the workspace root is itself a repo), escapes the project (symlinks included), or sits inside some other repo without being its own root makes the scope `unresolvable` with a reason naming it (`sub-repo-unreadable:<name>:<cause>`, `sub-repo-escapes-root:<name>`, `sub-repo-invalid:<index>`, `sub-repo-too-many`). A phase with no task commits has no phase-start anchor in a sub-repo, so unless the workspace root is a repo that tracked the phase directory it is an empty `degraded` scope whose reason ends `:no-phase-start-anchor` (advisory, never a pass). `--pathspec` is a git pathspec evaluated inside each repo, so it is repo-relative (`src`, not `api/src`); two config names that resolve to one repo are read once under the first spelling listed; a sub-repo whose directory cannot be run in makes the ancestry answer unknown (`null`). `tdd-review-checkpoint`'s ancestry check asks the workspace root (when it owns its repo) and then each sub-repo, and the first repo that holds the commits answers; a repo that times out leaves the answer unknown (`null`), never "no". Without `sub_repos` nothing changes.
-
-Workflows reach it as `gsd_run check evaluation-scope`:
-
-```bash
-gsd_run check evaluation-scope --phase <phase> [--since <sha>] --raw      # a phase (or --phase-dir <dir>; --ref <ref>)
-gsd_run check evaluation-scope --plan <phase>-<plan> --raw                # a plan: --commits-only, --max-commits N,
-                                                                          #   --milestone-bound, --committed-since <date>,
-                                                                          #   --pathspec <glob> (repeatable),
-                                                                          #   --all-branches (plan/quick only; see below)
-gsd_run check evaluation-scope --quick <quick-id> --include-files --raw   # a quick task
-```
-
-`--all-branches` (plan and quick units only; a usage failure on a phase) looks the unit's commits up across every local branch instead of the commits reachable from `--ref`, and adds `latestCommitTime` (unix seconds of the newest match, or `null`) to the payload. It exists for the executor stall probe ([#6117](https://github.com/open-gsd/gsd-core/issues/6117)): a worktree executor's commits sit on its own unmerged agent branch until the wave merges. It is an explicit opt-in; the gates keep the reachable-from-ref contract above, and without the flag the payload is unchanged.
-
-The verb is a resolver, not a policy: it always reports `block: false`, and the caller decides what a `degraded` or `unresolvable` scope means. `scripts/lint-evaluation-scope-drift.cjs` fails CI when a gate module, `verify`, a workflow or an agent derives its own range again (`git log … --all`, `git diff … ..HEAD`, a `HEAD~N` anchor, a hand-rolled phase-start anchor, a commit-message lookup); its allowlist pins exact non-scope sites and is drained, never renewed.
-
-Behavior differences from the pre-resolver derivations: a UI file, task commit or decision that appears only in an interleaved non-phase commit, or only on another branch, no longer counts toward a phase or plan; `ui-safety-gate` reads the whole phase's commits instead of the last one and reports `scopeStatus` / `scopeReason` when the scope was widened or unreadable; `decision-coverage-verify` and `verify schema-drift` read the phase's own commit messages instead of the last 200 (or 50) commits of any branch; the code-review step names deleted files and out-of-scope files instead of counting them.
+The verb is a resolver, not a policy: it always reports `block: false`, and the caller decides what a `degraded` or `unresolvable` scope means. The returned fields, design rules, `sub_repos` handling and CLI flags are in [Evaluation scope resolver reference](reference/evaluation-scope.md).
 
 ### Capability Command Dispatch (`gsd-core/bin/gsd-tools.cjs`, ADR-1244 D7)
 
@@ -400,11 +292,7 @@ Both paths share the same guards: prototype-pollution-safe command keys, an own-
 
 The Research Module implements an **L2-hybrid seam**: code owns the cache, provider policy, and package legitimacy verdicts; MCP owns the actual network fetch.
 
-Three compiled modules (generated to `gsd-core/bin/lib/*.cjs` per ADR-457) are reachable via `gsd-tools query research-plan | research-store | package-legitimacy`:
-
-- **Research Store** — content-addressed cache (`sha256(ecosystem+library+version+query+kind)`) with per-source TTL (curated-doc: 30 d, medium: 7 d, web/synthesis: 1 d) and two storage tiers: `~/.gsd/research-cache` for cross-project curated-doc hits, `.planning/research/.cache` for project-local web/synthesis results.
-- **Research Provider** — single `PROVIDER_WATERFALL` (`Context7→Ref→Jina→websearch` for docs; `Exa→Tavily→Perplexity→Brave→Serply→websearch` for web; `Firecrawl→Jina` for scrape-only). `planResearch()` returns cache hits plus a fetch plan; `classifyConfidence()` stamps `HIGH|MEDIUM|LOW` by provider tier.
-- **Package Legitimacy** — registry-API verdicts (npm/PyPI/crates.io injectable adapters) producing `OK|SUS|SLOP` per package. `slopcheck` is an optional escalate-only adapter; absence leaves registry verdicts intact rather than downgrading everything to `[ASSUMED]`.
+Three compiled modules (generated to `gsd-core/bin/lib/*.cjs` per ADR-457) are reachable via `gsd-tools query research-plan | research-store | package-legitimacy`: a content-addressed Research Store, a Research Provider with one provider waterfall, and Package Legitimacy registry verdicts. The cache key, TTL tiers and waterfall are in [ADR-0656](adr/0656-research-module-seam.md) and the provider tiers are in [CLI Tools](CLI-TOOLS.md).
 
 **Data flow:**
 
@@ -431,115 +319,19 @@ Agents always return a `RESEARCH.md` path, never raw fetched content. Context di
 
 The `CONTEXT.md` predicate fact-store — every backtick-wrapped `CLASS.subkey=value` declaration in the repo-root `CONTEXT.md` — has a compiled parser/selector seam (generated to `gsd-core/bin/lib/context-predicates.cjs` per ADR-457) reachable live via `gsd-tools query context-predicates --class|--prefix|--contains`. Fence-aware line skipping mirrors `markdown-sectionizer.cts`'s exported `scanFencedBlocks` delimiter-matching rule exactly (proven by a fence-skip parity test suite), but is scanned by a LOCAL, interleaved single pass rather than a call into that seam directly: fences and HTML comments must mutually suppress each other's open/close detection while either is active (a fence delimiter inside a real comment, or a comment token inside a real fence, must not falsely toggle the other construct), and that precedence cannot be resolved by two independent passes over `scanFencedBlocks`'s comment-blind output — see `src/context-predicates.cts`'s module doc comment.
 
-`scripts/gen-context-index.cjs --check` is the CI drift-guard for the committed `docs/CONTEXT-INDEX.json` artifact: it fails on staleness between a fresh parse of `CONTEXT.md` and the committed file, and on any duplicate predicate ID. It is wired into `lint:generated-sync` (so `lint:ci`, so CI). `docs/CONTEXT-INDEX.json` is **generated — never hand-edit it**; regenerate with `gen-context-index.cjs --write` (also wired into `build`, after `build:lib`, and into `regen:derived`). The generator `require()`s the compiled `context-predicates.cjs`, so it must run after `build:lib` in any pipeline; `.github/workflows/test.yml` does this.
-
-The committed index intentionally carries **no `line` field** for any predicate (ADR-1671 open question 4, resolved by #2928) — committed-but-uncompared metadata goes silently stale, the same defect class the drift-guard exists to catch, with the alarm removed. The live `gsd-tools query context-predicates` parse still returns `line`/`section` for callers that want to cite a source location. See [ADR-1671](adr/1671-dynamic-context-management-platform.md) and [CLI Tools Reference](CLI-TOOLS.md#query-context-predicates).
+The committed index carries no `line` field (ADR-1671, resolved by #2928); see [ADR-1671](adr/1671-dynamic-context-management-platform.md) and [CLI Tools](CLI-TOOLS.md) for the selector surface.
 
 ### Workflow Fragmentization and Emission (`src/workflow-fragments.cts`, ADR-1671)
 
-Workflow markdown under `gsd-core/workflows/*.md` can mark one or more sections with an
-in-file `<!-- gsd:section id="<id>" when="<when>" -->` / `<!-- /gsd:section -->` pair. A
-compiled parser/composer seam (generated to `gsd-core/bin/lib/workflow-fragments.cjs` per
-ADR-457) partitions a marked document into fragments and recomposes them through the shared
-`context-composer.cjs` budget seam (ADR-1671, #2929) before any per-runtime converter sees the
-text — so a marker attribute can never be corrupted by a `.claude/` → `.windsurf/`-style
-path-rewrite regex. `bin/install.js`'s `copyWithPathReplacement` calls `composeWorkflow` on
-every workflow file at emit time; an unmarked file (88 of the 89 shipped workflows today)
-parses to a single implicit fragment and round-trips byte-identical, so this is a no-op for
-every workflow that hasn't opted in yet.
-
-Every fragment in this phase carries the `verbatim` strategy, so composition is structurally
-non-lossy — nothing is trimmed regardless of budget. Fence and HTML-comment interleaving
-reuses the same LOCAL, single-pass, mutually-suppressing scan discipline as
-`context-predicates.cts` (see above), so a marker-shaped line inside a fenced code block or an
-unrelated comment is never misread as structural. Markers are **stripped at emit** — the
-installed artifact carries no build metadata and is smaller than the source by exactly the
-stripped marker bytes.
-
-See [Reference: Workflow fragments](reference/workflow-fragments.md) for the full marker
-grammar, the frozen `when=` vocabulary, and fail-closed authoring rules, and
-[ADR-1671](adr/1671-dynamic-context-management-platform.md) (open questions 1 and 2) for why
-in-file markers were chosen over separate fragment files or a sidecar manifest.
+Workflows are authored as fragments with marker comments and emitted as whole files at build time. The marker grammar, vocabulary and the set of fragmented workflows are in [Workflow fragments](reference/workflow-fragments.md); the design is [ADR-1671](adr/1671-dynamic-context-management-platform.md).
 
 ### Section Manifest (`src/section-manifest.cts`, ADR-1671 Phases 5 and 6.1)
 
-Two seams turn a workflow's `gsd:section` markers into per-invocation applicability data.
-`scripts/gen-section-manifest.cjs --write` (wired into `build` after `build:lib`, and into
-`lint:generated-sync`) scans `gsd-core/workflows/*.md` and writes the committed
-`gsd-core/workflows/section-manifest.json`, keyed **per workflow** —
-`{workflows: {"<name>": [{id, when, read}]}}` — where `read` is the path of the step file the
-section's body was extracted to. A workflow with no marked sections contributes **no key at
-all**: an absent key means degraded/unknown (the caller reads every section, the safe superset),
-while a key present with an empty array means "computed, nothing applies". The generator reuses
-`parseWorkflowSections` unchanged rather than re-implementing marker parsing, and fails closed
-(`--check`) on a marker naming a step file that does not exist, a step file no marker
-references, or a committed artifact still carrying the pre-6.1 flat `{sections: [...]}` shape.
-
-A separate pure evaluator, `src/section-manifest.cts` (compiled to
-`gsd-core/bin/lib/section-manifest.cjs` per ADR-457), maps one invocation's facts —
-`{flags, phaseNumber, hasPriorPhases}` plus the optional `needsCodebaseMap`, `phaseMvpMode` and
-`worktreesEnabled` booleans — to an included/excluded partition of section ids via
-`selectSections`. `flags` is a `ReadonlySet<string>` of flag tokens; because `parseNamedArgs`
-always materializes a boolean flag key (`false` when the token was absent, never `undefined`),
-presence is **truthiness**, and the init router folds a boolean flag's own `false` into the
-absent sentinel before the facts are built. Per Greenspun's Tenth Rule, the evaluator is a total
-lookup over the frozen 14-atom `when=` vocabulary, never a parser: `WHEN_PREDICATES` is a
-hand-written literal map that never derives a predicate from its atom string, and an
-unrecognized value fails closed rather than being silently excluded. An atom is admitted only
-when it has both a real consuming section and a fact the init seam actually computes — an atom
-without the latter would evaluate `false` forever and silently disable its own section.
-
-`execute-phase.md`'s `partial-wave` and `gap-closure-artifacts` sections — previously inlined
-directly per #2930's pilot — now delegate to dedicated step files under
-`gsd-core/workflows/execute-phase/steps/`, the same pattern the pre-existing `regression-gate`
-section already used.
+`section-manifest.json` and the `selectSections` selector are specified in [Workflow fragments](reference/workflow-fragments.md) and listed in [`docs/INVENTORY.md`](INVENTORY.md).
 
 ### CLI Tools (`gsd-core/bin/`)
 
-Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core/bin/lib/` (see [`docs/INVENTORY.md`](INVENTORY.md#cli-modules) for the authoritative roster):
-
-
-| Module                 | Responsibility                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------------------- |
-| `config-loader.cjs`    | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation, and federated config overlay (ADR-857 phase 3b) (extracted from `core.cjs`, ADR-857) |
-| `federated-config.cjs` | Defensive merge of capability-declared config slices (ADR-857 phase 3b); exports `mergeFederatedConfig`; live for migrated Capability keys that are absent from the central config schema |
-| `core-utils.cjs`       | Shared low-level utility primitives — POSIX path normalization, sub-repo/subdirectory scanning, phase file stats, slug/one-liner/plan-id helpers, time-ago (extracted from `core.cjs`, ADR-857) |
-| `core.cjs`             | Shared utilities; compatibility re-exports for planning, I/O (`io.cjs`), and phase-id helpers       |
-| `io.cjs`               | CLI I/O primitives — output/error emission, JSON-error mode, large-payload temp-file spillover     |
-| `phase-id.cjs`         | Pure phase-id parsing/matching helpers — normalize, token match, regex builders (extracted from `core.cjs`, ADR-857) |
-| `phase-locator.cjs`    | Phase-directory search and location — active-phase discovery (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against the filesystem (extracted from `core.cjs`, ADR-857) |
-| `roadmap-parser.cjs`   | ROADMAP.md parsing — milestone slicing, current-milestone extraction, phase/milestone lookups, milestone-phase filter (extracted from `core.cjs`, ADR-857) |
-| `planning-workspace.cjs` | Planning seam (`planningDir`, `planningPaths`, active workstream routing, `.planning/.lock`)      |
-| `state.cjs`            | STATE.md parsing, updating, progression, metrics                                                    |
-| `phase.cjs`            | Phase directory operations, decimal numbering, plan indexing                                        |
-| `roadmap.cjs`          | ROADMAP.md parsing, phase extraction, plan progress                                                 |
-| `config.cjs`           | config.json read/write, section initialization                                                      |
-| `verify.cjs`           | Plan structure, phase completeness, reference, commit validation                                    |
-| `template.cjs`         | Template selection and filling with variable substitution                                           |
-| `frontmatter.cjs`      | YAML frontmatter CRUD operations                                                                    |
-| `init.cjs`             | Compound context loading for each workflow type                                                     |
-| `milestone.cjs`        | Milestone archival, requirements marking                                                            |
-| `commands.cjs`         | Misc commands (slug, timestamp, todos, scaffolding, stats)                                          |
-| `model-profiles.cjs`   | Model profile resolution table                                                                      |
-| `model-resolver.cjs`   | Model and effort resolution policy — resolves model, tier, granularity, effort, and fast-mode for a given agent from project config and model profiles/catalog (extracted from `core.cjs`, ADR-857) |
-| `security.cjs`         | Path traversal prevention, prompt injection detection, safe JSON parsing, shell argument validation |
-| `uat.cjs`              | UAT file parsing, verification debt tracking, audit-uat support                                     |
-| `docs.cjs`             | Docs-update workflow init, Markdown scanning, monorepo detection                                    |
-| `workstream.cjs`       | Workstream CRUD, migration, session-scoped active pointer                                           |
-| `schema-detect.cjs`    | Schema-drift detection for ORM patterns (Prisma, Drizzle, etc.)                                     |
-| `profile-pipeline.cjs` | User behavioral profiling data pipeline, session file scanning                                      |
-| `profile-output.cjs`       | Profile rendering, USER-PROFILE.md and dev-preferences.md generation                                |
-| `context-predicates.cjs`   | `CONTEXT.md` predicate fact-store parser/selector (ADR-1671, #2928); backs `query context-predicates` and `scripts/gen-context-index.cjs`'s `docs/CONTEXT-INDEX.json` drift guard; compiled from `src/context-predicates.cts` |
-| `loop-host-contract.cjs`   | Generated Loop Host Contract — 12 loop points, per-step agent roles, and core artifacts; emitted by `scripts/gen-loop-host-contract.cjs` from workflow markers (ADR-894 §3); consumed by `gen-capability-registry.cjs` |
-| `capability-loader.cjs`    | Runtime registry overlay loader (ADR-1244 D2) — `loadRegistry({ includeInstalled })` composes the frozen first-party registry with a validated installed overlay of third-party capability manifests read from global `$GSD_HOME/.gsd/capabilities/` and project `<projectRoot>/.gsd/capabilities/`; first-party always wins; load-time `engines.gsd` re-gate skips incompatible overlays with a warning; gate-kind hooks on skipped capabilities fail OPEN — no gate is injected; a loud warning (stderr + envelope `warnings`) names the load failure and the `gsd capability remove <id>` remediation (#2009) |
-| `capability-registry.cjs`  | Generated central Capability Registry — role-partitioned index of all co-located capability declarations; emitted by `scripts/gen-capability-registry.cjs` (ADR-894 §5) |
-| `loop-resolver.cjs`        | Loop Extension Point resolver — ADR-857 phase 3c registry-consuming query; consumes resolved Capability State, filters `byLoopPoint` by capability enablement plus config activation, renders active hooks as markdown, emits `{ point, activeHooks, rendered }` envelope; `gsd-tools loop render-hooks <point> [--config-dir <path>]` |
-| `capability-state.cjs`     | Unified capability-state resolver — ADR-857 phase 4b/6; composes install profile, runtime surface, and config activation into one per-capability view consumed by workflow hook rendering; pure `resolveCapabilityState`, reusable `resolveCapabilityRuntimeState`, I/O `cmdCapabilityState`, and convenience predicate `isCapabilityActive(capId, cwd)`; `gsd-tools capability state [--config-dir <path>]` emits `{ runtimeConfigDir, capabilities[] }` where each entry carries `enabled` (installed && surfaced) and `active` (enabled && configActivation via the capability's `activationKey`; absent key → active===enabled) |
-| `capability-validator.cjs` | Shared capability conformance validator (ADR-1244 D2) — extracted from `scripts/gen-capability-registry.cjs` so the build-time generator and the runtime overlay loader share one `validateCapability(manifest)` implementation; generative-parity is CI-guarded |
-| `graphify-command-router.cjs` | ADR-959 capability command router — first real capability command cutover (phase 4d-impl-2); extracted from the `case 'graphify':` arm in `gsd-tools.cjs`; dispatches build/query/status/diff subcommands; discovered via `commandFamilies` in the capability registry |
-| `audit-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-3); extracted from the `case 'audit-uat':` and `case 'audit-open':` arms in `gsd-tools.cjs`; `routeAuditUat` → `uat.cjs:cmdAuditUat`, `routeAuditOpen` → `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; discovered via `commandFamilies` in the capability registry |
-| `intel-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-4, last first-party cutover); extracted from the `case 'intel':` arm in `gsd-tools.cjs`; `routeIntelCommand` → all 9 intel subcommands via lazy `require('./intel.cjs')`; preserves non-raw `timeAgo` transform on `status.files[*].updated_at`; discovered via `commandFamilies` in the capability registry |
-| `runtime-hooks-surface.cjs` | Hook-surface writer and configured-entrypoint validation module (ADR-857 phase 5f-1); owns Cline rules/agents-md/pre-tool-use hook generation, Cursor/Windsurf `hooks.json`, Kimi hook TOML, Copilot session-hook config, Codex hook-block management, and construction-time records for paths emitted into runtime configuration. Installer success requires those records to pass non-executing file-type and interpreter-resolution checks. |
+`gsd-tools.cjs` is the single CLI entry point. Its modules are listed with their roles in [`docs/INVENTORY.md`](INVENTORY.md#cli-modules).
 
 `gsd-tools.cjs` requires each of these modules on first use (#5865). A command loads the modules it runs, plus the ones every command goes through before dispatch: those `main()` uses first (`cli-exit`, `io`, `project-root`, `project-context`, `cli-skew-check`, `active-workstream-store`, `cli-surface`, and what they require) and the capability-dispatch stack (`capability-registry`, `capability-loader` and theirs). `runtime-identity` loads 32 `lib/` modules, where every command used to load about 220.
 
@@ -572,44 +364,11 @@ Orchestrator (workflow .md)
 
 ### Primary Agent Spawn Categories
 
-Conceptual spawn-pattern taxonomy for the primary agents. For the authoritative agent roster (including the advanced/specialized agents such as `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), see [`docs/INVENTORY.md`](INVENTORY.md#agents).
-
-
-| Category         | Agents                                                                                  | Parallelism                                                                               |
-| ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **Researchers**  | gsd-project-researcher, gsd-phase-researcher, gsd-ui-researcher, gsd-advisor-researcher | 4 parallel (stack, features, architecture, pitfalls); advisor spawns during discuss-phase |
-| **Synthesizers** | gsd-research-synthesizer                                                                | Sequential (after researchers complete)                                                   |
-| **Planners**     | gsd-planner, gsd-roadmapper                                                             | Sequential                                                                                |
-| **Checkers**     | gsd-plan-checker, gsd-integration-checker, gsd-ui-checker, gsd-nyquist-auditor          | Sequential (verification loop, max 3 iterations)                                          |
-| **Executors**    | gsd-executor                                                                            | Parallel within waves, sequential across waves                                            |
-| **Verifiers**    | gsd-verifier                                                                            | Sequential (after all executors complete)                                                 |
-| **Mappers**      | gsd-codebase-mapper                                                                     | 4 parallel (tech, arch, quality, concerns)                                                |
-| **Debuggers**    | gsd-debugger                                                                            | Sequential (interactive)                                                                  |
-| **Auditors**     | gsd-ui-auditor, gsd-security-auditor                                                    | Sequential                                                                                |
-| **Doc Writers**  | gsd-doc-writer, gsd-doc-verifier                                                        | Sequential (writer then verifier)                                                         |
-| **Profilers**    | gsd-user-profiler                                                                       | Sequential                                                                                |
-| **Analyzers**    | gsd-assumptions-analyzer                                                                | Sequential (during discuss-phase)                                                         |
-
+The spawn-pattern taxonomy (researchers, synthesizers, planners, checkers, executors, verifiers, mappers and the rest) and each category's parallelism are in [Multi-agent orchestration](explanation/multi-agent-orchestration.md); the authoritative roster is in [`docs/AGENTS.md`](AGENTS.md) and [Agents](reference/agents.md).
 
 ### Wave Execution Model
 
-During `execute-phase`, plans are grouped into dependency waves:
-
-```
-Wave Analysis:
-  Plan 01 (no deps)      ─┐
-  Plan 02 (no deps)      ─┤── Wave 1 (parallel)
-  Plan 03 (depends: 01)  ─┤── Wave 2 (waits for Wave 1)
-  Plan 04 (depends: 02)  ─┘
-  Plan 05 (depends: 03,04) ── Wave 3 (waits for Wave 2)
-```
-
-Each executor gets:
-
-- Fresh 200K context window (or up to 1M for models that support it)
-- The specific PLAN.md to execute
-- Project context (PROJECT.md, STATE.md)
-- Phase context (CONTEXT.md, RESEARCH.md if available)
+During `execute-phase`, plans are grouped into dependency waves: plans with no dependency run in parallel in Wave 1, and a plan that depends on another waits for the earlier wave. Each executor gets a fresh context window, its PLAN.md, the project context and the phase context. The diagram and rules are in [Multi-agent orchestration](explanation/multi-agent-orchestration.md).
 
 ### Adaptive Context Enrichment (1M Models)
 
@@ -622,10 +381,7 @@ The orchestrator reads `context_window` from config (`gsd-tools.cjs config-get c
 
 #### Parallel Commit Safety
 
-When multiple executors run within the same wave, two mechanisms prevent conflicts:
-
-1. `--no-verify` commits — Parallel agents skip pre-commit hooks (which can cause build lock contention, e.g., cargo lock fights in Rust projects). The orchestrator runs `git hook run pre-commit` once after each wave completes.
-2. **STATE.md file locking** — All `writeStateMd()` calls use lockfile-based mutual exclusion (`STATE.md.lock` with `O_EXCL` atomic creation). This prevents the read-modify-write race condition where two agents read STATE.md, modify different fields, and the last writer overwrites the other's changes. Includes stale lock detection (10s timeout) and spin-wait with jitter.
+Parallel executors in one wave skip pre-commit hooks (the orchestrator validates once per wave) and serialize `STATE.md` writes behind a lockfile; see [Multi-agent orchestration](explanation/multi-agent-orchestration.md).
 
 #### The STATE.md Write Path
 
@@ -635,13 +391,7 @@ STATE.md carries the same fact in two places — YAML frontmatter and the docume
 
 `FIELD_CLASSIFICATION` (`src/state-transition.cts`) answers it per field, declaring a `preservation` policy — `preserve-when-unchanged`, `preserve-always`, `preserve-if-placeholder`, `derive` — that `applyStatePreservation` executes after `syncStateFrontmatter` re-derives. (A fifth policy, `clear`, was listed here until ADR-3408 §8.6's amendment removed it: no row used it and no executor existed for it.)
 
-**The pipeline's precondition is a type, not a convention (ADR-3473 §8.6).** A policy row can only be honored if the pre-write frontmatter snapshot it compares against is actually present. That snapshot now travels as a `StateTransaction`, built by `openStateTransaction()` — preservation applies — or `rebuildStateTransaction()` — it does not. Both carry the snapshot, and a transaction cannot be constructed without one: an absent snapshot is a *construction failure*, not a runtime skip. That distinction is the whole point. Previously the snapshot was nulled to signal "re-derive from disk", so a declared `preserve-always` row and a silently-skipped one were indistinguishable at runtime, which is how a curated `progress:` block was erased by verbs that had nothing to do with progress.
-
-`rebuildStateTransaction()` is the typed form of ADR-3408 §8.3's closed exception list: `state sync`, which exists to let the body win, and `/gsd-health --repair`'s factory reset. Both are deliberate and permanent, not debt — and because the type names them, the write-path drift guard no longer has to track them as strings in a ratcheted baseline.
-
-**What a command reports it wrote is the same snapshot, read back (ADR-3473 §8.7).** Every `state.*` command returns an `updated` array. That array is now derived by comparing what was actually persisted against the transaction's pre-write snapshot: **a field appears if, and only if, its persisted value changed.** One comparison answers both of the questions that used to need separate machinery — a field the caller asked for that the pipeline then discarded is persisted-equals-snapshot and drops out, and a field nobody asked for that the write moved anyway is different and appears. Nothing is filtered by its preservation policy.
-
-Reporting is at **leaf granularity**: when a single counter moves you are told `progress.total_plans`, not `progress`. The leaves are the ones the field-classification table already declares, so the report is bounded by a schema rather than by walking the document.
+The pre-write snapshot a policy compares against travels as a `StateTransaction` (`openStateTransaction()`, or `rebuildStateTransaction()` for the closed exception list: `state sync` and `/gsd-health --repair`'s factory reset), so the precondition is a type, not a convention (ADR-3473 §8.6). Every `state.*` command returns an `updated` array derived by comparing what was persisted against that snapshot: a field appears if, and only if, its persisted value changed, at dotted-leaf granularity (`progress.total_plans`, not `progress`; ADR-3473 §8.7).
 
 One field is excluded, and it is excluded for its *provenance* rather than its policy: `last_updated` is stamped on every save regardless of what you changed, so admitting it would make `state patch`'s success signal — which is simply whether `updated` is non-empty — permanently true, and a patch in which every field failed would report success. `state_head` is deliberately **not** excluded: it is recomputed on every save but only *changes* when the commit it records actually moved, so reporting it tells you something true.
 
@@ -762,21 +512,7 @@ verification.
 `.planning/codebase/*.md` file; `bin/lib/drift.cjs` provides
 `readMappedCommit` and `writeMappedCommit` round-trip helpers.
 
-The baseline is written by `gsd-tools stamp-codebase-map`, a shell step in the
-map-codebase workflow, not by the mapper agent. The mapper's own freshness
-markers (`**Analysis Date:**`, `<!-- refreshed: ... -->`) are restamped
-unconditionally on an Update run, so an agent that rewrites only the dates still
-looks current to a reader; the machine-readable stamp is the one marker that
-cannot be satisfied by a date-only rewrite, which is exactly why it is not the
-agent's to write. `--files a.md,b.md` narrows the stamp to the documents a
-caller actually refreshed, as the auto-remap path does.
-
-An absent or unresolvable baseline is reported as `skipped` with reason
-`no-mapped-commit` or `unresolvable-mapped-commit`, never as drift. Diffing
-HEAD against the empty tree would report every tracked file as newly added,
-which makes a stale map indistinguishable from a fresh one. Files under
-`.planning/` are excluded from the diff: the map's own commit is a planning
-artifact, not codebase structure.
+The baseline stamp is written by a shell step, not the mapper agent, and an absent baseline is skipped rather than reported as drift; see [Why the codebase drift gate is built the way it is](explanation/codebase-drift-gate-design.md). The element table, skip reasons and `stamp-codebase-map` are in [CLI Tools](CLI-TOOLS.md#verify-codebase-drift-structural-drift-of-the-codebase-map-2003-5134).
 
 ---
 
@@ -784,25 +520,10 @@ artifact, not codebase structure.
 
 The installer (`bin/install.js`, ~10,700 lines) handles:
 
-1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **Runtime detection** — Interactive prompt or CLI flags (the flag list is in [Installer flags](reference/installer-flags.md))
 2. **Location selection** — Global (`--global`) or local (`--local`)
 3. **File deployment** — Copies commands, skills, workflows, references, templates, agents, and hooks
-4. **Runtime adaptation** — Transforms file content per runtime:
-  - Claude Code: Uses as-is
-  - OpenCode: Converts commands/agents to OpenCode-compatible flat command + subagent format
-  - Kilo: Reuses the OpenCode conversion pipeline with Kilo config paths
-  - Codex: Generates TOML config + skills from commands
-  - Kimi CLI: Generates Agent Skills under `skills/gsd-*/SKILL.md`, custom agent YAML/prompt files, and explicit `kimi_cli.tools.*` module paths
-  - Copilot: Maps tool names (Read→read, Bash→execute, etc.)
-  - Antigravity: Skills-first with Google model equivalents; adjusts hook event names (`AfterTool` instead of `PostToolUse`)
-  - Cursor: Skills-first with Cursor rule references
-  - Windsurf: Skills-first with Windsurf rule references
-  - Trae: Skills-first install to `~/.trae` / `./.trae` with no `settings.json` or hook integration
-  - Qwen Code: Skills-first with Qwen-branded path and prompt rewrites
-  - Hermes Agent: Category-based skills under `skills/gsd/`
-  - CodeBuddy: Skills-first with CodeBuddy path and prompt rewrites
-  - Cline: Writes `.clinerules` for rule-based integration
-  - Augment Code: Skills-first with full skill conversion and config management
+4. **Runtime adaptation** — Transforms file content per runtime (Claude Code uses it as-is; the per-runtime conversions and install surfaces are in [Installer migrations](installer-migrations.md) and [Runtime install contracts](reference/runtime-install-contracts.md))
 5. **Path normalization** — Replaces `~/.claude/` paths with runtime-specific paths
 6. **Settings integration** — Registers hooks in runtime's `settings.json`
 7. **Patch backup** — Since v1.17, backs up locally modified files to `gsd-local-patches/` for `/gsd-update --reapply`
@@ -830,7 +551,7 @@ remove or rewrite anything.
 
 The plan drift guard (`plan_review.source_grounding`) — which verifies symbol references in generated plans against live source before execution — is specified in [ADR 22](adr/22-plan-drift-guard.md).
 
-The same switch gates a second, cross-artifact axis: a fact-drift pass that compares the *same* fact as stated in `ROADMAP.md`, `PLAN.md`, `STATE.md` and `CONTEXT.md` and reports contradictions (a phase status, a success criterion, a requirement ID, a glossary term) with both locations and the authoritative side named. Where the source-grounding axis grounds a plan against code, this one grounds the planning artifacts against each other. It keys on contradicting knowledge rather than similar-looking text, and is advisory only — it never sets `hardBlock` and never contributes to the convergence counts.
+`plan_review.source_grounding` also gates a second, cross-artifact fact-drift axis; both are described in [Configuration](CONFIGURATION.md#plan-review-settings).
 
 ### Platform Handling
 
@@ -875,12 +596,7 @@ table, the measurement scale, and the fallback rules.
 
 ### Safety Properties
 
-- Advisory hooks wrap in try/catch and exit silently on error; enforcement hooks take the crash policy they declare (see the crash policy under Hooks above)
-- A stdin timeout guard prevents hanging on pipe issues: 3 s in the guards and the statusline, 5 s in the read injection scanner, 8 s in the config reload hook, 10 s in the context monitor
-- Stale metrics (>60s old) are ignored
-- Missing bridge files handled gracefully (fresh sessions)
-- Subagent inputs (`agent_id` a non-empty string) exit silently before any bridge or sentinel access: they share the parent's `session_id`, so any reading would be the parent's (#6360)
-- Context monitor is advisory — never issues imperative commands that override user preferences
+Advisory hooks wrap in try/catch and exit silently on error; enforcement hooks take the crash policy they declare (see the crash policy under Hooks above). Stale metrics (older than 60s) are ignored ([Context monitor](context-monitor.md)), and the context monitor is advisory. The per-hook stdin timeouts and the subagent early-exit are in [Security hooks](reference/security-hooks.md#hook-safety-properties).
 
 ### Package Legitimacy Gate (v1.42.1)
 
@@ -900,31 +616,7 @@ The researcher → planner → executor pipeline includes a supply-chain gate ag
 
 For a conceptual overview of how the hook and guard layers fit into the broader security approach, see [Security model](explanation/security-model.md).
 
-**Prompt Guard** (`gsd-prompt-guard.js`):
-
-- Triggers on Write/Edit to `.planning/` files
-- Scans content for prompt injection patterns (role override, instruction bypass, system tag injection)
-- Advisory-only — logs detection, does not block
-- Patterns are inlined (subset of `security.cjs`) for hook independence
-- **Output contract:** `hookSpecificOutput` carries both `additionalContext` and `findings` — an array of `{ ruleId, match }` records (`INJECTION-PATTERN` or `INVISIBLE-UNICODE`), module-local to this hook (not shared with `gsd-read-injection-scanner.js`'s own `RULE_IDS`). The advisory is rendered from `findings` via a single mapper, so the two cannot disagree. Consumers should read `findings` rather than parsing the advisory text.
-
-**Read Injection Scanner** (`gsd-read-injection-scanner.js`):
-
-- Triggers on `Read` / `WebFetch` / `WebSearch` PostToolUse events
-- Advisory by default; blocks only `HIGH` severity, and only when `security.injection_blocking` is `true`
-- Severity is `LOW` for 1-2 matched patterns, `HIGH` for 3 or more
-- Skips content shorter than 20 characters, and skips excluded paths (`.planning/`, `REVIEW.md`, `CHECKPOINT*`, security/injection docs, and GSD's own staged hook bundle)
-- Rule ids: the `MD-LINK-*` markdown-link rules mirrored from `security.cjs`'s `MARKDOWN_LINK_PATTERNS`, plus `INJECTION-PATTERN`, `INVISIBLE-UNICODE`, and `UNICODE-TAG-BLOCK`
-- Patterns are shared with `gsd-prompt-guard.js` via `hooks/lib/injection-patterns.js` (#3504); the markdown-link list is inlined for hook independence
-- **Output contract:** `hookSpecificOutput` carries `additionalContext` (the human-readable advisory sentence), `findings` — an array of `{ ruleId, match }` records naming each rule that fired — plus `severity` (`LOW` for 1-2 matches, `HIGH` for 3+) and `source` (the scanned file path, URL, or `search: <query>` string). `findings` and `severity` are the structured surface; the advisory is rendered from them, so the three cannot disagree. `match` is `null` for rules with no captured text (`INVISIBLE-UNICODE`, `UNICODE-TAG-BLOCK`). Consumers should read `findings`/`severity`/`source` rather than parsing the advisory text.
-
-**Workflow Guard** (`gsd-workflow-guard.js`):
-
-- Triggers on Write/Edit to non-`.planning/` files
-- Detects edits outside GSD workflow context (no active `/gsd-` command or Task subagent)
-- Advises using `/gsd-quick` or `/gsd-fast` for state-tracked changes
-- Opt-in via `hooks.workflow_guard: true` (default: false)
-- **Output contract:** the advisory leg's `hookSpecificOutput` carries `code: 'WORKFLOW_ADVISORY'` alongside `additionalContext`. This is distinct from the hook's separate force-add block leg (`code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'`, `decision: 'block'`) — the two are disambiguated by `code`, never by presence.
+The per-hook behavior, rule ids, thresholds and output contracts are in [Security hooks](reference/security-hooks.md#hook-specifications).
 
 ---
 
@@ -938,48 +630,7 @@ upstream documentation each row was checked against are described in
 
 ### OpenCode 1.x and 2.x
 
-OpenCode 1.x and 2.x use the same `opencode` command and config directories and cannot be installed side by side,
-so one `opencode` runtime serves both. The design is recorded in
-[ADR-5331](adr/5331-opencode-v2-support-and-v1-sunset.md); Kilo is a fork on the 1.x line and is unaffected.
-
-- **Generation detection** (`opencode-version.cts`): a bounded, argv-only `opencode --version` run (`1.19.0` on 1.x,
-  `opencode v2.0.27` on 2.x), `GSD_OPENCODE_GENERATION=1|2` to force it, and 2.x-only config signals as a fallback.
-  An undeterminable generation is `null` and keeps today's behavior. The installer prints the result and records it as
-  `hostGeneration` in `gsd-install-state.json`, which `update-context` reports.
-- **One plugin, two entrypoints:** `plugins/gsd-core.js` exports `server` (1.x) and a non-enumerable `setup` (2.x). `setup`
-  is inert unless it is handed a 2.x context (1.18.29 and 1.19.0 also call it, with one that has no `tool`). Both
-  adapters run the same guards; the 2.x `shell` and `patch` tool ids map to `Bash` and `MultiEdit`; `file.edited`, which
-  2.x never emits, is derived from completed edit-tool calls on `.planning/config.json`.
-- **Hooks run under Node.** Inside OpenCode `process.execPath` is the OpenCode binary, so the plugin starts hook
-  scripts with `node` from `PATH` (override: `GSD_HOOK_RUNTIME`); before this every guard was silently skipped (#4849).
-- **Spawn arguments differ by generation** and are adapted when a command line is built: 2.x has no `--dir` (the worker
-  binds through its working directory, which 2.x takes from `$PWD`, so it must be launched from a shell that has
-  `cd`'d there) and no `--variant` (effort rides on the model as `provider/model#variant`); the reviewer lane drops the
-  trailing stdin `-`, which 2.x sends to the model as text, and runs `--standalone` so no background service outlives it.
-- **Config edits preserve JSONC.** `jsonc-edit.cts` splices only the keys GSD owns, so an annotated `opencode.jsonc` or
-  `kilo.jsonc` keeps its comments, trailing commas and layout through install, migration and uninstall (#5334). Plain
-  JSON without comments is rewritten as before. GSD never writes 2.x-only shapes to user config.
-- **MCP companion.** The installer registers `mcp.gsd` with `--no-prompts`; OpenCode would otherwise list every GSD
-  prompt as a second `gsd:<name>` slash command next to the command files. Migration 011 converges existing entries.
-  The entry stays in the 1.x shape, which 2.x reads in place; 2.x's default Code Mode is left as it is, because the
-  companion's tools are reached by exact name from GSD workflows and nothing relies on them being native tools.
-- **Data directory.** 2.x adds its own session tables beside 1.x's and 1.x keeps working; a data directory 2.x creates
-  from scratch has no 1.x tables and 1.x cannot open it. The installer reads the schema (never writes it) and says which
-  case applies.
-- **Uninstall is complete on both generations:** it removes every staged `hooks/lib` helper (derived from what the
-  installer copies, so the lists cannot drift), the install state and migration-journal records (backups of files the
-  user modified are kept), an empty `settings.json`, the GSD `mcp` entry in both shapes, empty directories GSD created,
-  and the `~/.gsd/defaults.json` keys the install set once no other runtime needs them and the user has not changed them.
-
-- **Phase 3 additions (#5339).** The OpenCode-only parity code in the plugin sits between `gsd:opencode-parity` markers and
-  is absent from the byte-identical Kilo mirror: the four opt-in `.sh` hooks (commit validation, phase boundary, session
-  state, graphify auto-update) run under bash, with their config gates re-checked in-process so a project that has not
-  opted in pays no spawn; advisories are appended to the tool result (OpenCode shows neither a plugin's stderr nor its
-  metadata to the model); the 2.x adapter treats the first event naming a session as `session.created`, because a 2.x
-  `run` never emits one. The terminal-client plugin `plugins/gsd-statusline/tui.tsx` (descriptor key
-  `hostBehaviors.nativeCliPlugin`) renders the output of `hooks/gsd-statusline.js` in the `home.footer.status` and
-  `prompt.footer.status` slots; 1.x never loads it. The deprecation notice and freeze date live in `opencode-version.cts`
-  (`describeDeprecationNotice`, `OPENCODE_V1_FREEZE_DATE`). Execution evidence: [verification matrix](reference/opencode-v2-verification-matrix.md).
+One `opencode` runtime serves OpenCode 1.x and 2.x ([ADR-5331](adr/5331-opencode-v2-support-and-v1-sunset.md)). How GSD detects the generation, builds spawn arguments, installs and uninstalls on each is in [How GSD runs on OpenCode](explanation/how-gsd-runs-on-opencode.md).
 
 ### Abstraction Points
 

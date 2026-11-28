@@ -1081,13 +1081,7 @@ modifications and deletions are drift inside it.
 - Modified file inside a mapped directory (`modified`; a typechange counts here)
 - Deleted file inside a mapped directory (`deleted`; a rename's old path counts here, its new path as an addition)
 
-**Why the rule is inverted.** A new directory is by definition outside what
-the map describes, so an addition is drift where the map is silent. An edit or
-deletion can only matter where the map does speak: a map that names a
-directory describes its contents, and changing or removing them makes the
-description stale. Counting modifications outside mapped territory would flag
-every ordinary edit; counting only additions, as the gate did before #5134,
-never flagged a map that went stale through edits or deletions.
+**Why the rule is inverted.** An addition is drift where the map is silent; an edit or deletion only matters where the map speaks. The reasoning is in [Why the codebase drift gate is built the way it is](explanation/codebase-drift-gate-design.md#why-the-rule-is-inverted).
 
 **Mapped territory is the whole map.** The gate reads all seven
 `.planning/codebase/*.md` documents, not only `STRUCTURE.md`. A directory is
@@ -1516,10 +1510,6 @@ The reason a lane refuses an over-window prompt instead of trimming it (#4559) i
 
 The reason each review records the model that produced it (#2295) is in [Cross-AI review design decisions](explanation/cross-ai-review-decisions.md#why-the-review-records-which-model-produced-it-2295).
 
-The fix records the model *and its provenance*. Provenance is what makes the value trustworthy: `pinned` (from `review.models.<slug>`) is certain, while `banner` and `transcript` are recovered from third-party CLI output this project does not own — a startup banner or an undocumented session log.
-
-That third-party dependence is a real trade-off, held honestly rather than papered over: the `banner` and `transcript` arms read formats GSD does not control, so they are best-effort by design and degrade to `unknown` rather than guessing or failing the run. A recorded `unknown` is a real answer — a wrong model name attributed to a review would be worse than none.
-
 ---
 
 ### 43. Backlog Parking Lot
@@ -1577,9 +1567,7 @@ That third-party dependence is a real trade-off, held honestly rather than paper
 
 **Filter modes.** `planning.pr_strict` selects what "filtered" means. The default mode treats `.planning/` as two populations: structural state that belongs in review (`STATE.md`, `ROADMAP.md`, `MILESTONES.md`, `PROJECT.md`, `REQUIREMENTS.md`, `milestones/**`) and transient per-phase artifacts that do not (`phases/`, `quick/`, `research/`, `threads/`, `todos/`, `debug/`, `seeds/`, `codebase/`, `ui-reviews/`). Strict mode collapses that distinction: nothing under `.planning/` reaches the PR branch, and a commit is carried over only when it touches at least one file outside `.planning/`.
 
-Strict mode exists because the two ways to keep planning private are not equivalent. Turning off `planning.commit_docs` keeps `.planning/` out of git, which also takes parallel executor worktrees with it — a worktree is checked out from a commit, so an untracked planning tree is simply absent inside it and the executor has no `PLAN.md` to read. Strict mode leaves planning committed, so worktrees and revert paths keep working, and moves the guarantee to the publication boundary instead. See [Publish PRs without planning artifacts](how-to/publish-prs-without-planning-artifacts.md).
-
-Both modes filter by forcing the excluded paths back to whatever the target branch already tracks, in the index *and* the working tree. Un-staging alone would record a deletion of any planning file the target branch carries, and would leave the picked file untracked on disk, where it makes a later cherry-pick of the same path abort.
+Both modes filter by forcing the excluded paths back to whatever the target branch already tracks, in the index and the working tree. Strict mode leaves planning committed, so worktrees and revert paths keep working. See [Why PR-branch filtering has a strict mode](explanation/pr-branch-filtering-design.md) and [Publish PRs without planning artifacts](how-to/publish-prs-without-planning-artifacts.md).
 
 ---
 
@@ -2520,44 +2508,7 @@ defaulting to `open`:
 
 `open` means recorded but not yet triaged, and it is the only value the gate assigns on its own.
 
-**Where the reconciliation happens, which is not where you might expect.** The in-phase gate runs
-immediately after review, and at that moment `<NN>-REVIEW-FIX.md` does not exist — the gate invokes
-review with neither `--fix` nor `--auto` — so every row it writes is `open`. The `fixed` and
-`skipped` outcomes are reconciled by `/gsd-code-review <N> --fix`, which records them once the fix
-report is on disk. Running the gate alone therefore tells you what was found; running `--fix` is
-what records what happened to it.
-
-**`--auto`'s iterations are reconciled too, and that takes reading more than the final report.**
-The loop overwrites `REVIEW-FIX.md` on every pass and the re-review stops reporting a finding once
-it is fixed, so a finding closed in iteration 1 appears in neither final artifact. The gate
-therefore also reads the per-iteration backups the loop writes (`<NN>-REVIEW-FIX.iterN.md`), newest
-first, so the most recent statement about an ID wins; the backups are removed after the ledger has
-read them, not before. Without this a fully successful multi-iteration run recorded its early fixes
-as `open (not in the current review)` — indistinguishable from a finding that vanished for an
-unrelated reason, which is the one distinction this ledger exists to make. A finding a fix report
-decided but the current review no longer reports gets a row of its own, carrying that decision and
-marked *(not in the current review)*.
-
-A converged `--auto` run also reaches the gate with a clean review and, on a direct
-`/gsd-code-review` invocation, no ledger from the in-phase gate. A fix report on disk is reason
-enough to record: without that, a run in which every finding was fixed and committed produced no
-disposition record at all.
-
-**A decision belongs to a finding, not to an ID.** IDs are reused across re-reviews — `--auto`
-renumbers — so the ledger records each finding's title alongside its disposition, and a recorded
-decision is carried forward only while the ID still names the same finding. Without that, a prior
-`CR-01 fixed` would be inherited by a brand-new `CR-01`, which is a false decision in the one
-artifact whose purpose is telling triaged from forgotten.
-
-**The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
-is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
-the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
-on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
-row carried only by a fix report (#5802).
-A prior row still sitting at `open` is replaced silently (see [why the replacement is silent](explanation/review-pipeline-design.md)).
-Recovery is the ledger's own git history where `commit_docs` is on — which is why the console
-reports the drop rather than pointing at a commit that may not exist.
+**Reconciliation and identity (the arguments are in [About the code-review pipeline's design choices](explanation/review-pipeline-design.md#how-the-disposition-ledger-reconciles-and-what-it-cannot-prove)).** The in-phase gate runs before `<NN>-REVIEW-FIX.md` exists, so every row it writes is `open`; `/gsd-code-review <N> --fix` records `fixed` and `skipped`. `--auto` iterations are reconciled from the `<NN>-REVIEW-FIX.iterN.md` backups, newest first, which are removed after the ledger has read them. A decision is carried forward only while the ID still names the same finding (the ledger records each title); a reused ID is recorded `open` and the earlier decision loses its row, reported on the console (#5802).
 
 **Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
 `<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
@@ -2572,11 +2523,7 @@ read case-insensitively (`Deferred` is `deferred`). Two rows for one id are name
 console names are masked for control characters and capped. A frontmatter `- id:` entry outside the grammar ends
 the previous entry, so its `title:` is never attributed to another finding.
 
-**Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
-recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
-every decision in every existing ledger, which is the loss the guard exists to prevent. And two
-genuinely distinct findings that share both an ID and a title are indistinguishable to this key.
-Separating them needs a second identity scheme, which is the thing that was just withdrawn.
+**Residuals:** a ledger written before titles were recorded inherits decisions on the ID alone, and two distinct findings sharing both ID and title are indistinguishable to the key.
 
 Reconciliation applies an outcome only when the fix report names the **same** finding, because
 finding IDs are reused across re-reviews and a stale report would otherwise declare a brand-new
@@ -2626,19 +2573,7 @@ renumbered finding shows under both IDs until the old row is decided; the marker
 A run that changes nothing rewrites nothing, so a re-executed phase does not produce a docs commit
 with no content.
 
-One residual is concurrency: the ledger is read, rebuilt and written whole, with no lock. Two
-dispatchers can run this step (`code_review_gate` and `code-review-fix`'s `record_disposition`) and
-a human is invited to hand-edit the file, so two writers overlapping would lose one's update. This is
-the shape #3780 reported for `WINDOWS.md` under parallel executors, closed there by a cross-process
-lock (#4681); the disposition step does not take that lock. No lost update has been reproduced; the
-window is stated so it is not mistaken for a guarantee.
-
-Not to be confused with the **Review Dispositions Ledger** of reviews-mode planning
-([ADR-3806](adr/3806-review-dispositions-ledger.md), `docs/features/review-dispositions-ledger.md`):
-that one is a `## Review Dispositions Ledger` section inside `PLAN.md`, append-only per round, over
-`REVIEWS.md` findings. This artifact is a sibling file beside `REVIEW.md`, rewritten idempotently
-with rows carried. Same word, different inputs, writers, files and durability rules; neither governs
-the other.
+The ledger is read, rebuilt and written whole with no lock, so two overlapping writers could lose an update; no lost update has been reproduced. It is not the Review Dispositions Ledger of reviews-mode planning ([ADR-3806](adr/3806-review-dispositions-ledger.md)).
 
 The record is a sibling artifact rather than a section inside REVIEW.md (see [why a sibling file](explanation/review-pipeline-design.md)).
 The gate remains advisory throughout: it reports and records, and never blocks phase completion.
@@ -3685,15 +3620,11 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 | `backstop` | Intent recorded, needs a held-out/property-based test | Lifted into `must_haves.truths` as a non-inferable check |
 | `unresolved` | Deferred | Soft-gates the spec; row stamped `⚠ Edge unresolved — planner must treat as assumption` |
 
-When a requirement's prose matches **no** shape cue, the probe does not silently drop it (#1110): it emits a single `unclassified — review manually` candidate so the zero-cue requirement is surfaced for the author to resolve like any other (specify / dismiss-with-reason / defer) — a manual-review nudge, not a hard block.
-
-**Non-English projects: the probe reads English via `text_en`, the SPEC does not have to (#2773, durable fix #3717).** The shape cues are English word-boundary patterns, so a project running with [`response_language`](CONFIGURATION.md) set would otherwise have *every* requirement match nothing, classify to zero shapes, and land in `unclassified` — the taxonomy silently contributing nothing to exactly the kind of spec it exists to harden. `spec-phase` Step 5.5 therefore populates an optional `text_en` field alongside each requirement's `text` with a faithful **English translation**: `text_en` is engine input, never user-facing output, so it is translated while `text` keeps the requirement's own wording (the SPEC stays in the original language), requirement ids are left untouched, and any acceptance criteria written back from the resolved edges return to `response_language`. Translation makes the classifier *applicable*; it does not make it omniscient. A requirement carrying no shape cue in **any** language still classifies to zero — that is the classifier's recorded recall gap (ADR-857 §98), not a translation failure — and the remedy there is the same one an English project uses: author an explicit `shapes` array on the requirement instead of relying on prose classification.
+A requirement whose prose matches **no** shape cue is surfaced as a single `unclassified — review manually` candidate, never silently dropped (#1110). A project with `response_language` set gets an optional `text_en` English translation per requirement as engine input only (#2773, #3717); the SPEC keeps its own language. The reasoning is in [Spec-phase probes: edge and prohibition design](explanation/spec-phase-probe-design.md#edge-probe).
 
 The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolved *applicable* edges trigger a soft gate (Resolve / Write-anyway-flagged / Keep-probing) rather than a hard block. Under `--auto`, the probe **never auto-dismisses** — it auto-covers where a defensible criterion exists, otherwise auto-backstops, and logs `[auto] edge coverage: C covered, B backstop, U unresolved`. The one exception is an `unclassified` candidate: `--auto` leaves it **`unresolved`** (surfaced as a flagged assumption), never auto-`backstop` — a missing shape is not evidence an edge exists, so minting a held-out edge obligation would be a false claim.
 
-The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation. A `backstop` edge is lifted as a **structured non-inferable marker** (`{ statement, verification: backstop }`, a flat scalar — not a prose note), which the **honest verifier** then consumes (see below) — closing the loop the edge-probe opened.
-
-**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](../gsd-core/references/honest-verifier.md).
+`plan-phase` lifts `covered` and `backstop` edges into `must_haves.truths`; a `backstop` edge becomes a structured non-inferable marker (`{ statement, verification: backstop }`). At verify time a `backstop` truth without explicit evidence (a passing wired held-out/property-based test, or a directly-observed behavior) abstains → `human_needed` with reason `insufficient_spec` (`unverified — held-out test recommended`), never a silent `passed` (#1154). An inferable truth is never abstained. Reference: [Honest Verifier](../gsd-core/references/honest-verifier.md).
 
 **Requirements:**
 - REQ-EDGE-01: The edge pass MUST run after the ambiguity gate and emit a `## Edge Coverage` SPEC section.
@@ -3718,15 +3649,7 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 
 **Behavior:** A default-off capability owns two boolean keys, one agent and one additive step. When `workflow.deep_verify` is on, `gsd-behavior-verifier` runs at `verify:pre`, enumerates behaviors as `action → expected observable outcome` from the plan's `must_haves` / acceptance criteria, the SUMMARY "Files Changed" list and the files it names, and executes each machine-observable one through a browser MCP server. It writes the full run to `{phase}-DEEP-VERIFY.md` and hands `extract_tests` only what a human must still confirm in `DEEP-VERIFY-CHECKPOINTS.md`: judgment items, failed behaviors and anything it could not run. Failures then enter diagnose-issues and gap-closure planning unchanged. With no browser MCP the step degrades to printing the enumerated list and routing every item to the human.
 
-**Built as a capability, not a `verify-work` edit.** The capability registers a `verify:pre` `step` hook, which `verify-work` dispatches since [#3866](https://github.com/open-gsd/gsd-core/issues/3866), and its `produces` artifact reaches `extract_tests` through the produced-artefact seam. Nothing in core changed. Results travel through `produces` and not through a `contribution`, because a contribution injects prompt prose only ([ADR-857](adr/857-capability-system.md) D4).
-
-**Only the checkpoint artifact is produced.** Listing the full-results file would make the seam parse every passed behavior as a checkpoint and surface it to the human; the results file therefore stays unlisted. The checkpoint file is rewritten on every run (with no entries when nothing needs a human) and carries the bare declared name, because the agent cannot delete a stale file and the seam looks the artifact up by that name. Entries carry just `name` and `expected`, the two fields the seam reads.
-
-**Which phases it runs on.** Once on, it runs only on UI phases, which the agent recognizes by a phase-scoped `{phase}-UI-SPEC.md` in the phase directory (it cannot read the init payload, and nothing in core relays it). `workflow.deep_verify_all_phases` widens it to every phase; on its own it activates nothing.
-
-**The browser contract is the existing two-family one.** `mcp__playwright__*` is driven whenever it responds; the Chrome-family servers only while `workflow.live_dom_uat` is also `true`. The browser grants live on the agent's own `tools:` line, which carries no `Bash` ([ADR-1244](adr/1244-capability-ecosystem.md) D2); `gsd-executor` is not widened.
-
-**`nothing_to_report` is never conflated with `could_not_look`.** The results artifact carries a closed `reason` enum so "the phase had nothing to check" and "I had no browser" stay distinguishable.
+**Design points (the arguments are in [Deep verify capability](explanation/deep-verify-capability.md)):** it is a capability with a `verify:pre` `step` hook, not a `verify-work` edit; only the checkpoint artifact (`DEEP-VERIFY-CHECKPOINTS.md`, rewritten on every run) is produced; it runs on UI phases (a phase-scoped `{phase}-UI-SPEC.md`) unless `workflow.deep_verify_all_phases` widens it; `mcp__playwright__*` is driven whenever it responds and the Chrome-family servers only while `workflow.live_dom_uat` is also `true`; and the results artifact carries a closed `reason` enum so `nothing_to_report` and `could_not_look` stay distinguishable.
 
 **Known limits:** the browser-family gate, the phase-directory boundary and the scope gate are instructions the agent follows, not permissions the runtime enforces; the "diff" is the SUMMARY's changed-file list read with `Read`, not a VCS diff; enumeration is best-effort and not a coverage claim; DOM observation only; #1602 coverage metadata does not reach `{phase}-UAT.md`; no sandbox constrains which origins are reached once browser reach is on ([ADR-1244](adr/1244-capability-ecosystem.md) D5).
 
@@ -3752,7 +3675,7 @@ Where a validate-only mode exists for an `<automated>` command's language or too
 
 A body that fails its validator blocks the plan. Where no validate-only mode applies, behavior is unchanged: the planner states the failing direction and writes `[UNVALIDATABLE: <reason>]`, so `gsd-plan-checker` can tell a considered answer from a skipped one. Check 8g raises a command with no record as a WARNING, and a record that does not hold up as a BLOCKER.
 
-**The sanctioned set is closed, and it is smaller than it looks.** Validate-only means the form does not run the body, does not write to the tree, does not need the command's targets to exist, and needs no network or install. `bash -n`, `node --check`, a `python3` `ast.parse` one-liner, `SET PARSEONLY ON` (T-SQL, with a live session) and `cargo metadata --no-deps` (target shape) qualify. Four forms that read like validators do not, and the reference names them so the planner never reaches for them: `python -m py_compile` writes a `.pyc`; `cargo check` runs the crate's build scripts and procedural macros; `npm run <script> --dry-run` is ignored by `npm run` and executes the script; `terraform validate` needs an initialized directory.
+**The sanctioned set is closed.** Validate-only means the form does not run the body, write to the tree, need the command's targets to exist, or need network or install; the closed table is in the reference. The reasoning is in [Why plan verify commands are checked the way they are](explanation/plan-verify-command-checks.md#why-a-command-that-parses-is-checked-separately-from-a-command-that-detects-4586).
 
 **No schema change.** The record is a plain-text line inside `<verify>`. The `<automated>` and `<fails_when>` elements and the #2401 and #3172 probes are unchanged, and a test pins that.
 
@@ -3811,11 +3734,9 @@ Each surfaced prohibition is resolved to exactly one of three states:
 | `dismissed` | Not a genuine prohibition (requires a non-empty reason) | Recorded with its reason; empty dismissals are rejected |
 | `unresolved` | Deferred | Soft-gates the spec; surfaced as a planner assumption |
 
-Each resolved prohibition carries a `verification` tier — `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). At verify time, judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits an `unverified-prohibition — human review recommended` flag); test-tier prohibitions are enforced via the deterministic `check prohibition-enforcement` gate — green when the wired negative test / lint rule passes, hard-gate (flagged, non-green) when missing or failing, in both interactive and autonomous modes (#1259, ADR-550 D5d). Under `--auto`, the probe **never auto-dismisses**. Canon-bound concerns (OWASP / GDPR / fairness) are referred to `/gsd-secure-phase` rather than minting SPEC prohibitions (ADR-550 D6).
+Each resolved prohibition carries a `verification` tier: `test` (a negative test can enforce it) or `judgment` (only human/LLM judgment can). Judgment-tier prohibitions route to a never-silent / never-hard-halt soft gate (autonomous emits `unverified-prohibition — human review recommended`); test-tier prohibitions are enforced by the deterministic `check prohibition-enforcement` gate (#1259, ADR-550 D5d). Under `--auto` the probe never auto-dismisses. Canon-bound concerns (OWASP / GDPR / fairness) go to `/gsd-secure-phase` (ADR-550 D6). `plan-phase` lifts resolved prohibitions into `must_haves.prohibitions`.
 
-The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, so the section is not merely documentation.
-
-**Deterministic prohibition-check descriptor source (#1278).** A resolved `test`-tier prohibition MAY carry an optional **`check` descriptor** — the flat-scalar keys `check_kind` (`node-test` | `lint-rule`), `check_target`, and `check_rule` (lint-rule only) — authored at spec-phase. `projectProhibitions` projects these scalars deterministically and verify-phase reads them back to locate the check handed to `check prohibition-enforcement`, so a wired, passing test closes the gap with **zero manual descriptor authoring** (previously the verify-phase LLM had to invent `{kind, target, rule}` each run, #1259). The descriptor is **optional and backward-compatible** — a descriptor-less prohibition parses and disposes byte-identically to today — and **fail-closed**: a partial, invalid, or absent descriptor falls through to the producer's existing fail-closed locate, never a silent green. `failFirst` stays a verify-time caller attestation (machine-proven fail-first is tracked in #1279).
+A `test`-tier prohibition may carry an optional, fail-closed `check` descriptor (`check_kind`, `check_target`, `check_rule`; #1278) so a wired, passing test needs no manual descriptor authoring. The reasoning is in [Spec-phase probes: edge and prohibition design](explanation/spec-phase-probe-design.md#prohibition-probe).
 
 **Requirements:**
 - REQ-PROHIB-01: The prohibition pass MUST run after the edge probe and emit a `## Prohibitions (must-NOT)` SPEC section.
@@ -4091,7 +4012,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 **Behavior:** Renders `state ~N commits back` inside the GSD-state segment when `STATE.md` carries a `state_head` stamp (#2573) and `HEAD` is at least `STATE_HEAD_ADVISORY_COMMITS` (20) commits past it. Both statusline formats carry it — the default renderer and the compact `statusline.state_format` one.
 
-**The threshold is 20, deliberately not 1.** With `commit_docs: true` (the default) the commit carrying a `STATE.md` sync advances `HEAD` by one, so a `> 0` threshold would render `state ~1 commits back` permanently on a project that is by construction fresh — alarm fatigue on the one always-visible surface.
+**The threshold is 20, deliberately not 1.** The reasoning is in [Read the statusline freshness marker](how-to/read-the-statusline-freshness-marker.md).
 
 **It degrades to silence rather than to a wrong answer.** The marker is absent — never "fresh" — when the stamp is malformed, when the project root does not own its `.git` (an enclosing unrelated repo would otherwise answer), in a `planning.sub_repos` workspace (the outer `HEAD` never advances when code lands in children), when history was rewound past the stamp, and when git is unavailable or slow. A freshness claim the project cannot substantiate degrades to *unknown*.
 
@@ -4136,15 +4057,12 @@ The reason `planning inspect` maps into its own flat schema rather than serializ
 
 **Behavior:** A default-off capability owns one boolean key, one agent, and one additive step. When the key is on, `gsd-dom-verifier` runs at `execute:wave:post` and writes `{phase}-DOM-VERIFY.md`; the orchestrator's `automated_ui_verification` step additionally considers `mcp__chrome-devtools__*` / `mcp__claude-in-chrome__*` when present.
 
-**The executor's tool surface is unchanged in every configuration.** Widening it was the reported proposal and was refused: for a first-party agent the static `tools:` list is the only control that exists — no capability can grant tools to one ([ADR-1244](adr/1244-capability-ecosystem.md) D2), no hook kind grants tool permissions ([ADR-857](adr/857-capability-system.md) D4), and there is no per-dispatch override. Browser reach lives in one purpose-built agent that carries no `Bash`.
-
-**Two independent gates, both fail-closed.** The capability's `activationKey` makes it resolve inactive when the key is off — `resolveLoopHooks` renders a hook only on `state.active === true` — and the step carries its own `when` guard. Tool presence alone never activates it: a browser MCP configured for unrelated work is not driven by default.
-
-**The pre-existing Playwright path is untouched.** `mcp__playwright__*` keeps the gating it already had (presence plus an active UI phase). Pulling it behind a new default-off key would have silently removed working behavior from current users on upgrade; the key gates only the newly added families.
-
-**It tolerates the browser-profile lock rather than coordinating it.** `chrome-devtools-mcp` holds an exclusive lock on its profile, so parallel waves collide. `--isolated` is a flag on the operator's own MCP server registration — GSD neither launches that server nor passes its arguments — so the verifier reports `could_not_look` / `profile_locked`, names the flag, and stops. No retry, no held-up wave.
-
-**`nothing_to_report` is never conflated with `could_not_look`.** A report claiming no issues when it never opened a browser is worse than no report; the artifact carries a closed reason enum so the two are always distinguishable.
+**Design points (the arguments are in [The live-DOM UAT capability](explanation/live-dom-uat-capability.md)):**
+- The executor's tool surface is unchanged in every configuration; browser reach lives in one purpose-built agent that carries no `Bash`.
+- Two independent fail-closed gates: the capability's `activationKey` and the step's own `when` guard. Tool presence alone never activates it.
+- The pre-existing `mcp__playwright__*` path keeps its gating; the key gates only the newly added families.
+- A browser-profile lock is tolerated, not coordinated: the verifier reports `could_not_look` / `profile_locked`, names `--isolated`, and stops.
+- `nothing_to_report` is never conflated with `could_not_look`; the artifact carries a closed `reason` enum.
 
 **Known limits:** no sandbox — once enabled, nothing constrains which origins are reached ([ADR-1244](adr/1244-capability-ecosystem.md) D5); DOM observation only, no screenshot diffing, accessibility audit, or performance tracing.
 
@@ -4162,11 +4080,7 @@ The reason `planning inspect` maps into its own flat schema rather than serializ
 
 **Behavior:** With the key enabled, the `invoke_reviewers` step dispatches each selected lane as a background job and joins all of them before `REVIEWS.md` and consensus are rendered. Wall-clock cost falls toward the slowest lane rather than the sum. Default remains `false`, preserving the existing sequential dispatch and its rate-limit protection.
 
-**The guard is strict equality, and it fails safe.** Only the exact value `true` opts in — `"1"`, `"yes"` and `"TRUE"` all stay sequential, so a mistyped config gets the conservative behavior rather than concurrent requests at a rate-limited provider. A failure to read the config falls back to sequential too. This polarity is deliberately the opposite of the `commit_docs` guard, which fails open: there, failing open preserves user intent; here it would fire the very requests the default exists to prevent.
-
-**Result ordering is unchanged in both modes.** Per-lane results are written to slug-scoped files and concatenated in reviewer-selection order after the join, so `gsd-review-lane-results.jsonl` reads identically whether lanes ran sequentially or concurrently. Completion order never reaches the artifact. This also means concurrent lanes never share an append handle — a lane result larger than the pipe-atomicity bound cannot interleave and corrupt the `models:` / `model_sources:` frontmatter that `write_reviews` renders from that file.
-
-**Per-lane semantics are untouched.** Timeouts, prompt budgets, the diagnostic stub for an empty or failed lane, explicit-lane failure ([ADR-2782](adr/2782-reviewer-lane-capability-surface.md) D4), trust/egress checks and result-file layout all behave exactly as they do sequentially. A failing lane does not abort its siblings.
+**Guard and ordering.** Only the exact value `true` opts in, and a failure to read the config falls back to sequential. Per-lane results are concatenated in reviewer-selection order after the join, so `gsd-review-lane-results.jsonl` is identical in both modes. Timeouts, prompt budgets, the diagnostic stub for an empty or failed lane, explicit-lane failure ([ADR-2782](adr/2782-reviewer-lane-capability-surface.md) D4), trust/egress checks and result-file layout are untouched, and a failing lane does not abort its siblings. The reasoning is in [About the code-review pipeline's design choices](explanation/review-pipeline-design.md#why-parallel-reviewer-lanes-fail-safe-and-keep-sequential-ordering).
 
 **Known limits:** convergence cycles stay sequential by design (`review → replan → re-review` has a genuine data dependency), so this speeds up each pass rather than reducing the number of passes; there is no concurrency bound, so every selected lane dispatches at once; and reviewer instances sharing one adapter dispatch concurrently against that single provider, which is the most likely way to hit a limit.
 
@@ -4233,23 +4147,13 @@ See [State a failing direction](how-to/state-a-failing-direction.md) and [`gsd-t
 
 ### 168. Runtime Identity
 
-**Purpose:** The predecessor package `get-shit-done-cc` publishes a binary named `gsd-tools`, and so does this one. They answer some of the same verb names with **different semantics**. [#3129](https://github.com/open-gsd/gsd-core/issues/3129) is the worked example: `phases.clear` **archives** here and **deletes** there. Both print success-shaped output, and `.planning/` is gitignored by default, so a user lost 43 phase directories with no error, no warning, and nothing recoverable from git. The failure was silent in both directions — the workflow could not tell it had reached the wrong handler, and the handler could not tell it had been called by a workflow written for a different contract (#3146).
+**Purpose:** The predecessor package `get-shit-done-cc` publishes a binary named `gsd-tools`, and so does this one. They answer some of the same verb names with **different semantics** ([#3129](https://github.com/open-gsd/gsd-core/issues/3129): `phases.clear` archives here and deletes there, with no error and nothing recoverable from git). The workflow could not tell it had reached the wrong handler, and the handler could not tell it had been called by a workflow written for a different contract (#3146). The reasoning behind the design is in [Runtime identity: why the PATH branch and the anchored probe](explanation/runtime-identity-design.md).
 
 **Behavior:** two independent defenses, one structural and one asserted.
 
-**Structural — the `PATH` branch.** The launcher's `PATH` resolution branch looks for **`gsd_run`** instead of `gsd-tools`. Only this package publishes `gsd_run`; the predecessor publishes `gsd-tools` and `gsd-sdk`. Our `gsd_run` follows its own symlink chain and executes the `gsd-tools.cjs` sitting **beside it**, so resolving it cannot land on a foreign handler.
-
-**Asserted — every other branch.** The path-based branches (a project-local install, a runtime config directory) have no such guarantee: they trust their configured location. So once resolution finishes, and before any verb runs, the preamble probes the tool it picked with `runtime-identity --raw` and matches the answer **anchored** against the compact payload. It exports the result as a two-valued `GSD_IDENTITY_STATUS` (`ok` / `unverified`) and, when it is `unverified`, prints one actionable line naming both plausible causes. The same `gsd-tools runtime-identity` verb remains available by hand, so a human or a support thread can settle "which tool am I actually running?" in one command.
-
-**The match is anchored at both ends, not a substring.** A substring search for `@opengsd/gsd-core` accepts the decoy `{"packageName":"get-shit-done-cc","note":"@opengsd/gsd-core"}`, which any colliding package could publish. The preamble instead requires the payload to *begin* with `{"packageName":"@opengsd/gsd-core"` **and to end with a closing brace**, so a truncated answer fails as well. Closing on `}` costs nothing in future-proofing: a JSON object's own brace is always the last character, whatever type the last value has.
-
-**The status is a value, not prose.** `GSD_IDENTITY_STATUS` exists so the gate can be tested — and read by a later step — without anyone parsing the warning text.
-
-**The byte budget is why the assertion arrived second.** The preamble is inlined into 113 shipped files, several of which sat within **single-digit bytes** of frozen size ceilings — `agents/gsd-verifier.md` had 2 bytes of headroom — and those caps are red lines, not budgets. A first attempt to inline an assertion broke five of them. What made it fit was collapsing the resolver's twenty near-identical `elif [ -f … ]` arms into a single candidate-list helper, which is worth far more bytes than the assertion costs: the preamble is now **1,876 bytes smaller** than the version that carried no assertion at all, so every one of the 113 files moved *away* from its ceiling.
-
-**It fails closed.** If no `gsd_run` is reachable, the resolver falls through its remaining path-based branches and finally errors with an install command. It does not fall back to executing whatever `gsd-tools` happens to be on `PATH` — that fallback *was* the vulnerability.
-
-**A doubly-sourced preamble cannot build a recursive launcher.** `command -v gsd_run` finds the shell *function* on a second source and would return the bare string `gsd_run`, defining the function in terms of itself. `unset -f gsd_run` leads that branch, so the second source resolves exactly as the first did. (An executability guard was tried here instead and removed: it rejected the bare name, fell through every branch, and hit the resolver's `exit 1` — which, in a *sourced* script, kills the caller's shell.)
+- **Structural — the `PATH` branch.** The launcher's `PATH` resolution branch looks for `gsd_run` instead of `gsd-tools`. Only this package publishes `gsd_run`, and it executes the `gsd-tools.cjs` beside it.
+- **Asserted — every other branch.** After resolution and before any verb runs, the preamble probes the chosen tool with `runtime-identity --raw` and matches the answer anchored at both ends against the compact payload. It exports a two-valued `GSD_IDENTITY_STATUS` (`ok` / `unverified`) and, when `unverified`, prints one line naming both plausible causes. `gsd-tools runtime-identity` stays available by hand.
+- **Fails closed.** If no `gsd_run` is reachable, the resolver falls through its path-based branches and finally errors with an install command; it never executes whatever `gsd-tools` is on `PATH`.
 
 **Known limits:**
 - **The assertion warns; it does not yet stop the run.** The rollout is warn-then-fail. It cannot hard-fail yet because an `@opengsd/gsd-core` older than the `runtime-identity` verb answers exactly as a foreign package does — neither answers — and at rollout the old-version case is the common one. The warning therefore names both causes. A later release turns `unverified` into a refusal.
@@ -4257,10 +4161,6 @@ See [State a failing direction](how-to/state-a-failing-direction.md) and [`gsd-t
 - The probe costs one extra process launch per preamble source. It is a pure local read of baked coordinates, deliberately kept off the SDK bridge for that reason.
 
 **Reference:** [`runtime-identity`](COMMANDS.md#runtime-identity) · [Diagnose which gsd-tools is running](how-to/diagnose-a-foreign-gsd-tools.md)
-
----
-
-_Generated by `scripts/gen-features.cjs` — add a fragment under `docs/features/` and run `--write`._
 
 ---
 
@@ -4377,164 +4277,63 @@ nullglob hazard) is untouched. See
 
 ### 3885. No Silent Swallow, No Verdict From Dropped Data
 
-**Purpose:** ADR-3473 §8.5 states the rule directly: a failure or a gap in the
-input must not be absorbed into an output that reads as authoritative. A
-routine that drops data it could not read or could not resolve, and then
-reports a clean result anyway, turns a diagnosable gap into a confidently
-wrong answer. This closes four instances of that collapse found across
-`gsd-tools`.
+**Purpose:** ADR-3473 §8.5: a failure or a gap in the input must not be absorbed into an
+output that reads as authoritative. This closes four instances of that collapse found across
+`gsd-tools`. The reasoning is in
+[Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md#no-silent-swallow-no-verdict-from-dropped-data-3885).
 
-**`intel query` no longer crashes past ~12000 levels of nesting (#3427).**
-`searchJsonEntries` / `matchesInValue` recursed with no depth bound at all —
-an intel JSON file nested deeply enough overflowed the call stack with an
-uncaught `RangeError` instead of a diagnosis. The original SDK-era bound
-(`MAX_JSON_SEARCH_DEPTH = 48`, lost in the ADR-0174 consolidation) is
-restored, paired with a `truncated` result field: a match at or above the
-ceiling is not returned, and the result says so rather than reporting a bare
-"not found" that is indistinguishable from a genuine miss. A match at depth
-48 (inclusive) or shallower is unaffected; the bound is on nesting depth, not
-breadth or total node count, so a shallow object with many siblings still
-works unchanged.
+**Behavior:**
+- `intel query` no longer overflows the stack on deeply nested JSON (#3427): nesting is
+  bounded at `MAX_JSON_SEARCH_DEPTH = 48` and the result carries a `truncated` field, so a
+  match past the ceiling reads as truncated, not absent.
+- `phase-plan-index` names an unresolved `depends_on:` token in its own `warnings[]` entry
+  and suppresses the wave-mismatch warning for that plan only (#3427). The token is escaped
+  before it enters the warning text.
+- `review.md` withholds `REVIEWS.md` when every lane failed (#3352), reports the failure,
+  and preserves per-lane outputs and non-empty `.err` files before cleanup.
+- Unreadable phase directories are distinguished from absent ones (#3473 B5) in
+  `countPhasePlansAndSummaries`, `runGapAnalysis` and two `init.cts` blocks, via
+  `context_read_error` / `phase_dir_read_error`.
 
-**`phase-plan-index` no longer blames the author for an edge the tool itself
-dropped (#3427).** A `depends_on:` token that resolves to no plan in the
-phase (typo, or a stale cross-phase reference) silently dropped that edge,
-making the dependent plan a DAG root — its own docstring recorded the intent
-as "ignore this edge, never a throw." The tool then compared the resulting
-degraded wave against the plan's declared `wave:` and reported the *author's
-correct* declaration as a mismatch. The unresolved token is now named in its
-own `warnings[]` entry (plan and token together), and the wave-mismatch
-warning is suppressed for that plan only — a plan with no dropped edges and a
-genuinely wrong `wave:` still warns as before. The token is escaped
-(quoted, control characters and embedded newlines backslash-escaped) before
-it is embedded in the warning text, so a `depends_on` value crafted to
-contain a newline or a quote cannot forge a second, fabricated warning entry.
-
-**A code-review run where every lane failed no longer writes `REVIEWS.md`
-from nothing (#3352).** `review.md`'s aggregation step wrote `REVIEWS.md`
-regardless of whether any lane actually produced results — a run where every
-lane failed still emitted a completed-looking review artifact, and the
-per-lane outputs and `.err` files that would have explained the failure were
-then destroyed by the run's own cleanup. `REVIEWS.md` is now withheld when
-the aggregate has zero lines (every lane failed, not merely skipped under a
-lower budget), the run reports the failure instead, and per-lane outputs and
-non-empty `.err` files are preserved beside the phase's artifacts before
-cleanup runs.
-
-**Unreadable directories are distinguished from absent ones (#3473 B5).**
-Four call sites collapsed an `EACCES`/`EIO` on a phase directory into the
-same "nothing here" result as a directory that genuinely does not exist —
-`countPhasePlansAndSummaries` (`hasContext:false`), `runGapAnalysis`, and two
-guarded blocks in `init.cts` (`context_path` absent). Each now distinguishes
-"could not read" from "does not exist" and names the discarded path and
-error in a dedicated field (`context_read_error` / `phase_dir_read_error`)
-rather than silently reading as absent.
-
-**Audited, no defect found:** every retry-set / swallowed-catch call site
-this phase's rule covers that had not already been fixed by a prior PR
-(`withPlanningLock`, `acquireStateLock`, `atomicRenameWithRetry`,
-`renameWithRetry`) was reviewed and found to already fail loudly on a fatal
-errno rather than folding it into a retry.
+**Audited, no defect found:** `withPlanningLock`, `acquireStateLock`,
+`atomicRenameWithRetry` and `renameWithRetry` already fail loudly on a fatal errno.
 
 **Known limits:**
-- A match deeper than 48 levels is still not surfaced by `intel query` — it
-  is reported as truncated rather than as absent, but the value itself is
-  not returned. Raising the ceiling is a separate decision.
-- `phase-plan-index`'s `waves` / `wave` fields remain computed from the
-  degraded DAG when an edge is dropped — this phase stops the tool from
-  manufacturing a false verdict about it, but does not invent the missing
-  edge. A consumer that schedules work from `wave` (e.g. `--wave N`
-  filtering) is still working from the degraded assignment.
-- `review.md`'s evidence preservation is bounded by what a lane actually
-  wrote — a lane that produced no output at all leaves nothing to preserve.
+- A match deeper than 48 levels is reported as truncated, and the value is not returned.
+- `phase-plan-index`'s `waves` / `wave` fields remain computed from the degraded DAG when an
+  edge is dropped.
+- `review.md`'s evidence preservation is bounded by what a lane actually wrote.
 
 ---
 
 ### 3897. Runtime Marker Resolution, Derived Codex Sandbox, and In-Phase Short-Form Dependencies
 
-**Purpose:** ADR-3473 §8.3 states the rule directly — one implementation per
-invariant, not a hand-maintained copy that quietly drifts from the rule it
-stands in for. This closes three instances across `gsd-tools`: a resolver
-that never read the install-time signal it was documented to read, a
-Codex sandbox map that was fully redundant with the tool contract it stood
-in for, and a dependency-resolution tier lost when the SDK lineage was
-retired.
+**Purpose:** ADR-3473 §8.3: one implementation per invariant, not a hand-maintained copy
+that drifts. This closes three instances across `gsd-tools`. The reasoning is in
+[Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md#why-the-runtime-marker-the-derived-codex-sandbox-and-short-form-dependencies-3897).
 
-**A non-Claude install now resolves its own runtime with no config
-needed (#3897).** `resolveRuntime`'s ladder was `GSD_RUNTIME` env var →
-project `config.runtime` → `'claude'` — the per-install `.gsd-runtime`
-marker the installer has written beside `VERSION` since #2297 was read by
-four separate hand-rolled copies (`model-resolver.cts`, and two more inside
-`gsd-cursor-subagent-start.js`), but never by `resolveRuntime` itself. A
-Codex, Cursor, or other non-Claude install with no `GSD_RUNTIME` set and no
-`runtime` key in `.planning/config.json` therefore still resolved `claude`
-everywhere `resolveRuntime` is consulted (slash-command style, `query
-teams-status`, `validate agents`'s agent-directory selection, and 19 other
-call sites). The marker is now the third rung — `GSD_RUNTIME` → `config.runtime`
-→ install marker → `'claude'` — so those installs resolve their own runtime
-by default. The marker's contents are never trusted verbatim: they are routed
-through the same name-normalization the env rung already uses, so a marker
-holding an unexpected or hostile value degrades exactly like an unexpected
-`GSD_RUNTIME` value would.
-
-**Codex sandbox permissions are derived from each agent's own tool contract,
-not a hand-maintained map (#3897).** `generateCodexAgentToml` looked up
-`sandbox_mode` in an 11-entry `CODEX_AGENT_SANDBOX` map, falling back to
-`read-only` — silently — for every role the map didn't name. Measured against
-all 35 shipped roles, the map's 11 entries agree with deriving `sandbox_mode`
-from each role's declared `tools:` frontmatter (`workspace-write` when it
-declares `Write` or `Edit`, `read-only` otherwise) with **zero disagreements**,
-so the map is deleted rather than clamped. The fallback, however, was
-under-granting: 16 of the 24 roles that hit it declare `Write`/`Edit` and
-would derive `workspace-write`. Pending a decision on whether Codex actually
-enforces `sandbox_mode` (a question the derivation can't answer on its own),
-those 16 are held at `read-only` by an explicit, self-invalidating hold
-list — a hold whose role no longer derives broader, or that names a role
-that no longer exists, fails loudly instead of being silently honored.
-**Every one of the 35 emitted `.toml` files is byte-identical to before this
-change** — the fix is in provenance (an explicit, reviewable rule instead of
-a silent default), not in any installed agent's actual permissions today.
-
-**`validate agents` now reports Codex sandbox drift (#3897).** A new
-`sandbox_posture` field — report-only, exit 0, same shape as the existing
-`codex_posture` — flags any installed Codex `.toml` whose `sandbox_mode`
-disagrees with what its role's tool contract derives. Populated only when
-the active runtime is `codex`.
-
-**`depends_on` accepts the bare plan number (#3897).** A plan's frontmatter
-could already reference a dependency by its full id (`"03-01-auth-hardening"`)
-or its canonical phase-plan prefix (`"03-01"`). A third form — the bare
-plan number alone (`"01"`) — existed in the retired SDK lineage but was lost
-when that lineage was consolidated; a plan written with it silently dropped
-the edge entirely, collapsing into wave 1 regardless of its declared
-dependency. That form is restored, scoped to the **same phase only**: `"01"`
-resolves to the sibling plan whose canonical id ends `-01`. This is an
-observable behavior change — a phase whose plans used the bare form and had
-silently collapsed into a single wave will now execute in its actual declared
-waves. Two plans in the same phase sharing a bare form resolve first-write-wins,
-by sorted plan-file order — deterministic, but arbitrary where the collision
-happens, matching the retired behavior exactly.
+**Behavior:**
+- `resolveRuntime` ladder is now `GSD_RUNTIME` → `config.runtime` → the install-time
+  `.gsd-runtime` marker → `'claude'`. The marker is normalized through the same routine as
+  the env rung.
+- `generateCodexAgentToml` derives `sandbox_mode` from each role's `tools:` frontmatter
+  (`workspace-write` when it declares `Write` or `Edit`, `read-only` otherwise); the
+  `CODEX_AGENT_SANDBOX` map is deleted. An explicit, self-invalidating hold list keeps the
+  16 roles that would derive broader at `read-only`. All 35 emitted `.toml` files are
+  byte-identical to before.
+- `validate agents` reports `sandbox_posture` (report-only, exit 0, populated only when the
+  active runtime is `codex`) for any installed Codex `.toml` whose `sandbox_mode` disagrees
+  with its derivation.
+- `depends_on` accepts the bare plan number (`"01"`), same phase only. A phase that used the
+  bare form and had collapsed into one wave now executes in its declared waves. Two plans
+  sharing a bare form resolve first-write-wins by sorted plan-file order.
 
 **Known limits:**
-- The 17 held Codex roles are pinned at `read-only`, not widened. A faithful
-  derivation from the tool contract would widen them, because they declare
-  `Write` or `Edit`; the previous hand-maintained map never listed them and
-  they fell through a silent `|| 'read-only'` default instead. Deriving *and*
-  holding keeps emitted TOML byte-identical for all 35 roles today while the
-  derivation becomes the single owner of the rule. Widening them is a follow-up
-  once Codex's actual enforcement of `sandbox_mode` is confirmed — until then a
-  hold is reversible and a widened sandbox is not. The hold list is
-  self-invalidating: an entry naming a role that no longer derives broader, or
-  that has no file in the shipped roster, fails rather than rotting into the
-  subset map this change deletes.
-- The bare plan-number form is ambiguous by construction across two plans in
-  the same phase that share a short form; first-write-wins is deterministic
-  but not a conflict warning. Prefer the full or canonical id when a phase's
-  plan numbering risks a short-form collision.
-- The install marker never feeds model-tier resolution (`model_profile_overrides`,
-  `model_policy.runtime_tiers`) — that still reads `config.runtime` alone, and
-  reporting-only host detection (`agent_runtime`) is a separate, pre-existing
-  ladder this change does not touch.
+- The held Codex roles stay at `read-only` until Codex's enforcement of `sandbox_mode` is
+  confirmed.
+- The bare plan-number form is ambiguous by construction when two plans in a phase share a
+  short form; prefer the full or canonical id then.
+- The install marker never feeds model-tier resolution, which reads `config.runtime` alone.
 
 ---
 
@@ -4542,45 +4341,28 @@ happens, matching the retired behavior exactly.
 
 **Purpose:** Make a bare `process.exit(...)` a lint error everywhere it matters, so the
 "nothing fails with success" defect class ADR-3889 exists to close cannot silently reopen
-through a new call site.
+through a new call site. The reasoning is in
+[Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md#why-the-raw-terminator-is-banned-by-construction-3910).
 
 **What changed (ADR-3889 Phase 6, #3910):**
 
 - New rule `local/require-registered-exit` (`eslint-rules/require-registered-exit.cjs`) flags
-  any `CallExpression` shaped exactly like `process.exit(...)`. It does **not** flag
-  `process.exitCode = N` — that assignment is the correct drain-then-exit pattern `runMain`
-  itself uses, and the two are structurally distinct (an assignment target is never a
-  `CallExpression`).
+  any `CallExpression` shaped exactly like `process.exit(...)`. It does not flag
+  `process.exitCode = N`.
 - Registered on four globs: `src/**/*.cts`, `scripts/**/*.cjs`, `hooks/**/*.js`,
-  `gsd-core/bin/**/*.cjs` (`eslint.config.mjs:420-426,545-547,574-576,601`). Registering on
-  `src/**/*.cts` — not only the emitted `gsd-core/bin/lib/*.cjs` mirrors, which are globally
-  eslint-ignored (ADR-457) — is load-bearing: a rule registered only on the emitted surface is
-  blind to the real sources, the same way `n/no-process-exit` went invisible (#3496).
-- The dead `n/no-process-exit: 'off'` carve-out for `hooks/**` is deleted: Phase 7 (#3911)
-  migrated every enforcement hook onto `terminateNow`, so it protected nothing.
-- Exactly two allowlist entries, repo-wide:
-  1. The body of `terminateNow` in `src/cli-exit.cts` — detected **structurally** (any
-     `process.exit()` lexically nested inside a function named `terminateNow`, *and* the file's
-     basename is `cli-exit.cts`), not by path+line, so it does not rot when the function moves.
-  2. `gsd-core/bin/gsd-tools.cjs`'s `ensureRuntimeBuild` bootstrap-failure path, via an inline
-     `// eslint-disable-next-line local/require-registered-exit` with a stated reason — it runs
-     *before* `./lib/cli-exit.cjs` is even required, so the registered-exit seam does not exist
-     yet at that point in the process's lifetime.
-- The last raw terminators in `src/**/*.cts` were migrated onto the seam, most notably
-  `src/io.cts`'s `error()`: it changed from an uncatchable `process.exit(1)` to a catchable
-  `throw new ExitError(1)` (stderr output is byte-identical; `runMain` projects the exit code).
-  `terminateNow` could not serve this site — ADR-3889 §1 makes exit codes 0 and 1
-  unallocatable, so `nameForExitCode(1)` throws. That control-flow change required three
-  interceptor fixes so an `ExitError` reaches `runMain`: `command-routing-hub`'s `dispatch()`
-  now rethrows it, and the profile-pipeline router's detached `.catch()` no longer calls
-  `error()` — it writes stderr and sets `exitCode` in place.
+  `gsd-core/bin/**/*.cjs` (`eslint.config.mjs:420-426,545-547,574-576,601`).
+- The dead `n/no-process-exit: 'off'` carve-out for `hooks/**` is deleted.
+- Exactly two allowlist entries, repo-wide: the body of `terminateNow` in `src/cli-exit.cts`
+  (detected structurally), and `gsd-core/bin/gsd-tools.cjs`'s `ensureRuntimeBuild`
+  bootstrap-failure path via an inline `eslint-disable-next-line`.
+- The last raw terminators in `src/**/*.cts` were migrated onto the seam; `src/io.cts`'s
+  `error()` now throws a catchable `ExitError(1)` with byte-identical stderr, and
+  `command-routing-hub`'s `dispatch()` and the profile-pipeline router were fixed so it
+  reaches `runMain`.
 - **Known limits (documented and test-pinned, not endorsed):** the rule matches the literal
-  `process.exit(...)` shape only, with no scope/flow analysis. It does not catch
-  `process['exit'](0)` (computed member access), `const e = process.exit; e(1)` (aliasing to a
-  local binding before calling), or `process.exit.call(...)`/`.apply(...)` (indirect invocation).
-  Catching these needs binding/scope-aware analysis, out of scope for this issue; pinning tests
-  in `tests/eslint-rules.test.cjs` assert today's non-detection so a future widening is a visible
-  choice, not a silent one.
+  `process.exit(...)` shape only. It does not catch `process['exit'](0)`, `const e =
+  process.exit; e(1)`, or `process.exit.call(...)`/`.apply(...)`; pinning tests in
+  `tests/eslint-rules.test.cjs` assert today's non-detection.
 
 See [Resolve a raw-terminator finding](how-to/resolve-a-raw-terminator-finding.md) for what to
 do when this rule fires, and [ADR-3889](adr/3889-process-exit-contract.md) for the exit-code
@@ -4682,23 +4464,7 @@ declaration through the versioned exit contract ([ADR-3889](adr/3889-process-exi
   [ADR-2980](adr/2980-payload-carried-error-is-a-degraded-result.md)'s compatibility boundary,
   deliberately preserved, not a bug to reconcile.
 
-**Explanation — why this is the shape it is:**
-
-ADR-2980 ratified `output({error})`'s exit-0 population on measured blast radius (`output` has 170
-direct callers) and Hyrum's Law grounds — a CLI exit code has no `/v2/` of its own, so normalizing
-it in place would have broken every caller already treating exit `0` as a soft signal. Its own
-"Revisit if" clause named the missing piece: *"a future `gsd-tools` major version provides a
-compatibility boundary that a CLI exit code otherwise lacks."* ADR-3889 §4 built exactly that
-boundary — a versioned projection selected by flag or env var, defaulting to today's behavior — and
-this phase is what wires `error()` and `output()` onto it. Declaring an outcome is unconditional and
-immediate; only its *projection* onto an integer is deferred behind the version switch, so the
-population ADR-2980 ratified keeps exiting `0` until a caller explicitly asks for something else.
-
-The count matters here too: an AST re-measure for this phase found **64** `output({error})` call
-sites across the same nine modules ADR-2980 named — not the 60 that ADR itself recorded, the drift
-concentrated in `frontmatter.cts`, `phase.cts`, and `roadmap.cts`. The `v2` projection is asserted
-over the enumerated 64, not a restated 60; see ADR-2980's amendment for the module-by-module
-breakdown.
+**Why this shape:** declaring an outcome is unconditional; only its projection onto an integer is deferred behind the version switch. The reasoning, the Hyrum's Law grounds, and the 64-site re-measure are in [ADR-2980](adr/2980-payload-carried-error-is-a-degraded-result.md) (including its amendment) and [ADR-3889](adr/3889-process-exit-contract.md) §4.
 
 See [Adopt the v2 exit contract](how-to/adopt-the-v2-exit-contract.md) for how to opt in and what
 it means for a CI gate, [`docs/json-errors.md`](json-errors.md#outcome-declaration-and-the-versioned-exit-contract-adr-3889-4-3912)
@@ -4711,50 +4477,31 @@ for the full reference, and
 ### 3951. Reachable Lint Rules and a Non-Destructive Quick-Task Append
 
 **Purpose:** Make two ESLint rules cover the code they were written to govern, and stop
-`quick-tasks-append` from overwriting curated `progress.*` values on a body-only write.
+`quick-tasks-append` from overwriting curated `progress.*` values on a body-only write. The
+reasoning is in
+[Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md#why-two-lint-rules-had-to-reach-their-whole-surface-3951).
 
 **What changed:**
 
-- **`local/no-adhoc-markdown-parsing` reaches its whole registered surface.** The rule short-circuited
-  unless a file's path matched a flat `src/*.cts` pattern, so it **self-gated on its own filename**.
-  Two consequences: 28 `.cts` files in `src/` subdirectories sat inside the `src/**/*.cts` glob it was
-  registered on and were silently skipped, and the rule could not be extended by configuration at all —
-  widening the glob alone left it inert. Both halves now move together, and a test pins that the gate
-  and the registration agree in *both* directions.
-- **The rule now also covers `tests/**` and `scripts/**`**, which surfaced **80 hand-rolled markdown
-  parses across 43 test files**. Seventy are routed through the existing `markdown-sectionizer` and
-  `markdown-table` seams; ten are suppressed with a stated reason (six of those are a shell-pipe
-  detector whose regex merely resembles a table).
-- **`local/no-adhoc-regex-escape` sees property access.** Its unsafe-`new RegExp` arm examined only
-  bare identifiers, so `new RegExp(obj['key'])` — the shape runtime data actually arrives in — was
-  invisible. That is why it never fired on a known ReDoS. It now inspects `MemberExpression`, with an
-  exemption keyed strictly on the property being `source` (18 safe sites), plus provenance exemptions
-  for `_SOURCE` constants reached through a required module (3 sites).
-- **`quick-tasks-append` can write the canonical row.** Optional `--quick-id`, `--slug` and
-  `--directory` let a caller that has a real quick task emit the same row `/gsd-quick` renders. Omit
-  them — as `fast.md` does, having neither an id nor a directory — and the row is byte-identical to
-  before.
-- **A body-only append no longer re-derives progress.** The route was the only body-only STATE.md
-  writer not passing `{ resync: false }`, so appending one row triggered a full re-derive of the
-  disk-derived `progress.*` frontmatter and replaced curated values. Reproduced: a project with two
-  real phase directories and a curated `total_phases: 25` collapsed to `2` on append.
-
-**Found by the widening:** `tests/config-field-docs.test.cjs` asserted that
-`workflow.subagent_timeout`'s documented default is not `600` — but read the **Type** column instead
-of **Default**, so it compared `'number'` against `'600'` and could never fail. The guard against
-regressing to the old seconds-based default had been inert. It is now row-scoped and real.
+- `local/no-adhoc-markdown-parsing` no longer gates on its own filename, so it reaches the 28
+  `.cts` files in `src/` subdirectories and now also covers `tests/**` and `scripts/**` (80
+  parses in 43 test files: 70 routed through `markdown-sectionizer` / `markdown-table`, 10
+  suppressed with a stated reason). A test pins that the gate and the registration agree in
+  both directions.
+- `local/no-adhoc-regex-escape` inspects `MemberExpression`, with an exemption keyed strictly
+  on the property being `source` (18 sites) plus `_SOURCE` provenance exemptions (3 sites).
+- `quick-tasks-append` accepts optional `--quick-id`, `--slug` and `--directory` to emit the
+  canonical row; omitted, the row is byte-identical to before.
+- A body-only append passes `{ resync: false }`, so it no longer re-derives `progress.*`.
+- `tests/config-field-docs.test.cjs` now reads the **Default** column for
+  `workflow.subagent_timeout`, so the guard against the old seconds-based default can fail.
 
 **Known limits:**
 
-- #3426 and #3239 are **not** closed by this. Their hand-rolled scans in
-  `tests/package-legitimacy-gate.test.cjs` are built from line filters and `split('|')`, not the
-  regex-literal fingerprints this rule detects — measured at zero violations even with the gate
-  bypassed. They need new detectors, which is a separate design.
-- The 10 suppressions are suppressions, not fixes. Each names why the raw markdown text is the
-  subject of that assertion.
-- The `src/` subdirectory hole was **latent** — zero violations existed there when it was fixed. It is
-  closed because "no violations today" is not a property that keeps holding, not because it was
-  hiding anything.
+- #3426 and #3239 are not closed: their scans in `tests/package-legitimacy-gate.test.cjs`
+  need new detectors.
+- The 10 suppressions are suppressions, not fixes; each names why the raw markdown text is
+  the subject of that assertion.
 
 ---
 
@@ -4806,47 +4553,28 @@ for how `execute:task` differs from the twelve prose-dispatched points.
 
 ### 4014. Unreadable-Directory Scope Signal
 
-**Purpose:** ADR-3473 §8.4 ("failure is a value") applies to filesystem
-listings, not only command argv. `#3885` (B5) gave `roadmap analyze`,
-`gap-checker`, and `init`'s JSON bundles a `context_read_error` /
-`phase_dir_read_error` string naming an unreadable phase directory — but the
-underlying `has_context` / `hasContext` boolean stayed `false` either way,
-so a consumer branching on that boolean alone still cannot tell "genuinely
-no context file" from "could not read the directory at all." This closes
-that gap with a typed signal, reusing ADR-3180's existing frozen `SCOPE`
-enum rather than a new vocabulary.
+**Purpose:** ADR-3473 §8.4 ("failure is a value") applies to filesystem listings. #3885 (B5)
+added a `context_read_error` / `phase_dir_read_error` string, but the `has_context` /
+`hasContext` boolean stayed `false` either way. This adds a typed signal that reuses
+ADR-3180's frozen `SCOPE` enum. The reasoning is in
+[Why failures are surfaced, not absorbed](explanation/why-failures-are-surfaced-not-absorbed.md#a-typed-scope-signal-for-unreadable-directories-4014).
 
-**`findContextMdIn` (`src/planning-workspace.cts`) now reports its own
-scope.** Called with a directory path, it returns `{ file, files, scope }`
-instead of a bare filename-or-null, and never throws — an unreadable
-directory reports `scope: 'unreadable'` (previously it threw, forcing every
-caller to hand-roll its own `try`/`catch`); a genuinely absent directory
-(`ENOENT`) reports `scope: 'complete'`, the same "real empty" answer as
-today. The array-input call form (an already-read listing) is unchanged.
-
-**Five downstream call sites gain an additive `scope` field, none renamed
-or removed:** `roadmap analyze`'s `AnalyzePhase.context_scope`,
-`gap-checker`'s `phase_dir_scope`, and `init`'s `context_scope` on all three
-JSON bundles (`init plan-phase`, `init phase-op`, `init manager`) —
-including `cmdInitManager`, whose own read failure previously vanished into
-a bare empty `catch {}` with no signal of any kind. `getPhaseFileStats`
-(`src/core-utils.cts`) — the shared listing owner behind `roadmap analyze`
-and `init`'s `has_context` — no longer lets its own failed read get masked
-by an unrelated, already-successful `scanPhasePlans` scope on the same
-phase directory.
+**Behavior:**
+- `findContextMdIn` (`src/planning-workspace.cts`), called with a directory path, returns
+  `{ file, files, scope }` and never throws. An unreadable directory reports
+  `scope: 'unreadable'`; an absent one (`ENOENT`) reports `scope: 'complete'`. The
+  array-input call form is unchanged.
+- Five call sites gain an additive `scope` field, none renamed or removed:
+  `roadmap analyze`'s `AnalyzePhase.context_scope`, `gap-checker`'s `phase_dir_scope`, and
+  `init`'s `context_scope` on `init plan-phase`, `init phase-op` and `init manager`.
+- `getPhaseFileStats` (`src/core-utils.cts`) no longer lets its failed read be masked by an
+  already-successful `scanPhasePlans` scope on the same directory.
 
 **Known limits:**
-- `context_read_error` / `phase_dir_read_error`'s message text is now a
-  fixed "Could not read phase directory `<path>`" rather than embedding the
-  underlying OS errno text — `findContextMdIn`'s directory-string form
-  reports only the `SCOPE` discriminator, not the raw caught error. The
-  field's presence and type are unchanged; only its message detail is
-  coarser than before #4014.
-- `init.cts`'s three call sites call `findContextMdIn` for the scope signal
-  and then still run their own, pre-existing `fs.readdirSync` on the same
-  path for the rest of their output — an intentional, additive-only choice
-  to avoid altering already-complex failure control-flow at those sites,
-  not a performance optimization.
+- `context_read_error` / `phase_dir_read_error` is now a fixed "Could not read phase
+  directory `<path>`" without the OS errno text.
+- `init.cts`'s three call sites still run their own `fs.readdirSync` on the same path after
+  `findContextMdIn`: an additive-only choice, not a performance optimization.
 
 ---
 
@@ -4903,17 +4631,7 @@ The exit path asks nothing, writes no `STATE.md`, and does not replan, so the pl
 
 ### 4836. Graphify CLI Preferred for Planner and Researcher Graph Queries
 
-**Purpose:** `gsd-planner` gets **one** knowledge-graph query per phase and
-`gsd-phase-researcher` gets two or three. That single shot decides which modules
-the plan treats as related, and therefore how tasks are ordered into waves. It
-was spent on the built-in reader, which seeds by case-insensitive **substring**
-match over a node's label and description and then expands a hardcoded two hops
-— so the phase "User Authentication" seeds on `author`, `authoring`, and
-`unauthorized` with exactly the same weight as `authenticate`, and when the
-inflated result exceeds `--budget` the trimmer drops edges by confidence tier.
-The `graphify` CLI, already a hard dependency of `/gsd-graphify build`, ranks
-seeds (IDF weighting, trigram fuzzy matching) and applies context filters before
-traversal.
+**Purpose:** `gsd-planner` gets one knowledge-graph query per phase and `gsd-phase-researcher` two or three, and that single shot decides how tasks are ordered into waves. It was spent on the built-in reader's substring seeding; the `graphify` CLI ranks seeds and filters context before traversal. The argument is in [Why planners and researchers query graphify first](explanation/graphify-query-path.md).
 
 **Both prompts now prefer the CLI and fall back to the built-in reader.** The
 branch is `command -v graphify`, the same degradation shape the repo already
@@ -4924,11 +4642,7 @@ covers edge cases — a CI checkout with a committed graph, a binary since remov
 — not the common path. No new tool grant either: both agents already have
 `Bash`.
 
-**The planner additionally runs `graphify affected`.** The reference states its
-own goal as "which subsystems may be affected by changes in this phase", which is
-literally reverse traversal by relation. The built-in reader only approximates it
-with undirected two-hop expansion, and has no equivalent verb, so `affected` is
-skipped on the fallback path.
+**The planner additionally runs `graphify affected`** (reverse traversal by relation); it is skipped on the fallback path, which has no equivalent verb.
 
 **`gsd-tools graphify status` now returns `graph_path`.** The CLI takes the graph
 location as `--graph`, and the prompts must not re-derive
@@ -4963,7 +4677,7 @@ default location.
 - **Unreadable is a distinct state from none.** A gate reads evidence as `found` (a value; an empty file is `found ''`), `none` (the thing authoritatively does not exist: `ENOENT`, or `ENOTDIR` because a parent is a file) or `unreadable` (it exists or may exist and could not be read: `EISDIR`, `EACCES`, `EIO`, an encoding failure, an unresolvable phase, a plan scan that did not see every plan). `none` is a legitimate answer and each gate keeps its documented policy for it; `unreadable` is never coerced to `''`, `false` or an empty list. The verdict builder for the `unreadable` arm returns a verdict typed `outcome: 'unreadable'`, so a passing verdict from that arm does not type-check. A drift guard (`lint-gate-evidence-drift`) rejects the remaining shapes the type cannot see: an empty `catch` in a gate, a tolerant reader that returns `''`, a verdict arm that passes from `unreadable`, and a gate verb that sets its own exit code.
 - **The exit code is a function of the verdict.** One total function maps the outcome to a registered code: positive verdicts `0`; a negative verdict `1` in status mode; a read-and-genuinely-empty scope `66` (`NO_INPUT`); `unreadable` `69` (`UNAVAILABLE`) in both modes. No verb picks a code. The gate's own `block` decision is untouched: policy did not change, only the outcome and the exit for the unreadable arms.
 - **Status mode and payload mode.** `phase uat-passed` and the `verify` verbs that shell callers branch on (`artifacts`, `plan-structure`, `phase-completeness`, `references`, `commits`, `key-links`) are status mode: exit `1` is a negative verdict and the JSON on stdout is still the verdict. The gates that are routed as `check <verb>`, and the three drift verbs, are payload mode.
-- **Why `check` verbs stay payload mode.** The gate dispatch (`execute-phase/steps/wave-post-gate-hooks.md` step 1, `references/loop-hook-dispatch.md`) reads `.block` from stdout and treats a non-zero exit as a command failure routed by the capability's `onError`. `capabilities/drift` declares schema-drift `blocking: true, onError: skip`; exit `1` for "blocked" would be dropped as a skippable failure. A blocking verdict is therefore a delivered answer and exits `0`; only "could not look" exits `69`, which the dispatch routes as a step-1 command failure.
+- **`check` verbs stay payload mode:** a blocking verdict is a delivered answer and exits `0`; only "could not look" exits `69`. The reasoning is in [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md), [Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170) and [ADR-5057](adr/5057-one-owner-per-workflow-verdict.md).
 - **Callers are migrated.** The workflow and agent shell blocks that consume these verbs capture the status (`… && X_EXIT=0 || X_EXIT=$?`, safe under `set -e`), read the JSON for `0`, `1` and `66`, and treat `69` or anything else as "could not run". Fail-closed consumers (the safe-resume and TDD gates) halt with a message that is not "missing RED commit".
 
 **Declared behavior changes:**
@@ -5021,7 +4735,7 @@ See [ADR-3997](adr/3997-review-prompt-capability-contributions.md), the [capabil
 
 **Cost and limits:** Each consult sends the full session transcript to the advisor model, billed at the advisor's rate, so the key is off by default. The advisor is a single session-wide model (per-agent control is tracked upstream in anthropics/claude-code#73072) and may share a family with the executor, so the answer is an early warning rather than decorrelated review. The Claude Code advisor is an experimental host feature; GSD takes no dependency on its interface beyond the tool being present.
 
-See [ADR-4795](adr/4795-advisor-prefilter-in-review-pipeline.md), [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) and the [advisor caveats](gsd-core/references/model-profiles.md).
+See [ADR-4795](adr/4795-advisor-prefilter-in-review-pipeline.md), [Enable the advisor pre-filter](how-to/enable-the-advisor-prefilter.md) and the [advisor caveats](../gsd-core/references/model-profiles.md).
 
 ---
 
