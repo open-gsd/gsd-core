@@ -11,14 +11,10 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
-const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const helpers = require('./helpers.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { FAKE_WSL_HOST_PREAMBLE, WSL_WARNING_PATTERN, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const shellCmdProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -470,20 +466,36 @@ process.stdout.write('PROBE_JSON ' + JSON.stringify({
 `;
 
 describe('#5850 the installer writes the shell key', () => {
+  const runProbe = (t, opts) => runWin32InstallerChild(t, WIN32_INSTALL_PROBE, { tmpPrefix: 'gsd-5850-win32-', ...opts });
+  const probeReport = (result) => {
+    const probe = readProbeJson(result);
+    assert.ok(probe, `probe reported nothing: outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
+    return probe;
+  };
+
   test('install + finishInstall on a win32 host write PowerShell hooks stamped shell powershell and a neutral statusLine', (t) => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5850-win32-'));
-    t.after(() => helpers.cleanup(home));
-    const result = runNode(['-e', WIN32_INSTALL_PROBE], {
-      cwd: path.join(__dirname, '..'),
-      env: helpers.installSpawnEnv(isolatedEnv({ home, override: { PROBE_REPO: path.join(__dirname, '..'), GSD_TEST_MODE: '1' } })),
-      timeoutMs: INSTALL_TIMEOUT_MS,
-    });
-    const line = result.stdout.split('\n').find((entry) => entry.startsWith('PROBE_JSON '));
-    assert.ok(line, `probe reported nothing: outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
-    const probe = JSON.parse(line.slice('PROBE_JSON '.length));
+    const probe = probeReport(runProbe(t));
     assert.ok(probe.powershell > 0, JSON.stringify(probe));
     assert.equal(probe.chain, 0, JSON.stringify(probe));
     assert.equal(probe.unstamped, 0, JSON.stringify(probe));
     assert.ok(String(probe.statusLine).startsWith('powershell -NoProfile -Command "if (Test-Path'), JSON.stringify(probe));
+  });
+
+  // #5888: on a WSL host the faked-win32 child inherits WSL_DISTRO_NAME and a /proc/version
+  // naming "microsoft", and the installer's load-time WSL check exits 1 before install() runs.
+  // Present both signals on any host: without the isolation the probe must hit that exit (so the
+  // fake host is real), with it the probe must reach finishInstall().
+  const fakeWslHost = { preamble: FAKE_WSL_HOST_PREAMBLE, env: { WSL_DISTRO_NAME: 'Ubuntu' } };
+
+  test('#5888 on a faked WSL host the probe takes the installer WSL exit without the isolation', (t) => {
+    const result = runProbe(t, { ...fakeWslHost, isolateWsl: false });
+    assert.equal(result.exitCode, 1, `expected exit 1; got outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
+    assert.match(result.stderr, WSL_WARNING_PATTERN);
+  });
+
+  test('#5888 on a faked WSL host the isolated probe still writes PowerShell hooks', (t) => {
+    const probe = probeReport(runProbe(t, fakeWslHost));
+    assert.ok(probe.powershell > 0, JSON.stringify(probe));
+    assert.equal(probe.unstamped, 0, JSON.stringify(probe));
   });
 });

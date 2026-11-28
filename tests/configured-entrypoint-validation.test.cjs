@@ -14,9 +14,7 @@ require('node:test').afterEach(() => {
 });
 
 const helpers = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { FAKE_WSL_HOST_PREAMBLE, WSL_WARNING_PATTERN, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const { install, installAllRuntimes, finishInstall, selectConfiguredEntrypointsForValidation } = require('../bin/install.js');
@@ -857,6 +855,7 @@ Object.defineProperty(process, 'platform', { value: 'win32' });
 // Host-independent: a real Windows host carries a real Git Bash, and blanking the discovery
 // env vars is spelling-sensitive there (ProgramFiles / PROGRAMFILES). Make no bash.exe exist
 // for this probe, whatever the host has, so the 'no Git Bash found' host is the one under test.
+// (#5888: the host's WSL signals are hidden by runWin32InstallerChild, not here.)
 const nodeFs = require('node:fs');
 const realExistsSync = nodeFs.existsSync;
 nodeFs.existsSync = (p) => (/[\\\\/]bash\\.exe$/i.test(String(p)) ? false : realExistsSync(p));
@@ -875,17 +874,16 @@ process.stdout.write('PROBE_JSON ' + JSON.stringify({
 }) + '\\n');
 `;
 
-function gsd5100RunWin32InstallProbe(t, runtime) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-win32-'));
-  t.after(() => helpers.cleanup(home));
-  const result = runNode(['-e', GSD_5100_WIN32_INSTALL_PROBE], {
-    cwd: path.join(__dirname, '..'),
-    env: helpers.installSpawnEnv(isolatedEnv({
-      home,
-      override: {
-      PROBE_REPO: path.join(__dirname, '..'),
+// `env` stands in for host variables (the #5888 case passes a WSL host's WSL_DISTRO_NAME);
+// the probe's own blanks below, and runWin32InstallerChild's WSL isolation, win over it. So the
+// #5888 case's WSL_DISTRO_NAME is discarded before the child runs, which is what that case checks.
+function gsd5100RunWin32InstallProbe(t, runtime, { preamble = '', env = {} } = {}) {
+  const result = runWin32InstallerChild(t, GSD_5100_WIN32_INSTALL_PROBE, {
+    preamble,
+    tmpPrefix: 'gsd-5100-win32-',
+    env: (home) => ({
+      ...env,
       PROBE_RUNTIME: runtime,
-      GSD_TEST_MODE: '1',
       // #5848: under a spoofed win32 os.tmpdir() reads TEMP/TMP, else the unset
       // SystemRoot and yields the RELATIVE 'undefined\\temp' (a dir inside the repo
       // root, the probe's cwd). Point both at an os.tmpdir()-based directory.
@@ -902,18 +900,15 @@ function gsd5100RunWin32InstallProbe(t, runtime) {
       ProgramFiles: '',
       'ProgramFiles(x86)': '',
       SystemDrive: '',
-      },
-    })),
-    timeoutMs: INSTALL_TIMEOUT_MS,
+    }),
   });
-  const marker = 'PROBE_JSON ';
-  const line = result.stdout.split('\n').find(entry => entry.startsWith(marker));
+  const probe = readProbeJson(result);
   assert.ok(
-    line,
+    probe,
     `the win32 install probe must report its summary on stdout; got outcome=${result.outcome} `
       + `exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`,
   );
-  return { ...JSON.parse(line.slice(marker.length)), expectedTmpdir: home };
+  return { ...probe, expectedTmpdir: result.home };
 }
 
 test('#5850 claude portable install on a win32 host with no Git Bash registers PowerShell hooks and needs no bash', (t) => {
@@ -947,3 +942,42 @@ test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entrie
       + `entries to the validation gate; got ${JSON.stringify(probe)}`,
   );
   });
+
+// #5888: the probe above fakes win32 in a child that inherits the host. On a WSL
+// host that child saw WSL_DISTRO_NAME and a /proc/version naming "microsoft", so
+// the installer's load-time WSL check exited 1 before install() ran. Present both
+// signals here (the env override stands in for the host's variable, the preamble
+// for its /proc/version) and require the probe to still reach install().
+test('#5888 the #5100 win32 install probe is independent of a WSL host', (t) => {
+  const probe = gsd5100RunWin32InstallProbe(t, 'claude', {
+    preamble: FAKE_WSL_HOST_PREAMBLE,
+    env: { WSL_DISTRO_NAME: 'Ubuntu' },
+  });
+  // Reaching install() at all is the point; since #5850 claude registers PowerShell hooks there.
+  assert.ok(probe.total > 0, `the win32 install probe must reach install() on a WSL host; got ${JSON.stringify(probe)}`);
+  assert.equal(probe.unresolvedBash, 0, `claude portable hooks must not require bash; got ${JSON.stringify(probe)}`);
+});
+
+// #5888 positive control: without the isolation, the faked-win32 installer must
+// still take its WSL exit, both from WSL_DISTRO_NAME and from the
+// FAKE_WSL_HOST_PREAMBLE /proc/version. Keeps the WSL warning covered and proves
+// the preamble actually presents WSL, so the #5888 case above can't pass vacuously.
+const GSD_5888_BARE_WIN32_REQUIRE = `
+Object.defineProperty(process, 'platform', { value: 'win32' });
+require(require('node:path').join(process.env.PROBE_REPO, 'bin', 'install.js'));
+`;
+
+for (const [label, opts] of [
+  // Row 1 stays even though it needs no fake-host preamble and adds nothing on a
+  // real WSL host: the installer checks WSL_DISTRO_NAME first and returns before
+  // reading /proc/version, so on any other host (CI included) this is the only row
+  // that reaches the env-var branch. Row 2 blanks the variable to reach the file branch.
+  ['WSL_DISTRO_NAME', { env: { WSL_DISTRO_NAME: 'Ubuntu' } }],
+  ['/proc/version via FAKE_WSL_HOST_PREAMBLE', { env: { WSL_DISTRO_NAME: '' }, preamble: FAKE_WSL_HOST_PREAMBLE }],
+]) {
+  test(`#5888 a faked-win32 installer on a WSL host still exits with the WSL warning (${label})`, (t) => {
+    const result = runWin32InstallerChild(t, GSD_5888_BARE_WIN32_REQUIRE, { ...opts, isolateWsl: false, tmpPrefix: 'gsd-5888-wsl-' });
+    assert.equal(result.exitCode, 1, `expected exit 1; got outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
+    assert.match(result.stderr, WSL_WARNING_PATTERN);
+  });
+}
