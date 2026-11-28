@@ -23769,3 +23769,470 @@ describe('state update-progress: an unscoped decline names the cause and the fix
     assert.ok(!('hint' in out));
   });
 });
+
+// #6174: regression tests, block-scoped so their top-level names stay local
+// (lint-test-file-count caps the files per module).
+{
+/**
+ * #6174 — `state milestone-switch` and `milestone complete` must not silently
+ * discard operator state.
+ *
+ * - milestone-switch rebuilt the frontmatter from a fixed key list, so a custom
+ *   key such as `team_owner` was lost; it now carries the unclassified keys.
+ * - Both commands replaced `## Current Position` with the four template lines,
+ *   deleting operator lines. Every line the reset does not rewrite now moves
+ *   under `## Accumulated Context`, listed in the result as written; one that
+ *   still reads as a field is a list item in the file.
+ */
+
+const { describe, test, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const fc = require('./helpers/fast-check-setup.cjs');
+
+const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
+const { reconstructFrontmatter, stripFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+const { sliceSection } = (() => {
+  // Local section slicer for assertions: text between `## <name>` and the next `## ` heading.
+  const sliceSection = (doc, name) => {
+    const lines = doc.split('\n');
+    const start = lines.findIndex((l) => l.replace(/\r$/, '') === `## ${name}`);
+    if (start === -1) return null;
+    let end = lines.length;
+    let fence = false;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^\s*(```|~~~)/.test(lines[i])) fence = !fence;
+      if (!fence && /^## /.test(lines[i])) { end = i; break; }
+    }
+    return lines.slice(start + 1, end);
+  };
+  return { sliceSection };
+})();
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+const deps = {
+  clock: Object.freeze({
+    today: () => '2026-06-27',
+    localToday: () => '2026-06-27',
+    nowIso: () => '2026-06-27T12:00:00.000Z',
+  }),
+};
+const SWITCH = { kind: 'milestoneSwitch', version: 'v2.0', name: 'Second' };
+const COMPLETE = { kind: 'milestoneComplete', version: 'v1.0', nextMilestoneCommand: '/gsd-new-milestone' };
+const INTENTS = { milestoneSwitch: SWITCH, milestoneComplete: COMPLETE };
+
+const TEMPLATE_LINES = ['Phase: 3 (Execution)', 'Plan: 2 of 4', 'Status: Executing', 'Last activity: 2026-06-01 — worked'];
+
+function state({ fm = ['gsd_state_version: 1.0', 'milestone: v1.0', 'team_owner: ops'], position = TEMPLATE_LINES, accumulated = ['### Decisions', '', '- keep it simple'], eol = '\n' } = {}) {
+  const parts = [];
+  if (fm) parts.push('---', ...fm, '---', '');
+  parts.push('# Project State', '');
+  if (position) parts.push('## Current Position', '', ...position, '');
+  if (accumulated) parts.push('## Accumulated Context', '', ...accumulated, '');
+  parts.push('## Session', '', 'Last session: 2026-06-01', '');
+  return parts.join(eol);
+}
+
+const EXTRAS = ['Blocked on: vendor sign-off', 'Carry-over: plan 3-02'];
+const POSITION_WITH_EXTRAS = [TEMPLATE_LINES[0], EXTRAS[0], TEMPLATE_LINES[1], TEMPLATE_LINES[2], EXTRAS[1], TEMPLATE_LINES[3]];
+
+const positionTemplateCount = (doc) => (sliceSection(doc, 'Current Position') || [])
+  .filter((l) => l.trim() !== '').length;
+
+describe('#6174 milestoneSwitch preserves unknown frontmatter keys', () => {
+  test('a custom key survives with its value and the reset fields hold the reset values', () => {
+    const out = transitionCore(state(), SWITCH, deps).content;
+    assert.match(out, /^team_owner: ops$/m);
+    assert.match(out, /^milestone: v2\.0$/m);
+    assert.match(out, /^milestone_name: Second$/m);
+    assert.match(out, /^status: planning$/m);
+    assert.match(out, /^last_updated: ['"]?2026-06-27T12:00:00\.000Z['"]?$/m);
+    assert.match(out, /^last_activity: ['"]?2026-06-27['"]?$/m);
+    assert.match(out, /^progress:\n(?: {2}.*\n)*? {2}total_phases: 0$/m);
+    assert.doesNotMatch(out, /milestone: v1\.0/);
+  });
+
+  test('custom keys named like Object.prototype members are carried, and a `__proto__` key stays data', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', 'constructor: c1', 'toString: t1', 'hasOwnProperty: h1', '__proto__:', '  polluted: yes'];
+    const out = transitionCore(state({ fm }), SWITCH, deps).content;
+    for (const line of ['constructor: c1', 'toString: t1', 'hasOwnProperty: h1', '__proto__:', '  polluted: yes']) {
+      assert.ok(out.split('\n').includes(line), `${line} was dropped`);
+    }
+    assert.strictEqual({}.polluted, undefined);
+  });
+
+  test('dropped curated keys stay dropped, the others keep their original order', () => {
+    // Order is the document's own, not the fixed order the base rebuild wrote: the splice keeps
+    // an unchanged key's raw text and position, so the output frontmatter differs from the base's by
+    // design for a hand-edited STATE.md (#6174 needs this to keep comments). The bytes are pinned.
+    const fm = ['team_owner: ops  # on-call', 'status: executing', 'gsd_state_version: 1.0', 'stopped_at: here', 'milestone: v1.0',
+      'progress:', '  percent: 40', 'z_custom: last'];
+    const head = transitionCore(state({ fm }), SWITCH, deps).content.split('\n\n')[0];
+    assert.strictEqual(head, [
+      '---', 'team_owner: ops  # on-call', 'status: planning', 'gsd_state_version: 1.0', 'milestone: v2.0', 'progress:',
+      '  total_phases: 0', '  completed_phases: 0', '  total_plans: 0', '  completed_plans: 0', '  percent: 0',
+      'z_custom: last', 'milestone_name: Second', 'last_updated: "2026-06-27T12:00:00.000Z"', 'last_activity: 2026-06-27', '---',
+    ].join('\n'));
+  });
+
+  test('(control) a frontmatter in the canonical order the base wrote is byte-identical to the base rebuild', () => {
+    const reset = {
+      gsd_state_version: '1.0', milestone: 'v2.0', milestone_name: 'Second', status: 'planning',
+      last_updated: '2026-06-27T12:00:00.000Z', last_activity: '2026-06-27',
+      progress: { total_phases: 0, completed_phases: 0, total_plans: 0, completed_plans: 0, percent: 0 },
+    };
+    const canonical = `---\n${reconstructFrontmatter({ ...reset, milestone: 'v1.0', milestone_name: 'First', status: 'executing' })}\n---`;
+    const body = ['', '# Project State', '', '## Current Position', '', ...TEMPLATE_LINES, '', '## Accumulated Context', '', '- ctx', ''].join('\n');
+    for (const intent of [SWITCH]) {
+      const out = transitionCore(`${canonical}\n${body}`, intent, deps).content;
+      assert.strictEqual(out.split('\n\n')[0], `---\n${reconstructFrontmatter(reset)}\n---`);
+    }
+  });
+
+  test('CRLF input: the frontmatter, the gap after it and the moved lines all use CRLF, with no bare LF at the seam', () => {
+    const out = transitionCore(state({ position: POSITION_WITH_EXTRAS, eol: '\r\n' }), SWITCH, deps).content;
+    const seam = out.slice(0, out.indexOf('# Project State'));
+    assert.ok(seam.endsWith('---\r\n\r\n'), JSON.stringify(seam.slice(-12)));
+    assert.ok(!/[^\r]\n/.test(seam), `a bare LF in the frontmatter or its seam: ${JSON.stringify(seam)}`);
+  });
+
+  test('CRLF input with the rebuild fallback (a duplicate key): the rebuilt block uses CRLF too', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', 'milestone: v1.0', 'team_owner: ops'];
+    const out = transitionCore(state({ fm, eol: '\r\n' }), SWITCH, deps).content;
+    const seam = out.slice(0, out.indexOf('# Project State'));
+    assert.ok(!/[^\r]\n/.test(seam), JSON.stringify(seam));
+  });
+});
+
+describe('#6174 non-template Current Position lines move under Accumulated Context', () => {
+  for (const [kind, intent] of Object.entries(INTENTS)) {
+    describe(kind, () => {
+      test('0 extra lines: no data key, no new section, Accumulated Context untouched', () => {
+        const input = state();
+        const result = transitionCore(input, intent, deps);
+        assert.strictEqual(result.data, undefined);
+        assert.deepStrictEqual(sliceSection(result.content, 'Accumulated Context'), sliceSection(input, 'Accumulated Context'));
+        assert.strictEqual(positionTemplateCount(result.content), 4);
+      });
+
+      test('2 extra lines (interleaved with template lines): moved once, in order, and reported', () => {
+        const result = transitionCore(state({ position: POSITION_WITH_EXTRAS }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, EXTRAS);
+        assert.strictEqual(positionTemplateCount(result.content), 4);
+        const ac = sliceSection(result.content, 'Accumulated Context');
+        assert.deepStrictEqual(ac.filter((l) => EXTRAS.includes(l)), EXTRAS);
+        // existing Accumulated Context content is untouched, directly after the moved lines
+        assert.ok(ac.includes('### Decisions') && ac.includes('- keep it simple'));
+        assert.ok(ac.indexOf(EXTRAS[1]) < ac.indexOf('### Decisions'));
+        for (const line of EXTRAS) assert.strictEqual(result.content.split('\n').filter((l) => l === line).length, 1);
+      });
+
+      test('1 extra line', () => {
+        const result = transitionCore(state({ position: [...TEMPLATE_LINES, 'Blocked on: legal'] }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Blocked on: legal']);
+        assert.strictEqual(positionTemplateCount(result.content), 4);
+      });
+
+      test('Accumulated Context absent: the section is created holding the moved lines', () => {
+        const result = transitionCore(state({ position: POSITION_WITH_EXTRAS, accumulated: null }), intent, deps);
+        assert.deepStrictEqual((sliceSection(result.content, 'Accumulated Context') || []).filter((l) => l.trim()), EXTRAS);
+      });
+
+      test('Current Position absent: nothing to move, no data key', () => {
+        const result = transitionCore(state({ position: null }), intent, deps);
+        assert.strictEqual(result.data, undefined);
+        assert.strictEqual(positionTemplateCount(result.content), 4);
+      });
+
+      test('CRLF input: lines are moved once, without a stray carriage return in the result data', () => {
+        const result = transitionCore(state({ position: POSITION_WITH_EXTRAS, eol: '\r\n' }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, EXTRAS);
+        for (const line of EXTRAS) {
+          assert.strictEqual(result.content.split(/\r?\n/).filter((l) => l === line).length, 1);
+        }
+      });
+
+      test('a fenced `##` inside Current Position does not end the section: the fenced block moves whole', () => {
+        const fenced = ['```', '## not a heading', 'Phase: inside a fence', '```'];
+        const result = transitionCore(state({ position: [TEMPLATE_LINES[0], ...fenced, ...TEMPLATE_LINES.slice(1), 'Blocked on: x'] }), intent, deps);
+        // reported as written; the file gets the fenced `Phase:` line as a list item so no field reader takes it
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['```', '## not a heading', 'Phase: inside a fence', '```', 'Blocked on: x']);
+        assert.strictEqual(positionTemplateCount(result.content), 4);
+        assert.strictEqual(result.content.split('\n').filter((l) => l === '## not a heading').length, 1);
+        assert.strictEqual(result.content.split('\n').filter((l) => l === '- Phase: inside a fence').length, 1);
+        assert.ok(result.content.includes('## Session'), 'the section after Current Position survives');
+      });
+    });
+  }
+});
+
+describe('#6174 property: no non-template line is lost or duplicated', () => {
+  // A unit is one line or one whole fenced block, so a generated block is never split by another insertion.
+  const unit = fc.integer({ min: 0, max: 1e6 }).chain((n) => fc.constantFrom(
+    [`Blocked on: item ${n}`], [`Carry-over: ${n}`], [`- note ${n}`], [`**Owner:** ${n}`],
+    [`free text ${n}`], [`Stopped At: ${n}`], [`**Current Plan:** ${n}`], [`Total Phases: ${n}`],
+    [`| Last Activity Description | ${n} |`], [''], ['```', `Status: fenced ${n}`, '```'], ['~~~', `fenced ${n}`, '', `text ${n}`, '~~~'],
+  ));
+  // A second line with a reset label is operator content only when the reset's own line comes first.
+  const duplicate = fc.integer({ min: 0, max: 1e6 }).chain((n) => fc.constantFrom(`Status: again ${n}`, `Plan: again ${n}`, `Phase: again ${n}`));
+  const isDelimiter = (l) => l === '```' || l === '~~~';
+  for (const [kind, intent] of Object.entries(INTENTS)) {
+    test(`${kind}`, () => {
+      fc.assert(fc.property(
+        fc.array(unit, { maxLength: 8 }),
+        fc.array(fc.integer({ min: 0, max: 3 }), { maxLength: 8 }),
+        fc.uniqueArray(duplicate, { maxLength: 2 }),
+        fc.boolean(),
+        fc.boolean(),
+        (units, slots, dups, withAcc, crlf) => {
+          const position = TEMPLATE_LINES.map((l) => [l]);
+          units.forEach((u, i) => position.splice(Math.min(slots[i] ?? 0, position.length), 0, u));
+          position.push(...dups.map((l) => [l]));
+          const lines = position.flat();
+          // A lone blank line is layout; a blank line inside a fenced unit is content.
+          const expected = position.filter((u) => !(u.length === 1 && TEMPLATE_LINES.includes(u[0]))).flatMap((u) => (u.length === 1 && u[0] === '' ? [] : u));
+          const result = transitionCore(state({ position: lines, accumulated: withAcc ? ['- ctx'] : null, eol: crlf ? '\r\n' : '\n' }), intent, deps);
+          const outLines = result.content.split(/\r?\n/);
+          for (const line of expected.filter((l) => l !== '' && !isDelimiter(l))) {
+            assert.strictEqual(outLines.filter((l) => l === line || l === `- ${line}`).length, 1, `${line} lost or duplicated`);
+          }
+          const moved = result.data ? result.data.moved_current_position_lines : [];
+          assert.deepStrictEqual(moved, expected);
+          assert.strictEqual(positionTemplateCount(result.content), 4);
+          const ac = (sliceSection(result.content, 'Accumulated Context') || []).map((l) => l.replace(/\r$/, ''));
+          assert.strictEqual(ac.filter((l) => l.trim() !== '' && l !== '- ctx').length, moved.filter((l) => l.trim() !== '').length);
+        },
+      ), { numRuns: 100 });
+    });
+  }
+});
+
+describe('#6174 parity: milestone-switch and milestone-complete treat these lines identically', () => {
+  const FENCED = ['```', 'Status: fenced example', 'Last activity: fenced example', 'Last Activity Description: fenced example', '```'];
+  const inputs = {
+    'plain extras': state({ position: POSITION_WITH_EXTRAS }),
+    // milestone complete pre-replaces Status / Last activity body-wide; a fenced example above the live line must not be the one it edits
+    'a fenced Status, Last activity and Last Activity Description above the live lines': state({ position: [TEMPLATE_LINES[0], TEMPLATE_LINES[1], ...FENCED, TEMPLATE_LINES[2], TEMPLATE_LINES[3], 'Blocked on: x'] }),
+    'fenced example, Status first': state({ position: [...FENCED, ...TEMPLATE_LINES] }),
+  };
+  for (const [name, input] of Object.entries(inputs)) {
+    test(`same input gives the same moved lines and the same Accumulated Context section: ${name}`, () => {
+      const a = transitionCore(input, SWITCH, deps);
+      const b = transitionCore(input, COMPLETE, deps);
+      assert.deepStrictEqual(a.data, b.data);
+      assert.deepStrictEqual(sliceSection(a.content, 'Accumulated Context'), sliceSection(b.content, 'Accumulated Context'));
+    });
+  }
+  test('plain extras are the moved lines', () => {
+    assert.deepStrictEqual(transitionCore(inputs['plain extras'], SWITCH, deps).data, { moved_current_position_lines: EXTRAS });
+  });
+  test('a fenced Status above the live one is moved unedited by both commands, and the live line is the one reset', () => {
+    for (const intent of [SWITCH, COMPLETE]) {
+      const out = transitionCore(inputs['a fenced Status, Last activity and Last Activity Description above the live lines'], intent, deps);
+      assert.deepStrictEqual(out.data.moved_current_position_lines, [...FENCED, 'Blocked on: x']);
+      const ac = sliceSection(out.content, 'Accumulated Context');
+      assert.ok(ac.includes('- Status: fenced example') && ac.includes('- Last activity: fenced example'));
+      assert.ok(!ac.some((l) => l.includes('milestone complete') || l.includes('Milestone v')), 'the fenced example was edited by a field replacement');
+    }
+  });
+});
+
+describe('#6174 lines the state commands own are not moved, and nothing moved is read back as a field', () => {
+  for (const [kind, intent] of Object.entries(INTENTS)) {
+    describe(kind, () => {
+      test('a STATE.md made from the shipped template moves nothing: no data key', () => {
+        const body = readShippedStateTemplateBody([]);
+        const result = transitionCore(`---\ngsd_state_version: 1.0\nmilestone: v1.0\n---\n\n${body}`, intent, deps);
+        assert.strictEqual(result.data, undefined);
+      });
+
+      test('the lines the reset rewrites (the first Phase, Plan, Status, Last activity and Progress) are reset, not moved', () => {
+        const position = [...TEMPLATE_LINES, '', 'Progress: [####------] 40%', 'Blocked on: legal'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Blocked on: legal']);
+        assert.ok(!result.content.includes('40%'));
+      });
+
+      test('a line the frontmatter sync reads but the reset does not rewrite is moved, reported as written, and kept as a list item', () => {
+        // `Stopped At` / `Paused At` are read from `## Session` only; `Current Plan`, `Total Phases` and
+        // `Last Activity Description` are not rewritten by either reset. None may vanish (#6174).
+        const extras = ['Stopped At: waiting on legal', 'Paused At: 2026-06-02', '**Current Plan:** 7', '| Total Phases | 5 |', 'Last Activity Description: held'];
+        const result = transitionCore(state({ position: [...TEMPLATE_LINES, ...extras] }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, extras);
+        const ac = sliceSection(result.content, 'Accumulated Context');
+        for (const line of extras) assert.strictEqual(ac.filter((l) => l === `- ${line}`).length, 1, line);
+        const { stateExtractField } = require('../gsd-core/bin/lib/state-document.cjs');
+        for (const label of ['Stopped At', 'Paused At', 'Current Plan', 'Total Phases', 'Last Activity Description']) {
+          assert.strictEqual(stateExtractField(stripFrontmatter(result.content), label), null, `${label} still reads as a field`);
+        }
+      });
+
+      test('a second line with a template label is operator content: moved as a list item, reported as written', () => {
+        const position = [...TEMPLATE_LINES, 'Status: blocked on legal', '**Plan:** 3-02 deferred'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Status: blocked on legal', '**Plan:** 3-02 deferred']);
+        const ac = sliceSection(result.content, 'Accumulated Context');
+        assert.ok(ac.includes('- Status: blocked on legal') && ac.includes('- **Plan:** 3-02 deferred'));
+      });
+
+      test('indented lines wrapping a dropped field go with it; an unindented line below it is operator content', () => {
+        const position = ['Phase: 3', 'Plan: 2 of 4', 'Status: Executing, and then', '  wrapped value', '    still wrapped', 'Blocked on: legal', 'Last activity: 2026-06-01 — worked'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Blocked on: legal']);
+        assert.ok(!result.content.includes('wrapped value') && !result.content.includes('still wrapped'));
+      });
+
+      test('an indented list item below a dropped field is not its continuation', () => {
+        const result = transitionCore(state({ position: [...TEMPLATE_LINES.slice(0, 3), '  - nested note', TEMPLATE_LINES[3]] }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['  - nested note']);
+      });
+
+      test('Current Position holding only reset lines or only a heading: nothing moves', () => {
+        const emptySection = ['---', 'milestone: v1.0', '---', '', '## Current Position', '## Accumulated Context', '', '- ctx', ''].join('\n');
+        const result = transitionCore(emptySection, intent, deps);
+        assert.strictEqual(result.data, undefined);
+        assert.strictEqual(positionTemplateCount(result.content), 4);
+        assert.deepStrictEqual(sliceSection(result.content, 'Accumulated Context'), ['', '- ctx', '']);
+      });
+
+      test('a heading that continues the name (`## Accumulated Context (v1)`) is the section the lines go under, not a second one', () => {
+        const doc = state({ position: POSITION_WITH_EXTRAS }).replace('## Accumulated Context', '## Accumulated Context (v1)');
+        const out = transitionCore(doc, intent, deps).content;
+        assert.strictEqual(out.split('\n').filter((l) => /^## Accumulated Context/.test(l)).length, 1);
+        assert.ok(out.includes(`## Accumulated Context (v1)\n\n${EXTRAS.join('\n')}\n`));
+      });
+
+      test('blank lines between operator lines are layout; a blank line inside a fence is kept', () => {
+        const position = [...TEMPLATE_LINES, '', 'Blocked on: a', '', '', 'Carry-over: b', '~~~', 'x', '', 'y', '~~~'];
+        const result = transitionCore(state({ position }), intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['Blocked on: a', 'Carry-over: b', '~~~', 'x', '', 'y', '~~~']);
+      });
+
+      test('an unclosed fence is closed with the opener\'s delimiter, so no later heading is swallowed', () => {
+        // Accumulated Context ahead of Current Position: the moved block lands above the rewritten position heading.
+        const doc = ['---', 'milestone: v1.0', '---', '', '# Project State', '', '## Accumulated Context', '', '- ctx', '',
+          '## Current Position', '', ...TEMPLATE_LINES, '', '````text', 'Blocked on: z', ''].join('\n');
+        const result = transitionCore(doc, intent, deps);
+        assert.deepStrictEqual(result.data.moved_current_position_lines, ['````text', 'Blocked on: z', '````']);
+        const headings = require('../gsd-core/bin/lib/markdown-sectionizer.cjs').tokenizeHeadings(result.content)
+          .filter((h) => h.level === 2).map((h) => h.text);
+        assert.deepStrictEqual(headings.slice(0, 2), ['Accumulated Context', 'Current Position']);
+      });
+
+      test('CRLF input: the moved lines are written with CRLF and no bare LF is introduced', () => {
+        const input = state({ position: POSITION_WITH_EXTRAS, eol: '\r\n' });
+        const out = transitionCore(input, intent, deps).content;
+        // (the reset's own template lines are outside this check: that writer predates #6174)
+        const ac = out.slice(out.indexOf('## Accumulated Context'), out.indexOf('## Session'));
+        assert.ok(ac.includes(`\r\n${EXTRAS[0]}\r\n${EXTRAS[1]}\r\n`));
+        assert.ok(!/[^\r]\n/.test(ac), 'a bare LF was written into the CRLF Accumulated Context section');
+      });
+
+      test('the existing Accumulated Context content is kept byte for byte below the moved lines', () => {
+        for (const accumulated of [['### Decisions', '', '- keep it simple'], ['', '', '- two blank lines first']]) {
+          const input = state({ position: POSITION_WITH_EXTRAS, accumulated });
+          const out = transitionCore(input, intent, deps).content;
+          const original = input.slice(input.indexOf('## Accumulated Context\n') + '## Accumulated Context\n'.length, input.indexOf('## Session'));
+          assert.ok(out.includes(`## Accumulated Context\n\n${EXTRAS.join('\n')}\n${/^\n/.test(original) ? '' : '\n'}${original}`));
+        }
+      });
+
+      test('Accumulated Context heading at the end of the file, with and without a trailing newline', () => {
+        for (const tail of ['## Accumulated Context', '## Accumulated Context\n']) {
+          const doc = ['---', 'milestone: v1.0', '---', '', '# Project State', '', '## Current Position', '', ...TEMPLATE_LINES, 'Blocked on: q', '', tail].join('\n');
+          const result = transitionCore(doc, intent, deps);
+          assert.deepStrictEqual(sliceSection(result.content, 'Accumulated Context').filter((l) => l.trim()).slice(0, 1), ['Blocked on: q']);
+          assert.ok(result.content.includes('## Accumulated Context\n\nBlocked on: q\n'));
+        }
+      });
+    });
+  }
+
+  test('milestone-switch keeps a custom key\'s full-line and inline comments and a mapping nested four levels deep', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', '# who owns this project', 'team_owner: ops  # on-call rota', 'deep:', '  a:', '    b:', '      c: 1', '      d:', '        - x'];
+    const out = transitionCore(state({ fm }), SWITCH, deps).content;
+    assert.match(out, /^# who owns this project\nteam_owner: ops {2}# on-call rota$/m);
+    assert.match(out, /^milestone: v2\.0$/m, 'the reset keys are still written');
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    assert.deepStrictEqual(extractFrontmatter(out).deep, { a: { b: { c: '1', d: ['x'] } } });
+  });
+
+  test('a frontmatter block the splice refuses (a duplicate key) is still rebuilt, keeping the custom key and its full-line comment', () => {
+    const fm = ['gsd_state_version: 1.0', 'milestone: v1.0', 'milestone: v1.0', '# who owns this project', 'team_owner: ops'];
+    const out = transitionCore(state({ fm }), SWITCH, deps).content;
+    assert.match(out, /^# who owns this project\nteam_owner: ops$/m);
+    assert.match(out, /^milestone: v2\.0$/m);
+    assert.strictEqual((out.match(/^milestone:/gm) || []).length, 1);
+  });
+});
+
+describe('#6174 the frontmatter sync never reads an old-milestone value from a moved line', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) cleanup(tmpDir); tmpDir = null; });
+  // Accumulated Context first, so a moved line would win the first-match read. Each owned label appears
+  // twice (the first is the live field, the second operator content) and the reset-owned ones in a fence too.
+  const doc = ['---', 'gsd_state_version: 1.0', 'milestone: v1.0', '---', '', '# Project State', '',
+    '## Accumulated Context', '', '- ctx', '', '## Current Position', '', ...TEMPLATE_LINES, '',
+    'Progress: [####------] 40%', 'Progress: [#######---] 70%', '**Current Plan:** OLD-PLAN', 'Current Plan: OLD-PLAN-2',
+    'Status: OLD-STATUS', 'Total Phases: 77', 'Total Phases: 88',
+    '```', 'Current Phase Name: OLD-NAME', '```', '', '## Session', '', 'Last session: 2026-06-01', ''].join('\n');
+  for (const cmd of ['milestone complete v1.0 --name One --confirm', 'state milestone-switch --milestone v2.0 --name Two']) {
+    test(cmd, () => {
+      tmpDir = createTempProject();
+      const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, doc);
+      assert.ok(runGsdTools(cmd, tmpDir).success);
+      assert.ok(runGsdTools('state sync', tmpDir).success);
+      const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+      const fm = extractFrontmatter(fs.readFileSync(statePath, 'utf8'));
+      assert.ok(!JSON.stringify(fm).includes('OLD'), `old value in frontmatter: ${JSON.stringify(fm)}`);
+      // extractFrontmatter yields strings (FAILSAFE_SCHEMA), so compare strings
+      for (const old of ['77', '88']) assert.notStrictEqual(fm.progress?.total_phases, old);
+      for (const old of ['40', '70']) assert.notStrictEqual(fm.progress?.percent, old);
+      assert.ok(!('current_plan' in fm) || !String(fm.current_plan).includes('OLD'));
+    });
+  }
+});
+
+describe('#6174 CLI results', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) cleanup(tmpDir); tmpDir = null; });
+
+  test('state milestone-switch lists the moved lines, keeps team_owner, and omits the key when nothing moved', () => {
+    tmpDir = createTempProject();
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, state({ position: POSITION_WITH_EXTRAS }));
+    const r = runGsdTools('state milestone-switch --milestone v2.0 --name Second', tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepStrictEqual(out.moved_current_position_lines, EXTRAS);
+    assert.strictEqual(out.switched, true);
+    const written = fs.readFileSync(statePath, 'utf8');
+    assert.match(written, /team_owner: ops/);
+    assert.strictEqual(written.split(/\r?\n/).filter((l) => l === EXTRAS[0]).length, 1);
+
+    fs.writeFileSync(statePath, state());
+    const clean = JSON.parse(runGsdTools('state milestone-switch --milestone v3.0 --name Third', tmpDir).output);
+    assert.ok(!('moved_current_position_lines' in clean));
+  });
+
+  test('milestone complete lists the moved lines in its result and moves them in STATE.md', () => {
+    tmpDir = createTempProject();
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, state({ position: POSITION_WITH_EXTRAS }));
+    const r = runGsdTools('milestone complete v1.0 --name One --confirm', tmpDir);
+    assert.ok(r.success, r.error);
+    assert.deepStrictEqual(JSON.parse(r.output).moved_current_position_lines, EXTRAS);
+    const written = fs.readFileSync(statePath, 'utf8');
+    assert.match(written, /team_owner: ops/);
+    for (const line of EXTRAS) assert.strictEqual(written.split(/\r?\n/).filter((l) => l === line).length, 1);
+    assert.deepStrictEqual(
+      (sliceSection(written, 'Accumulated Context') || []).filter((l) => EXTRAS.includes(l)), EXTRAS);
+
+    fs.writeFileSync(statePath, state());
+    const clean = JSON.parse(runGsdTools('milestone complete v1.0 --name One --confirm', tmpDir).output);
+    assert.ok(!('moved_current_position_lines' in clean));
+  });
+});
+}

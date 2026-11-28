@@ -2809,6 +2809,35 @@ describe('frontmatter commands and reader seam (in-process)', () => {
     });
   });
 
+  // ─── reconstructFrontmatter: mappings nested four or more levels (#6174) ─────
+
+  describe('reconstructFrontmatter: a mapping nested four or more levels deep is written in full', () => {
+    // a > b > c is depth three; c's value is a mapping, which was written as `String(object)`.
+    const deep = {
+      a: { b: { c: { d: 'x', e: 'a: b', f: '#h', g: '007', h: ['one', 't: w'], i: [], j: null, k: { l: { m: 'deep' }, n: {} }, o: 5 } } },
+    };
+    const expected = [
+      'a:', '  b:', '    c:', '      d: x', '      e: "a: b"', '      f: "#h"', '      g: 007', '      h:', '        - one', '        - "t: w"',
+      '      i: []', '      k:', '        l:', '          m: deep', '        n:', '      o: 5',
+    ].join('\n');
+
+    test('exact output: scalars, quoted scalars, block sequence, empty sequence, empty mapping, a null skipped, a sixth level', () => {
+      assert.equal(reconstructFrontmatter(deep), expected);
+    });
+
+    test('reads back as the same mapping, with no `[object Object]`', () => {
+      const out = reconstructFrontmatter(deep);
+      assert.ok(!out.includes('[object Object]'));
+      assert.deepEqual(extractFrontmatter(`---\n${out}\n---\n`), {
+        a: { b: { c: { d: 'x', e: 'a: b', f: '#h', g: '007', h: ['one', 't: w'], i: [], k: { l: { m: 'deep' }, n: {} }, o: '5' } } },
+      });
+    });
+
+    test('an undefined value is skipped at depth four like a null one', () => {
+      assert.equal(reconstructFrontmatter({ a: { b: { c: { d: undefined, e: 'x' } } } }), 'a:\n  b:\n    c:\n      e: x');
+    });
+  });
+
   // ─── stripFrontmatter ─────────────────────────────────────────────────────────
 
   describe('stripFrontmatter: whitespace after the closing fence', () => {

@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 6192
+---
+**`state milestone-switch` keeps custom STATE.md frontmatter keys, and neither it nor `milestone complete` silently deletes operator lines from `## Current Position`** — milestone-switch rebuilt the frontmatter from a fixed key list, so a custom key such as `team_owner` was lost, and both commands replaced the whole Current Position body with the four template lines, so lines like `Blocked on:` or `Carry-over:` vanished without a trace. Custom frontmatter keys now survive the switch, with their comments when the frontmatter is spliced. Every Current Position line the reset does not rewrite (all but the first `Phase`, `Plan`, `Status`, `Last activity` and `Progress`) is moved under `## Accumulated Context` (created when absent) and listed in the JSON result as `moved_current_position_lines`. The shared frontmatter writer also writes a mapping nested four or more levels deep in full instead of as `[object Object]`, which `frontmatter set` and `frontmatter merge` accept now too. (#6174)
