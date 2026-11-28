@@ -4590,6 +4590,7 @@ export = {
   resolvePhaseCommitDocsOverride,
   resolveCommitDocsPolicy,
   COMMIT_DOCS_SKIP_REASON,
+  commitRefusal,
   cmdCommit,
   cmdCommitToSubrepo,
   cmdPrSubrepo,

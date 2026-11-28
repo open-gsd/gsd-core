@@ -821,7 +821,16 @@ function cmdUatCompleteSession(
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const commandsMod = require('./commands.cjs') as {
     cmdCommit(ctx: ProjectContext, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean): void;
+    commitRefusal(ctx: ProjectContext, planningCwd: string, files: string[] | undefined, filesRemoved: string[] | undefined): { reason: string } | null;
   };
+  // The UAT file is already written, so a commit the context refuses (not a git repository, or a file
+  // outside the worktree) is reported in the envelope, never raised: this command's exit code answers
+  // "did the session complete", and `committed:false` + `reason` answers the commit.
+  const refusal = commandsMod.commitRefusal(ctx, ctx.projectRoot, [relPath], undefined);
+  if (refusal) {
+    output({ changed: true, status: result.status, committed: false, reason: refusal.reason }, raw);
+    return;
+  }
   // `raw: false` — cmdCommit's `raw: true` shape emits only a bare hash/reason
   // STRING (its own `output(result, raw, hash || 'committed')` rawValue arm),
   // not the structured `{ committed, reason }` object this command needs to
