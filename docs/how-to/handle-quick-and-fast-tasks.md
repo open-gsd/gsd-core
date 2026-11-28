@@ -70,6 +70,13 @@ Flags compose freely:
 /gsd-quick resume my-task-slug     # resume an interrupted task
 ```
 
+`resume` continues the task you name, under its own quick id, directory and branch. It never starts a new id.
+The slug must match a directory name exactly: `260101-abc-fix-login/` is found by `resume fix-login`, never by
+`resume login`. If one slug names more than one task directory, `resume` stops and lists them instead of picking
+one; rename or archive all but one, then resume again. A task in an older `YYYYMMDD-{slug}/` directory can still be
+resumed. Mode flags (`--discuss`, `--research`, `--validate`, `--full`) apply to the resumed run as on a first run,
+so pass the ones the task started with: `/gsd-quick resume my-task-slug --validate`.
+
 ---
 
 ## `/gsd-fast` — inline trivial edits

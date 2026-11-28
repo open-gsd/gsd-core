@@ -1045,7 +1045,7 @@ Granular flags are composable: `--discuss --research --validate` is equivalent t
 |------------|-------------|
 | `list` | List all quick tasks with status |
 | `status <slug>` | Show status of a specific quick task |
-| `resume <slug>` | Resume a specific quick task by slug |
+| `resume <slug>` | Resume a specific quick task by slug, keeping its quick id, directory and branch; a slug that names more than one task directory stops with the list |
 
 ```bash
 /gsd-quick                          # Basic quick task

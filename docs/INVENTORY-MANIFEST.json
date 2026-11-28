@@ -580,6 +580,7 @@
       "quick-batch-command-router.cjs",
       "quick-batch-dispatch.cjs",
       "quick-batch.cjs",
+      "quick-resume.cjs",
       "read-only-git-env.cjs",
       "real-home-guard.cjs",
       "refactor-trigger-command-router.cjs",

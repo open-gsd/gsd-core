@@ -60,7 +60,7 @@ Context files are resolved inside the workflow (`init quick`) and delegated via 
 
 - If the `<arguments>` block starts with "list": SUBCMD=list
 - If the `<arguments>` block starts with "status ": SUBCMD=status, SLUG=remainder (strip whitespace, sanitize)
-- If the `<arguments>` block starts with "resume ": SUBCMD=resume, SLUG=remainder (strip whitespace, sanitize)
+- If the `<arguments>` block starts with "resume ": SUBCMD=resume, SLUG=the first word after "resume" (sanitize); any words after it (`--discuss`, `--research`, `--validate`, `--full`, `--ws <name>`) are RESUME_FLAGS
 - Otherwise: SUBCMD=run, pass the full contents of the `<arguments>` block to the quick workflow as-is
 
 **Slug sanitization (for status and resume):** Strip any characters not matching `[a-z0-9-]`. Reject slugs longer than 60 chars or containing `..` or `/`. If invalid, output "Invalid session slug." and stop.
@@ -144,29 +144,31 @@ No agent spawn. STOP after printing.
 
 When SUBCMD=resume and SLUG is set (already sanitized):
 
-1. Find the directory matching `*-{SLUG}` pattern:
+1. If RESUME_FLAGS holds `--ws <name>`, set `GSD_WS="--ws <name>"` first (name: `[A-Za-z0-9._-]` only), so the
+   lookup searches that workstream. Look the task up by its exact slug. `init.quick --resume` matches only a directory named
+   `{quick_id}-{SLUG}` (or a legacy `YYYYMMDD-{SLUG}`), returns that task's own `quick_id`, `slug`,
+   `task_dir` and `branch_name`, and never allocates a new id:
    ```bash
-   PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
-   : "${PLANNING_ROOT:?}"
-   dir=$(ls -d "${PLANNING_ROOT}"/quick/*-{SLUG}/ 2>/dev/null | head -1)
+   RESUME_INIT=$(gsd_run query init.quick ${GSD_WS:+--ws=${GSD_WS##* }} --resume "{SLUG}")
    ```
-2. If no directory found, print `No quick task found with slug: {SLUG}` and stop.
+2. If the command fails, print its message and stop. It fails when no task has that slug
+   (`No quick task found with slug: {SLUG}`) and when the slug names more than one task directory
+   (the message lists them); it never picks one.
 
-3. Read PLAN.md to extract description and SUMMARY.md (if exists) to extract status.
+3. If `resume.has_plan` is false, print `Quick task {SLUG} has no plan yet; start it again with /gsd-quick` and stop.
+   Otherwise read the plan in `task_dir` (`PLAN.md`, or its one `*-PLAN.md` file) to extract the description,
+   and the summary (if `resume.has_summary`) to extract the status.
 
 4. Print before spawning:
    ```
-   [quick] Resuming: .planning/quick/{dir}/
-   [quick] Plan: {description from PLAN.md}
-   [quick] Status: {status from SUMMARY.md, or "in-progress"}
+   [quick] Resuming: {task_dir}
+   [quick] Plan: {description from the plan}
+   [quick] Status: {status from the summary, or "in-progress"}
    ```
 
-5. Load context via:
-   ```bash
-   gsd_run query init.quick
-   ```
-
-6. Proceed to execute the quick workflow with resume context, passing the slug and plan directory so the executor picks up where it left off.
+5. Execute the quick workflow with `RESUME_SLUG={SLUG}`, `$DESCRIPTION` set to the plan's description, and
+   RESUME_FLAGS as its flags. Its Step 2 then loads context with `init.quick --resume`, so the run keeps the
+   task's quick id, directory and branch. Mode flags apply as on a first run.
 
 ## RUN subcommand (default)
 
@@ -179,7 +181,7 @@ Preserve all workflow gates (validation, task description, planning, execution, 
 
 <notes>
 - Quick tasks live in `.planning/quick/` — separate from phases, not tracked in ROADMAP.md
-- Each quick task gets a `YYYYMMDD-{slug}/` directory with PLAN.md and eventually SUMMARY.md
+- Each quick task gets a `{quick_id}-{slug}/` directory (`quick_id` is `YYMMDD-xxx`) with `{quick_id}-PLAN.md` and eventually `{quick_id}-SUMMARY.md`; a legacy `YYYYMMDD-{slug}/` directory can still be resumed
 - STATE.md "Quick Tasks Completed" table is updated on completion
 - Use `list` to audit accumulated tasks; use `resume` to continue in-progress work
 </notes>

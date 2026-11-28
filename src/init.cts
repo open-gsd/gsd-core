@@ -38,6 +38,8 @@ import phaseId = require('./phase-id.cjs');
 import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- worktree-safety.cjs is an export= CommonJS module
 import worktreeSafety = require('./worktree-safety.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6530 CJS interop import, as in the sibling modules
+import quickResume = require('./quick-resume.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1829,8 +1831,10 @@ function cmdInitQuick(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
+  // #6530: `--resume <slug>` names an existing task; its own ids are returned and none is minted.
+  const resumed = typeof options['resume'] === 'string' ? quickResume.resolveQuickResumeOrExit(cwd, options['resume']) : null;
   const now = new Date(realClock.now());
-  const slug = description ? generateSlugInternal(description)?.substring(0, 40) : null;
+  const slug = resumed ? resumed.slug : description ? generateSlugInternal(description)?.substring(0, 40) : null;
 
   const yy = String(now.getFullYear()).slice(-2);
   const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -1840,12 +1844,14 @@ function cmdInitQuick(
     now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
   const timeBlocks = Math.floor(secondsSinceMidnight / 2);
   const timeEncoded = timeBlocks.toString(36).padStart(3, '0');
-  const quickId = dateStr + '-' + timeEncoded;
+  const quickId = resumed ? resumed.quick_id : dateStr + '-' + timeEncoded;
+  // A legacy `YYYYMMDD-<slug>` task has no quick id; its branch takes the directory's date prefix.
+  const branchId = resumed ? resumed.id_prefix : (quickId as string);
   const branchSlug = slug || 'quick';
   const quickBranchName = config.quick_branch_template
     ? (config.quick_branch_template as string)
-        .replace('{num}', quickId)
-        .replace('{quick}', quickId)
+        .replace('{num}', branchId)
+        .replace('{quick}', branchId)
         .replace('{slug}', branchSlug)
     : null;
 
@@ -1874,13 +1880,19 @@ function cmdInitQuick(
 
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
     quick_dir: toPosixPath(path.join(planningDir(cwd), 'quick')),
-    task_dir: slug
+    task_dir: resumed
+      ? resumed.task_dir
+      : slug
       ? toPosixPath(path.join(planningDir(cwd), 'quick', `${quickId}-${slug}`))
       : null,
 
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     planning_exists: fs.existsSync(planningRoot(cwd)),
   };
+  if (resumed) {
+    result['legacy'] = resumed.legacy;
+    result['resume'] = resumed.resume;
+  }
 
   // #2994: `--full` IMPLIES `--discuss`/`--research`/`--validate` — resolved to
   // ONE set of facts HERE, in fact computation, never in the `when=` grammar

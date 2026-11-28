@@ -408,6 +408,8 @@ export default tseslint.config(
       // sources, not these emitted .cjs files.
       'gsd-core/bin/lib/quick-batch-dispatch.cjs',
       'gsd-core/bin/lib/quick-batch-command-router.cjs',
+      // #6530: tsc-generated runtime artifact — lint the src/quick-resume.cts source, not this.
+      'gsd-core/bin/lib/quick-resume.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
       'gsd-core/bin/lib/roadmap-progress.cjs',
       'gsd-core/bin/lib/drift.cjs',

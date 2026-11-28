@@ -297,6 +297,8 @@ build/
 # src/quick-batch-command-router.cts (ADR-457 build-at-publish).
 /gsd-core/bin/lib/quick-batch-dispatch.cjs
 /gsd-core/bin/lib/quick-batch-command-router.cjs
+# #6530: compiled from src/quick-resume.cts (ADR-457 build-at-publish).
+/gsd-core/bin/lib/quick-resume.cjs
 /gsd-core/bin/lib/phase-estimation.cjs
 /gsd-core/bin/lib/estimate-cli.cjs
 /gsd-core/bin/lib/roadmap-parser.cjs

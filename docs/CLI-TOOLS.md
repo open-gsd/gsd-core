@@ -1399,6 +1399,7 @@ node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
 node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
+node gsd-tools.cjs init quick --resume <slug>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>
 node gsd-tools.cjs init phase-op <phase>

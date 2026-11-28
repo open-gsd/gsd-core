@@ -697,6 +697,8 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   not_git_repo: 'UNAVAILABLE',
   outside_worktree: 'FAIL',
   plans_no_line: 'FAIL',
+  quick_resume_not_found: 'NO_INPUT',
+  quick_resume_ambiguous: 'USAGE',
   security_scan_failed: 'INTERNAL',
   pick_field_absent: 'UNAVAILABLE',
   pick_output_not_json: 'UNAVAILABLE',
@@ -714,7 +716,7 @@ function expectedErrorCode3912(reasonValue, version) {
   return CODE_FOR_3912.get(outcome);
 }
 
-describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 33-member enum', () => {
+describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 35-member enum', () => {
   afterEach(() => {
     resolveContractVersion({ argv: ['node', 'x'], env: {} }); // restore v1 default
   });
