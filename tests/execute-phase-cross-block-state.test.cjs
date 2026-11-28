@@ -19,14 +19,17 @@
 
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('./helpers/fast-check-setup.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runHook, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { runHook, assertSeamExit, formatSeamResult, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
-const { cleanup } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { cleanup, createTempGitProject } = require('./helpers.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -153,6 +156,209 @@ describe('#4915: the regression gate runs the scoped file list, not the full sui
     assert.doesNotMatch(fs.readFileSync(FILES.regressionRun, 'utf8'), /Expects `REGRESSION_FILES` \(from the prior step\) in scope/);
     assert.doesNotMatch(fs.readFileSync(FILES.regression, 'utf8'), /into `REGRESSION_FILES`\./);
   });
+});
+
+// #6813: the gate excludes the current phase by its resolved directory, never by a substring of its number.
+describe('#6813: the regression gate excludes exactly the current phase\'s directory', { skip: skipUnless('bash', 'node') }, () => {
+  const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const MARK = 'GSD_6813_PRIOR';
+
+  /**
+   * The Step 1 fence as the model runs it: `{phase_number}` and `$ARGUMENTS` written in (unless
+   * `substitute` is false), the launcher preamble replaced by a gsd_run that calls this checkout's CLI.
+   */
+  function discoveryFence(phase, args, substitute) {
+    const lines = splitLines(fs.readFileSync(FILES.regression, 'utf8'));
+    const hit = scanFencedBlocks(lines).find((b) => b.closeLineIdx !== -1
+      && lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n').includes('PRIOR_VERIFICATIONS='));
+    assert.ok(hit, 'regression-gate.md must still assign PRIOR_VERIFICATIONS in a fence');
+    const body = lines.slice(hit.openLineIdx + 1, hit.closeLineIdx).filter((l) => !l.startsWith('_GSD_SHIM_NAME='));
+    if (!substitute) return body.join('\n');
+    return body.map((l) => (l === '$ARGUMENTS' ? args : l)).join('\n').replaceAll('{phase_number}', phase);
+  }
+
+  // How `rewrite` changes one gsd-tools answer: blank it, spell the same directory another way, or
+  // point it at a directory that does not exist.
+  const REWRITES = { blank: '_o=', respelled: '_o="$_o/."', missing: '_o=/nonexistent-gsd-6813' };
+
+  /**
+   * Run the fence in its own bash over a fixture whose phase directories are `dirs` (relative to
+   * `.planning/`), each holding a `<token>-VERIFICATION.md`. `inScope` is a PHASE_NUMBER left in the
+   * environment by a caller: the fence must assign it, not read it from the caller. `links` maps a
+   * path under `.planning/` to the directory it is a symlink to, also relative to `.planning/`. `rewrite`
+   * ({ pick, as }) passes the real CLI's answer for one `--pick` field through a REWRITES entry.
+   * Every run seeds a regression-files list first; the result's `stale` says whether it survived.
+   */
+  function runGate({ dirs, phase, args = phase, inScope = phase, project = '', subdir = '', strict = false, substitute = true, links = {}, rewrite = null }) {
+    const proj = createTempGitProject('gsd-6813-');
+    try {
+      for (const rel of dirs) {
+        const dir = path.join(proj, '.planning', ...rel.split('/'));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, `${path.basename(dir).split('-')[0]}-VERIFICATION.md`), '# v\n');
+      }
+      for (const [link, target] of Object.entries(links)) {
+        const at = path.join(proj, '.planning', ...link.split('/'));
+        cleanup(at); // createTempGitProject seeds an empty phases/
+        fs.mkdirSync(path.dirname(at), { recursive: true });
+        fs.symlinkSync(path.join(proj, '.planning', ...target.split('/')), at, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      const cwd = subdir ? path.join(proj, subdir) : proj;
+      fs.mkdirSync(cwd, { recursive: true });
+      const staleList = path.join(proj, '.git', 'gsd-handoff', 'regression-files');
+      fs.mkdirSync(path.dirname(staleList), { recursive: true });
+      fs.writeFileSync(staleList, 'tests/old.py\n');
+      const override = { GSD_TOOLS };
+      if (inScope !== null) override.PHASE_NUMBER = inScope;
+      if (project) override.GSD_PROJECT = project;
+      const env = isolatedEnv({ home: proj, override });
+      const run = rewrite
+        ? `gsd_run() { _o=$(node "$GSD_TOOLS" "$@") || return; case " $* " in *" --pick ${rewrite.pick} "*) ${REWRITES[rewrite.as]};; esac; printf '%s\\n' "$_o"; }`
+        : 'gsd_run() { node "$GSD_TOOLS" "$@"; }';
+      const script = [
+        strict ? 'set -eu' : '',
+        run,
+        discoveryFence(phase, args, substitute),
+        `printf '%s\\n' ${MARK} "$PRIOR_VERIFICATIONS"`,
+      ].join('\n');
+      const res = runHook('-c', [script], { interpreter: 'bash', cwd, env, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+      const out = splitLines(res.stdout);
+      const at = out.indexOf(MARK);
+      const kept = at === -1 ? null : out.slice(at + 1).filter(Boolean)
+        .map((p) => p.slice(p.lastIndexOf('/phases/') + '/phases/'.length)).sort();
+      return { res, kept, stale: fs.existsSync(staleList) };
+    } finally {
+      cleanup(proj);
+    }
+  }
+
+  const keptDirs = (dirs, drop) => dirs.filter((d) => d !== drop)
+    .map((d) => { const base = d.split('/').pop(); return `${base}/${base.split('-')[0]}-VERIFICATION.md`; }).sort();
+
+  const UNPADDED = ['1-auth', '2-api', '3-current', '13-x', '23-x', '30-x'].map((d) => `phases/${d}`);
+  const PADDED = ['03-dates-rfc-2010', '09-api', '10-current', '10.1-x', '11-ui', '100-x'].map((d) => `phases/${d}`);
+  const DECIMAL = ['01-auth', '03-current', '03.1-hotfix', '03.10-x', '04-next'].map((d) => `phases/${d}`);
+
+  test('unpadded phase 3 keeps 13-*, 23-* and 30-*; only 3-current is excluded', () => {
+    const { res, kept } = runGate({ dirs: UNPADDED, phase: '3' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, keptDirs(UNPADDED, 'phases/3-current'));
+  });
+
+  test('padded phase 10 keeps 10.1-*, 100-* and a slug containing 10; only 10-current is excluded', () => {
+    const { res, kept } = runGate({ dirs: PADDED, phase: '10' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, keptDirs(PADDED, 'phases/10-current'));
+  });
+
+  test('a decimal phase is its own phase: phase 03 keeps 03.1-* and 03.10-*', () => {
+    const { res, kept } = runGate({ dirs: DECIMAL, phase: '03' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, keptDirs(DECIMAL, 'phases/03-current'));
+  });
+
+  test('a decimal phase excludes only itself: phase 03.1 keeps 03-* and 03.10-*', () => {
+    const { res, kept } = runGate({ dirs: DECIMAL, phase: '03.1' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, keptDirs(DECIMAL, 'phases/03.1-hotfix'));
+  });
+
+  test('the fence assigns the phase number itself; nothing left in scope by an earlier block is read', () => {
+    const { res, kept } = runGate({ dirs: PADDED, phase: '10', inScope: null, strict: true });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed under set -eu');
+    assert.deepEqual(kept, keptDirs(PADDED, 'phases/10-current'));
+  });
+
+  test('run from a subdirectory of the project, the same set is kept', () => {
+    const { res, kept } = runGate({ dirs: PADDED, phase: '10', subdir: 'src' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, keptDirs(PADDED, 'phases/10-current'));
+  });
+
+  test('a --ws argument scopes the listing and the exclusion to the workstream\'s phases', () => {
+    const dirs = ['workstreams/ws1/phases/06-prior', 'workstreams/ws1/phases/07-current', 'workstreams/ws1/phases/07.1-hotfix', 'phases/06-root'];
+    const { res, kept } = runGate({ dirs, phase: '07', args: '07 --ws ws1' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, ['06-prior/06-VERIFICATION.md', '07.1-hotfix/07.1-VERIFICATION.md']);
+  });
+
+  test('a GSD_PROJECT scope lists and excludes within the project\'s phases', () => {
+    const dirs = ['beta/phases/06-prior', 'beta/phases/07-current', 'beta/phases/17-x', 'phases/06-root'];
+    const { res, kept } = runGate({ dirs, phase: '7', project: 'beta' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, ['06-prior/06-VERIFICATION.md', '17-x/17-VERIFICATION.md']);
+  });
+
+  test('a current phase found only in a milestone archive excludes nothing from the active phases', () => {
+    const dirs = ['milestones/v1.0-phases/03-old', 'phases/04-next', 'phases/13-x'];
+    const { res, kept } = runGate({ dirs, phase: '3' });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, ['04-next/04-VERIFICATION.md', '13-x/13-VERIFICATION.md']);
+  });
+
+  test('a symlinked phases directory and a symlinked phase inside it are both listed and searched', () => {
+    const dirs = ['../store/06-prior', '../store/07-current', '../store/17-x', '../elsewhere/08-next'];
+    const links = { phases: '../store', '../store/08-next': '../elsewhere/08-next' };
+    const { res, kept } = runGate({ dirs, phase: '07', links });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, ['06-prior/06-VERIFICATION.md', '08-next/08-VERIFICATION.md', '17-x/17-VERIFICATION.md']);
+  });
+
+  test('the exclusion compares directories, not spellings: a respelled project root still drops the current phase', () => {
+    const { res, kept } = runGate({ dirs: PADDED, phase: '10', rewrite: { pick: 'generated_from.cwd', as: 'respelled' } });
+    assertSeamExit(assert, res, 0, 'the discovery fence must succeed');
+    assert.deepEqual(kept, keptDirs(PADDED, 'phases/10-current'));
+  });
+
+  // `exit` null: the planning-root guard is a `${PLANNING_ROOT:?}` expansion, whose status is the shell's own.
+  for (const [label, rewrite, exit] of [
+    ['a blank planning root', { pick: 'generated_from.planning_root', as: 'blank' }, null],
+    ['a blank phase directory', { pick: 'directory', as: 'blank' }, 1],
+    ['a blank project root', { pick: 'generated_from.cwd', as: 'blank' }, 1],
+    ['a project root that does not exist', { pick: 'generated_from.cwd', as: 'missing' }, 1],
+  ]) {
+    test(`${label} from gsd-tools stops the fence before any file list is reported`, () => {
+      const { res, kept } = runGate({ dirs: PADDED, phase: '10', rewrite });
+      const why = 'a lookup that cannot place the current phase must fail the fence';
+      if (exit === null) assert.ok(res.outcome === OUTCOME.EXITED && res.exitCode !== 0, `${why}; got ${formatSeamResult(res)}`);
+      else assertSeamExit(assert, res, exit, why);
+      assert.equal(kept, null, 'no file list may be reported when the current phase cannot be placed');
+    });
+  }
+
+  test('property: every phase but the current one is kept, whatever digits the numbers and slugs share', () => {
+    // Padded integer tokens from a small range share digits (03, 13, 30), and decimal children (03.1,
+    // 03.10) sit beside their parent. Unpadded decimals are left out: the locator does not resolve them.
+    const TOKEN = fc.tuple(fc.integer({ min: 1, max: 31 }), fc.option(fc.integer({ min: 1, max: 12 }), { nil: null }))
+      .map(([n, d]) => String(n).padStart(2, '0') + (d === null ? '' : `.${d}`));
+    const SLUG = fc.tuple(fc.constantFrom('x', 'api', 'rfc'), fc.integer({ min: 0, max: 2031 })).map(([w, n]) => `${w}${n}`);
+    // One bash per draw, each building its own project: five draws keep the cost near the examples above.
+    // Every draw also holds a child of the current number (07.1 for 07, 03.11 for 03.1), so a pattern on
+    // the number, rather than the directory, fails every draw and not only the ones whose digits collide.
+    fc.assert(fc.property(fc.uniqueArray(fc.tuple(TOKEN, SLUG), { minLength: 2, maxLength: 8, selector: ([t]) => t }), fc.nat(), (phases, pick) => {
+      const at = pick % phases.length;
+      const current = phases[at][0];
+      const child = current.includes('.') ? `${current}1` : `${current}.1`;
+      const dirs = phases.map(([t, s]) => `phases/${t}-${s}`);
+      if (!phases.some(([t]) => t === child)) dirs.push(`phases/${child}-x0`);
+      const { res, kept } = runGate({ dirs, phase: current });
+      assertSeamExit(assert, res, 0, `the discovery fence must succeed for current phase ${dirs[at]}`);
+      assert.deepEqual(kept, keptDirs(dirs, dirs[at]), `current phase ${dirs[at]} among ${dirs.join(', ')}`);
+    }), { numRuns: 5 });
+  });
+
+  for (const [label, dirs, substitute] of [
+    ['a phase with no directory', ['phases/06-prior', 'phases/08-next'], true],
+    ['an ambiguous phase number', ['phases/06-prior', 'phases/07-a', 'phases/07-b'], true],
+    ['an unsubstituted {phase_number} placeholder', ['phases/06-prior', 'phases/07-current'], false],
+  ]) {
+    test(`${label} stops the fence before any file list is reported, after clearing an earlier list`, () => {
+      const { res, kept, stale } = runGate({ dirs, phase: '07', substitute });
+      assertSeamExit(assert, res, 1, 'an unresolved current phase must fail the fence');
+      assert.equal(kept, null, 'no file list may be reported for an unresolved phase');
+      assert.equal(stale, false, 'a regression-files list from an earlier run must not survive a failed fence');
+    });
+  }
 });
 
 // #6258: the begin-phase block is its own shell, so it must assign every value it passes.

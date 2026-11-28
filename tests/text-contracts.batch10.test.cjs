@@ -1305,6 +1305,8 @@ describe('the batch 10 contracts hold on the real files, and fail when a contrac
         ]),
         ['REGRESSION GATE ABORTED gone from the regression gate (#1857)', 'gsd-core/workflows/execute-phase/steps/regression-gate.md',
           eraseAll('REGRESSION GATE ABORTED'), 'post-merge-gate-watch-mode', /the regression gate must abort \(not continue\) on a watch-mode timeout/],
+        ['the discovery-failure HALT gone from the regression gate (#6813)', 'gsd-core/workflows/execute-phase/steps/regression-gate.md',
+          eraseAll('If this block exits non-zero, HALT'), 'post-merge-gate-watch-mode', /the regression gate must halt when its discovery block fails, not read the failure as no prior phases/],
         ['the shared verification step include gone from execute-phase.md (#5118)', 'gsd-core/workflows/execute-phase.md',
           eraseAll('steps/verify-phase-goal.md'), 'post-merge-gate-watch-mode', /execute-phase\.md must include the shared verification step/],
         ['the regression-gate step reference gone from the shared verification step (#5118)', 'gsd-core/workflows/execute-phase/steps/verify-phase-goal.md',

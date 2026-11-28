@@ -139,7 +139,9 @@ module.exports = {
         }, `${label}: every build/test_command config-get must pass --raw so an unset key is empty, not the literal ""`);
     }
 
-    docOf(REGRESSION_GATE).has('REGRESSION GATE ABORTED', 'the regression gate must abort (not continue) on a watch-mode timeout');
+    docOf(REGRESSION_GATE)
+      .has('REGRESSION GATE ABORTED', 'the regression gate must abort (not continue) on a watch-mode timeout')
+      .has('If this block exits non-zero, HALT', 'the regression gate must halt when its discovery block fails, not read the failure as no prior phases (#6813)');
 
     docOf(EXECUTE_PHASE).has('steps/verify-phase-goal.md', 'execute-phase.md must include the shared verification step');
     docOf(VERIFY_PHASE_GOAL).has('steps/regression-gate.md', 'the shared verification step must reference the extracted regression-gate step');

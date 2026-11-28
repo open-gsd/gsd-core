@@ -563,8 +563,9 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
       const gateFence = extractBashBlocks(gateContent).find((b) => b.includes('PRIOR_VERIFICATIONS='));
       assert.ok(gateFence, 'regression-gate.md has a PRIOR_VERIFICATIONS fence');
       // The harness prelude below stands in for the launcher preamble the fence carries.
-      const head = gateFence.slice(0, gateFence.indexOf('# gsd-handoff:begin'))
-        .split('\n').filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+      const head = gateFence
+        .split('\n').filter((l) => !l.startsWith('_GSD_SHIM_NAME='))
+        .map((l) => (l === '$ARGUMENTS' ? '7' : l)).join('\n').replaceAll('{phase_number}', '7');
       const parent = repo;
       repo = path.join(parent, 'proj7'); // the absolute path holds the phase number 7
       fs.mkdirSync(repo);
@@ -572,7 +573,8 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
         setUpRepo(null);
         fs.mkdirSync(path.join(repo, '.planning', 'phases', '06-prior'), { recursive: true });
         fs.writeFileSync(path.join(repo, '.planning', 'phases', '06-prior', '06-VERIFICATION.md'), '# v\n');
-        const out = runFence(`PHASE_NUMBER=7\n${head}\nprintf 'PRIOR=[%s]\\n' "$PRIOR_VERIFICATIONS"`, {});
+        fs.mkdirSync(path.join(repo, '.planning', 'phases', '07-current'), { recursive: true });
+        const out = runFence(`${head}\nprintf 'PRIOR=[%s]\\n' "$PRIOR_VERIFICATIONS"`, {});
         assert.ok(out.includes('06-VERIFICATION.md'), `prior phase verification must be found, got: ${out}`);
       } finally {
         repo = parent;
