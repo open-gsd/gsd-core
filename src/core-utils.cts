@@ -581,6 +581,28 @@ function planRowPattern(planId: string, opts: { anchored?: boolean; anyState?: b
   );
 }
 
+const PLAN_LIST_STUB_OPEN = 'TBD (run ';
+const PLAN_LIST_STUB_CLOSE = ' to break down)';
+const PLAN_LIST_STUB_ROW_RE = new RegExp(
+  `^[ \\t]*-[ \\t]+\\[[ xX]\\][ \\t]+${escapeRegex(PLAN_LIST_STUB_OPEN)}\\S+[ \\t]+\\S+${escapeRegex(PLAN_LIST_STUB_CLOSE)}[ \\t]*\\r?$`,
+  'i',
+);
+
+/**
+ * #6171: the unchecked placeholder row `phase add` / `phase insert` write under `Plans:` until the phase is
+ * planned. One owner for both sides: the writers render it here and `isPlanListStubRow` finds it, so the
+ * wording cannot change on one side only. The command token is runtime-specific (`/gsd-plan-phase`,
+ * `$gsd-plan-phase`), so the matcher takes any single token.
+ */
+function planListStubRow(command: string, phase: string | number): string {
+  return `- [ ] ${PLAN_LIST_STUB_OPEN}${command} ${phase}${PLAN_LIST_STUB_CLOSE}`;
+}
+
+/** Is this one line the placeholder row `planListStubRow` renders (any command token, any box state)? */
+function isPlanListStubRow(line: string): boolean {
+  return PLAN_LIST_STUB_ROW_RE.test(line);
+}
+
 /**
  * Tick the first line-anchored unchecked row for `planId` in `text` (the
  * `phase complete` / `roadmap update-plan-progress` bullet flip): a bullet
@@ -608,5 +630,7 @@ export = {
   findOrphanSummaries,
   summaryPairsWithAnyPlan,
   planRowPattern,
+  planListStubRow,
+  isPlanListStubRow,
   tickAnchoredPlanRow,
 };
