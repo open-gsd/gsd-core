@@ -3414,3 +3414,96 @@ cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], fals
     assert.equal(result.timed_out, undefined);
   });
 });
+
+// #6256: `git add` ran without `--`, so an existing --files path that starts
+// with `-` reached git as an option: `-A` staged the whole tree and `-n`
+// staged nothing yet exited 0.
+describe('commit --files: a dash-leading path stages as a path, not an option (#6256)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempGitProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  for (const name of ['-A', '-rf', '-n']) {
+    test(`a file named ${name} commits as a path and an undeclared sibling stays out`, () => {
+      fs.writeFileSync(path.join(tmpDir, name), 'dash-leading name\n');
+      fs.writeFileSync(path.join(tmpDir, 'other.txt'), 'never declared\n');
+
+      const result = runGsdTools(['commit', 'docs: dash path', '--files', name], tmpDir);
+      assert.ok(result.success, `commit failed: ${result.error}`);
+
+      const committed = gitOrThrow(['diff', 'HEAD~1', 'HEAD', '--name-only'], {
+        cwd: tmpDir,
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).trim();
+      assert.strictEqual(committed, name, `the commit must hold only ${name}, got:\n${committed}`);
+
+      const status = gitOrThrow(['status', '--porcelain', '--', 'other.txt'], {
+        cwd: tmpDir,
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).trim();
+      assert.strictEqual(status, '?? other.txt', `other.txt must stay untracked, status was:\n${status}`);
+    });
+  }
+});
+
+// #6256: the sub-repo twin -- `cmdCommitToSubrepo` staged with the same
+// `git add <path>` (no `--`), so `--files backend/-A` ran `git add -A` inside
+// the sub-repo and `backend/-n` staged nothing.
+describe('commit-to-subrepo --files: a dash-leading path stages as a path, not an option (#6256)', () => {
+  let tmpDir;
+  let subDir;
+
+  beforeEach(() => {
+    tmpDir = createTempGitProject();
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ planning: { sub_repos: ['backend'] } }, null, 2),
+    );
+    subDir = path.join(tmpDir, 'backend');
+    fs.mkdirSync(subDir, { recursive: true });
+    gitOrThrow(['init', '-q', '.'], { cwd: subDir });
+    gitOrThrow(['config', 'user.email', 't@t'], { cwd: subDir });
+    gitOrThrow(['config', 'user.name', 't'], { cwd: subDir });
+    fs.writeFileSync(path.join(subDir, 'seed.js'), '// seed\n');
+    gitOrThrow(['add', 'seed.js'], { cwd: subDir });
+    gitOrThrow(['commit', '-q', '-m', 'seed'], { cwd: subDir });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  for (const name of ['-A', '-n']) {
+    test(`a sub-repo file named ${name} commits as a path and an undeclared sibling stays out`, () => {
+      fs.writeFileSync(path.join(subDir, name), 'dash-leading name\n');
+      fs.writeFileSync(path.join(subDir, 'other.txt'), 'never declared\n');
+
+      const res = runGsdTools(
+        ['commit-to-subrepo', 'docs: dash path', '--files', `backend/${name}`],
+        tmpDir,
+      );
+      assert.ok(res.success, `commit-to-subrepo failed: ${res.error}`);
+      const result = JSON.parse(res.output);
+      assert.strictEqual(result.repos.backend.committed, true,
+        `the sub-repo commit must land, got ${JSON.stringify(result.repos.backend)}`);
+
+      const committed = gitOrThrow(['diff', 'HEAD~1', 'HEAD', '--name-only'], {
+        cwd: subDir,
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).trim();
+      assert.strictEqual(committed, name, `the sub-repo commit must hold only ${name}, got:\n${committed}`);
+
+      const status = gitOrThrow(['status', '--porcelain', '--', 'other.txt'], {
+        cwd: subDir,
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).trim();
+      assert.strictEqual(status, '?? other.txt', `other.txt must stay untracked, status was:\n${status}`);
+    });
+  }
+});
