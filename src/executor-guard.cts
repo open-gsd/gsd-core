@@ -74,6 +74,15 @@ export interface GuardCheck {
   detail: string;
 }
 
+/**
+ * `--path` given alone (no `--toplevel`, `--expected-base` or `--expected-base-alternate`) asks
+ * where a write would land (step 0b), which no branch decides, so the branch checks do not run.
+ */
+export function isPathOnly(opts: GuardOptions): boolean {
+  const given = (v: string | null | undefined): boolean => v !== undefined && v !== null;
+  return given(opts.path) && !given(opts.toplevel) && !given(opts.expectedBase) && !given(opts.expectedBaseAlternate);
+}
+
 export interface GuardResult {
   ok: boolean;
   branch: string;
@@ -223,11 +232,8 @@ export function evaluateGuard(
   const head = headResult && headResult.exitCode === 0 ? headResult.stdout : '';
 
   const expectedBase = opts.expectedBase ?? null;
-  const given = (v: string | null | undefined): boolean => v !== undefined && v !== null;
-  // `--path` given alone asks where a write would land (step 0b), which no branch decides: the
-  // branch checks run on the spawn-time and pre-commit calls.
-  const branchChecks = !given(opts.path) || given(opts.toplevel) || expectedBase !== null ||
-    Boolean(opts.expectedBaseAlternate);
+  // The branch checks run on the spawn-time and pre-commit calls, never on `--path` alone.
+  const branchChecks = !isPathOnly(opts);
 
   if (branchChecks) {
     checks.push({
@@ -282,7 +288,7 @@ export function evaluateGuard(
     });
   }
 
-  if (expectedBase === null && opts.expectedBaseAlternate) {
+  if (expectedBase === null && opts.expectedBaseAlternate !== undefined && opts.expectedBaseAlternate !== null) {
     checks.push({ name: 'base', ok: false, detail: '--expected-base-alternate needs --expected-base' });
   }
   if (expectedBase !== null) {
@@ -345,6 +351,15 @@ export function cmdExecutorGuard(
   deps?: ExecutorGuardDeps,
 ): GuardResult {
   const writeDiagnostic = deps?.writeDiagnostic ?? ((s: string) => process.stderr.write(s));
+  // A flag that changes nothing on a path-only call is refused, so a command that means to run the
+  // branch checks cannot lose them without an error.
+  if (isPathOnly(opts) && opts.sequential) {
+    error(
+      'executor.guard: --sequential has no effect on --path alone, which runs only the path check; ' +
+        'give --toplevel <worktree root> to run the pre-commit checks with it',
+      ERROR_REASON.USAGE,
+    );
+  }
   let result: GuardResult;
   try {
     result = evaluateGuard(ctx, opts, deps);

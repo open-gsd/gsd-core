@@ -75,7 +75,8 @@ describe('#4799 the orchestrator tells each sequential executor, in its own prom
     assert.match(step0a, /add `--sequential`\s+only when the executor's prompt has a `<sequential_execution>` block/);
     const step0b = between(safety, '## Absolute-path guard — step 0b', '## `<automated>` command guard — step 0c');
     assert.match(step0b, /Given alone, `--path` runs only this check/);
-    assert.doesNotMatch(step0b, /--sequential/);
+    assert.match(step0b, /`--sequential` beside it is\s+refused/);
+    assert.doesNotMatch(step0b, /add `--sequential`/);
   });
 
   test('step 0a passes --toplevel back on step 0 runs, in the executor and in worktree-path-safety.md (#6216)', () => {

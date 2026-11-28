@@ -27,7 +27,7 @@ When those blocks are refused, an executor splits them up by hand or skips them.
 | `toplevel` | the worktree root of the current directory is not `--toplevel`, both resolved | step 0a |
 | `path` | `--path` (absolute, or relative to the current directory), resolved one segment at a time with each link followed, lands outside the worktree root; or it cannot be resolved (a link that does not resolve, a segment, `.` or trailing separator below a file, `..` below a missing segment). On POSIX only `/` separates segments | step 0b |
 
-Given `--path` with neither `--toplevel` nor an expected base, the verb runs the `path` check alone, as the step 0b block did: `head-attached`, `not-protected` and `agent-namespace` are run by the spawn-time and pre-commit calls.
+Given `--path` with none of `--toplevel`, `--expected-base` and `--expected-base-alternate`, the verb runs the `path` check alone, as the step 0b block did: `head-attached`, `not-protected` and `agent-namespace` are run by the spawn-time and pre-commit calls. `--sequential` on such a call changes nothing, so it is refused as a usage error, and `--expected-base-alternate` (empty or not) makes the call a branch-checking one.
 
 The verb reads the worktree of the directory it runs in, its HEAD and branch, and writes nothing. It prints its checks as JSON, prints a `FATAL:` line on stderr for each failed check, and exits 42, the `worktree_branch_check` contract's code. Recovery stays with the orchestrator that owns the worktree (#48).
 

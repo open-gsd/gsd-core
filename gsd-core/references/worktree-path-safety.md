@@ -160,7 +160,8 @@ It exits 42 when the path lands outside the worktree root, or cannot be resolved
 judging a file not yet created by where it would land.
 
 Given alone, `--path` runs only this check: the branch checks of step 0 are not run,
-so the command is the same in a sequential dispatch.
+so the command is the same in a sequential dispatch. `--sequential` beside it is
+refused, since it would change nothing.
 
 **Prefer relative paths** for all Edit/Write operations. When an absolute path is
 unavoidable, always derive it from `git rev-parse --show-toplevel` run inside the

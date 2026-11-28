@@ -336,18 +336,29 @@ describe('#4799 / #3819 / #2924 behaviours, now held by executor.guard', () => {
     });
   }
 
-  test('#4799 --path given alone on a feature/* linked worktree runs only the path check, with and without --sequential', (t) => {
+  test('#4799 --path given alone on a feature/* linked worktree runs only the path check', (t) => {
     const { tmp, main, wt } = mkFixture(t, { agentBranch: 'feature/phase-48' });
     const inside = path.join(wt, 'src', 'new', 'file.ts');
-    for (const extra of [[], ['--sequential']]) {
-      const res = run(['executor.guard', '--path', inside, ...extra], wt, tmp);
-      assert.equal(res.exitCode, 0, `${JSON.stringify(extra)}: ${res.error}`);
-      assert.deepEqual(json(res).checks.map((c) => c.name), ['path']);
+    const res = run(['executor.guard', '--path', inside], wt, tmp);
+    assert.equal(res.exitCode, 0, res.error);
+    assert.deepEqual(json(res).checks.map((c) => c.name), ['path']);
 
-      const outside = run(['executor.guard', '--path', path.join(main, 'README.md'), ...extra], wt, tmp);
-      assert.equal(outside.exitCode, GUARD_EXIT_CODE);
-      assert.deepEqual(json(outside).checks.map((c) => c.name), ['path']);
-      assert.deepEqual(failed(outside), ['path']);
+    const outside = run(['executor.guard', '--path', path.join(main, 'README.md')], wt, tmp);
+    assert.equal(outside.exitCode, GUARD_EXIT_CODE);
+    assert.deepEqual(json(outside).checks.map((c) => c.name), ['path']);
+    assert.deepEqual(failed(outside), ['path']);
+  });
+
+  test('--path given alone beside --sequential is refused before any check runs, inside the worktree or out', (t) => {
+    const { tmp, main, wt } = mkFixture(t, { agentBranch: 'feature/phase-48' });
+    for (const target of [path.join(wt, 'src', 'new', 'file.ts'), path.join(main, 'README.md')]) {
+      for (const flags of [['--path', target, '--sequential'], ['--sequential', '--path', target]]) {
+        const res = run(['executor.guard', ...flags], wt, tmp);
+        assert.notEqual(res.exitCode, 0, JSON.stringify(flags));
+        assert.notEqual(res.exitCode, GUARD_EXIT_CODE, JSON.stringify(flags));
+        assert.match(res.error, /--sequential has no effect on --path alone/);
+        assert.equal(res.output.trim(), '', JSON.stringify(flags));
+      }
     }
   });
 
@@ -382,17 +393,15 @@ describe('#4799 / #3819 / #2924 behaviours, now held by executor.guard', () => {
     assert.ok(failed(run(['executor.guard'], main, tmp)).includes('head-attached'));
   });
 
-  test('--path beside an empty --expected-base-alternate is --path alone; beside a non-empty one the branch checks run and base fails', (t) => {
+  test('--path beside --expected-base-alternate, empty or not, runs the branch checks, and base fails without --expected-base', (t) => {
     const { tmp, wt } = mkFixture(t, { agentBranch: 'feature/phase-48' });
     const inside = path.join(wt, 'src', 'x.ts');
-    const empty = run(['executor.guard', '--path', inside, '--expected-base-alternate', ''], wt, tmp);
-    assert.equal(empty.exitCode, 0, empty.error);
-    assert.deepEqual(json(empty).checks.map((c) => c.name), ['path']);
-
-    const named = run(['executor.guard', '--path', inside, '--expected-base-alternate', git(['rev-parse', 'HEAD'], wt)], wt, tmp);
-    assert.equal(named.exitCode, GUARD_EXIT_CODE);
-    assert.deepEqual(json(named).checks.map((c) => c.name), ['head-attached', 'not-protected', 'agent-namespace', 'base', 'path']);
-    assert.deepEqual(failed(named), ['agent-namespace', 'base']);
+    for (const alternate of ['', git(['rev-parse', 'HEAD'], wt)]) {
+      const res = run(['executor.guard', '--path', inside, '--expected-base-alternate', alternate], wt, tmp);
+      assert.equal(res.exitCode, GUARD_EXIT_CODE, JSON.stringify(alternate));
+      assert.deepEqual(json(res).checks.map((c) => c.name), ['head-attached', 'not-protected', 'agent-namespace', 'base', 'path']);
+      assert.deepEqual(failed(res), ['agent-namespace', 'base']);
+    }
   });
 
   test('#4799 a main checkout is not subject to the allow-list in either mode', (t) => {
@@ -779,11 +788,13 @@ describe('#6216: separators, layouts, ledger ignore file, fail-closed exit', () 
     assert.deepEqual(result.checks.filter((c) => !c.ok).map((c) => c.name), ['agent-namespace']);
   });
 
-  test('--expected-base-alternate without --expected-base is refused', (t) => {
+  test('--expected-base-alternate without --expected-base is refused, empty or not', (t) => {
     const { tmp, wt } = mkFixture(t);
-    const res = run(['executor.guard', '--expected-base-alternate', git(['rev-parse', 'HEAD'], wt)], wt, tmp);
-    assert.equal(res.exitCode, GUARD_EXIT_CODE);
-    assert.deepEqual(failed(res), ['base']);
+    for (const alternate of [git(['rev-parse', 'HEAD'], wt), '']) {
+      const res = run(['executor.guard', '--expected-base-alternate', alternate], wt, tmp);
+      assert.equal(res.exitCode, GUARD_EXIT_CODE, JSON.stringify(alternate));
+      assert.deepEqual(failed(res), ['base'], JSON.stringify(alternate));
+    }
   });
 
   test('record refuses a linked .gsd', (t) => {
